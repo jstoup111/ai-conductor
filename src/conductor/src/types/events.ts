@@ -2361,7 +2361,7 @@ type ConductorEventBody =
       child: ChildId;
       generation: number;
       closureSha: CommitSha;
-      outcome: string;
+      outcome: 'passed' | 'fixed';
     }
   // ── Worktree reclamation lifecycle ──
   | {

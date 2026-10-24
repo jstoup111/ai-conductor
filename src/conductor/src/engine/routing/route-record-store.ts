@@ -59,10 +59,14 @@ export type RoutingTransactionOp =
   | { readonly kind: 'delete-record'; readonly previous: StoredRouteRecord }
   | { readonly kind: 'create-marker'; readonly marker: RepairMarker }
   | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
+  | { readonly kind: 'update-queue'; readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' }; readonly queue: RevalidationQueueRecord }
+  | { readonly kind: 'delete-queue'; readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' } }
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
-  | { readonly kind: 'delete-marker'; readonly old: CommitSha };
+  | { readonly kind: 'delete-marker'; readonly old: CommitSha }
+  /** A value-only fence for authority refs not otherwise written by this transaction. */
+  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 /** Every newly admitted route seals its authored-task denominator. */
@@ -71,7 +75,7 @@ export type CreateRouteRecordInput = Pick<
   'roundId' | 'kind' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
 > & { readonly sealedAuthored: number; readonly receipt?: RouteRecord['receipt'] };
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
-export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'unavailable' };
+export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
 
 async function readBlob(ref: string, git: GitRunner): Promise<{ readonly kind: 'absent' } | { readonly kind: 'unreadable' } | { readonly blob: CommitSha; readonly content: string }> {
   try {
@@ -190,6 +194,20 @@ export async function writeRoutingTransaction(
           lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${op.previous.blob}`);
           break;
         }
+        case 'update-queue': {
+          if (op.previous.slug !== slug) return { kind: 'unavailable' };
+          const serialized = JSON.stringify(op.queue);
+          if (parseRevalidationQueueRecord(serialized) === undefined) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
+          const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
+          if (!blob) return { kind: 'unavailable' };
+          lines.push(`update ${revalidationQueueRefFor(slug)} ${blob} ${op.previous.blob}`);
+          break;
+        }
+        case 'delete-queue':
+          if (op.previous.slug !== slug) return { kind: 'unavailable' };
+          lines.push(`delete ${revalidationQueueRefFor(slug)} ${op.previous.blob}`);
+          break;
         case 'update-branch':
           if (!isFeatureBranchRef(op.ref)) return { kind: 'unavailable' };
           lines.push(`update ${op.ref} ${op.new} ${op.old}`);
@@ -203,6 +221,9 @@ export async function writeRoutingTransaction(
           break;
         case 'delete-marker':
           lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
+          break;
+        case 'verify-ref':
+          lines.push(`verify ${op.ref} ${op.value}`);
           break;
       }
     }
@@ -306,10 +327,42 @@ export async function drainOutbox(worktree: string, stored: StoredRouteRecord, p
   return { kind: 'drained' };
 }
 
+/** Delivers queue outcomes using the same at-least-once envelope as routes. */
+export async function drainQueueOutbox(
+  worktree: string,
+  stored: Extract<ReadRevalidationQueueResult, { readonly kind: 'queue' }>,
+  persist: PersistOutboxEvent,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<DrainOutboxResult> {
+  let current = stored;
+  while (current.queue.outbox.length > 0) {
+    const entry = current.queue.outbox[0]!;
+    const event = { ...entry.event, eventId: entry.eventId, occurredAt: entry.occurredAt } as ConductorEvent;
+    try { await persist(event); } catch { return { kind: 'persist-failed' }; }
+    const queue = { ...current.queue, outbox: current.queue.outbox.slice(1) };
+    const wrote = queue.entries.length === 0 && queue.outbox.length === 0
+      ? await writeRoutingTransaction(worktree, current.slug, [{ kind: 'delete-queue', previous: current }], dependencies)
+      : await writeRoutingTransaction(worktree, current.slug, [{ kind: 'update-queue', previous: current, queue }], dependencies);
+    if (wrote.kind === 'restack-journal-open') return { kind: 'restack-journal-open' };
+    if (wrote.kind !== 'updated') return wrote.kind === 'cas-failed' ? { kind: 'retry' } : { kind: 'unavailable' };
+    if (queue.entries.length === 0 && queue.outbox.length === 0) return { kind: 'drained' };
+    const reread = await readRevalidationQueue(worktree, current.slug, dependencies);
+    if (reread.kind !== 'queue' || reread.queue.outbox.length >= current.queue.outbox.length) return { kind: 'retry' };
+    current = reread;
+  }
+  return { kind: 'drained' };
+}
+
 /** Enumerates durable route records, never inferring them from a transient marker. */
 export async function drainRoutingOutboxes(worktree: string, slug: string, persist: PersistOutboxEvent, dependencies: RouteRecordStoreDependencies = {}): Promise<DrainOutboxResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   try {
+    const queue = await readRevalidationQueue(worktree, slug, { git });
+    if (queue.kind === 'unreadable') return { kind: 'unavailable' };
+    if (queue.kind === 'queue') {
+      const drained = await drainQueueOutbox(worktree, queue, persist, { git });
+      if (drained.kind !== 'drained') return drained;
+    }
     const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
     if (listed.exitCode !== 0) return { kind: 'unavailable' };
     for (const ref of listed.stdout.split('\n').filter(Boolean)) {

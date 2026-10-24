@@ -53,7 +53,7 @@ async function fixture() {
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
   await writeCoverageBindingEnvelope(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
@@ -124,6 +124,35 @@ describe('runStackPreflight (real local Git)', () => {
     expect(phases).toEqual(['consume']);
     expect(planned.map(({ cause }) => cause)).toEqual(['feature-repair', 'base-refresh']);
     expect(planned[0]!.opId).not.toBe(planned[1]!.opId);
+  });
+
+  // Covers: task:rem-prd-audit-rem-vg5-s10-2
+  it('emits deferred-base-refresh once when a routed round opens after the repair applies', async () => {
+    const subject = await fixture();
+    await subject.git(['checkout', '-q', 'main']);
+    await subject.commit('base advance', 'base.txt', 'advanced\n');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('operator change', 'operator.txt', 'X\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const rearmed: string[] = [];
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      baseRefreshDue: true,
+      rearmRekick: async () => { rearmed.push('rearm'); },
+      // The routing record can be admitted after the early preflight probe
+      // but before the repair hands off its base-refresh journal.
+      routedRoundOpen: async () => true,
+      events,
+      git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toEqual({ kind: 'repaired' });
+    expect(rearmed).toEqual(['rearm']);
+    expect(records.filter((record) => record.type === 'restack_refused' && record.reason === 'deferred-base-refresh'))
+      .toHaveLength(1);
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
   async function withPersistedEvents<T>(repo: string, run: (events: ConductorEventEmitter) => Promise<T>) {

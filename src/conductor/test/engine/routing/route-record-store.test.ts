@@ -183,7 +183,14 @@ describe('ref-backed route record store', () => {
       const markerBlob = await writeRef(fixture, repairMarkerRefFor('demo'), { host: 1, roundId: 'r1' });
       const queueBlob = await writeRef(fixture, revalidationQueueRefFor('demo'), {
         generation: 2,
-        entries: [{ child: 1, closureSha: 'a'.repeat(40), state: 'pending' }],
+        entries: [{
+          child: 1,
+          position: 1,
+          closureSha: 'a'.repeat(40),
+          gates: ['test_suite'],
+          replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+          state: 'queued',
+        }],
         outbox: [],
       });
 
@@ -200,7 +207,18 @@ describe('ref-backed route record store', () => {
       expect(await readRevalidationQueue(fixture.repo, 'demo')).toEqual({
         kind: 'queue',
         slug: 'demo',
-        queue: { generation: 2, entries: [{ child: 1, closureSha: 'a'.repeat(40), state: 'pending' }], outbox: [] },
+        queue: {
+          generation: 2,
+          entries: [{
+            child: 1,
+            position: 1,
+            closureSha: 'a'.repeat(40),
+            gates: ['test_suite'],
+            replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+            state: 'queued',
+          }],
+          outbox: [],
+        },
         blob: queueBlob,
       });
 

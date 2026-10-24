@@ -216,9 +216,10 @@ import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker,
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound } from './routing/round-admission.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { requestRoutedExit } from './routing/routed-exit.js';
+import { consumeLowestQueued } from './routing/revalidation-queue.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
@@ -712,6 +713,8 @@ export class Conductor {
   /** Current run state, retained so terminal events can be step-stamped. */
   private haltState: ConductState = {};
   private stateStore: ConductStateStore<ConductState>;
+  /** The feature-level store is restored after a routed return reaches leaf. */
+  private readonly rootStateStore: ConductStateStore<ConductState>;
   private readonly resolveActiveChild: typeof resolveActiveChild;
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
@@ -822,7 +825,24 @@ export class Conductor {
     slug: string,
     state: ConductState,
   ): Promise<boolean> {
-    if (execution.source !== 'routed-host') return true;
+    if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return true;
+
+    // A queued child is only authority to re-enter BUILD after the queue has
+    // been consumed into its own open revalidate round.  The cursor carries a
+    // revalidating hint independently of that durable handshake, so validate
+    // the marker and record here, before either entry side effect or dispatch.
+    if (execution.source === 'revalidating') {
+      const marker = await readRepairMarker(this.projectRoot, slug);
+      if (marker.kind !== 'marker' || marker.marker.host !== execution.target.child || marker.marker.roundId !== execution.roundId) {
+        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no matching repair marker`);
+        return false;
+      }
+      const route = await readRouteRecord(this.projectRoot, slug, execution.roundId!);
+      if (route.kind !== 'record' || route.record.kind !== 'revalidate' || route.record.phase !== 'open') {
+        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
+        return false;
+      }
+    }
 
     const hostEntry = await this.enterHostRegion({
       worktree: this.projectRoot,
@@ -2534,6 +2554,7 @@ export class Conductor {
       opts.stateStore,
       createStepStatusWriteRefusalDiagnostics(opts.events),
     );
+    this.rootStateStore = this.stateStore;
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.resolveActiveChild = opts.childRegionLifecycle?.resolveActiveChild ?? resolveActiveChild;
@@ -2731,6 +2752,18 @@ export class Conductor {
     else state.last_step = lastStep;
     this.activeRegionChild = child;
     this.activeRegionIsLeaf = isLeaf;
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /** Rebind from a child overlay to feature state after a routed leaf return. */
+  private async restoreWholeFeatureState(state: ConductState): Promise<void> {
+    const fresh = await readState(this.stateFilePath);
+    if (!fresh.ok) throw new Error(`cannot reload feature state after routed leaf return: ${fresh.error.message}`);
+    for (const key of Object.keys(state)) delete (state as Record<string, unknown>)[key];
+    Object.assign(state, fresh.value);
+    this.stateStore = this.rootStateStore;
+    this.activeRegionChild = undefined;
+    this.activeRegionIsLeaf = undefined;
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -5619,7 +5652,23 @@ export class Conductor {
   }
 
   /** Complete a verified terminal run and leave the daemon's success marker. */
-  private async completeRun(state: ConductState, doneMarkerBody: string): Promise<void> {
+  private async completeRun(state: ConductState, doneMarkerBody: string): Promise<boolean> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    // Routing durability exists only for an actual stack.  N=1 completion
+    // must not enumerate routing refs merely because routing defaults on.
+    const leaf = slug !== undefined && this.config.stacked_prs?.route_whole_feature_fixes === true
+      ? await resolveSealedLeaf(this.projectRoot)
+      : undefined;
+    if (
+      slug !== undefined &&
+      this.config.stacked_prs?.route_whole_feature_fixes === true &&
+      leaf !== undefined && leaf > 1 &&
+      await routedRoundOpen(this.projectRoot, slug)
+    ) {
+      // A route marker, open round, unreadable queue, or queued child is
+      // durable unfinished work.  Never mint terminal state around it.
+      return false;
+    }
     await this.commitStateChanges(state, 'complete verified feature run', {
       feature_status: 'complete',
     });
@@ -5643,6 +5692,7 @@ export class Conductor {
       await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
       await writeFile(join(this.projectRoot, DONE_MARKER), doneMarkerBody, 'utf-8').catch(() => {});
     }
+    return true;
   }
 
   /** Emit a HALT event with the most recently advanced conductor step. */
@@ -7519,6 +7569,9 @@ export class Conductor {
     // completion must continue through the tail without trying to close again.
     let activeChildRequiresClosure = false;
     let parkedAtOperatorBoundary = false;
+    // Routing has durable work but no runnable whole-feature gate.  This is a
+    // resumable parking boundary, not loop convergence and not a failure.
+    let parkedForRouting = false;
     const stopAtOperatorParkBoundary =
       async (
         alreadyObserved = false,
@@ -7629,7 +7682,8 @@ export class Conductor {
               // A routed host already owns its closure, but it still needs its
               // BUILD-region exit.  Only revalidation has a separate exit
               // protocol at this point in the lifecycle.
-              activeChildRequiresClosure = execution.source === 'cursor' || execution.source === 'routed-host';
+              activeChildRequiresClosure = execution.source === 'routed-host'
+                || (execution.source === 'cursor' && !target.isLeaf);
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
@@ -15212,7 +15266,7 @@ export class Conductor {
             await this.commitStateChanges(state, 'adopt documentation delivery pull request URL', {
               pr_url: documentationDelivery.prUrl,
             });
-            await this.completeRun(state, 'documentation delivery complete\n');
+            if (!await this.completeRun(state, 'documentation delivery complete\n')) parkedForRouting = true;
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -15253,7 +15307,6 @@ export class Conductor {
             step.name === 'build_review' &&
             activeChild !== undefined &&
             activeChildRequiresClosure &&
-            !activeChild.isLeaf &&
             CHILD_REGION_STEPS.every((regionStep) => {
               const status = getStepStatus(state, regionStep);
               return status === 'done' || status === 'skipped';
@@ -15274,7 +15327,14 @@ export class Conductor {
                 // requestRoutedExit supplies the durable diagnostic (including
                 // a restack HALT where appropriate); do not replace it with a
                 // generic conductor refusal.
-                await this.haltChildRegionRefusal(exited.detail);
+                const existingHalt = await readHaltMarkerContent(this.projectRoot);
+                if (existingHalt?.trim()) {
+                  const body = existingHalt.trim();
+                  const prUrl = await this.surfaceRemediationPr(body);
+                  await this.emitLoopHalt(body, prUrl);
+                } else {
+                  await this.haltChildRegionRefusal(exited.detail);
+                }
                 return;
               }
               const drained = await drainRoutingOutboxes(
@@ -15285,6 +15345,68 @@ export class Conductor {
               if (drained.kind !== 'drained') {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
                 return;
+              }
+              // A routed exit only settles its host. Reconcile immediately so
+              // the same loop iteration admits the next host, closes a round
+              // before queue consumption, or records the final leaf return.
+              const reconciled = await reconcileRounds(this.projectRoot, slug);
+              if (reconciled.kind === 'unavailable') {
+                await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
+                return;
+              }
+              let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
+              // Queue admission always wins over a return to whole-feature
+              // gates. Reconciliation reports the final leaf return separately
+              // from a close that still has routed work, but every terminal
+              // result must still prove the queue empty before whole-feature
+              // validation may resume.
+              if (
+                reconciled.kind === 'deferred' ||
+                reconciled.kind === 'none' ||
+                reconciled.kind === 'aborted' ||
+                reconciled.kind === 'leaf-returned' ||
+                reconciled.kind === 'quiescent'
+              ) {
+                consumed = await consumeLowestQueued(this.projectRoot, slug);
+                if (consumed.kind === 'unavailable') {
+                  await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
+                  return;
+                }
+                if (consumed.kind === 'admitted') {
+                  const next = await this.resolveActiveChild(this.projectRoot, slug);
+                  const nextExecution = resolveExecutionChild(next, slug);
+                  if (nextExecution.source !== 'revalidating' && nextExecution.source !== 'routed-host') {
+                    await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
+                    return;
+                  }
+                  activeChild = nextExecution.target;
+                  await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+                  i = indexOf('acceptance_specs') - 1;
+                  continue;
+                }
+              }
+              if (
+                (
+                  reconciled.kind === 'none' ||
+                  reconciled.kind === 'aborted' ||
+                  reconciled.kind === 'leaf-returned' ||
+                  reconciled.kind === 'quiescent'
+                ) &&
+                consumed?.kind === 'none' &&
+                !await routedRoundOpen(this.projectRoot, slug)
+              ) {
+                // returnToLeaf re-pends whole-feature gates in the root state
+                // file.  Do not keep the former routed host's overlay or its
+                // CAS baseline while selecting those gates.
+                await this.restoreWholeFeatureState(state);
+                activeChild = undefined;
+                // `returnToLeaf` intentionally re-pends manual_test as well
+                // as the audit gates.  Re-enter at the first re-pended tail
+                // gate: prd_audit depends on manual_test, so jumping straight
+                // to it would halt on its own prerequisite before any
+                // whole-feature validation could resume.
+                i = indexOf('manual_test') - 1;
+                continue;
               }
               const next = await this.resolveActiveChild(this.projectRoot, slug);
               const nextExecution = resolveExecutionChild(next, slug);
@@ -15321,7 +15443,7 @@ export class Conductor {
             continue;
           }
 
-          let advance: number | null | 'halt';
+          let advance: number | null | 'halt' | 'parked';
           try {
             advance = await this.advanceTail(
               step,
@@ -15349,6 +15471,10 @@ export class Conductor {
             }
             return;
           }
+          if (advance === 'parked') {
+            parkedForRouting = true;
+            return;
+          }
           if (advance !== null) {
             i = advance - 1; // the for loop's i++ lands on the selector's choice
             continue;
@@ -15374,8 +15500,10 @@ export class Conductor {
         }
       }
 
-      await this.completeRun(state, 'gate-driven loop converged\n');
-      if (state.feature_desc && state.pr_url) {
+      if (!parkedForRouting && !await this.completeRun(state, 'gate-driven loop converged\n')) {
+        parkedForRouting = true;
+      }
+      if (!parkedForRouting && state.feature_desc && state.pr_url) {
         await refreshPostFinishShippedRecord({
           runGit: this.git,
           cwd: this.projectRoot,
@@ -15438,6 +15566,7 @@ export class Conductor {
       if (
         this.daemon &&
         !parkedAtOperatorBoundary &&
+        !parkedForRouting &&
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
       ) {
@@ -15901,7 +16030,7 @@ export class Conductor {
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
     buildRoutedForward = false,
-  ): Promise<number | null | 'halt'> {
+  ): Promise<number | null | 'halt' | 'parked'> {
     // The gate-driven tail engages only when completion is verified against
     // artifacts (verifyArtifacts=true) — the single satisfaction authority
     // (adr-2026-07-11-verdict-aware-resume-entry, Decision item 5). The daemon
@@ -16239,6 +16368,12 @@ export class Conductor {
       regionStart: topo.regionStart,
       ...(routedParking === undefined ? {} : { routedParking }),
     });
+    if (decision.kind === 'parked') {
+      // Preflight owns queue admission.  Do not turn an outstanding route or
+      // queue into convergence merely because no whole-feature gate is
+      // selectable in this pass.
+      return 'parked';
+    }
     if (decision.kind === 'done') {
       await writeFile(
         join(this.projectRoot, DONE_MARKER),

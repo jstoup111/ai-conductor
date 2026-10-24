@@ -1463,3 +1463,322 @@ Three APPROVED ADRs carry 2026-10-23 #3212 amendment notes in this change set, s
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic, and no task depends on a later slice
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-rem-1: Apply inherited rem-* block normalization in restack-transition.ts outcomeFor/queueInvalidation and classifyReplayGateInvalidation, with a fixture test proving child 2's replay outcome is `unchanged` and wouldInvalidate is empty
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside approved Task 18: only restack-ownership.ts strips inherited rem-* blocks; restack-transition.ts outcomeFor/queueInvalidation and classifyReplayGateInvalidation still compare raw plans, so the replay proof is not `unchanged`. No architectural decision needed.
+**Criterion:** S4.4
+**Parent task:** 18
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-2: Call advanceRound (via round reconciliation) from the conductor's in-loop routed exit after requestRoutedExit settles a host, and add advanceRound tests for the currentHostIndex+admitted single CAS
+**Gate:** prd-audit
+**Rationale:** advanceRound exists but is only reached from runStackPreflight; the in-loop routed exit (conductor.ts ~15261-15295) re-resolves the cursor without advancing the round. Task 20 admits wiring and testing advanceRound; approved ADR is authoritative.
+**Criterion:** S5.1
+**Parent task:** 20
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-3: Test advanceRound admits the leaf host with marker in one CAS when child hosts are settled and queue is empty, reached from the in-loop exit path
+**Gate:** prd-audit
+**Rationale:** Same defect as S5.1: next-host/leaf-host admission happens only from preflight. Covered by Task 20's leaf-host admission done-whens.
+**Criterion:** S5.2
+**Parent task:** 20
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-4: Implement and test advanceRound closure rules: close in the same CAS when every host settled and another round open, or when queue has entries (no leafReturn); keep open on leaf host otherwise
+**Gate:** prd-audit
+**Rationale:** Round closure is unreachable from the in-loop exit and untested. Task 20 specifies closure semantics (closed in same CAS when another round is open or queue non-empty before consumption; otherwise stay open for leaf return).
+**Criterion:** S5.3
+**Parent task:** 20
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-5: Reach returnToLeaf from the in-loop exit path, perform it only when no other round is open, record leafReturn before close, and re-pend prd_audit/architecture_review_as_built/manual_test plus configured post-region custom steps; add Task 25/26 tests
+**Gate:** prd-audit
+**Rationale:** returnToLeaf is reachable only from preflight, ignores other open rounds and omits configured post-region custom steps. Tasks 25 and 26 admit the full return/re-pend behavior.
+**Criterion:** S6.1
+**Parent task:** 25
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-6: In routed-exit.ts no-commit branch, remove the host's queue entry and append child_revalidated `passed` in the same CAS that marks the host done regardless of round kind; test it
+**Gate:** prd-audit
+**Rationale:** The no-commit exit acknowledges the queue entry only for revalidate rounds; Task 32 requires the host's own entry be removed in the same CAS that marks it done with a child_revalidated `passed` event for any round kind.
+**Criterion:** S7.8
+**Parent task:** 32
+**Done when:**
+- [test] S7.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-7: Make acknowledgeQueueEntry close routes/r2 in the ack transaction unless the queue empties AND no other round is open; test both branches per Task 36
+**Gate:** prd-audit
+**Rationale:** acknowledgeQueueEntry's closure decision checks only queue length, not other open rounds, contrary to Task 36's last-entry exception.
+**Criterion:** S8.5
+**Parent task:** 36
+**Done when:**
+- [test] S8.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-8: Pin queue generation (blob identity) and closed/cN at revalidate admission and CAS against them in acknowledgeQueueEntry; test newer-generation and moved closed/c2 failures leave entry, route and marker unchanged
+**Gate:** prd-audit
+**Rationale:** acknowledgeQueueEntry CASes against a freshly re-read generation rather than the one pinned at admission; Task 36 requires generation and closure guards so a newer generation fails the CAS.
+**Criterion:** S8.9
+**Parent task:** 36
+**Done when:**
+- [test] S8.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-9: In stack-preflight.ts evaluate the due base refresh deferral (emit restack_refused deferred-base-refresh) before or alongside queue consumption; add Task 39's three tests
+**Gate:** prd-audit
+**Rationale:** Verified in stack-preflight.ts: consumeLowestQueued returns navigate-host before the baseRefreshDue && routedRoundOpen check, so no deferred-base-refresh is emitted. Task 39 admits reordering and tests.
+**Criterion:** S10.1
+**Parent task:** 39
+**Done when:**
+- [test] S10.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-9 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-10: Propagate the exit's typed failure (with existing HALT) from routed-exit.ts instead of collapsing to 'halted', and skip haltChildRegionRefusal when a HALT already exists; test cascade-cap, publication, foreign-round and changed-ref details survive
+**Gate:** as-built
+**Rationale:** Conforming fix under ADR D13: the conductor's exit handler overwrites detailed HALTs via haltChildRegionRefusal. Tasks 9/13/14/12/5 require the originating HALT (cascade-cap runbook, publication, foreign-round, changed-ref) survive.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 13
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-10 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-11: Remove the leaf-target exclusion before requestRoutedExit in conductor.ts for routed leaf hosts, and test the leaf host region exit calls requestRoutedExit once with no advanceChildRegion
+**Gate:** as-built
+**Rationale:** conductor.ts excludes leaf targets before requestRoutedExit, making the leaf-host exit unreachable; Task 22's second done-when requires the region exit for the leaf host call requestRoutedExit once.
+**Parent task:** 22
+**Governing clause:** Task 22
+**Done when:**
+- Task 22 is satisfied by this task.
+- The repair for task rem-as-built-rem-11 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-12: Implement D6 in routed-exit.ts: close settled round (no leafReturn) when queue has entries or another round is open; leaf-return only when queue empty and no other round open
+**Gate:** as-built
+**Rationale:** ADR D6 distinction (close before queue consumption vs record final leaf return) is approved; code leaves settled rounds open when queue has entries and always leaf-returns. Implementation drift within Tasks 20/25.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 6
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-12 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-13: Re-pend configured post-region custom steps with the three leaf gates and invalidate their prior satisfied verdicts so selectNextGate dispatches prd_audit; add Task 26 tests including byte-identical kickback ledger
+**Gate:** as-built
+**Rationale:** Task 26 requires configured post-region custom steps re-pended and prior PASS verdicts not treated as satisfied; current code hardcodes three gates and retains verdicts accepted by selector.ts.
+**Parent task:** 26
+**Governing clause:** Task 26
+**Done when:**
+- Task 26 is satisfied by this task.
+- The repair for task rem-as-built-rem-13 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-14: In returnToLeaf restage leaf gates before writing phase closed, fail closed on state-read/mutation errors, and make resume re-run restaging for a recorded leafReturn on an open round; add injected-crash test
+**Gate:** as-built
+**Rationale:** ADR D15 crash-safety: round is closed before leaf gates are restaged and failures are ignored, losing the obligation on resume. Tasks 25/26 admit ordering restaging before close and failing closed.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 15
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 15 is satisfied by this task.
+- The repair for task rem-as-built-rem-14 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s4-4: In restack-transition.ts, normalize inherited rem-* plan blocks before compareReplayTree (so a plan-only conflict cannot yield 'unproved'), and restrict the fallback relevant-path set to child-owned paths rather than oldTip..newSha. Add a fixture test where child 2 and its new parent both append rem blocks and the parent also changes code, asserting the replay outcome is 'unchanged' and wouldInvalidate is empty
+**Gate:** prd-audit
+**Rationale:** Conforming implementation gap within approved scope (verified by audit evidence, ~90%): normalizedReplayComparison in restack-transition.ts only normalizes a 'changed' compareReplayTree result. When both child 2 and its new parent appended rem-* plan blocks, merge-tree conflicts and returns 'unproved', which skips normalization. The fallback path set also includes the parent's own code changes. Task rem-prd-audit-rem-1 admits the repair, and no architectural decision is needed.
+**Criterion:** S4.4
+**Parent task:** rem-prd-audit-rem-1
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s4-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s6-1: In conductor.ts, after a routed exit whose reconciliation records leafReturn, rebind state/persistedStateSnapshot/stateStore to the leaf via activateChildRegionState (or reload from disk) before selecting the next gate. Add Task 25/26 tests proving the re-pended prd_audit/architecture_review_as_built/manual_test and post-region custom steps are pending in memory and the next state write raises no CAS mismatch
+**Gate:** prd-audit
+**Rationale:** Conforming wiring defect (verified ~90%). In the in-loop exit, returnToLeaf re-pends gates on disk, but the conductor keeps its in-memory state, persistedStateSnapshot and stateStore bound to the previous host's child store. Task rem-prd-audit-rem-5 (Tasks 25/26) admits rebinding and the missing tests.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-rem-5
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s6-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s6-8: In conductor.ts/selector.ts, when routing parking (a marker, an open round or a non-empty queue) excludes every gate, return a parked/consume-queue decision instead of 'done': no .pipeline/DONE and no loop_converged. Ensure no leaf gate dispatches via the linear index while the queue is non-empty. Add Task 24 tests: child 2 queued with no marker records no leaf gate, no post-region custom step, no FINISH or publication step, and no DONE
+**Gate:** prd-audit
+**Rationale:** Verified at conductor.ts: reconciled.kind 'deferred' sets i = indexOf('prd_audit') - 1. This lets the linear loop dispatch a leaf gate past the parking-aware selector. A fully parked selector returns 'done', which writes DONE. Task 24 admits correct parking behavior. This needs no decision.
+**Criterion:** S6.8
+**Parent task:** 24
+**Done when:**
+- [test] S6.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s6-8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s7-8: In revalidation-queue.ts acknowledgeQueueEntry (or the routed-exit.ts no-commit branch), close the round only when its kind is 'revalidate' and no host remains pending. For an audit round, mark the host done, remove its entry and append child_revalidated 'passed' in one CAS while leaving the round open. Add a test of an audit round with queued host 1 and pending later hosts, asserting the round stays open and the next host is admitted
+**Gate:** prd-audit
+**Rationale:** Verified in revalidation-queue.ts: acknowledgeQueueEntry writes phase 'closed' unless leavesRoundOpen, without regard to round kind. An audit round whose queued host 1 exits with no commit is therefore closed while later hosts are still pending. Task rem-prd-audit-rem-6 admits the fix.
+**Criterion:** S7.8
+**Parent task:** rem-prd-audit-rem-6
+**Done when:**
+- [test] S7.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s7-8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s8-8: In the conductor.ts routed-exit branch, when reconcileRounds returns 'deferred' because advanceRound yielded to the queue, call consumeLowestQueued (marker first) and enter the resulting revalidate host region instead of jumping to prd_audit. Add the Task 33 test: with the audit round's leaf host pending and child 2 queued, child 2's revalidate round is created in the same run and the leaf host stays pending
+**Gate:** prd-audit
+**Rationale:** Verified: consumeLowestQueued is called only from stack-preflight.ts, and the in-loop 'deferred' branch jumps to prd_audit. Task 33 requires that the lowest queued child becomes a revalidate round. That requires calling it from the in-loop path too.
+**Criterion:** S8.8
+**Parent task:** 33
+**Done when:**
+- [test] S8.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s8-8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s8-11: In conductor.ts enterRoutedHostRegion, add a host admission guard: a 'revalidating' execution child is admitted only when a marker names an open 'revalidate' round for that child. Otherwise refuse, or consume the queue first, and dispatch no region step. Add the Task 34 test: a revalidating child with no revalidate round is refused and the dispatch spy records no region step
+**Gate:** prd-audit
+**Rationale:** The audit cites code paths (child-cursor.ts:454, conductor.ts:7612/824) showing that a 'revalidating' source enters the region without a revalidate round (~85%). Task 34 explicitly requires that refusal, so this is conforming BUILD work.
+**Criterion:** S8.11
+**Parent task:** 34
+**Done when:**
+- [test] S8.11 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s8-11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg3-s11-2: In the conductor.ts build_review region-exit guard, restore the leaf exclusion for non-routed sources: admit leaf targets only when the execution source is 'routed-host', so an ordinary cursor leaf proceeds to whole-feature gates without advanceChildRegion/closeChild. Add a regression test: a routing-off stacked leaf completing its region records no advanceChildRegion and no closeChild call
+**Gate:** prd-audit
+**Rationale:** Verified: the build_review region-exit guard in conductor.ts now gates only on activeChildRequiresClosure. An ordinary cursor leaf therefore falls through to advanceChildRegion/closeChild. The rem-as-built-rem-11 repair overreached its approved scope (routed leaf hosts only), so the guard must be narrowed.
+**Criterion:** S11.2
+**Parent task:** rem-as-built-rem-11
+**Done when:**
+- [test] S11.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg3-s11-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg3-ab-1: In revalidation-queue.ts acknowledgeQueueEntry, include a 'verify refs/conductor/<slug>/closed/c<host> <closureSha>' op in the same writeRoutingTransaction (add a verify-ref op kind if absent), so a closure change makes the whole update-ref --stdin fail. Add the Task 36 test: moving closed/c2 between the read and the transaction leaves the entry, routes/r2 and the marker unchanged
+**Gate:** as-built
+**Rationale:** Verified in revalidation-queue.ts: the closed/cN rev-parse check runs before writeRoutingTransaction, whose ops cover only the record, marker and queue. Task 36 requires the CAS to fail when closed/c2 moves, so the closure ref must join the transaction.
+**Parent task:** 36
+**Governing clause:** Task 36
+**Done when:**
+- Task 36 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg3-ab-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg3-ab-2: In conductor.ts, remove 'deferred' from the routed-exit branch condition that jumps to prd_audit. Route 'deferred' through queue consumption or the parking-aware selector, and jump to whole-feature gates only on 'none'/'aborted' with an empty queue and no open round. Add a test that a deferred reconciliation never dispatches prd_audit while a queue entry exists
+**Gate:** as-built
+**Rationale:** This is the same defect as S6.8/S8.8, verified in conductor.ts: 'deferred' jumps to prd_audit. ADR decision 13 is approved and authoritative, so this is conforming implementation work. This task is the guard against the branch's reintroduction, distinct from the S8.8 queue-consumption wiring.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 13
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg3-ab-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg3-ab-3: Add a conductor.ts test pairing both leaf cases: a routed leaf host's build_review region exit calls requestRoutedExit once with no advanceChildRegion, and a cursor-selected leaf calls neither requestRoutedExit nor advanceChildRegion/closeChild. Adjust the guard so both pass
+**Gate:** as-built
+**Rationale:** Same root cause as S11.2, verified in conductor.ts. Task 22 governs the routed leaf exit only. Ordinary leaves must keep their exclusion from closure and advancement. This task adds the routed-leaf positive test to pair with the S11.2 regression.
+**Parent task:** 22
+**Governing clause:** Task 22
+**Done when:**
+- Task 22 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg3-ab-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s4-4: In src/conductor/src/engine/restack/restack-transition.ts normalizedReplayComparison, strip inherited rem-* plan blocks from both trees before compareReplayTree, and normalize 'unproved' results instead of returning early on any non-'changed' kind. Restrict the fallback relevant-path set to child-owned paths instead of tuple.previous..tuple.head. Add a fixture test where child 2 and its new parent both append rem blocks and the parent also changes code, asserting the outcome is 'unchanged' and wouldInvalidate is empty
+**Gate:** prd-audit
+**Rationale:** Verified (95%): restack-transition.ts:96 still has `if (comparison.kind !== 'changed') return comparison;`, so a merge-tree 'unproved' result is never normalized. Owner task rem-prd-audit-rem-vg3-s4-4 is marked completed, but the repair did not land. The approved architecture covers this, so it is a conforming implementation and test repair for BUILD.
+**Criterion:** S4.4
+**Parent task:** rem-prd-audit-rem-vg3-s4-4
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s4-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s5-1: In src/conductor/src/engine/routing/routed-exit.ts, derive the leaf from resolveSealedLeaf in both selectNextHost and returnToLeaf instead of `hosts.length - 1` / `Math.max(hosts)`, and treat every allocated host below the sealed leaf as a child host. Add a test for a round with hosts {1,2} and an unallocated leaf 3: after host 1's exit queues child 2, selectNextHost returns child-host 2 before 'queue', and returnToLeaf targets leaf 3
+**Gate:** prd-audit
+**Rationale:** Verified (95%): routed-exit.ts:73 uses `leafIndex = hosts.length - 1` and :195 uses `Math.max(...hosts)` as the leaf. Hosts come from allocation keys, which need not include the sealed leaf. The parking path already uses resolveSealedLeaf, so the fix is a conforming implementation change within Task 19's recorded-order contract.
+**Criterion:** S5.1
+**Parent task:** 19
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s5-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s6-1: In src/conductor/src/engine/conductor.ts, after a routed exit whose reconciliation records leafReturn, reload the leaf's full conduct state from disk into state, persistedStateSnapshot and stateStore, including the restaged post-region steps, before selecting the next gate. Add a test showing that prd_audit, architecture_review_as_built, manual_test and the configured custom steps are pending in memory, and that the next commitStateChanges raises no CAS mismatch
+**Gate:** prd-audit
+**Rationale:** Verified (90%): restageLeafGates writes pending state directly to disk, while activateChildRegionState reloads only CHILD_REGION_STEPS and resets persistedStateSnapshot from stale memory. The next CAS write therefore expects 'done' against disk 'pending'. Owner task rem-prd-audit-rem-vg3-s6-1 is completed but has no Task 25/26 test. This is a conforming BUILD repair.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-rem-vg3-s6-1
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s6-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s6-2: In src/conductor/src/engine/routing/routed-exit.ts restageLeafGates, write the re-pended verdicts without a kickback.from attribution, or with a restaging marker that conductor.ts scanKickbackVerdicts skips, so the scan never charges them as kickback laps. Add a Task 26 test: snapshot the kickback ledger file before the return, run the return and then a leaf build_review completion, and assert the ledger is byte-identical
+**Gate:** prd-audit
+**Rationale:** Verified (90%): routed-exit.ts:172 stamps restaging verdicts with `kickback: { from: 'build_review' }`. scanKickbackVerdicts charges unsatisfied verdicts whose kickback.from matches the step just run, so a later build_review run bumps the ledger. That breaks Task 26's unchanged-caps contract. This is an implementation repair plus the missing ledger byte-identity test.
+**Criterion:** S6.2
+**Parent task:** 26
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s6-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s6-8: In src/conductor/src/engine/conductor.ts advanceTail, handle a 'parked' selectNextGate decision with an explicit park/consume-queue outcome instead of returning steps.length, and make the step loop treat it as non-convergence: consume the queue when non-empty, otherwise stop without completeRun, loop_converged or DONE. Add a Task 24 test: with child 2 queued and no marker, no leaf gate, post-region custom step, FINISH or publication step is recorded, and no .pipeline/DONE is written
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:16301 maps a 'parked' selector decision to `steps.length`. The loop then exits into completeRun, which marks the feature complete and writes DONE. Owner task rem-prd-audit-rem-vg3-s6-8 is completed but ineffective. This is a conforming BUILD repair.
+**Criterion:** S6.8
+**Parent task:** rem-prd-audit-rem-vg3-s6-8
+**Done when:**
+- [test] S6.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s6-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg4-ab-f4e-1: In src/conductor/src/engine/conductor.ts, near the same-loop queue-admission branch at line 15328, accept the execution source produced for an admitted revalidate round ('routed-host' bound to the admitted child and route, or 'revalidating') and enter the admitted region instead of HALTing. Add a test showing that queue admission of child 2 in the same loop enters child 2's revalidate region without a HALT
+**Gate:** as-built
+**Rationale:** Verified (95%): conductor.ts:15328 requires nextExecution.source === 'revalidating' after queue admission. Admission writes a marker, so child-cursor projects routedRepair and execution-child returns 'routed-host'. Every successful same-loop admission therefore HALTs. Task 33's contract is clear, so this is an implementation repair.
+**Parent task:** 33
+**Governing clause:** Task 33
+**Done when:**
+- Task 33 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg4-ab-f4e-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg4-ab-f4e-2: In src/conductor/src/engine/conductor.ts completeRun, refuse to commit feature_status 'complete', emit feature_complete or write .pipeline/DONE while a routing marker, an open round or a non-empty revalidation queue exists, and return to queue consumption or parking instead. Add a test showing that completeRun with child 2 queued writes no DONE and emits no feature_complete
+**Gate:** as-built
+**Rationale:** Verified (95%): this is the same defect as S6.8. The parked selector result at conductor.ts:16301 reaches completeRun at :15436, which writes feature_complete and daemon DONE. The primary fix is rem-vg4-s6-8. This task adds a completion guard so that no other path can mark the feature done while routed work is outstanding.
+**Parent task:** rem-prd-audit-rem-vg3-s6-8
+**Governing clause:** Task rem-prd-audit-rem-vg3-s6-8
+**Done when:**
+- Task rem-prd-audit-rem-vg3-s6-8 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg4-ab-f4e-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg5-s6-1: In src/conductor/src/engine/conductor.ts routed-exit branch (~15355-15381), remove the `reconciled.kind === 'deferred' && consumed?.kind === 'none'` arm from the prd_audit jump. When reconciliation is deferred and the queue is empty, call reconcileRounds again (bounded loop) or resolve the next routed host via resolveActiveChild. Enter whole-feature gates (restoreWholeFeatureState; i = indexOf('prd_audit') - 1) only when reconciliation returns 'none'/'aborted', the queue is empty and routedRoundOpen is false. Add a conductor test: revalidate round r2 is open for child 2 while audit round r1's leaf host exits and r1 closes. Assert no prd_audit dispatch and no .pipeline/DONE, and assert r2's host is entered next. Add a second test: a deferred reconciliation with a queue entry never dispatches prd_audit
+**Gate:** prd-audit
+**Rationale:** Verified (99%): src/conductor/src/engine/conductor.ts:15374-15375 still jumps to prd_audit on `reconciled.kind === 'deferred' && consumed?.kind === 'none'`. reconcileRounds returns 'deferred' after advanceRound closes one round while another round (r2) is still open, so whole-feature gates run before r2 closes and before returnToLeaf restaging. This is an implementation gap in existing task rem-as-built-rem-vg3-ab-2 and ADR decision 13; the approved architecture already defines the behavior, so no decision is needed. The earlier repair kept the 'deferred' arm, so the new task names the exact condition to remove and the test to add.
+**Criterion:** S6.1
+**Parent task:** rem-as-built-rem-vg3-ab-2
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg5-s6-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg5-s10-2: In src/conductor/src/engine/restack/stack-preflight.ts post-repair branches (~236-267), emit deferred-base-refresh exactly once. Either have recoverRestackJournal report whether it already emitted restack_refused 'deferred-base-refresh' and skip deferredBaseRefresh when it did, or make restack-recovery.ts skip its own emission when suppressFollowOn is set. Keep rearmRekick before journal deletion. Strengthen the Task 40 preflight test to assert exactly one restack_refused event with reason 'deferred-base-refresh' (count === 1), and keep the recovery-path test at one event
+**Gate:** prd-audit
+**Rationale:** Verified (99%): src/conductor/src/engine/restack/stack-preflight.ts:241-242 (and the sibling at :253) calls recoverRestackJournal({suppressFollowOn:true}) and then deferredBaseRefresh(). restack-recovery.ts:625-639 already emits restack_refused 'deferred-base-refresh' on its applied-journal base-refresh path when a routed round is open, so the event is emitted twice. Task 40's done-when requires exactly one restack_refused on the preflight path. This is an implementation/test gap inside Task 40.
+**Criterion:** S10.2
+**Parent task:** 40
+**Done when:**
+- [test] S10.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg5-s10-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg5-d14: In src/conductor/src/engine/restack/restack-transition.ts normalizedReplayComparison (~180-210), replace `fallbackPaths: []` with the parent's changed paths minus only the plan paths whose difference is inherited rem-* blocks. The classifier consumers at ~:272 and ~:531 then still see parent runtime changes. Keep the replay comparison 'unchanged'. Add restack-transition tests. (a) The parent appends a rem block and changes parseA's signature in src/a.ts, a file child 2 does not own: replay is 'unchanged', yet queueInvalidation and wouldInvalidate include child 2 with test_suite. (b) The difference is inherited rem blocks only: wouldInvalidate stays empty (Task 18 preserved)
+**Gate:** as-built
+**Rationale:** Verified (99%): restack-transition.ts:190-209 returns `fallbackPaths: []`. The consumers at :272 and :531 use `normalized.fallbackPaths ?? outcome.allChangedPaths`, so an empty array erases the parent's runtime code changes along with the inherited rem blocks. ADR decision 14 states that replay identity alone never preserves test_suite, because a lower child's change can break an upper child. Task 30's done-when requires that a parseA signature change in a file child 2 does not own puts test_suite in child 2's gates. The earlier rem tasks expecting an empty wouldInvalidate when the parent also changes code contradict D14 and Task 30. The approved ADR stays authoritative, so this is BUILD drift with no architecture change. The fix keeps Task 18's rem-only case: when the only difference is inherited rem blocks, wouldInvalidate is still empty.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 14
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 14 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg5-d14 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-rem-vg6-s6-1: Disambiguate the routed leaf-return result instead of re-tuning the conductor.ts condition (operator-directed design; S6.1 has failed four laps because 'deferred' conflates distinct outcomes). (1) routing/routed-exit.ts: add AdvanceRoundResult { kind: 'leaf-returned' } and return it from the returnToLeaf path in advanceRound (the settled, empty-queue, no-other-open-round branch) instead of 'closed'; 'closed' keeps meaning closed-while-another-round-or-queue-remains. (2) routing/round-admission.ts reconcileRounds: map advanceRound 'leaf-returned' to a new ReconcileRoundsResult { kind: 'leaf-returned'; roundId }, and when every route record is phase 'closed' and no marker exists return a new { kind: 'quiescent' } instead of falling through to 'deferred' (crash-after-leaf-return recovery). 'deferred' must then mean only: reroute sync, round closed with work remaining, or yielded to the queue. (3) conductor.ts routed-exit branch: enter restoreWholeFeatureState, clear activeChild and jump to prd_audit only when reconciled.kind is none, aborted, leaf-returned or quiescent AND queue consumption returns none AND routedRoundOpen is false; 'deferred' never enters it. Make every switch over both result unions exhaustive (stack-preflight and any other consumer). (4) Tests: unit tests in round-admission/routed-exit tests for each result kind (leaf-returned vs closed-with-other-open vs queue vs quiescent); and one conductor test with real route-record, marker, queue and conduct-state refs that mocks none of reconcileRounds, advanceRound, returnToLeaf or routedRoundOpen: drive a real final-host exit through returnToLeaf, assert prd_audit is dispatched next, acceptance_specs is not re-dispatched, no child region state is reactivated, and the in-memory state equals the on-disk leaf conduct state. Keep the vg5 tests passing (open r2 => no prd_audit; queued entry => no prd_audit) and keep ordinary cursor leaves excluded from non-leaf closure.
+**Gate:** prd-audit
+**Rationale:** Verified 98% against HEAD edd634f789: conductor.ts:15377-15387 still enters restoreWholeFeatureState and jumps to prd_audit only when reconciled.kind is none or aborted. round-admission.ts:92 returns none only when no route refs exist. Closed rounds keep their refs, and advanceRound's leaf-return close maps to deferred (round-admission.ts:117-120). So the real leaf-return path falls through to resolveActiveChild and acceptance_specs. The vg5 commit added the queue and routedRoundOpen guards but kept the reconciled.kind gate. The approved architecture (ADR decisions 13 and 15) is clear about the required behavior, so this is conforming implementation drift and belongs in BUILD.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-rem-vg5-s6-1
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-rem-vg6-s6-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1: In src/conductor/test (conductor routed-exit tests), add a test with real route-record, marker and conduct-state files and no mocks of reconcileRounds or returnToLeaf. A routed leaf host exits, returnToLeaf closes the final round and re-pends the post-region gates on disk. Assert that after the routed-exit branch: the in-memory state, persistedStateSnapshot and stateStore baseline equal the on-disk leaf conduct state; prd_audit, architecture_review_as_built, manual_test and every configured post-region custom step are pending in memory with their satisfied verdicts cleared; and the next commitStateChanges raises no CAS mismatch. If restoreWholeFeatureState (conductor.ts:2758) does not reload all three, fix it in the same task
+**Gate:** as-built
+**Rationale:** Same defect as S6.1, verified at HEAD (conductor.ts:15377-15398 and round-admission.ts:92,117-120). The full leaf-state and CAS-baseline restore that task rem-prd-audit-rem-vg4-s6-1 requires never runs on the actual returnToLeaf path, because that path reconciles to deferred. The gate fix belongs to rem-prd-audit-rem-vg6-s6-1. This task adds the missing state-level proof on the real (unmocked) leaf-return path, which existing tests never exercise because they mock reconcileRounds. Plan task rem-prd-audit-rem-vg4-s6-1 admits it.
+**Parent task:** rem-prd-audit-rem-vg4-s6-1
+**Governing clause:** Task rem-prd-audit-rem-vg4-s6-1
+**Done when:**
+- Task rem-prd-audit-rem-vg4-s6-1 is satisfied by this task.
+- The repair for task rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1 is committed and its targeted tests pass.

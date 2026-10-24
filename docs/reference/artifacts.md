@@ -828,7 +828,7 @@ when a reseal changes a story's owner without moving a task; and the restack eve
 (`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). Routed repair adds
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
-`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome`). Stacked
+`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
 publication adds `stack_member_published` and `stack_member_redrafted` (`child`, `pr`),
 `stack_assembled` (`prs`), `stack_member_lifecycle` (`child`, `pr`, `state` of
 `merged`/`closed`/`reverted`, de-duplicated by `eventId`), `stack_members_unreachable` (`child`,

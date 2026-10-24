@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   verifyGreenAcceptance: vi.fn(),
   selfHealAcceptanceRed: vi.fn(),
   drainRoutingOutboxes: vi.fn(async () => ({ kind: 'drained' as const })),
+  reconcileRounds: undefined as undefined | (() => Promise<unknown>),
+  consumeLowestQueued: undefined as undefined | (() => Promise<unknown>),
 }));
 
 vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
@@ -22,6 +24,22 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
   return {
     ...actual,
     drainRoutingOutboxes: () => mocks.drainRoutingOutboxes(),
+  };
+});
+vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/round-admission.js')>();
+  return {
+    ...actual,
+    reconcileRounds: (...args: Parameters<typeof actual.reconcileRounds>) =>
+      mocks.reconcileRounds === undefined ? actual.reconcileRounds(...args) : mocks.reconcileRounds(),
+  };
+});
+vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/revalidation-queue.js')>();
+  return {
+    ...actual,
+    consumeLowestQueued: (...args: Parameters<typeof actual.consumeLowestQueued>) =>
+      mocks.consumeLowestQueued === undefined ? actual.consumeLowestQueued(...args) : mocks.consumeLowestQueued(),
   };
 });
 
@@ -40,6 +58,8 @@ afterEach(async () => {
   mocks.verifyGreenAcceptance.mockReset();
   mocks.selfHealAcceptanceRed.mockReset();
   mocks.drainRoutingOutboxes.mockClear();
+  mocks.reconcileRounds = undefined;
+  mocks.consumeLowestQueued = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -101,7 +121,9 @@ describe('Conductor routed acceptance verify-green path', () => {
         kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
       })
       .mockResolvedValueOnce({
-        kind: 'repair-pending', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
+        // A routed leaf still owns a marker and must take the routed exit;
+        // the ordinary non-leaf closure guard must not bypass it.
+        kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo',
         repairChildren: [child], routedRepair: { child, roundId },
       })
       .mockResolvedValueOnce({ kind: 'no-child' });
@@ -132,6 +154,134 @@ describe('Conductor routed acceptance verify-green path', () => {
     // is untouched proves the routed exit cannot close this host directly.
     expect(advanceChildRegion).not.toHaveBeenCalled();
     expect(mocks.drainRoutingOutboxes).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:rem-prd-audit-rem-vg5-s6-1
+  it('enters r2 after r1 closes deferred, without dispatching whole-feature audit or completing', async () => {
+    const { root } = await routedFixture();
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'pending', build: 'skipped', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    // r1's leaf host has just exited. Reconciliation closes r1 but must
+    // report deferred while r2 remains open for child 2.
+    mocks.reconcileRounds = async () => ({ kind: 'deferred' });
+    mocks.consumeLowestQueued = async () => ({ kind: 'none' });
+    const requestRoutedExit = vi.fn(async () => ({ kind: 'no-commit-done' as const }));
+    const nextHost = parseChildId(2)!;
+    const nextRound = parseRoundId('r2')!;
+    const enteredHosts: number[] = [];
+    const resolveActiveChild = vi.fn()
+      .mockResolvedValueOnce({ kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo' })
+      .mockResolvedValueOnce({ kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo' })
+      .mockResolvedValueOnce({
+        kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo',
+        repairChildren: [child], routedRepair: { child, roundId },
+      })
+      .mockImplementationOnce(async () => {
+        enteredHosts.push(nextHost);
+        return {
+          kind: 'repair-pending', child: nextHost, position: nextHost, isLeaf: true, branch: 'feat/daemon-demo',
+          repairChildren: [nextHost], routedRepair: { child: nextHost, roundId: nextRound },
+        };
+      });
+    const dispatched: string[] = [];
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(),
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          if (step === 'build_review') return { success: true };
+          throw new Error('stop after next routed host selection');
+        },
+      },
+      acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: {
+        resolveActiveChild,
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        requestRoutedExit,
+      },
+    });
+
+    await conductor.run();
+
+    expect(requestRoutedExit).toHaveBeenCalledOnce();
+    // The fourth lookup is the next routed host selected after the deferred
+    // reconciliation; the prior implementation jumped directly to prd_audit.
+    expect(resolveActiveChild.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(enteredHosts).toEqual([nextHost]);
+    expect(dispatched).not.toContain('prd_audit');
+    await expect(readFile(join(root, '.pipeline', 'DONE'), 'utf8')).rejects.toThrow();
+  });
+
+  // Covers: task:rem-prd-audit-rem-vg5-s6-1
+  it('enters the admitted revalidation host from a deferred reconciliation before prd_audit', async () => {
+    const { root } = await routedFixture();
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'pending', build: 'skipped', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    const nextHost = parseChildId(2)!;
+    const nextRound = parseRoundId('r2')!;
+    const enteredHosts: number[] = [];
+    mocks.reconcileRounds = async () => ({ kind: 'deferred' });
+    // The r1 close reveals a queued revalidation. Its atomic admission opens
+    // r2, so selecting prd_audit here would skip durable routed work.
+    const consumeLowestQueued = vi.fn(async () => ({ kind: 'admitted' as const, roundId: nextRound, host: nextHost }));
+    mocks.consumeLowestQueued = consumeLowestQueued;
+    const requestRoutedExit = vi.fn(async () => ({ kind: 'no-commit-done' as const }));
+    const resolveActiveChild = vi.fn()
+      .mockResolvedValueOnce({ kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo' })
+      .mockResolvedValueOnce({ kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo' })
+      .mockResolvedValueOnce({
+        kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo',
+        repairChildren: [child], routedRepair: { child, roundId },
+      })
+      .mockImplementationOnce(async () => {
+        enteredHosts.push(nextHost);
+        return {
+          kind: 'repair-pending', child: nextHost, position: nextHost, isLeaf: true, branch: 'feat/daemon-demo',
+          repairChildren: [nextHost], revalidating: { child: nextHost, generation: 2 },
+        };
+      });
+    const dispatched: string[] = [];
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(),
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          if (step === 'build_review') return { success: true };
+          throw new Error('stop after queued revalidation host entry');
+        },
+      },
+      acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: {
+        resolveActiveChild,
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        requestRoutedExit,
+      },
+    });
+
+    await conductor.run();
+
+    expect(consumeLowestQueued).toHaveBeenCalledOnce();
+    expect(enteredHosts).toEqual([nextHost]);
+    expect(dispatched).not.toContain('prd_audit');
+    await expect(readFile(join(root, '.pipeline', 'DONE'), 'utf8')).rejects.toThrow();
   });
 
   it('settles a refused verify-green without self-healing RED, dispatching, or reporting success', async () => {

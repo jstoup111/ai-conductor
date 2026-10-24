@@ -1,15 +1,16 @@
-import type { ChildId } from '../child-context.js';
+import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { makeGitRunner } from '../rebase.js';
 import type { GitRunner } from '../rebase.js';
 import { ConductorEventEmitter } from '../../ui/events.js';
 import { EventPersister } from '../event-persister.js';
-import { resolveActiveChild } from '../child-cursor.js';
+import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
 import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import {
   drainOutbox,
+  drainQueueOutbox,
   readRevalidationQueue,
   readRepairMarker,
   readRouteRecord,
@@ -24,6 +25,11 @@ import { assertNever, type HostState, type RevalidationQueueRecord, type RouteRe
 import { leafBranchFor } from '../feature-branch-identity.js';
 import { switchToChild } from '../child-lifecycle.js';
 import { applyStateChanges, readState } from '../state.js';
+import { acknowledgeQueueEntry } from './revalidation-queue.js';
+import { loadConfig } from '../config.js';
+import { buildStepRegistry } from '../steps.js';
+import { writeVerdict } from '../gate-verdicts.js';
+import type { StepName } from '../../types/index.js';
 
 export type NextHostSelection =
   | { readonly kind: 'child-host'; readonly host: ChildId; readonly index: number }
@@ -35,6 +41,8 @@ export type AdvanceRoundResult =
   | { readonly kind: 'admitted'; readonly host: ChildId }
   | { readonly kind: 'queue' }
   | { readonly kind: 'closed' }
+  /** The final settled round switched back to the leaf and re-pended its gates. */
+  | { readonly kind: 'leaf-returned' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 function pendingHost(state: HostState): boolean {
@@ -57,24 +65,31 @@ function pendingHost(state: HostState): boolean {
  * Selects the next durable return target, preserving the recorded host order.
  * The last host is the leaf, so it waits for both child hosts and revalidation.
  */
-export function selectNextHost(
+export async function selectNextHost(
+  worktree: string,
   record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>,
   queue: Pick<RevalidationQueueRecord, 'entries'>,
-): NextHostSelection {
+  options: { readonly leaf?: ChildId } = {},
+): Promise<NextHostSelection> {
   const hosts = Object.keys(record.hosts)
     .map(Number)
     .sort((left, right) => left - right) as ChildId[];
-  const leafIndex = hosts.length - 1;
+  const leaf = options.leaf ?? await resolveSealedLeaf(worktree);
+  if (leaf === undefined) return { kind: 'settled' };
+  const leafIndex = hosts.indexOf(leaf);
+  // A round can be opened before its leaf is allocated into its host map.
+  // Treat every allocated position below the durable sealed leaf as a child;
+  // the leaf remains the final return target, not the final map entry.
+  const childEnd = leafIndex === -1 ? hosts.length : leafIndex;
 
-  for (let index = record.currentHostIndex + 1; index < leafIndex; index += 1) {
+  for (let index = record.currentHostIndex + 1; index < childEnd; index += 1) {
     const host = hosts[index]!;
     if (pendingHost(record.hosts[host]!)) return { kind: 'child-host', host, index };
   }
 
   if (queue.entries.length > 0) return { kind: 'queue' };
 
-  const leaf = hosts[leafIndex];
-  if (leaf !== undefined && pendingHost(record.hosts[leaf]!)) return { kind: 'leaf-host', host: leaf, index: leafIndex };
+  if (leafIndex !== -1 && pendingHost(record.hosts[leaf]!)) return { kind: 'leaf-host', host: leaf, index: leafIndex };
   return { kind: 'settled' };
 }
 
@@ -95,9 +110,27 @@ export async function advanceRound(
     return { kind: 'unavailable', detail: 'revalidation queue is unreadable' };
   }
   const entries = options.queue?.entries ?? (queued?.kind === 'queue' ? queued.queue.entries : []);
-  const next = selectNextHost(stored.record, { entries });
-  if (next.kind === 'queue') return { kind: 'queue' };
-  if (next.kind === 'settled') return returnToLeaf(worktree, slug, stored, { git });
+  const next = await selectNextHost(worktree, stored.record, { entries });
+  if (next.kind === 'queue') {
+    const everyHostSettled = Object.values(stored.record.hosts)
+      .every((state) => state === 'restacked' || state === 'done' || state === 'rerouted');
+    if (!everyHostSettled) return { kind: 'queue' };
+    const wrote = await writeRoutingTransaction(worktree, slug, [
+      { kind: 'update-record', previous: stored, record: { ...stored.record, phase: 'closed' as const } },
+    ], { git });
+    return wrote.kind === 'updated' ? { kind: 'closed' } : { kind: 'unavailable', detail: `round close ${wrote.kind}` };
+  }
+  if (next.kind === 'settled') {
+    const otherOpen = await hasOtherOpenRound(worktree, slug, stored.record.roundId, git);
+    if (otherOpen === undefined) return { kind: 'unavailable', detail: 'cannot inspect other routed rounds' };
+    if (entries.length > 0 || otherOpen) {
+      const wrote = await writeRoutingTransaction(worktree, slug, [
+        { kind: 'update-record', previous: stored, record: { ...stored.record, phase: 'closed' as const } },
+      ], { git });
+      return wrote.kind === 'updated' ? { kind: 'closed' } : { kind: 'unavailable', detail: `round close ${wrote.kind}` };
+    }
+    return returnToLeaf(worktree, slug, stored, { git });
+  }
   const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });
   if (admitted.kind !== 'updated') return { kind: 'unavailable', detail: `cannot admit routed host ${next.host}` };
   const record = { ...admitted.record, currentHostIndex: next.index };
@@ -110,16 +143,65 @@ export async function advanceRound(
     : { kind: 'unavailable', detail: `round advance ${wrote.kind}` };
 }
 
+async function hasOtherOpenRound(worktree: string, slug: string, roundId: RoundId, git: GitRunner): Promise<boolean | undefined> {
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return undefined;
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const id = ref.split('/').at(-1);
+    if (!id || id === roundId) continue;
+    const other = await readRouteRecord(worktree, slug, id as RoundId, { git });
+    if (other.kind !== 'record') return undefined;
+    if (other.record.phase !== 'closed') return true;
+  }
+  return false;
+}
+
+async function restageLeafGates(worktree: string): Promise<string | undefined> {
+  const statePath = `${worktree}/.pipeline/conduct-state.json`;
+  const state = await readState(statePath);
+  if (!state.ok) return state.error.message;
+  const config = await loadConfig(worktree);
+  if (!config.ok) return config.error.message;
+  const registry = buildStepRegistry(config.config);
+  const buildReview = registry.findIndex((step) => step.name === 'build_review');
+  const finish = registry.findIndex((step) => step.name === 'finish');
+  if (buildReview < 0 || finish < 0) return 'cannot resolve routed leaf gate order';
+  const builtins = new Set(['prd_audit', 'architecture_review_as_built', 'manual_test']);
+  const postRegion = registry.slice(buildReview + 1, finish)
+    .map((step) => step.name)
+    .filter((name) => !builtins.has(name) && !CHILD_REGION_STEPS.includes(name as never));
+  const gates = ['prd_audit', 'architecture_review_as_built', 'manual_test', ...postRegion] as StepName[];
+  const result = await applyStateChanges(statePath, state.value, Object.fromEntries(gates.map((gate) => [gate, 'pending'])), 're-pend leaf gates after routed return');
+  if ('message' in result) return result.message;
+  try {
+    await Promise.all(gates.map((gate) => writeVerdict(worktree, gate, {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
+    })));
+  } catch (error) {
+    return `cannot invalidate leaf gate verdicts: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  return undefined;
+}
+
 /** Return to the leaf and record that return before the route can close. */
 export async function returnToLeaf(
   worktree: string,
   slug: string,
   stored: StoredRouteRecord,
   options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter } = {},
-): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'unavailable' }>> {
+): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
-  const leaf = Math.max(...Object.keys(stored.record.hosts).map(Number)) as ChildId;
+  const otherOpen = await hasOtherOpenRound(worktree, slug, stored.record.roundId, git);
+  if (otherOpen === undefined) return { kind: 'unavailable', detail: 'cannot inspect other routed rounds before leaf return' };
+  if (otherOpen) return { kind: 'unavailable', detail: 'cannot return to leaf while another routed round is open' };
+  const queue = await readRevalidationQueue(worktree, slug, { git });
+  if (queue.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot inspect revalidation queue before leaf return' };
+  if (queue.kind === 'queue' && queue.queue.entries.length > 0) return { kind: 'unavailable', detail: 'cannot return to leaf while revalidation queue has entries' };
+  const leaf = await resolveSealedLeaf(worktree);
+  if (leaf === undefined) return { kind: 'unavailable', detail: 'cannot resolve sealed leaf before routed return' };
   const branch = leafBranchFor(slug);
   const current = await git(['symbolic-ref', '--short', 'HEAD']);
   if (current.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot determine branch before leaf return' };
@@ -138,17 +220,12 @@ export async function returnToLeaf(
     if (reread.kind !== 'record') return { kind: 'unavailable', detail: 'cannot reread leaf return record' };
     currentStored = reread;
   }
+  const restageFailure = await restageLeafGates(worktree);
+  if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
   const closed = { ...currentStored.record, phase: 'closed' as const };
   const closedWrite = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: currentStored, record: closed }], { git });
   if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
-  const statePath = `${worktree}/.pipeline/conduct-state.json`;
-  const state = await readState(statePath);
-  if (state.ok) {
-    await applyStateChanges(statePath, state.value, {
-      prd_audit: 'pending', architecture_review_as_built: 'pending', manual_test: 'pending',
-    }, 're-pend leaf gates after routed return');
-  }
-  return { kind: 'closed' };
+  return { kind: 'leaf-returned' };
 }
 
 /** The immutable Git comparison facts used to choose a routed host's exit. */
@@ -256,6 +333,19 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   // still work that must be carried.  Only the exact closure tip is a no-op.
   if (evidence.tipEqualsClosure) {
     if (state === 'built') return halted(`routed exit host ${input.host}: built host cannot take no-commit exit`);
+    if (stored.record.entry?.host === input.host && stored.record.entry.revalidation !== undefined) {
+      const acknowledged = await acknowledgeQueueEntry(input.worktree, input.slug, stored, input.host, { git });
+      if (acknowledged.kind !== 'acknowledged') return halted(`routed exit host ${input.host}: queue acknowledgement ${acknowledged.kind}`);
+      const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
+      if (queue.kind === 'queue') {
+        const persister = new EventPersister(`${input.worktree}/.pipeline/events.jsonl`, input.events ?? new ConductorEventEmitter());
+        const persisted = input.persist ?? ((event) => persister.persistDurably(event));
+        // Queue delivery is replay-safe; leave the durable envelope if this process dies here.
+        const drained = await drainQueueOutbox(input.worktree, queue, persisted, { git });
+        if (drained.kind !== 'drained') return halted(`routed exit host ${input.host}: queue outbox ${drained.kind}`);
+      }
+      return { kind: 'no-commit-done' };
+    }
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark host done`);
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [

@@ -7,25 +7,25 @@ describe('stacked_prs config block', () => {
   it('materializes the dark-launch routing flag when the block is absent', () => {
     const result = validateConfig({});
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ route_whole_feature_fixes: false });
+    expect(result.ok && result.config.stacked_prs).toEqual({ route_whole_feature_fixes: true });
   });
 
   it('defaults enabled to false and max_slices to 1 when the block is present but empty', () => {
     const result = validateConfig({ stacked_prs: {} });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: 1, route_whole_feature_fixes: false });
+    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: 1, route_whole_feature_fixes: true });
   });
 
   it('preserves enabled: true and defaults max_slices to 1', () => {
     const result = validateConfig({ stacked_prs: { enabled: true } });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: true, max_slices: 1, route_whole_feature_fixes: false });
+    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: true, max_slices: 1, route_whole_feature_fixes: true });
   });
 
   it.each([1, 5, 6, 7, 9])('accepts max_slices %i', (maxSlices) => {
     const result = validateConfig({ stacked_prs: { max_slices: maxSlices } });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: maxSlices, route_whole_feature_fixes: false });
+    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: maxSlices, route_whole_feature_fixes: true });
   });
 
   it.each([6, 7])('warns when max_slices is %i', (maxSlices) => {

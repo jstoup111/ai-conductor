@@ -20,6 +20,7 @@ vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => 
 });
 
 import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
+import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
@@ -45,6 +46,8 @@ async function blob(git: ReturnType<typeof makeGitRunner>, value: unknown): Prom
 
 async function fixture(withRepair: boolean): Promise<SweepRepository & { readonly gitRunner: ReturnType<typeof makeGitRunner>; readonly repair?: string }> {
   const subject = await createSweepRepository('routed-exit-', cleanup);
+  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  await subject.git(['add', '.ai-conductor/config.yml']);
   await subject.git(['commit', '-qm', 'ignore pipeline']);
   await subject.commit('base', 'base.txt', 'base\n');
   await subject.git(['checkout', '-qb', 'feat/c1/demo']);
@@ -56,7 +59,6 @@ async function fixture(withRepair: boolean): Promise<SweepRepository & { readonl
   await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
   await subject.commit('leaf', 'leaf.txt', 'leaf\n');
   await sealStack(subject.repo);
-  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
   await subject.git(['checkout', '-q', 'feat/c1/demo']);
   const repair = withRepair ? await subject.commit('routed fix', 'fix.txt', 'fixed\n') : undefined;
   const gitRunner = makeGitRunner(subject.repo);
@@ -111,6 +113,44 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
+  it('distinguishes a final leaf return from a close that yields to an open round or queue', async () => {
+    const leafReturn = await fixture(false);
+    await writeFile(join(leafReturn.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo' }));
+    await expect(requestRoutedExit({ worktree: leafReturn.repo, slug: 'demo', roundId, host, git: leafReturn.gitRunner }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+    const settled = await readRouteRecord(leafReturn.repo, 'demo', roundId, { git: leafReturn.gitRunner });
+    if (settled.kind !== 'record') throw new Error('missing settled route');
+    await expect(advanceRound(leafReturn.repo, 'demo', settled, { git: leafReturn.gitRunner }))
+      .resolves.toEqual({ kind: 'leaf-returned' });
+
+    const otherOpen = await fixture(false);
+    await expect(requestRoutedExit({ worktree: otherOpen.repo, slug: 'demo', roundId, host, git: otherOpen.gitRunner }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+    const first = await readRouteRecord(otherOpen.repo, 'demo', roundId, { git: otherOpen.gitRunner });
+    if (first.kind !== 'record') throw new Error('missing first route');
+    const secondRound = parseRoundId('r2')!;
+    const second: RouteRecord = { ...first.record, roundId: secondRound, phase: 'open' };
+    await otherOpen.gitRunner(['update-ref', routeRecordRefFor('demo', secondRound), await blob(otherOpen.gitRunner, second)]);
+    await expect(advanceRound(otherOpen.repo, 'demo', first, { git: otherOpen.gitRunner }))
+      .resolves.toEqual({ kind: 'closed' });
+
+    const queued = await fixture(false);
+    const queuedRoute = await readRouteRecord(queued.repo, 'demo', roundId, { git: queued.gitRunner });
+    if (queuedRoute.kind !== 'record') throw new Error('missing queued route');
+    const waitingForLeaf: typeof queuedRoute = {
+      ...queuedRoute,
+      record: {
+        ...queuedRoute.record,
+        hosts: { [host]: 'done', [parseChildId(3)!]: 'pending' },
+      },
+    };
+    await expect(advanceRound(queued.repo, 'demo', waitingForLeaf, {
+      git: queued.gitRunner,
+      queue: { entries: [{}] as never },
+    })).resolves.toEqual({ kind: 'queue' });
+  });
+
   it('marks a repaired host built, drains its outbox, and carries the fix through one routed restack', async () => {
     const subject = await fixture(true);
     const persisted: string[] = [];

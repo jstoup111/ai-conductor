@@ -109,7 +109,7 @@ export interface DeltaPartition {
   foreignSrc: string[];
 }
 
-export function partitionDelta(D: string[], F: string[]): DeltaPartition {
+export function partitionDelta(D: readonly string[], F: readonly string[]): DeltaPartition {
   const featureSet = new Set(F);
   const result: DeltaPartition = { test: [], featureSrc: [], foreignSrc: [] };
 
@@ -140,7 +140,7 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
  * distinction, so it is computed alongside rather than by widening — and
  * kept out of `DeltaPartition` so that invariant is untouched.
  */
-export function featureTestPaths(D: string[], F: string[]): string[] {
+export function featureTestPaths(D: readonly string[], F: readonly string[]): string[] {
   const featureSet = new Set(F);
   return D.filter((path) => isTestPath(path) && featureSet.has(path));
 }
@@ -182,8 +182,8 @@ export interface ReplayGateInvalidation {
  * dependency surface, making a new kind a type error until it is explicit.
  */
 export function projectGateSurfaces(
-  D: string[],
-  F: string[],
+  D: readonly string[],
+  F: readonly string[],
   documentInputs?: readonly string[],
 ): Record<GateSurfaceKind, GateSurfaceProjection> {
   const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
@@ -260,8 +260,8 @@ export function projectGateSurfaces(
  *   re-running is cheap.
  */
 export function classifyGateInvalidation(
-  D: string[],
-  F: string[],
+  D: readonly string[],
+  F: readonly string[],
   ranManualTest: boolean,
   documentInputs?: readonly string[],
 ): { preserved: string[]; invalidated: string[] } {
@@ -300,8 +300,8 @@ function isFeatureScopedReview(surface: GateSurfaceKind): boolean {
  * path-based conservative result.
  */
 export function classifyReplayGateInvalidation(
-  D: string[],
-  F: string[],
+  D: readonly string[],
+  F: readonly string[],
   ranManualTest: boolean,
   replay: ReplayComparison,
   documentInputs?: readonly string[],
