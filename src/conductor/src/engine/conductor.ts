@@ -15355,7 +15355,10 @@ export class Conductor {
                 return;
               }
               let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
-              if (reconciled.kind === 'deferred') {
+              // Queue admission always wins over a return to whole-feature
+              // gates. `none`/`aborted` describes the round just reconciled,
+              // not necessarily every durable routed obligation.
+              if (reconciled.kind === 'deferred' || reconciled.kind === 'none' || reconciled.kind === 'aborted') {
                 consumed = await consumeLowestQueued(this.projectRoot, slug);
                 if (consumed.kind === 'unavailable') {
                   await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
@@ -15374,7 +15377,11 @@ export class Conductor {
                   continue;
                 }
               }
-              if (reconciled.kind === 'none' || reconciled.kind === 'aborted') {
+              if (
+                (reconciled.kind === 'none' || reconciled.kind === 'aborted') &&
+                consumed?.kind === 'none' &&
+                !await routedRoundOpen(this.projectRoot, slug)
+              ) {
                 // returnToLeaf re-pends whole-feature gates in the root state
                 // file.  Do not keep the former routed host's overlay or its
                 // CAS baseline while selecting those gates.
