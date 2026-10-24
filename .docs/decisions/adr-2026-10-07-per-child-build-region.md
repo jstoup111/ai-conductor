@@ -318,6 +318,8 @@ The decisions below incorporate the fixes.
 
 > **Amended 2026-10-17 by #2945:** A child branch is pushed only by FINISH's `establish_child_prs`, after every gate has passed, through `executeRemoteGit`, as a plain push of its closure SHA after an `ls-remote` shows the branch absent. Halt records are still never pushed to a child (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 4).
 
+> **Amended 2026-10-24 by #3203:** `rewind --child k` for a closed child is no longer refused. It opens a declared operator round on k and restages k's region from the target; the children above are re-validated by the queue rather than demoted. `stack land` and `stack owners` join the operator surfaces (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 5, 11 and 14).
+
 12. **Rebase guards until #2943.**
     - While the active child is not the leaf, `resumeRebaseFirst` and the base-advance re-kick
       rebase are skipped. The stack stays on its pinned base, and an event records the skip.

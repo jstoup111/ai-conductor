@@ -105,6 +105,8 @@ backward.
 
 > **Amended 2026-10-10 by #2943:** A closed target child is still refused, but the refusal now names #2944, which owns re-validating closed children; #2943 delivers the restack without re-opening them (decision 9) (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
+> **Amended 2026-10-24 by #3203:** A closed target child is no longer refused. With `--reason`, the verb opens a declared operator route round on that child under the feature dispatch lease, after the round's open predicate (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
+
 ### D2 — Every state change is an authorized port mutation, never a file write
 
 Each demotion is submitted to `ConductStateStore` with the current value as the expected value and an
@@ -129,6 +131,8 @@ re-decision of what applies to the feature.
 
 > **Amended 2026-10-10 by #2943:** Demoting a closed child's region now requires #2944, not #2943 (decision 9) (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
+> **Amended 2026-10-24 by #3203:** For a closed target child, the demotion set is that child's region from the target onward only. The children above and the whole-feature steps are not demoted: the re-validation queue re-judges every closed child the exit restack moves, and the leaf return re-pends the whole-feature gates (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
+
 ### D4 — Derived records that would contradict the new position are cleared in the same operation
 
 Gate verdicts for the demoted steps, and `.pipeline/HALT` with its class sidecar, are cleared as part
@@ -137,6 +141,8 @@ rewind is worse than none. Halt clearing follows
 `adr-2026-08-09-halt-state-clear-is-marker-and-label-atomic`'s atomicity rule rather than inventing a
 second clearing path. The order is: acquire, mutate state, clear verdicts, clear halt — so a failure
 at any point leaves the feature halted rather than running from a partially-rewound position.
+
+> **Amended 2026-10-24 by #3203:** For a closed target child, the cleared verdicts are that child's demoted region verdicts. HALT clearing is unchanged, and happens after the round is admitted (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
 
 ### D5 — The occurrence rides the existing event spine
 

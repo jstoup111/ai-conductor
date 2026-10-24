@@ -108,6 +108,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      - **Taskless obligations:** a `manual_test` FAIL and a post-region custom-step kickback. They
        rewind to `build` with their retry hint and append no task.
 
+   > **Amended 2026-10-24 by #3203:** Routing is also entered by an operator command, with no finding to classify: `stack land` and the closed-child `rewind` open a round of kind `operator` on a closed child (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 1, 5 and 11).
+
 2. **Owner derivation is mechanical for task-bound work.**
    - A finding bound to an authored task routes to `taskSlices[taskId]` from the sealed envelope.
    - A finding bound to a rem-* task routes to that block's committed `**Child:**` line
@@ -191,6 +193,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    - **Not verified:** the claim is an ordinary failed build attempt within the host region's caps.
    - Reroutes move strictly upward, so a round has at most N−1.
 
+   > **Amended 2026-10-24 by #3203:** Prerequisite claims are disabled in an `operator` round, so no reroute can move or reset an operator's change (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 1).
+
 6. **A ref-backed route record is the authority for a routing round.**
    - **Where.** `refs/conductor/<slug>/routes/<roundId>`, a blob ref written only through
      `update-ref --stdin` compare-and-swap. This follows the `cascades` precedent; the non-CAS
@@ -230,6 +234,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      | host `restacked` | the restack's `applied` transaction | admit the next child host, else the queue, else the leaf host, else the leaf gates |
      | `closed` (round) | when the last host is `restacked`, `done` or `rerouted`; if no other round is open and the queue is empty, the leaf switch is recorded in this round first (decision 4), otherwise it closes before the queue is consumed | none |
 
+   > **Amended 2026-10-24 by #3203:** The record gains a third kind, `operator`, with an `operator` section written at `prepared`, and the host states `abandoning` and `abandoned`; a closed round counts `abandoned` as terminal. Every kind test is an exhaustive switch. No new ref is created: abandoned work is pinned under the existing `rejected/<roundId>/<k>` (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 1 and 13).
+
 7. **Admission is marker-first, and reconciliation runs after journal recovery.**
    - **Order:**
      - the route record is created in phase `prepared`;
@@ -256,6 +262,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    - **The no-op guard.** In a stacked round, the route-into-no-op guard
      (`adr-2026-07-13-kickback-build-no-op-escalation` decision 1) runs at the host's region entry,
      after the frozen blocks are written. It never runs at the leaf's route resolution.
+
+   > **Amended 2026-10-24 by #3203:** An operator round is admitted by the CLI under the feature dispatch lease, through `openOperatorRound`, not by the gate loop. Reconciliation's navigate result carries the round's `entryStep`. An undeclared `land` round halts `operator-round-undeclared` before the base-refresh deferral and the navigate arms. With routing eligible, a `repair-pending` cursor with no marker no longer runs the automatic `feature-repair` restack; it halts `unlanded-closed-child-commits` (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 2, 5, 8, 9 and 10).
 
 8. **The cursor gains fields, not kinds, and one execution-child resolver serves every consumer.**
    - **Cursor.** After the `no-child` return, `resolveActiveChild` reads the marker and the queue.
@@ -285,6 +293,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    - **Leaf parking.** After admission, the loop sits on `build`, the host region sentinel. Region
      entry enters the execution child's region instead of the leaf's. The leaf's whole-feature
      gates are restaged stale and are not re-pended until the queue drains (decision 15).
+
+   > **Amended 2026-10-24 by #3203:** A closed non-host child with unstamped post-closure commits is a co-origin only when the open operator round adopted it. Any other co-origin halts `unlanded-closed-child-commits`, in every round kind. An explicit closed `rewind --child` opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 9. **Routed tasks are appended on the host's checked-out branch, carry their child in committed
    text, and merge deterministically on replay.**
@@ -373,6 +383,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     - Each restack still charges one cascade on its originating child (restack ADR decision 10),
       which is a separate budget.
 
+    > **Amended 2026-10-24 by #3203:** An `operator` round charges no gate lap, no growth and no taskless charge. Its empty receipt is acknowledged without settlement, as a `revalidate` receipt is (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 12).
+
 11. **Repair obligations carry their branch and are keyed by the round.**
     - **Admission key:** `(roundId, findingId, taskIds)`. It no longer includes HEAD or plan path.
     - **Boundary:** `{branch, head}`, taken at host region entry together with the tree-hash
@@ -408,6 +420,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     > queued child's old and new replay parent into its queue entry, and the `revalidation` base
     > reads them from there. The pre-fix base for a fix made during re-validation is pinned in the
     > route record's existing host `entry`.
+
+    > **Amended 2026-10-24 by #3203:** In an `operator` round the host's `build_review` grades `pinnedBase..HEAD` with the round's reason as an operator work-order input beside `repairContext`, and the one per-round credit applies (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 9).
 
 13. **Routed exit is a feature-repair restack originating exactly at the host.**
     - When the host region passes, the loop does not call `closeChild` or advance the cursor.
@@ -451,6 +465,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     > anti-whitewash check, and `adr-2026-07-13-kickback-build-no-op-escalation` decision 2
     > escalates it. A host's exit that acknowledges its own queue entry records `child_revalidated`
     > for that host, with outcome `fixed` on the restack exit and `passed` on the no-commit exit.
+
+    > **Amended 2026-10-24 by #3203:** Unstamped operator commits on other closed children are no longer automatic co-origins: the exit halts `unlanded-closed-child-commits` unless the open operator round adopted them. Adopted children originate the exit restack with the host (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
 
 14. **A durable re-validation queue re-judges every closed child a restack moved.**
     - **Production.** Every restack carries, in its journal, the closed-child invalidation set
@@ -509,6 +525,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       inputs intersect the delta.
     - The `manual_test` anti-whitewash check is satisfied by the leaf tip moving through the
       restack, which carries the host's fix commits.
+
+    > **Amended 2026-10-24 by #3203:** An abandoned operator round returns to the leaf in an `abandon` mode, which records the switch and closes the round without re-pending the leaf gates, because no restack ran (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 13).
 
 16. **Events ride the existing spine through a transactional outbox.**
     - **New `ConductorEvent` members,** all carrying `child`:
