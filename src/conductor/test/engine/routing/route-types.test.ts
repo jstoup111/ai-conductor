@@ -311,14 +311,48 @@ describe('routed repair durable record parsers', () => {
     expect(parseRepairMarker(JSON.stringify({ host: 2, roundId: 'r1' }))).toEqual({ host: 2, roundId: 'r1' });
     expect(parseRevalidationQueueRecord(JSON.stringify({
       generation: 3,
-      entries: [{ child: 2, closureSha: 'a'.repeat(40), state: 'pending' }],
+      entries: [
+        {
+          child: 2,
+          position: 2,
+          closureSha: 'a'.repeat(40),
+          gates: ['test_suite'],
+          replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+          state: 'queued',
+        },
+        {
+          child: 4,
+          position: 4,
+          closureSha: 'd'.repeat(40),
+          gates: ['acceptance_specs', 'build_review'],
+          replay: { oldParent: 'e'.repeat(40), newParent: 'f'.repeat(40) },
+          state: 'queued',
+        },
+      ],
       outbox: [{
         eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z',
         event: { type: 'child_revalidated', eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z' },
       }],
     }))).toEqual({
       generation: 3,
-      entries: [{ child: 2, closureSha: 'a'.repeat(40), state: 'pending' }],
+      entries: [
+        {
+          child: 2,
+          position: 2,
+          closureSha: 'a'.repeat(40),
+          gates: ['test_suite'],
+          replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+          state: 'queued',
+        },
+        {
+          child: 4,
+          position: 4,
+          closureSha: 'd'.repeat(40),
+          gates: ['acceptance_specs', 'build_review'],
+          replay: { oldParent: 'e'.repeat(40), newParent: 'f'.repeat(40) },
+          state: 'queued',
+        },
+      ],
       outbox: [{
         eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z',
         event: { type: 'child_revalidated', eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z' },
@@ -326,8 +360,55 @@ describe('routed repair durable record parsers', () => {
     });
   });
 
+  it('rejects queues with duplicate children, non-ascending positions, or abbreviated closure SHAs', () => {
+    const entry = {
+      child: 2,
+      position: 2,
+      closureSha: 'a'.repeat(40),
+      gates: ['test_suite'],
+      replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+      state: 'queued',
+    };
+    const laterEntry = {
+      child: 4,
+      position: 4,
+      closureSha: 'd'.repeat(40),
+      gates: ['build_review'],
+      replay: { oldParent: 'e'.repeat(40), newParent: 'f'.repeat(40) },
+      state: 'queued',
+    };
+
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [entry, { ...laterEntry, child: 2 }], outbox: [],
+    }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [laterEntry, entry], outbox: [],
+    }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [{ ...entry, closureSha: 'a'.repeat(12) }], outbox: [],
+    }))).toBeUndefined();
+  });
+
+  it('rejects queues with an unknown gate or a state other than queued', () => {
+    const entry = {
+      child: 2,
+      position: 2,
+      closureSha: 'a'.repeat(40),
+      gates: ['test_suite'],
+      replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+      state: 'queued',
+    };
+
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [{ ...entry, gates: ['lint-docs'] }], outbox: [],
+    }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [{ ...entry, state: 'pending' }], outbox: [],
+    }))).toBeUndefined();
+  });
+
   it('rejects out-of-bounds repair marker hosts and queue entries without a closure SHA', () => {
     expect(parseRepairMarker(JSON.stringify({ host: MAX_CHILD_ID + 1, roundId: 'r1' }))).toBeUndefined();
-    expect(parseRevalidationQueueRecord(JSON.stringify({ generation: 1, entries: [{ child: 1, state: 'pending' }], outbox: [] }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({ generation: 1, entries: [{ child: 1, position: 1, state: 'queued' }], outbox: [] }))).toBeUndefined();
   });
 });

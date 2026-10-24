@@ -1,4 +1,4 @@
-import { parseChildId, type ChildId } from '../child-context.js';
+import { CHILD_REGION_STEPS, parseChildId, type ChildId } from '../child-context.js';
 import { isValidGitBranchName } from '../git-branch-name.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import type { StackedPrsConfig } from '../../types/config.js';
@@ -332,9 +332,14 @@ export interface RepairMarker {
 
 export interface RevalidationQueueEntry {
   readonly child: ChildId;
+  readonly position: ChildId;
   readonly closureSha: CommitSha;
-  readonly state: string;
+  readonly gates: readonly RegionGate[];
+  readonly replay: { readonly oldParent: CommitSha; readonly newParent: CommitSha };
+  readonly state: 'queued';
 }
+
+export type RegionGate = typeof CHILD_REGION_STEPS[number];
 
 export interface RevalidationQueueRecord {
   readonly generation: number;
@@ -347,6 +352,7 @@ const hostStates = new Set<HostState>([
 ]);
 const roundPhases = new Set<RoundPhase>(['prepared', 'open', 'closed']);
 const routeKinds = new Set<RouteKind>(['audit', 'revalidate']);
+const regionGates = new Set<RegionGate>(CHILD_REGION_STEPS);
 const ROUND_ID = /^r([1-9]\d*)$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -760,11 +766,25 @@ export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRec
   const entries = value.entries.map((entry): RevalidationQueueEntry | undefined => {
     if (!isRecord(entry)) return undefined;
     const child = parseChild(entry.child);
+    const position = parseChild(entry.position);
     const closureSha = typeof entry.closureSha === 'string' ? parseCommitSha(entry.closureSha) : undefined;
-    const state = nonEmptyString(entry.state);
-    return child && closureSha && state ? { child, closureSha, state } : undefined;
+    if (!isRecord(entry.replay) || !Array.isArray(entry.gates)) return undefined;
+    const oldParent = typeof entry.replay.oldParent === 'string' ? parseCommitSha(entry.replay.oldParent) : undefined;
+    const newParent = typeof entry.replay.newParent === 'string' ? parseCommitSha(entry.replay.newParent) : undefined;
+    const gates = entry.gates.map((gate): RegionGate | undefined =>
+      typeof gate === 'string' && regionGates.has(gate as RegionGate) ? gate as RegionGate : undefined);
+    if (!child || !position || !closureSha || !oldParent || !newParent || entry.state !== 'queued' || gates.some((gate) => gate === undefined)) return undefined;
+    return { child, position, closureSha, gates: gates as RegionGate[], replay: { oldParent, newParent }, state: 'queued' };
   });
   const outbox = parseOutbox(value.outbox);
   if (entries.some((entry) => entry === undefined) || !outbox) return undefined;
-  return { generation: value.generation, entries: entries as RevalidationQueueEntry[], outbox };
+  const parsedEntries = entries as RevalidationQueueEntry[];
+  const children = new Set<ChildId>();
+  let previousPosition: ChildId | undefined;
+  for (const entry of parsedEntries) {
+    if (children.has(entry.child) || (previousPosition !== undefined && entry.position <= previousPosition)) return undefined;
+    children.add(entry.child);
+    previousPosition = entry.position;
+  }
+  return { generation: value.generation, entries: parsedEntries, outbox };
 }

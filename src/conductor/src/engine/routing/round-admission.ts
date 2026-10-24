@@ -12,6 +12,7 @@ import {
 } from './route-record-store.js';
 import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
+import { revalidationQueueRefFor } from './routing-refs.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { advanceRound } from './routed-exit.js';
 
@@ -122,7 +123,7 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
 /** True when routing durability says that automatic base movement would race a round. */
 export async function routedRoundOpen(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<boolean> {
   const git = dependencies.git ?? makeGitRunner(worktree);
-  const queue = await git(['rev-parse', '-q', '--verify', `refs/conductor/${slug}/revalidate`]);
+  const queue = await git(['rev-parse', '-q', '--verify', revalidationQueueRefFor(slug)]);
   if (queue.exitCode === 0) return true;
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
   if (listed.exitCode !== 0) return true;
