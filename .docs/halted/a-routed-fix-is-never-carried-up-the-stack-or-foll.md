@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-24T19:45:15.189Z
 Slug: a-routed-fix-is-never-carried-up-the-stack-or-foll
 Class: needs-human
 Halting step: unknown
