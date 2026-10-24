@@ -1260,6 +1260,22 @@ export function createClaimTimeRepairRunner(options: {
   };
 }
 
+/**
+ * Attaches the daemon renderer to a feature event bus. Persistence is owned
+ * separately by the feature's EventPersister.
+ */
+export function attachFeatureEventRenderer(
+  featureEvents: ConductorEventEmitter,
+  featureLog: (message: string) => void,
+): () => void {
+  const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+  const renderableEvents = renderedEventTypes();
+  for (const type of renderableEvents) featureEvents.on(type, renderEvent);
+  return () => {
+    for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+  };
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
@@ -1755,20 +1771,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     }
     return featureLog;
   };
-  /**
-   * The same slug-aware renderer serves in-process feature buses and the
-   * supervisor's child-executor proxy buses. Persistence is intentionally not
-   * included: an executor child is the only writer of its feature ledger.
-   */
-  const attachFeatureEventRenderer = (slug: string, featureEvents: ConductorEventEmitter): (() => void) => {
-    const featureLog = featureLogFor(slug);
-    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
-    const renderableEvents = renderedEventTypes();
-    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
-    return () => {
-      for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-    };
-  };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
     const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
@@ -1812,7 +1814,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
       : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    const detachFeatureEventRenderer = attachFeatureEventRenderer(item.slug, featureEvents);
+    const detachFeatureEventRenderer = attachFeatureEventRenderer(featureEvents, featureLog);
     let stopPromise: Promise<void> | undefined;
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
@@ -2331,7 +2333,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktreeLifecycle,
     rootEvents: events,
     featureLogFor,
-    attachFeatureEventRenderer,
+    attachFeatureEventRenderer: (slug, featureEvents) => attachFeatureEventRenderer(featureEvents, featureLogFor(slug)),
     attachFeatureOtelVisualizer: attachChildFeatureOtelVisualizer,
     log,
   });
