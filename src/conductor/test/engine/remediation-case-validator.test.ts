@@ -5,6 +5,7 @@ import {
   classifyIndexOnlyAdmission,
   validateRemediationCaseGraph,
   type RemediationCaseJudgement,
+  type UnknownAdmissionTaskRejection,
 } from '../../src/engine/remediation-case-validator.js';
 import * as buildReviewAdjudication from '../../src/engine/build-review-adjudication.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
@@ -20,6 +21,14 @@ const CURRENT_SOURCE_IDS = [
   'testQuality:finding-3',
   'testQuality:finding-4',
 ] as const;
+
+function expectUnknownAdmissionTaskRejection(
+  result: ReturnType<typeof validateRemediationCaseGraph>,
+): asserts result is UnknownAdmissionTaskRejection {
+  if (result.ok || result.reason !== 'unknown-admission-task') {
+    throw new Error('expected an unknown admission task rejection');
+  }
+}
 
 const VALID_JUDGEMENT = {
   mode: 'case-v1',
@@ -523,7 +532,7 @@ describe('remediation case graph validator', () => {
         indexOnlyTaskIds: ['9'],
         absentTaskIds: [],
       });
-      if (indexOnlyRejection.ok) throw new Error('expected an admission rejection');
+      expectUnknownAdmissionTaskRejection(indexOnlyRejection);
       expect(classifyIndexOnlyAdmission(CURRENT_SOURCE_IDS, withAdmissions(['3', '9']), references, indexOnlyRejection))
         .toEqual({ kind: 'index-only', taskIds: ['9'] });
 
@@ -534,7 +543,7 @@ describe('remediation case graph validator', () => {
         indexOnlyTaskIds: [],
         absentTaskIds: ['T-99'],
       });
-      if (absentRejection.ok) throw new Error('expected an admission rejection');
+      expectUnknownAdmissionTaskRejection(absentRejection);
       expect(classifyIndexOnlyAdmission(CURRENT_SOURCE_IDS, withAdmissions(['T-99']), references, absentRejection))
         .toEqual({ kind: 'other', reason: 'unknown-admission-task' });
 
@@ -563,7 +572,7 @@ describe('remediation case graph validator', () => {
         indexOnlyTaskIds: ['9'],
         absentTaskIds: [],
       });
-      if (rejection.ok) throw new Error('expected an admission rejection');
+      expectUnknownAdmissionTaskRejection(rejection);
       expect(classifyIndexOnlyAdmission(CURRENT_SOURCE_IDS, judgement, references, rejection))
         .toEqual({ kind: 'other', reason: 'missing-source' });
     });

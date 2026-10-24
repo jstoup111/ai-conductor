@@ -26,6 +26,7 @@ import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-revie
 import { EventPersister } from '../../src/engine/event-persister.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import type { RemediationCaseV2Judgement } from '../../src/engine/remediation-case-artifact.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -261,7 +262,7 @@ function deferralJudgement(): unknown {
   };
 }
 
-function customActionJudgement(sourceId: string): unknown {
+function customActionJudgement(sourceId: string): RemediationCaseV2Judgement {
   return {
     mode: 'case-v2', domain: 'build_review',
     sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'portable-case' }],
@@ -280,7 +281,7 @@ function customActionJudgement(sourceId: string): unknown {
   };
 }
 
-function customIndexOnlyActionJudgement(sourceId: string): unknown {
+function customIndexOnlyActionJudgement(sourceId: string): RemediationCaseV2Judgement {
   return {
     ...customActionJudgement(sourceId),
     cases: [{
