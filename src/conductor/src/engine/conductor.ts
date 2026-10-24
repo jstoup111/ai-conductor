@@ -218,7 +218,7 @@ import { admitRound } from './routing/round-admission.js';
 import { routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { requestRoutedExit } from './routing/routed-exit.js';
-import { EventPersister } from './event-persister.js';
+import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -15268,8 +15268,11 @@ export class Conductor {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit refused: ${exited.detail}`);
                 return;
               }
-              const persister = new EventPersister(join(this.projectRoot, '.pipeline', 'events.jsonl'), this.events);
-              const drained = await drainRoutingOutboxes(this.projectRoot, slug, (event) => persister.persistDurably(event));
+              const drained = await drainRoutingOutboxes(
+                this.projectRoot,
+                slug,
+                (event) => persistOnActiveEventSpine(this.events, event),
+              );
               if (drained.kind !== 'drained') {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
                 return;

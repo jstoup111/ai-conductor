@@ -19,7 +19,10 @@ vi.mock('../../../src/engine/acceptance-red-runner.js', () => ({
 }));
 vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/route-record-store.js')>();
-  return { ...actual, drainRoutingOutboxes: (...args: unknown[]) => mocks.drainRoutingOutboxes(...args) };
+  return {
+    ...actual,
+    drainRoutingOutboxes: () => mocks.drainRoutingOutboxes(),
+  };
 });
 
 import { Conductor } from '../../../src/engine/conductor.js';
