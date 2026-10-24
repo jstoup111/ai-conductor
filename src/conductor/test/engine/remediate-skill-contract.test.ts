@@ -1,4 +1,4 @@
-// Covers: task:14
+// Covers: task:9, task:14
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
