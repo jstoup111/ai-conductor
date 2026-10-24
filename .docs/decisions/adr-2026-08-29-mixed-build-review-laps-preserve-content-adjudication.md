@@ -61,6 +61,8 @@ unchanged. No new step, skill, provider member, or second adjudicator is introdu
 
 > **Amended 2026-09-10 by #1986:** custom-policy laps extend this same case flow with versioned consistency, plan-admission, and decision-escalation outcomes. The shared operation serves attended and daemon execution exactly once per lap. A blocked consistency decision, any decision escalation, or invalid admission evidence prevents action effects before a worker receives repairs. The inherited source-complete, mixed-lap infrastructure, suppression, settled-recurrence, durable-effect, and cumulative-bound contracts remain effective (adr-2026-09-10-portable-build-review-policy D8–D11).
 
+> **Amended 2026-10-23 by #3291:** "Exactly once per lap" now means one authoritative judgement per lap. Inside the one shared operation, the coordinator may re-dispatch the same `remediate` judgement at most once, as an expansion round, under three conditions: the lap is case-v2, the round-1 judgement fails validation only because it admits plan tasks the context listed in its index without their bodies, and those tasks exist in the active plan. The expansion uses the same skill, provider member, mode and context contract, and adds only the requested task bodies under the same serialized ceiling. Round 1's judgement is discarded, never merged or reconciled. The expansion charges no kickback, and a second invalid judgement stops as today, naming any unsupplied task ids. No new step, skill, provider member or second adjudicator is introduced (adr-2026-09-10-portable-build-review-policy D8 amendment of the same date).
+
 ### D3 — Content action and infrastructure blocking compose without erasure
 
 After complete adjudication and required-effect settlement, transition precedence is:
