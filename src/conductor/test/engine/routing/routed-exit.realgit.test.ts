@@ -1,11 +1,12 @@
 // Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
+import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor, MAX_RESTACK_CASCADES_PER_CHILD } from '../../../src/engine/restack/cascade-cap.js';
@@ -13,11 +14,17 @@ import { journalRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { routedRepairPhaseEvent } from '../../../src/engine/routing/routing-events.js';
+vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/routed-exit.js')>();
+  return { ...actual, requestRoutedExit: vi.fn(actual.requestRoutedExit) };
+});
+
 import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
+import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
 
@@ -26,7 +33,10 @@ const host = parseChildId(1)!;
 const childTwo = parseChildId(2)!;
 const roundId = parseRoundId('r1')!;
 
-afterEach(async () => { await removeAll(cleanup); });
+afterEach(async () => {
+  vi.mocked(requestRoutedExit).mockClear();
+  await removeAll(cleanup);
+});
 
 async function blob(git: ReturnType<typeof makeGitRunner>, value: unknown): Promise<string> {
   const result = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) });
@@ -188,6 +198,47 @@ describe('routed exit (real local Git)', () => {
     expect(updateTransactions(recorded.calls).some((input) => new RegExp(`(?:create|update) ${journalRefFor('demo')}`).test(input))).toBe(false);
   });
 
+  it('rolls a failed exit verification back without settling routing refs, then blocks preflight before another exit', async () => {
+    const subject = await fixture(true);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { ...record.hosts, [host]: 'built' } }));
+    const before = await Promise.all([
+      subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')]),
+      subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)]),
+      subject.gitRunner(['rev-parse', closureRefFor('demo', host)]),
+    ]);
+    const real = subject.gitRunner;
+    let corrupted = false;
+    const corruptingGit: GitRunner = async (args, options) => {
+      const result = await real(args, options);
+      if (!corrupted && result.exitCode === 0 && args[0] === 'update-ref' && args[1] === '--stdin'
+        && options?.input?.includes('update refs/heads/feat/c1/demo ')) {
+        corrupted = true;
+        await real(['update-ref', 'refs/conductor/demo/restack/staging/c2', before[2]!.stdout.trim()]);
+      }
+      return result;
+    };
+
+    await expect(requestRoutedExit({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: corruptingGit,
+    })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('verification-failed') });
+
+    expect(corrupted).toBe(true);
+    await expect(Promise.all([
+      subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')]),
+      subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)]),
+      subject.gitRunner(['rev-parse', closureRefFor('demo', host)]),
+    ]).then((refs) => refs.map((ref) => ref.stdout.trim()))).resolves.toEqual(before.map((ref) => ref.stdout.trim()));
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'built' } },
+    });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('tree mismatch for child 2');
+
+    vi.mocked(requestRoutedExit).mockClear();
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner })).resolves.toEqual({ kind: 'halted' });
+    expect(requestRoutedExit).not.toHaveBeenCalled();
+  });
+
   it('takes the one-transaction no-commit exit only at the exact closure tip', async () => {
     const subject = await fixture(false);
     const recorded = recordingRunner(subject.gitRunner);
@@ -204,6 +255,58 @@ describe('routed exit (real local Git)', () => {
     expect(exitWrites[0]).toContain(`delete ${repairMarkerRefFor('demo')}`);
     expect(exitWrites[0]).not.toContain('"built"');
     expect(writes.join('\n')).not.toMatch(new RegExp(`(?:create|update) ${journalRefFor('demo')}`));
+  });
+
+  it('takes the no-commit exit for a taskless routed manual-test failure, then refuses the unchanged leaf PASS and halts the no-op cycle', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      items: [{ ...record.items[0]!, findingId: 'manual-test-fail', reason: 'manual-test' }],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint: '| s1 | FAIL |' } },
+      receipt: { ...record.receipt, taskless: { manual_test: 1 } },
+    }));
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'done' }, receipt: { taskless: { manual_test: 1 } } },
+    });
+    expect(await refExists(subject.gitRunner, journalRefFor('demo'))).toBe(false);
+
+    await subject.gitRunner(['checkout', '-q', 'feat/daemon-demo']);
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, step.name === 'manual_test' ? 'pending' : 'done']));
+    Object.assign(state, { feature_desc: 'demo', complexity_tier: 'L', build_review: 'skipped' });
+    await subject.write('.pipeline/conduct-state.json', JSON.stringify(state));
+    await subject.write('.pipeline/task-status.json', JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }));
+    let manualAttempt = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'build') {
+          await subject.write('.pipeline/task-status.json', JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }));
+        } else if (step === 'manual_test') {
+          manualAttempt += 1;
+          await subject.write('.pipeline/manual-test-results.md', manualAttempt === 1
+            ? '| Story | Result |\n|---|---|\n| s1 | FAIL |\n'
+            : '| Story | Result |\n|---|---|\n| s1 | PASS |\n');
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'manual_test',
+      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+      config: { stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: false } },
+      events: new ConductorEventEmitter(),
+      stepRunner: runner,
+    });
+
+    await conductor.run();
+
+    expect(manualAttempt).toBe(2);
+    expect(await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).toMatch(/kickback-to-build no-op/);
   });
 
   it('restacks an empty metadata commit instead of treating its matching tree as a no-commit exit', async () => {
