@@ -25,6 +25,7 @@ export function formatBotCoAuthorSkipped(event: Extract<ConductorEvent, { type: 
     case 'token-unavailable': return 'bot co-author skipped: token unavailable';
     case 'identity-read-failed': return 'bot co-author skipped: identity read failed';
     case 'worktree-write-failed': return 'bot co-author skipped: worktree setup failed';
+    case 'resolver-absent': return 'bot co-author skipped: resolver not installed for daemon dispatch';
   }
 }
 
