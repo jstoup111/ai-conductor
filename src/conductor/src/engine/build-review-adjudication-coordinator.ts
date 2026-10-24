@@ -259,6 +259,22 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
   return (current.length > 0 ? current : eligible).map((record) => record.id);
 }
 
+function describeInvalidRemediationJudgement(
+  reason: string,
+  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] },
+): string {
+  if (reason !== 'unknown-admission-task' || rejection === undefined) {
+    return `invalid remediation judgement ${reason}`;
+  }
+  const details = [
+    rejection.indexOnlyTaskIds.length === 0 ? undefined : `index-only task ids: ${rejection.indexOnlyTaskIds.join(', ')}`,
+    rejection.absentTaskIds.length === 0 ? undefined : `absent from plan: ${rejection.absentTaskIds.join(', ')}`,
+  ].filter((detail): detail is string => detail !== undefined);
+  return details.length === 0
+    ? `invalid remediation judgement ${reason}`
+    : `invalid remediation judgement ${reason} (${details.join('; ')})`;
+}
+
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
   // Legacy direct coordinator callers did not carry the distinct signal. The
   // conductor always supplies it; retain the historical value for those tests
@@ -832,8 +848,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       accepted = { judgement, validation: graph };
       break;
     }
-    if (round === 0 && dispatchContext.mode === 'case-v2' && graph.reason === 'unknown-admission-task') {
-      const classification = classifyIndexOnlyAdmission(dispatchSourceIds, judgement, {
+    const classification = dispatchContext.mode === 'case-v2' && graph.reason === 'unknown-admission-task'
+      ? classifyIndexOnlyAdmission(dispatchSourceIds, judgement, {
         existingCaseIds: prior.state.cases.map((record) => record.id),
         admittedTaskIds: dispatchContext.planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
         planTaskIds: dispatchContext.planContract.index?.map((task) => task.id) ?? [],
@@ -846,20 +862,23 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
             : [[buildReviewAdjudicationSourceId(source), source.severity] as const],
         )),
         declaredSeverityThresholds: input.declaredSeverityThresholds,
-      }, graph);
-      if (classification.kind === 'index-only') {
-        expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
-        const expandedContext = assembleBuildReviewAdjudicationContext({
-          aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-          operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-          planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
-        });
-        if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
-        dispatchContext = expandedContext.context;
-        continue;
-      }
+      }, graph)
+      : undefined;
+    if (round === 0 && classification?.kind === 'index-only') {
+      expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
+      const expandedContext = assembleBuildReviewAdjudicationContext({
+        aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
+        operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
+        planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
+      });
+      if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
+      dispatchContext = expandedContext.context;
+      continue;
     }
-    return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
+    return failUnlessAccepted(describeInvalidRemediationJudgement(
+      classification?.kind === 'other' ? classification.reason : graph.reason,
+      graph.reason === 'unknown-admission-task' ? graph : undefined,
+    ), { settleAbsentAttempted: true });
   }
   if (!accepted) return failUnlessAccepted('invalid remediation judgement unknown-admission-task', { settleAbsentAttempted: true });
   const { judgement, validation: graph } = accepted;

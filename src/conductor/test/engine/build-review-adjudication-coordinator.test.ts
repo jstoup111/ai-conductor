@@ -4059,6 +4059,175 @@ describe('coordinateBuildReviewAdjudication', () => {
     await expect(readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')).resolves.not.toContain('Repair from round-one');
   });
 
+  it('bounds expansion at two calls and names a second index-only admission', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(21), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2Source = projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!;
+    const caseV2SourceId = buildReviewAdjudicationSourceId(caseV2Source);
+    const judgement = (admittedTaskId: string): RemediationCaseJudgement => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef: 'case-1' }],
+      cases: [{
+        caseRef: 'case-1', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Repair the authorization boundary.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary', admittedTaskIds: [admittedTaskId], admissionRationale: 'The plan task owns this repair.' }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['case-1'], rationale: 'The repair is internally consistent.' },
+    });
+    const judge = vi.fn(async () => judge.mock.calls.length === 1 ? judgement('9') : judgement('21'));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: caseV2Aggregate,
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [
+        { id: '9', status: 'pending' }, { id: '21', status: 'pending' },
+      ] }),
+    });
+
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('unknown-admission-task') });
+    expect((result as { detail: string }).detail).toContain('21');
+  });
+
+  it('refuses non-expandable admission defects without another judge call', async () => {
+    const root = await projectRoot();
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2SourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!);
+    const invalid = (admittedTaskIds: readonly string[], sourceOutcomes = true): RemediationCaseJudgement => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: sourceOutcomes ? [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef: 'case-1' }] : [],
+      cases: [{
+        caseRef: 'case-1', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Repair the authorization boundary.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary', admittedTaskIds, admissionRationale: 'The plan task owns this repair.' }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['case-1'], rationale: 'The repair is internally consistent.' },
+    });
+    const absentJudge = vi.fn(async () => invalid(['T-99']));
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, absentJudge), aggregate: caseV2Aggregate,
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [], index: [{ id: '9', title: 'Task 9', dependencies: [] }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [] }),
+    })).resolves.toMatchObject({ ok: false, detail: expect.stringContaining('T-99') });
+    expect(absentJudge).toHaveBeenCalledTimes(1);
+
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(9), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const mixedDefectJudge = vi.fn(async () => invalid(['9'], false));
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, mixedDefectJudge), aggregate: caseV2Aggregate,
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '9', status: 'pending' }] }),
+    })).resolves.toEqual({ ok: false, detail: 'invalid remediation judgement missing-source' });
+    expect(mixedDefectJudge).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the ordinary invalid-judgement reason when round two omits a source', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(9), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2SourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!);
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: judge.mock.calls.length === 1 ? [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef: 'case-1' }] : [],
+      cases: [{
+        caseRef: 'case-1', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Repair the authorization boundary.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary', admittedTaskIds: ['9'], admissionRationale: 'The plan task owns this repair.' }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['case-1'], rationale: 'The repair is internally consistent.' },
+    }));
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: caseV2Aggregate,
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '9', status: 'pending' }] }),
+    }))
+      .resolves.toEqual({ ok: false, detail: 'invalid remediation judgement missing-source' });
+
+    expect(judge).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps case-v1 refusals single-round', async () => {
+    const root = await projectRoot();
+    const judge = vi.fn(async () => ({ ...actionJudgement(), sourceOutcomes: [] }));
+
+    await expect(coordinateBuildReviewAdjudication({ ...input(root, judge) }))
+      .resolves.toEqual({ ok: false, detail: 'invalid remediation judgement missing-source' });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops before round two when the expanded context exceeds its byte limit', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const expansionIds = Array.from({ length: 40 }, (_, index) => String(index + 1));
+    await writeFile(join(root, '.docs/plans/example.md'), expansionIds
+      .map((id) => `### Task ${id}: Task ${id}\n\n${'x'.repeat(7_000)}`)
+      .join('\n\n'), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2SourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!);
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef: 'case-1' }],
+      cases: [{
+        caseRef: 'case-1', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Repair the authorization boundary.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary', admittedTaskIds: expansionIds, admissionRationale: 'The plan tasks own this repair.' }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['case-1'], rationale: 'The repair is internally consistent.' },
+    }));
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: caseV2Aggregate,
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: expansionIds.map((id) => ({ id, status: 'pending' })) }),
+    }))
+      .resolves.toMatchObject({ ok: false, detail: expect.stringMatching(/serialized-byte-overflow \(\d+ > 262144 bytes\)/) });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads operator resolution after round two before reconciling either judgement', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(9), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2Source = projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!;
+    const caseV2SourceId = buildReviewAdjudicationSourceId(caseV2Source);
+    let accepted = false;
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => {
+      if (judge.mock.calls.length === 2) accepted = true;
+      return {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef: 'case-1' }],
+        cases: [{
+          caseRef: 'case-1', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Repair the authorization boundary.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary', admittedTaskIds: ['9'], admissionRationale: 'The plan task owns this repair.' }] },
+        }],
+        consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['case-1'], rationale: 'The repair is internally consistent.' },
+      };
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: caseV2Aggregate,
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '9', status: 'pending' }] }),
+      resolveOperatorResolvedFindingIds: async () => accepted ? new Set([caseV2Source.findingId]) : new Set(),
+      emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled' }));
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({ ok: true, state: { cases: [] } });
+  });
+
   it('keeps the single-round adjudication-started event shape unchanged', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];
