@@ -2284,6 +2284,7 @@ export class DefaultStepRunner implements StepRunner {
       success: result.success,
       ...(result.output ? { output: result.output } : {}),
       ...(result.exitFacts !== undefined ? { exitFacts: result.exitFacts } : {}),
+      provider: result.actualProvider ?? result.preferredProvider,
       ...(result.finalStructuredResult === undefined
         ? {}
         : { finalStructuredResult: result.finalStructuredResult }),

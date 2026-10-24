@@ -582,6 +582,52 @@ describe('build-review adjudication context', () => {
     expect(result.ok).toBe(true);
     expect(result.ok && Buffer.byteLength(JSON.stringify(result.context))).toBeGreaterThan(128 * 1024);
   });
+
+  it('serializes the complete bounded task index independently of supplied bodies', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
+        index: [{ id: '3', title: 'Repair finding', dependencies: ['2'] }, { id: '4', title: 'Independent check', dependencies: [] }],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      planContract: {
+        admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
+        index: [{ id: '3', title: 'Repair finding', dependencies: ['2'] }, { id: '4', title: 'Independent check', dependencies: [] }],
+      },
+    } });
+    expect(result.ok && JSON.parse(JSON.stringify(result.context)).planContract.index).toEqual([
+      { id: '3', title: 'Repair finding', dependencies: ['2'] },
+      { id: '4', title: 'Independent check', dependencies: [] },
+    ]);
+  });
+
+  it('stops when the plan index exceeds its bounded entry count', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        index: Array.from({ length: 1_025 }, (_value, index) => ({ id: String(index), title: `Task ${index}`, dependencies: [] })),
+      },
+    });
+
+    expect(result).toEqual({ ok: false, stop: {
+      code: 'field-overflow', subject: 'plan-index', field: 'index', limit: 1_024, actual: 1_025,
+    } });
+  });
+
+  it('keeps both plan task projections empty when no plan is bound', () => {
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: [] });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      planContract: { path: null, admittedTaskContracts: [], index: [] },
+    } });
+  });
   it('declares the case-v1 discriminator and every input field the skill is told to read', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('alpha')),

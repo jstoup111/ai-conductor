@@ -1,4 +1,4 @@
-// Covers: task:14
+// Covers: task:9, task:14
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
@@ -93,5 +93,14 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/do not.*apply.*effect/i);
     expect(caseMode).toMatch(/do not append[\s\S]*approved plan/i);
     expect(caseMode).toMatch(/write.*only.*`\.pipeline\/remediation\.json`/is);
+  });
+
+  it('states case-v2 index-only admission and its one-round expansion boundary', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+
+    expect(caseMode).toMatch(/`planContract\.index` lists every (?:active-)?plan task without (?:its )?body/i);
+    expect(caseMode).toMatch(/`admittedTaskIds` must name supplied task bodies/i);
+    expect(caseMode).toMatch(/index-only task.*at most one.*engine.*expansion round.*unsupplied admission.*halts/is);
   });
 });
