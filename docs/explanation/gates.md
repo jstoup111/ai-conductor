@@ -734,6 +734,20 @@ join. The judgement receives the complete unresolved finding set and the feature
 it does not replace the raw verdict in `.pipeline/build-review.json` or the operator's exact-finding
 dispositions. `build_review.adjudication.enabled: false` retains the legacy raw-FAIL route.
 
+The judgement's plan context is scoped to the findings it judges. `planContract.index` lists every
+active-plan task as id, title, and dependencies, without its body. `planContract.admittedTaskContracts`
+carries full bodies only for tasks whose declared paths match an evidence path of a source sent to the
+judgement, plus tasks an open case's published work order already admits. Settled, carried, and
+operator-resolved sources select no bodies. A v2 `act` may admit only supplied bodies. When its only
+admission fault is naming index-only task ids, the engine runs one expansion round: it adds those
+bodies, emits a second `remediation_adjudication_started` with `expansionTaskIds`, and dispatches the
+judgement again. Any other fault halts as `invalid remediation judgement <reason>`. An unsupplied
+admission after the expansion round, or one naming an id absent from the plan, halts as
+`invalid remediation judgement unknown-admission-task`, listing the `index-only task ids` and
+`absent from plan` ids. A failed dispatch halts with `remediate judgement failed:` followed by the
+provider name and its bounded exit facts, suffixed `(expansion round)` on the second round. The plan
+index is capped at 1,024 entries; a larger plan halts as an adjudication context `field-overflow`.
+
 The engine validates the judgement as a complete source-to-case mapping, assigns durable case and
 effect identities, and records the feature-local state before applying an effect. An action publishes
 a durable BUILD work order and returns to `build`; a justified deferral files or reuses its marked
