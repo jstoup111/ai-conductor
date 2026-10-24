@@ -101,7 +101,9 @@ describe('Conductor routed acceptance verify-green path', () => {
         kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
       })
       .mockResolvedValueOnce({
-        kind: 'repair-pending', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
+        // A routed leaf still owns a marker and must take the routed exit;
+        // the ordinary non-leaf closure guard must not bypass it.
+        kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo',
         repairChildren: [child], routedRepair: { child, roundId },
       })
       .mockResolvedValueOnce({ kind: 'no-child' });
