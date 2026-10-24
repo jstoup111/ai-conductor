@@ -19,6 +19,7 @@ import { routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes } from '../routing/route-record-store.js';
 import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
+import { requestRoutedExit } from '../routing/routed-exit.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 
@@ -135,6 +136,20 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     if (drained.kind !== 'drained') return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
     const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
     if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: reconciled.detail };
+    if (reconciled.kind === 'resume-exit') {
+      const exited = await requestRoutedExit({
+        worktree: options.worktree,
+        slug: options.slug,
+        roundId: reconciled.roundId,
+        host: reconciled.host,
+        skipBuiltCompareAndSwap: true,
+        ...(options.git === undefined ? {} : { git: options.git }),
+        ...(options.events === undefined ? {} : { events: options.events }),
+      });
+      return exited.kind === 'restacked' || exited.kind === 'no-commit-done'
+        ? { kind: 'repaired' }
+        : { kind: 'halted' };
+    }
     if (options.baseRefreshDue && await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
       await deferredBaseRefresh(options.events);
       return { kind: 'clear' };

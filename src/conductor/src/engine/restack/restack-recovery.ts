@@ -29,7 +29,14 @@ import { replayChildRange } from './restack-replay.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
-import { mergeInRange, runRestack, transitionAppliedWithCascade } from './restack-executor.js';
+import {
+  changedRoutedAppliedRef,
+  journalRoutedApplyPlan,
+  mergeInRange,
+  restackTransactionBuilder,
+  RoutedApplyPlanRefChangedError,
+  runRestack,
+} from './restack-executor.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
@@ -796,7 +803,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       }
       const activeMove = moves.find((move) => move.ref === checkedOut);
       if (!activeMove?.child) return { kind: 'unavailable', detail: 'cannot identify active child for recovered transition' };
-      await applyRestackTransition({
+      const transitionResult = await applyRestackTransition({
         worktree: options.worktree,
         cause: journal.journal.cause,
         opId: journal.journal.opId,
@@ -813,10 +820,26 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           : [[entry.child, new Map(entry.rewrites.map(({ from, to }) => [from, to]))] as const])),
         ...(options.events === undefined ? {} : { events: options.events }),
       });
-      const applied = journal.journal.cause === 'feature-repair'
-        ? await transitionAppliedWithCascade(options.worktree, journal, journal.journal.originatingChildren ?? [], git)
-        : await transition(options.worktree, journal, 'applied', git);
-      if (!applied) return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
+      try {
+        journal = await journalRoutedApplyPlan(options.worktree, journal, transitionResult, git);
+      } catch (error) {
+        if (error instanceof RoutedApplyPlanRefChangedError) {
+          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: error.ref });
+          return { kind: 'halted' };
+        }
+        throw error;
+      }
+      const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
+      const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedTransaction.lines));
+      if (appliedWrite?.exitCode !== 0) {
+        const changed = await changedRoutedAppliedRef(journal, git);
+        if (changed !== undefined) {
+          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
+          return { kind: 'halted' };
+        }
+        return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
+      }
+      const applied = appliedTransaction.journal;
       if (applied.journal.followOnCause === undefined && !await cleanJournal(options.worktree, applied, git)) {
         return { kind: 'unavailable', detail: 'cannot clean recovered restack journal' };
       }

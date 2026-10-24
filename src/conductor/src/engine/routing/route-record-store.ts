@@ -1,6 +1,6 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { journalRefFor, readRestackJournal } from '../restack/restack-journal.js';
-import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
+import { journalRefFor, readRestackJournal, type ReadRestackJournalResult, type RestackJournal } from '../restack/restack-journal.js';
+import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
   MAX_ROUTE_ROUNDS,
@@ -27,6 +27,18 @@ export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { r
 
 const ZERO_SHA = '0'.repeat(40);
 
+/**
+ * A routing writer can pass an in-progress sync only when it owns that
+ * journal. Other non-terminal journal states fence routing mutations.
+ */
+export function routingFenceOpen(journal: ReadRestackJournalResult, ownerOpId?: RestackOpId): boolean {
+  if (journal.kind === 'missing') return true;
+  if (journal.kind !== 'journal') return false;
+  return journal.journal.state === 'aborted'
+    || (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)
+    || (journal.journal.state === 'synced' && ownerOpId === journal.journal.opId);
+}
+
 function isFeatureBranchRef(ref: string): boolean {
   return /^refs\/heads\/feat\/(?:c[1-9]\/|daemon-)[a-z0-9][a-z0-9-]*$/.test(ref);
 }
@@ -49,7 +61,8 @@ export type RoutingTransactionOp =
   | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
-  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
+  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
+  | { readonly kind: 'delete-marker'; readonly old: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 /** Every newly admitted route seals its authored-task denominator. */
@@ -129,9 +142,7 @@ export async function writeRoutingTransaction(
   const git = dependencies.git ?? makeGitRunner(worktree);
   const journal = await readRestackJournal(worktree, slug, { git });
   if (journal.kind === 'unreadable') return { kind: 'unavailable' };
-  if (journal.kind === 'journal' &&
-    (journal.journal.state !== 'applied' && journal.journal.state !== 'aborted' ||
-      (journal.journal.state === 'applied' && journal.journal.followOnCause !== undefined))) {
+  if (!routingFenceOpen(journal)) {
     return { kind: 'restack-journal-open' };
   }
   try {
@@ -190,6 +201,9 @@ export async function writeRoutingTransaction(
         case 'update-marker':
           lines.push(`update ${repairMarkerRefFor(slug)} ${op.new} ${op.old}`);
           break;
+        case 'delete-marker':
+          lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
+          break;
       }
     }
     // Keep the ordinary record update first for compatibility with Git's
@@ -225,6 +239,41 @@ export function transitionHost(
   if (from === undefined || !isLegalHostTransition(from, to)) return { kind: 'illegal-transition' };
   const record = { ...stored.record, hosts: { ...stored.record.hosts, [host]: to } };
   return { kind: 'updated', record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit)) };
+}
+
+/** Applies the host state recorded when a routed repair leaves the restack. */
+export function routedRecordAfterExit(
+  stored: StoredRouteRecord,
+  host: import('../child-context.js').ChildId,
+  outcome: 'restacked' | 'done',
+): ReturnType<typeof transitionHost> {
+  return transitionHost(stored, host, outcome, { credit: false });
+}
+
+/**
+ * Builds the route and repair-marker portion of a routed restack transaction.
+ * The caller owns the write; this helper deliberately performs no I/O.
+ */
+export function routedAppliedLines(
+  slug: string,
+  journal: RestackJournal | ReadRestackJournalResult,
+  ownerOpId: RestackOpId,
+): readonly string[] | 'refused' {
+  let stored: ReadRestackJournalResult;
+  if ('kind' in journal) {
+    stored = journal;
+  } else {
+    const routed = journal.routed;
+    if (routed === undefined) return 'refused';
+    stored = { kind: 'journal', slug, blob: routed.routeOld, journal };
+  }
+  if (!routingFenceOpen(stored, ownerOpId) || stored.kind !== 'journal') return 'refused';
+  const routed = stored.journal.routed;
+  if (routed === undefined || routed.routeNew === undefined) return 'refused';
+  return [
+    `update ${routeRecordRefFor(slug, routed.roundId)} ${routed.routeNew} ${routed.routeOld}`,
+    `delete ${repairMarkerRefFor(slug)} ${routed.markerOld}`,
+  ];
 }
 
 

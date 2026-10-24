@@ -17,7 +17,7 @@ import type { StateMutation } from '../conduct-state-store.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { resolveGitRef } from './git-ref-resolver.js';
-import { readRouteRecord, transitionHost, writeRoutingTransaction } from './route-record-store.js';
+import { readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
@@ -155,9 +155,7 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
 }
 
 function terminalJournal(journal: Awaited<ReturnType<typeof readRestackJournal>>): boolean {
-  return journal.kind === 'missing' || (journal.kind === 'journal' &&
-    (journal.journal.state === 'aborted' ||
-      (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)));
+  return routingFenceOpen(journal);
 }
 
 async function hostTarget(
