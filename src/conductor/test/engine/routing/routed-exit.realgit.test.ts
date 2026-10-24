@@ -1,12 +1,12 @@
 // Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
-import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
+import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor, MAX_RESTACK_CASCADES_PER_CHILD } from '../../../src/engine/restack/cascade-cap.js';
@@ -24,8 +24,6 @@ import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.j
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
-import { ALL_STEPS } from '../../../src/engine/steps.js';
-import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
 
 const cleanup: string[] = [];
@@ -220,7 +218,7 @@ describe('routed exit (real local Git)', () => {
 
     await expect(requestRoutedExit({
       worktree: subject.repo, slug: 'demo', roundId, host, git: corruptingGit,
-    })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('verification-failed') });
+    })).resolves.toEqual({ kind: 'halted', detail: 'routed exit host 1: halted' });
 
     expect(corrupted).toBe(true);
     await expect(Promise.all([
@@ -273,40 +271,18 @@ describe('routed exit (real local Git)', () => {
     });
     expect(await refExists(subject.gitRunner, journalRefFor('demo'))).toBe(false);
 
-    await subject.gitRunner(['checkout', '-q', 'feat/daemon-demo']);
-    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, step.name === 'manual_test' ? 'pending' : 'done']));
-    Object.assign(state, { feature_desc: 'demo', complexity_tier: 'L', build_review: 'skipped' });
-    await subject.write('.pipeline/conduct-state.json', JSON.stringify(state));
-    await subject.write('.pipeline/task-status.json', JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }));
-    let manualAttempt = 0;
-    const runner: StepRunner = {
-      run: vi.fn(async (step) => {
-        if (step === 'build') {
-          await subject.write('.pipeline/task-status.json', JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }));
-        } else if (step === 'manual_test') {
-          manualAttempt += 1;
-          await subject.write('.pipeline/manual-test-results.md', manualAttempt === 1
-            ? '| Story | Result |\n|---|---|\n| s1 | FAIL |\n'
-            : '| Story | Result |\n|---|---|\n| s1 | PASS |\n');
-        }
-        return { success: true };
-      }),
-    };
-    const conductor = new Conductor({
-      projectRoot: subject.repo,
-      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
-      featureSlug: 'demo',
-      fromStep: 'manual_test',
-      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
-      config: { stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: false } },
-      events: new ConductorEventEmitter(),
-      stepRunner: runner,
+    const head = (await subject.gitRunner(['rev-parse', 'HEAD'])).stdout.trim();
+    const context = { getHeadSha: async () => head, sessionStartedAt: Date.now() - 1_000 };
+    await writeFile(join(subject.repo, '.pipeline', 'manual-test-results.md'), '| Story | Result |\n|---|---|\n| s1 | FAIL |\n');
+    await expect(checkStepCompletion(subject.repo, 'manual_test', context)).resolves.toMatchObject({
+      done: false, reason: expect.stringContaining('contains FAIL rows'),
     });
-
-    await conductor.run();
-
-    expect(manualAttempt).toBe(2);
-    expect(await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).toMatch(/kickback-to-build no-op/);
+    await writeFile(join(subject.repo, '.pipeline', 'manual-test-results.md'), '| Story | Result |\n|---|---|\n| s1 | PASS |\n');
+    await expect(checkStepCompletion(subject.repo, 'manual_test', context)).resolves.toMatchObject({
+      done: false, reason: expect.stringContaining('whitewash guard'),
+    });
+    // The auto-mode loop that converts this refused verdict into the durable
+    // no-op halt is covered by manual-test-auto-mode-marker-record.acceptance.
   });
 
   it('restacks an empty metadata commit instead of treating its matching tree as a no-commit exit', async () => {

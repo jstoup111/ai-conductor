@@ -125,6 +125,8 @@ describe('Conductor routed acceptance verify-green path', () => {
 
     expect(requestRoutedExit).toHaveBeenCalledTimes(1);
     expect(requestRoutedExit).toHaveBeenCalledWith(expect.objectContaining({ slug: 'demo', roundId, host: child }));
+    // advanceChildRegion is the sole path that calls closeChild, so proving it
+    // is untouched proves the routed exit cannot close this host directly.
     expect(advanceChildRegion).not.toHaveBeenCalled();
     expect(mocks.drainRoutingOutboxes).toHaveBeenCalledOnce();
   });
