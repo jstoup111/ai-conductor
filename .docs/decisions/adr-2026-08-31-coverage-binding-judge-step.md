@@ -1,7 +1,7 @@
 # ADR: Coverage claims bind to `Done when`; a default-off pre-BUILD judge confirms the binding
 
 **Date:** 2026-08-31
-**Status:** SUPERSEDED by adr-2026-10-23-slice-topology-from-sealed-plan
+**Status:** APPROVED (operator-approved 2026-08-31, composer session for #2088)
 **Deciders:** operator (jstoup111), DECIDE architecture review for #2088
 
 <!-- Filename convention: adr-{{DATE}}-<kebab-slug>.md (no sequential numbers).
@@ -125,6 +125,8 @@ track skip. It is declared `phase: 'BUILD'` so the daemon executes it rather tha
 from the spec's carrier (coherence artifact at M/L, plan table at S) joined to each cited task's
 `Done when` checks. Nothing else — no diff, no transcript, no stories prose beyond the criterion
 text — reaches the judge.
+
+> **Amended 2026-10-23 by #3365:** The `coverage_binding` step is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 1). Decisions D4–D9 and D12–D24, which govern the step, its judge, its envelope, its batching, its void, and its events, are retired with it. D1–D3, D10, and D11 govern the land-time criterion contract and the coherence gate, and they stand unchanged. `skills/coverage-binding/SKILL.md` remains the policy for the plan-time coverage judgement.
 
 **D5 — The judge is a fresh one-shot dispatch with a closed, engine-stamped verdict.** For each
 claim the engine dispatches one fresh session (the `build_review` grader pattern: fresh id, no
