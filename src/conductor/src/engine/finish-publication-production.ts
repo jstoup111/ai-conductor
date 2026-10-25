@@ -38,8 +38,9 @@ import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } 
 import { splitStoryBlocks } from './story-criteria.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
 import { gateSatisfied } from './selector.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import {
   dispatchFinishRecord,
   makeProductionFinishRecordRunners,
@@ -318,7 +319,11 @@ async function sealedChildPresentation(input: {
   const planText = planPath === undefined ? undefined : await readFile(planPath, 'utf8').catch(() => undefined);
   const storiesPath = planPath === undefined || planText === undefined
     ? null
-    : resolvePlanStoriesPath(relative(input.root, planPath).replaceAll('\\', '/'), planText);
+    : await resolveFeatureStoriesRef(
+      worktreeManifestSource(input.root),
+      relative(input.root, planPath).replaceAll('\\', '/'),
+      planText,
+    );
   if (storiesPath === null) {
     throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack stories path is unavailable');
   }

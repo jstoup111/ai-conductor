@@ -52,6 +52,7 @@ import { runTrackerUrlRead } from './tracker-client.js';
 import { daemonOwnedSlugOfBranch } from './feature-branch-identity.js';
 import { haltStackTipDiverged } from './stack-publication.js';
 import type { PublicationMember } from './stack-publication-record.js';
+import { gitRefManifestSource, resolveFeatureArtifact } from './feature-manifest-source.js';
 
 function leaseSlug(branch: string): string {
   // All production callers use daemon feature branches. Retain a stable,
@@ -293,7 +294,14 @@ export async function createShipDraftPublicationDependencies(input: {
     ? { repository, kind: 'remote-ref' as const, ref: `refs/heads/${input.branch}` }
     : pullRequestTargetFromUrl(input.prUrl, repository);
   if (!target) return undefined;
-  const featureMarker = `.docs/intake/${input.featureDesc}.md`;
+  const intake = await resolveFeatureArtifact(
+    gitRefManifestSource(input.cwd, input.branch),
+    input.featureDesc,
+    'intake',
+    async () => [`.docs/intake/${input.featureDesc}.md`],
+  );
+  const featureMarker = intake.paths[0];
+  if (featureMarker === undefined || (intake.origin === 'manifest' && intake.missing.includes(featureMarker))) return undefined;
   const remoteMutation: GithubMutationExecutionContext = {
     provenance: {
       repository,
@@ -309,8 +317,12 @@ export async function createShipDraftPublicationDependencies(input: {
       ),
       provenanceDiscovery: {
         readCommittedRecords: async ({ ref }) => {
-          const { stdout } = await input.git(['show', `${ref}:${featureMarker}`], { cwd: input.cwd });
-          return [{ path: featureMarker, content: stdout }];
+          const source = gitRefManifestSource(input.cwd, ref);
+          const artifact = await resolveFeatureArtifact(source, input.featureDesc!, 'intake', async () => [`.docs/intake/${input.featureDesc}.md`]);
+          const path = artifact.paths[0];
+          if (path === undefined || (artifact.origin === 'manifest' && artifact.missing.includes(path))) return [];
+          const content = await source.readFile(path);
+          return content === null ? [] : [{ path, content }];
         },
       },
     },

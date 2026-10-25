@@ -20,7 +20,7 @@ import { parseCoherenceWaiverDeclaration } from './engineer/coherence-waiver.js'
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
-import { worktreeManifestSource } from './feature-manifest-source.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
 import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 import type { PrdAuditRequirementAssociation } from './prd-audit-contract.js';
@@ -497,14 +497,22 @@ export async function buildPrdAuditProjection(
   }
   if (parsedCriteria.criteria.length === 0 || tasks.length === 0) return { ok: false, fault: { dimension: 'obligations', detail: 'active stories or plan contain no audit obligations' } };
 
-  const coherencePath = join(projectRoot, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
   let coherence: PrdAuditProjection['coherence'] = { kind: 'absent' };
-  try {
-    const parsed = parseCoherenceArtifact(await readFile(coherencePath, 'utf-8'));
-    if (!parsed.ok) return { ok: false, fault: { dimension: 'coherence', detail: parsed.reason } };
-    coherence = parsed.rows;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, fault: { dimension: 'coherence', detail: 'active coherence is unreadable' } };
+  const coherenceArtifact = await resolveFeatureArtifact(
+    worktreeManifestSource(projectRoot),
+    basename(planPath, '.md'),
+    'coherence',
+    async () => [`.docs/coherence/${basename(planPath, '.md')}.md`],
+  );
+  const coherencePath = coherenceArtifact.paths[0];
+  if (coherencePath !== undefined && !(coherenceArtifact.origin === 'manifest' && coherenceArtifact.missing.includes(coherencePath))) {
+    try {
+      const parsed = parseCoherenceArtifact(await readFile(join(projectRoot, coherencePath), 'utf-8'));
+      if (!parsed.ok) return { ok: false, fault: { dimension: 'coherence', detail: parsed.reason } };
+      coherence = parsed.rows;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, fault: { dimension: 'coherence', detail: 'active coherence is unreadable' } };
+    }
   }
 
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
