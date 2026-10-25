@@ -1300,6 +1300,7 @@ export class DefaultStepRunner implements StepRunner {
           onCandidateStart: this.providerCandidateStart,
           emit: async (event) => { await this.events?.emit(event); },
           onNotice: (notice) => this.log(notice),
+          maxPromptChars: this.config.plan_review?.max_prompt_chars,
         });
         this.callCount++;
         return { success: true };

@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
+// Covers: task:3, task:4, task:5, task:6, task:9, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeReviewedDigest, parsePlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
-import { runPlanReview } from '../../src/engine/plan-review-runner.js';
+import { PLAN_REVIEW_INDEX_INSTRUCTION, runPlanReview } from '../../src/engine/plan-review-runner.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -161,6 +161,17 @@ D2. Amended B decision.
       artifactTexts: { '.docs/coherence/idea.md': await readFile(join(root, '.docs', 'coherence', 'idea.md'), 'utf8') },
       changedPaths: ['.docs/decisions/adr-b.md'],
     }));
+  });
+
+  it('tells the reviewer that indexed material must be read from its worktree path', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls[0].options.prompt).toContain(PLAN_REVIEW_INDEX_INSTRUCTION);
+    expect(PLAN_REVIEW_INDEX_INSTRUCTION).toContain('not inlined');
+    expect(PLAN_REVIEW_INDEX_INSTRUCTION).toContain('read each item from its listed worktree path');
+    expect(PLAN_REVIEW_INDEX_INSTRUCTION).toContain('open it before a finding quotes or relies on it');
   });
 
   it('inlines every decision from an ADR added after the merge base', async () => {
@@ -615,12 +626,39 @@ describe('runPlanReview prompt bounds', () => {
     expect(calls[0].options.prompt).not.toContain('"searchedPaths"');
   });
 
-  it('refuses before dispatch, naming the sizes, when the review prompt exceeds its budget', async () => {
-    const root = await fixture(); const calls: any[] = [];
+  it('refuses before dispatch with every present section, both overrides, and no side effects', async () => {
+    const root = await fixture(); const calls: any[] = []; const events: any[] = [];
     await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
       maxPromptChars: 10,
       providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
-    })).rejects.toThrow(/plan review prompt is too large: \d+ characters exceeds 10 \(plan \d+, stories \d+, ADR decisions \d+, coherence \d+, candidates \d+\)/);
+      emit: async (event) => { events.push(event); },
+    })).rejects.toThrow(/plan review prompt is too large: \d+ characters exceeds 10 \(plan \d+, stories \d+, ADR decisions \d+, index \d+, candidates \d+\)\. Largest section: \w+(?: \w+)?\. To proceed, rerun with --max-prompt-chars \d+, or set plan_review\.max_prompt_chars: \d+ in \.ai-conductor\/config\.yml, or shrink the .+ section\./);
     expect(calls).toHaveLength(0);
+    expect(events).toEqual([]);
+    await expect(readFile(join(root, '.docs/plan-review/idea.md'), 'utf8')).rejects.toThrow();
+  });
+
+  it('uses the 400000-character default budget when no override is supplied', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), `# Plan\n\n${'x'.repeat(400_001)}`, 'utf8');
+    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    })).rejects.toThrow('exceeds 400000');
+    expect(calls).toEqual([]);
+  });
+
+  it('allows a prompt exactly equal to its override budget', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    let promptLength = 0;
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      maxPromptChars: Number.MAX_SAFE_INTEGER,
+      providerExecutor: (async (input: any) => { promptLength = input.options.prompt.length; calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    await rm(join(root, '.docs', 'plan-review'), { recursive: true, force: true });
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      maxPromptChars: promptLength,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls).toHaveLength(2);
   });
 });

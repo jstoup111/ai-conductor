@@ -1,11 +1,11 @@
-// Covers: task:15, remediation:31729538-c8e3-4af5-9737-d147a44a7500
+// Covers: task:7, task:15, remediation:31729538-c8e3-4af5-9737-d147a44a7500
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
+import { detectEngineerCommand, dispatchEngineer, SUBCOMMAND_HELP } from '../../../src/engine/engineer-cli.js';
 import { parsePlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFileAsync = promisify(execFile);
@@ -50,12 +50,71 @@ describe('compose plan-review command surface', () => {
       .toEqual({ kind: 'plan-review', project: 'alpha', worktree: '/tmp/feature' });
     expect(detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', '/tmp/feature', '--source-ref', 'acme/app#7')))
       .toMatchObject({ kind: 'plan-review', sourceRef: 'acme/app#7' });
+    expect(detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', '/tmp/feature', '--max-prompt-chars', '800000')))
+      .toMatchObject({ kind: 'plan-review', maxPromptChars: 800000 });
     expect(detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', '/tmp/feature', '--accept', 'F-1', '--reason', 'intentional')))
       .toMatchObject({ kind: 'plan-review', accept: 'F-1', reason: 'intentional' });
     expect(detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', '/tmp/feature', '--acknowledge', '--reason', 'reviewed')))
       .toMatchObject({ kind: 'plan-review', acknowledge: true, reason: 'reviewed' });
     expect(detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', '/tmp/feature', '--unknown')))
       .toEqual({ kind: 'reject', sub: 'plan-review', flag: '--unknown' });
+    expect(SUBCOMMAND_HELP['plan-review']).toContain('--max-prompt-chars');
+  });
+
+  it('refuses invalid and disposition-only prompt-budget flags before dispatch', async () => {
+    const { worktree, registryPath } = await fixture(); const calls: any[] = []; const errors: string[] = [];
+    for (const args of [
+      ['--max-prompt-chars', 'abc'],
+      ['--max-prompt-chars', '0'],
+      ['--max-prompt-chars', '800000', '--accept', 'F-1', '--reason', 'r'],
+      ['--max-prompt-chars', '800000', '--acknowledge', '--reason', 'r'],
+    ]) {
+      const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree, ...args))!;
+      expect(await dispatchEngineer(command, { registryPath, printErr: (line) => errors.push(line), probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any })).toBe(1);
+    }
+    expect(calls).toEqual([]);
+    expect(errors.join('\n')).toContain('--max-prompt-chars');
+  });
+
+  it('uses the configured budget and lets --max-prompt-chars override it for a review run', async () => {
+    const { worktree, registryPath } = await fixture(); const calls: any[] = []; const errors: string[] = [];
+    await writeFile(join(worktree, '.docs', 'plans', 'active-feature.md'), `# Plan\n\n${'x'.repeat(450_000)}`, 'utf8');
+    await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'llm_provider: codex\nplan_review:\n  max_prompt_chars: 600000\n', 'utf8');
+    const base = ['plan-review', '--project', 'alpha', '--worktree', worktree] as const;
+    const options = {
+      registryPath, printErr: (line: string) => errors.push(line),
+      probeGhVersion: async () => ({ kind: 'ok' as const, version: { major: 2, minor: 73, patch: 0 } }),
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    };
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...base))!, options)).toBe(0);
+    expect(calls).toHaveLength(1);
+    const overBudget = await fixture();
+    await writeFile(join(overBudget.worktree, '.docs', 'plans', 'active-feature.md'), `# Plan\n\n${'x'.repeat(650_000)}`, 'utf8');
+    await writeFile(join(overBudget.worktree, '.ai-conductor', 'config.yml'), 'llm_provider: codex\nplan_review:\n  max_prompt_chars: 600000\n', 'utf8');
+    const overBudgetBase = ['plan-review', '--project', 'alpha', '--worktree', overBudget.worktree] as const;
+    const overBudgetOptions = { ...options, registryPath: overBudget.registryPath };
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...overBudgetBase))!, overBudgetOptions)).toBe(1);
+    expect(errors.join('\n')).toContain('exceeds 600000');
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...overBudgetBase, '--max-prompt-chars', '800000'))!, overBudgetOptions)).toBe(0);
+    expect(calls).toHaveLength(2);
+    await rm(join(overBudget.worktree, '.docs', 'plan-review'), { recursive: true, force: true });
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...overBudgetBase))!, overBudgetOptions)).toBe(1);
+  });
+
+  it('lets an operator rerun the CLI size refusal with its advertised one-shot budget', async () => {
+    const { worktree, registryPath } = await fixture(); const calls: any[] = []; const errors: string[] = [];
+    await writeFile(join(worktree, '.docs', 'plans', 'active-feature.md'), `# Plan\n\n${'x'.repeat(450_000)}`, 'utf8');
+    const base = ['plan-review', '--project', 'alpha', '--worktree', worktree] as const;
+    const options = {
+      registryPath, printErr: (line: string) => errors.push(line),
+      probeGhVersion: async () => ({ kind: 'ok' as const, version: { major: 2, minor: 73, patch: 0 } }),
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    };
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...base))!, options)).toBe(1);
+    const match = errors.join('\n').match(/--max-prompt-chars (\d+)/);
+    expect(match?.[1]).toBeDefined();
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...base, '--max-prompt-chars', match![1]!))!, options)).toBe(0);
+    expect(calls).toHaveLength(1);
   });
 
   it('selects the active feature plan despite historical plans, writes a clean cross-provider review, and persists lifecycle events', async () => {

@@ -122,6 +122,10 @@ function selectedDecisions(adrTexts: Readonly<Record<string, string>>, ids: read
  */
 export const PLAN_REVIEW_MAX_PROMPT_CHARS = 400_000;
 
+/** Explains that the index is a read-through reference, not prompt context. */
+export const PLAN_REVIEW_INDEX_INSTRUCTION =
+  'INDEX (not inlined; read each item from its listed worktree path, and open it before a finding quotes or relies on it):';
+
 /** The reviewer reads source itself, so reachability rows carry a path count, not the list. */
 function promptCandidates(candidates: readonly unknown[]): unknown[] {
   return candidates.map((candidate) => {
@@ -173,10 +177,24 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const indexText = index.join('\n');
   const prompt = changed
     ? `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${decisionsJson}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${candidatesJson}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`
-    : `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS (changed in this spec):\n${decisionsJson}\n\nINDEX (not inlined; read each item from its listed worktree path, and open it before a finding quotes or relies on it):\n${indexText}\n\nCANDIDATES:\n${candidatesJson}`;
+    : `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS (changed in this spec):\n${decisionsJson}\n\n${PLAN_REVIEW_INDEX_INSTRUCTION}\n${indexText}\n\nCANDIDATES:\n${candidatesJson}`;
   const maxPromptChars = input.maxPromptChars ?? PLAN_REVIEW_MAX_PROMPT_CHARS;
   if (prompt.length > maxPromptChars) {
-    throw new Error(`plan review prompt is too large: ${prompt.length} characters exceeds ${maxPromptChars} (plan ${reviewPlan.length}, stories ${reviewStories.length}, ADR decisions ${decisionsJson.length}, coherence ${source.coherenceText.length}, candidates ${candidatesJson.length})`);
+    const sections: Array<[string, number]> = [
+      ['plan', reviewPlan.length],
+      ['stories', reviewStories.length],
+      ['ADR decisions', decisionsJson.length],
+      ...(changed ? [['coherence', source.coherenceText.length] as [string, number]] : [['index', indexText.length] as [string, number]]),
+      ['candidates', candidatesJson.length],
+      ...(prior ? [['prior findings', JSON.stringify(priorFindings).length] as [string, number]] : []),
+    ];
+    const largest = sections.reduce((current, section) => section[1] > current[1] ? section : current);
+    throw new Error(
+      `plan review prompt is too large: ${prompt.length} characters exceeds ${maxPromptChars} ` +
+      `(${sections.map(([name, size]) => `${name} ${size}`).join(', ')}). ` +
+      `Largest section: ${largest[0]}. To proceed, rerun with --max-prompt-chars ${prompt.length}, ` +
+      `or set plan_review.max_prompt_chars: ${prompt.length} in .ai-conductor/config.yml, or shrink the ${largest[0]} section.`,
+    );
   }
   const executor = input.providerExecutor ?? executeProviderCandidates;
   let findings: readonly import('./plan-review-contract.js').PlanReviewFinding[] | undefined;
