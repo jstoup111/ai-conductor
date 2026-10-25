@@ -204,6 +204,9 @@ ai-conductor compose phase --worktree <worktreePath> --phase <step>
 
     Never edit the review file by hand; its integrity line rejects the change at land.
 
+    If review refuses with `plan review prompt is too large`, shrink the named largest section, or
+    rerun with the printed `--max-prompt-chars <n>` value.
+
 Do not hand-write stub or DRAFT artifacts. See [steps reference](../reference/steps.md) for the
 per-step tier-skip and enforcement table, and [SDLC phases](../explanation/sdlc-phases.md) for why
 the order is fixed.
