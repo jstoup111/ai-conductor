@@ -266,6 +266,12 @@ out-of-closure task introduces — and the reviewer confirms or discards each wi
 for contradictions. Candidates are prompts, never findings by themselves; deterministic candidate
 generation keeps the reviewer's judgement scoped, and schema validation constrains its output.
 
+The first-round prompt inlines only the in-scope ADR decisions the spec changed against the merge base;
+unchanged decisions and the coherence artifact appear in an `INDEX` of worktree paths the reviewer reads
+directly. When the merge base cannot be read, every in-scope decision stays inline. A prompt over the
+[`plan_review.max_prompt_chars`](../reference/configuration.md#plan_review) budget is refused before
+dispatch, never truncated.
+
 The engine records the result in `.docs/plan-review/<plan-stem>.md`, guarded by an integrity hash and a
 digest of exactly the reviewed inputs. Land fails closed when the review is missing, tampered with, or
 stale against those inputs, or when a `blocking` finding stands without an operator acceptance. Review is

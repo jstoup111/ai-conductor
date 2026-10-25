@@ -3093,6 +3093,48 @@ steps:
     });
   });
 
+  describe('plan_review config field', () => {
+    it('accepts and preserves max_prompt_chars', () => {
+      expect(validateConfig({ plan_review: { max_prompt_chars: 600000 } })).toMatchObject({
+        ok: true,
+        config: { plan_review: { max_prompt_chars: 600000 } },
+      });
+    });
+
+    it.each([0, -1, 1.5, 'large'])(
+      'rejects non-positive-integer max_prompt_chars %#',
+      (max_prompt_chars) => {
+        expect(validateConfig({ plan_review: { max_prompt_chars } })).toEqual({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: 'plan_review.max_prompt_chars must be a positive integer',
+          },
+        });
+      },
+    );
+
+    it('rejects unknown plan_review keys', () => {
+      expect(validateConfig({ plan_review: { max_chars: 1 } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown key in plan_review: "max_chars"',
+        },
+      });
+    });
+
+    it('rejects max_prompt_chars as a per-step setting', () => {
+      expect(validateConfig({ steps: { plan_review: { max_prompt_chars: 600000 } } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown key in steps.plan_review: "max_prompt_chars"',
+        },
+      });
+    });
+  });
+
   describe('prd_audit and architecture_review_as_built config fields', () => {
     it('resolves the remediation caps and plan-gap policy defaults', () => {
       expect(validateConfig({})).toMatchObject({
