@@ -89,6 +89,11 @@ are:
   stable finding id, anchor, summary, and evidence locations.
 - `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
   resolution evidence.
+  - A prior source may carry `finding`, a bounded digest of the earlier finding: `rubric`,
+    `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`.
+  - Treat a supplied `finding` digest as binding context when deciding whether a current finding is
+    an equivalent re-raise of that prior source. It is never report text: do not copy, quote, or
+    treat it as a new finding; use it only to bind or distinguish the current source and case.
 - `planContract`: the active approved-plan contract that determines whether work is admitted.
 - `taskStatus`: the engine-supplied task-status evidence.
 - `effectPointers`: the engine-supplied prior effect and BUILD-attempt pointers.
