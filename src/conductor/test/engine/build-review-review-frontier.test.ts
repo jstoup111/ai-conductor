@@ -1,4 +1,4 @@
-// Covers: task:2, task:7
+// Covers: task:2, task:4, task:7
 import { describe, expect, it } from "vitest";
 
 import {
@@ -175,6 +175,31 @@ describe("build-review review frontier", () => {
     });
     const current = scope({ sequence: 2, mode: "delta", reason: "delta", predecessorLapId: lapId("lap-prior"), deltaHunks: [] });
     expect(decide({ priorLaps: [prior, { lapId: lapId("lap-current"), reviewScope: current }] })).toBe(current);
+  });
+
+  // Covers: task:4
+  it("records full current coverage while dispatching only unsettled delta hunks", () => {
+    const files: readonly ChangedFileReference[] = [{
+      path: "src/example.ts",
+      changeKind: "modified",
+      hunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: "sha256:hunk-a" },
+        { oldStart: 10, oldCount: 1, newStart: 10, newCount: 1, contentHash: "sha256:hunk-b" },
+      ],
+    }];
+
+    expect(decide({
+      changedFiles: files,
+      priorLaps: [{ lapId: lapId("lap-prior"), reviewScope: scope() }],
+      settledHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }],
+    })).toMatchObject({
+      mode: "delta",
+      reviewedHunks: [
+        { path: "src/example.ts", contentHash: "sha256:hunk-a" },
+        { path: "src/example.ts", contentHash: "sha256:hunk-b" },
+      ],
+      deltaHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-b" }],
+    });
   });
 
   // Covers: task:11
