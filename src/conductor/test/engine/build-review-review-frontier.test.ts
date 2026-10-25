@@ -197,10 +197,7 @@ describe("build-review review frontier", () => {
       settledHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }],
     })).toMatchObject({
       mode: "delta",
-      reviewedHunks: [
-        { path: "src/example.ts", contentHash: "sha256:hunk-a" },
-        { path: "src/example.ts", contentHash: "sha256:hunk-b" },
-      ],
+      reviewedHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-b" }],
       deltaHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-b" }],
     });
   });

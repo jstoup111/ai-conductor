@@ -165,7 +165,10 @@ export function decideBuildReviewReviewScope(
       headSha: input.headSha,
       policyIdentity: input.policyIdentity,
       predecessorLapId: latestReadable!.lapId,
-      reviewedHunks,
+      // `reviewedHunks` is evidence of what this lap actually judged, not
+      // the candidate frontier from which that judgment was selected.  A
+      // scope-empty delta therefore contributes no settlement evidence.
+      reviewedHunks: deltaHunks,
       deltaHunks,
       outOfDeltaSourceIds: [],
     };
