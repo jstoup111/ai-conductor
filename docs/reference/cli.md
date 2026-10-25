@@ -802,6 +802,7 @@ returns 1.
 | --- | --- | --- | --- |
 | `projects` | `compose projects` | Prints the registry as JSON. Read-only. | 0; 1 on unknown flag |
 | `worktree` | `compose worktree --project <name> --idea "<text>" [--source-ref <ref>] [--body <text>]` | Resolves the project, resolves the target repo, and creates the per-idea git worktree and branch. Prints `{kind, slug, branch, worktreePath, reconcile}`. With `--source-ref` and no `--body`, loads the Desired-outcome body from the persisted claim record or, if no record exists, from the referenced GitHub issue. A resolved empty or bulletless body stages the source reference with zero outcome bullets. An unreadable, missing, or unparseable source leaves no outcomes file and prints a diagnostic, without failing worktree creation; `--body` takes precedence. | 0; 1 on project not found, target resolution error, or worktree creation error |
+| `phase` | `compose phase --worktree <path> --phase <phase>` | Marks the start of a DECIDE step by [labeling the composer pane](#composer-pane-labels). `<phase>` must match `^[a-z0-9-]+$`, and the worktree must be on `spec/<slug>`. Changes no artifact or workflow state. | 0, including a skipped label; 1 on an invalid phase, a non-`spec/` worktree branch, or an unknown flag |
 | `dep-audit` | `compose dep-audit --project <name>` | Read-only dependency drift report for the project's GitHub repository. Prints counts and findings for `unlinked` (declared in prose, no native link), `stale`, `cycles`, `contradictions` (reverse-direction declarations), and `indeterminate`, or `Dependency drift audit: indeterminate (<cause>)` when the repository cannot be read. Never creates, removes, or changes a link. | 0, including indeterminate results; 1 on project not found or unknown flag |
 | `land` | `compose land --project <name> --idea "<text>" --worktree <path> [--source-ref <ref>] [--depends-on <owner/repo#N>]… [--decline-dependency <owner/repo#N>]… [--skip-dependency-check "<reason>"]` | Reads machine owner config, performs a fail-fast identity check, then commits the authored spec artifacts in the worktree onto `spec/<slug>`. With a GitHub `--source-ref`, it first runs the [dependency gate](#land-dependency-gate). With `--source-ref`, comments on the issue and advances the ledger to `routed` — advisory, so a `gh` failure never fails the land. On failure the worktree is kept and its path is reported. | 0; 1 on project not found, unresolved identity, or a land failure |
 | `plan-review` | `compose plan-review --project <name> --worktree <path> [--source-ref <ref>] [--accept <finding-id> --reason "<text>" \| --acknowledge --reason "<text>"]` | Medium/Large DECIDE gate between `/coherence-check` and `land`. The worktree must be on `spec/<slug>` and contain `.docs/plans/<slug>.md`. Without a disposition flag, runs one bounded review round in a read-only reviewer session and writes `.docs/plan-review/<slug>.md`; prints `plan review clean` when no `blocking` finding remains. A third round is refused with `plan review bound reached` and the standing findings. After round 2, `--accept` records an accepted disposition for one finding, and `--acknowledge` re-stamps the reviewed digest after later plan edits without a model call; both require a non-empty `--reason` and are mutually exclusive. Events go to the target repository's `.pipeline/composer-events.jsonl`. | 0, including a round with blocking findings; 1 on project not found, target or config resolution error, a non-`spec/` branch, a missing plan, an exhausted round bound, a reviewer failure on every provider, a refused disposition, or an unknown flag |
@@ -820,13 +821,27 @@ from the root `--help` output. Likewise, `land`'s
 `--depends-on`, `--decline-dependency`, and `--skip-dependency-check` are absent from both the root
 guide and `compose land --help`.
 
+#### Composer pane labels
+
+When the composer runs inside herdr or tmux, `compose` labels the current pane `<slug> · <phase>`:
+
+- `worktree` labels with phase `worktree` after creating the worktree.
+- `phase` labels with the supplied `--phase`.
+- `plan-review`, `land`, and `handoff` label with their own name when `--worktree` is on `spec/<slug>`.
+
+The environment alone identifies the pane: herdr when `HERDR_ENV=1` and `HERDR_PANE_ID` is set
+(`herdr pane rename <id> <label>`), tmux when `TMUX_PANE` is set (`tmux select-pane -t <pane> -T
+<label>`). Both run when both are present; outside either, nothing runs. Labeling is best-effort: a
+failure or 2-second timeout prints one `compose: pane label skipped (<command>): <reason>` line on
+stderr and never changes the subcommand's output or exit code.
+
 Every subcommand that touches the ledger — `launch`'s pre-poll, `land`, `handoff`, `claim`, `forget`,
 `unclaim`, `requeue`, and `resolve` — fails closed on a corrupt ledger: exit 1 with
 `compose <kind>: intake ledger is corrupt at <path>; quarantine path: <path>; ledger was not
 modified.` The ledger itself is left untouched for repair. See
 [corrupt intake ledger or stuck ledger lease](../runbooks/corrupt-intake-ledger.md).
 
-> **Known limitation.** Omitting a required flag or positional on `worktree`, `land`, `handoff`,
+> **Known limitation.** Omitting a required flag or positional on `worktree`, `phase`, `land`, `handoff`,
 > `plan-review`, `forget`, or `resolve` prints the full guide text and exits **0**, not a usage error. A script that
 > checks only the exit code will read a malformed invocation as success. Check for the expected JSON on
 > stdout instead. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).

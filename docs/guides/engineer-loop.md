@@ -162,6 +162,13 @@ With `worktreePath` as the working directory, run the real DECIDE skills in cano
 engineer owns the whole DECIDE phase; the daemon only builds. Every artifact is written inside the
 worktree, never the primary checkout.
 
+As each step starts, mark it so a herdr or tmux pane shows `<slug> · <step>`
+([pane labels](../reference/cli.md#composer-pane-labels)):
+
+```bash
+ai-conductor compose phase --worktree <worktreePath> --phase <step>
+```
+
 1. `/explore` — discovery and the confirmed track.
 2. Complexity assessment — write the tier to `.docs/complexity/<plan-stem>.md`. The stem must match
    the plan filename or the daemon cannot resolve it.

@@ -150,6 +150,7 @@ import type {
 import type { HarnessConfig } from './types/config.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { defaultPaneLabelRunner } from './engine/engineer/pane-label.js';
 import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
 import { detectBrainCommand, dispatchBrain } from './engine/brain-supervisor-cli.js';
 import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
@@ -1058,6 +1059,7 @@ async function dispatchCliCommand(): Promise<void> {
     try {
       code = await dispatchEngineer(engineerCmd, {
         events: spine.events,
+        paneLabelRunner: defaultPaneLabelRunner,
       });
     } finally {
       spine.stop();

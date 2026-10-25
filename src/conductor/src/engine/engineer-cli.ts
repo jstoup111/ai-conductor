@@ -106,6 +106,7 @@ import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
 import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
+import { labelComposerPane, type PaneLabelRunner } from './engineer/pane-label.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -116,6 +117,7 @@ type EngineerDispatchDescriptor =
   | { kind: 'projects' }
   | { kind: 'dep-audit'; project: string }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
+  | { kind: 'phase'; worktree: string; phase: string }
   | {
     kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
@@ -142,7 +144,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -157,6 +159,24 @@ async function resolvePlanReviewFeatureSlug(worktree: string): Promise<string | 
   if (!branch.startsWith('spec/')) return undefined;
   const slug = branch.slice('spec/'.length);
   return isSpecSlug(slug) ? slug : undefined;
+}
+
+async function labelPrimitivePane(
+  worktree: string,
+  phase: string,
+  opts: DispatchEngineerOpts,
+  warn: (line: string) => void,
+): Promise<void> {
+  if (!opts.paneLabelRunner) return;
+  const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(worktree);
+  if (!slug) return;
+  await labelComposerPane({
+    slug,
+    phase,
+    env: opts.env ?? process.env,
+    run: opts.paneLabelRunner,
+    warn,
+  });
 }
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -236,6 +256,15 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, [...WORKTREE_ACCEPTED_FLAGS]);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
     return { kind: 'worktree', project, idea, sourceRef, body };
+  }
+
+  if (subCmd === 'phase') {
+    const worktree = parseFlag(argv, '--worktree');
+    const phase = parseOptionalFlagPreservingEmpty(argv, '--phase');
+    if (!worktree || phase === undefined) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--worktree', '--phase']);
+    if (unk) return { kind: 'reject', sub: 'phase', flag: unk };
+    return { kind: 'phase', worktree, phase };
   }
 
   if (subCmd === 'land') {
@@ -583,6 +612,10 @@ export interface DispatchEngineerOpts {
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
   printErr?: (s: string) => void;
+  /** Optional pane-label process seam; only production injects the real runner. */
+  paneLabelRunner?: PaneLabelRunner;
+  /** Test seam for the checked-out spec branch lookup used by `compose phase`. */
+  resolvePlanReviewFeatureSlug?: (worktree: string) => Promise<string | undefined>;
   /** Injected gh runner (for tests). */
   gh?: GhRunner;
   /** Injectable canonical tracker seam for `compose dep-audit`. */
@@ -869,6 +902,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas), --body <text> (optional — stages the intake body).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
+  phase:
+    'compose phase --worktree <path> --phase <phase> — label the current composer pane for an active DECIDE phase.\n' +
+    'Flags: --worktree <path> (required), --phase <phase> (required).\n' +
+    'Mutates: updates only the current herdr or tmux pane label when one is identified by the environment.\n' +
+    'Loop fit: informational phase marker during DECIDE; it does not change authored artifacts or workflow state.',
   land:
     'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — commit the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
@@ -1277,6 +1315,28 @@ export async function dispatchEngineer(
       return 0;
     }
 
+    // ── phase ─────────────────────────────────────────────────────────────────
+    case 'phase': {
+      if (!/^[a-z0-9-]+$/.test(dispatch.phase)) {
+        printErr(`compose phase: invalid phase '${dispatch.phase}'.`);
+        return 1;
+      }
+      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
+      if (!slug) {
+        printErr(`compose phase: worktree '${dispatch.worktree}' must be on a canonical spec/<slug> branch.`);
+        return 1;
+      }
+      if (!opts.paneLabelRunner) return 0;
+      await labelComposerPane({
+        slug,
+        phase: dispatch.phase,
+        env: opts.env ?? process.env,
+        run: opts.paneLabelRunner,
+        warn: printErr,
+      });
+      return 0;
+    }
+
     // ── projects ──────────────────────────────────────────────────────────────
     case 'projects': {
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
@@ -1367,6 +1427,15 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
+        if (opts.paneLabelRunner) {
+          await labelComposerPane({
+            slug: wt.slug,
+            phase: 'worktree',
+            env: opts.env ?? process.env,
+            run: opts.paneLabelRunner,
+            warn: printErr,
+          });
+        }
         // The occurrence rides the one telemetry spine. This CLI process owns no
         // long-lived bus, so it builds the spine for the duration of the emit —
         // a ConductorEventEmitter with EventPersister attached to the canonical
@@ -1404,6 +1473,7 @@ export async function dispatchEngineer(
 
     case 'plan-review': {
       const { project: projectName, worktree, accept, acknowledge, reason } = dispatch;
+      await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const record = (await reader.listProjects()).find((project) => project.name === projectName);
       if (!record) { printErr(`engineer plan-review: project "${projectName}" not found in registry.`); return 1; }
@@ -1449,6 +1519,7 @@ export async function dispatchEngineer(
         project: projectName, idea, worktree, sourceRef,
         dependsOn = [], declinedDependencies = [], skipDependencyCheck,
       } = dispatch;
+      await labelPrimitivePane(worktree, 'land', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -1650,6 +1721,7 @@ export async function dispatchEngineer(
     // ── handoff ───────────────────────────────────────────────────────────────
     case 'handoff': {
       const { project: projectName, branch, worktree, sourceRef } = dispatch;
+      await labelPrimitivePane(worktree, 'handoff', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
