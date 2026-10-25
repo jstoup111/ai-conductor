@@ -1633,7 +1633,7 @@ export async function dispatchEngineer(
         return 1;
       }
 
-      if (result.added.length > 0) {
+      if (result.manifestChanged) {
         try {
           const events = new ConductorEventEmitter();
           const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);

@@ -205,6 +205,7 @@ describe('landSpec manifest registration', () => {
 
     expect(await readFile(join(worktreePath, '.docs', SLUG, 'manifest.json'), 'utf8')).toBe(before);
     expect(result.added).toEqual([]);
+    expect(result.manifestChanged).toBe(false);
   });
 
   it('rebuilds without a deleted ADR decision or complexity entry', async () => {
@@ -214,11 +215,12 @@ describe('landSpec manifest registration', () => {
     await git(['commit', '-m', 'remove decision and complexity'], worktreePath);
     await writeCurrentPlanReview(worktreePath);
 
-    await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options());
+    const result = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options());
 
     const entries = (await manifest(worktreePath)).artifacts;
     expect(entries).not.toContainEqual({ kind: 'decision', path: '.docs/decisions/adr-2026-10-25-manifest-landing.md' });
     expect(entries).not.toContainEqual({ kind: 'complexity', path: `.docs/complexity/${SLUG}.md` });
+    expect(result).toMatchObject({ manifestChanged: true, added: [] });
   });
 
   it('replaces missing-path, unparsable, and wrong-slug manifests instead of refusing', async () => {

@@ -142,6 +142,8 @@ export interface LandSpecResult {
   slug: string;
   branch: string;
   repoPath: string;
+  /** Whether the rendered manifest bytes differ from the prior manifest. */
+  manifestChanged: boolean;
   /** Entries newly registered by this land relative to the prior valid manifest. */
   added: readonly FeatureManifestEntry[];
   /** Present only for an intake-originated land that passed the proposal gate. */
@@ -900,7 +902,7 @@ export async function landSpec(
   const manifestSlug = markerSlug;
   const manifestRepoPath = featureManifestPath(manifestSlug);
   const manifestFile = join(worktreePath, manifestRepoPath);
-  const priorEntries = await readPriorManifestEntries(manifestFile, manifestRepoPath, manifestSlug);
+  const priorManifest = await readPriorManifest(manifestFile, manifestRepoPath, manifestSlug);
   const presentFeatureFiles = await existingDocsPaths(worktreePath, featureFiles);
   if (intakeMarker !== null) {
     presentFeatureFiles.add(relative(worktreePath, intakeMarker).replaceAll('\\', '/'));
@@ -908,12 +910,13 @@ export async function landSpec(
   const presentChangedAdrPaths = await existingDocsPaths(worktreePath, changedAdrPaths);
   const rebuiltManifest = buildFeatureManifest(manifestSlug, presentFeatureFiles, presentChangedAdrPaths);
   const renderedManifest = renderFeatureManifest(rebuiltManifest);
+  const manifestChanged = priorManifest.raw !== renderedManifest;
   const manifestDir = join(worktreePath, '.docs', manifestSlug);
   guard.assertWriteAllowed(manifestDir);
   guard.assertWriteAllowed(manifestFile);
   await mkdir(manifestDir, { recursive: true });
   await writeFile(manifestFile, renderedManifest, 'utf8');
-  const previousEntryKeys = new Set(priorEntries.map(({ kind, path }) => `${kind}\u0000${path}`));
+  const previousEntryKeys = new Set(priorManifest.entries.map(({ kind, path }) => `${kind}\u0000${path}`));
   const added = rebuiltManifest.artifacts.filter(({ kind, path }) => !previousEntryKeys.has(`${kind}\u0000${path}`));
 
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
@@ -940,6 +943,7 @@ export async function landSpec(
     slug,
     branch,
     repoPath: worktreePath,
+    manifestChanged,
     added,
     ...(dependencySourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
   };
@@ -965,20 +969,21 @@ async function existingDocsPaths(worktreePath: string, paths: Iterable<string>):
 
 /** A malformed or mismatched manifest is not a land gate: it is overwritten by
  * the deterministic rebuild. Only a valid prior manifest contributes to the
- * registration delta reported to the caller. */
-async function readPriorManifestEntries(
+ * registration delta reported to the caller, while its raw bytes still determine
+ * whether the rebuild changed the manifest. */
+async function readPriorManifest(
   manifestFile: string,
   manifestRepoPath: string,
   slug: string,
-): Promise<readonly FeatureManifestEntry[]> {
+): Promise<{ raw: string | null; entries: readonly FeatureManifestEntry[] }> {
   let raw: string;
   try {
     raw = await readFile(manifestFile, 'utf8');
   } catch {
-    return [];
+    return { raw: null, entries: [] };
   }
   const parsed = parseFeatureManifest(raw, manifestRepoPath, slug);
-  return parsed.kind === 'parsed' ? parsed.manifest.artifacts : [];
+  return { raw, entries: parsed.kind === 'parsed' ? parsed.manifest.artifacts : [] };
 }
 
 /** Existing paths retain their owning feature during DECIDE amendments. New paths,

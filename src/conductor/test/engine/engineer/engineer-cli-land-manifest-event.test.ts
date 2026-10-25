@@ -100,6 +100,29 @@ async function seedWorktree(): Promise<string> {
   return worktreePath;
 }
 
+async function writeCurrentPlanReview(worktree: string): Promise<void> {
+  const planText = await readFile(join(worktree, `.docs/plans/${SLUG}.md`), 'utf8');
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText: STORIES,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${SLUG}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(worktree, repo)],
+  });
+  await writeFile(
+    join(worktree, `.docs/plan-review/${SLUG}.md`),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
+}
+
 const gh: GhRunner = async (args) => {
   if (args.join(' ') === 'api user --jq .login') return { stdout: 'operator\n' };
   throw new Error(`unexpected gh call: ${args.join(' ')}`);
@@ -180,5 +203,23 @@ describe('compose land manifest registration event', () => {
     expect(await land(worktree)).toBe(0);
 
     expect(await registeredEvents()).toHaveLength(1);
+  });
+
+  it('appends a registration event when re-land removes a manifest entry without adding one', async () => {
+    const worktree = await seedWorktree();
+    await mkdir(join(worktree, '.docs', 'track'), { recursive: true });
+    await writeFile(join(worktree, `.docs/track/${SLUG}.md`), '# Track\n\nTrack: technical\n');
+    await writeCurrentPlanReview(worktree);
+    expect(await land(worktree)).toBe(0);
+
+    await git(['rm', `.docs/track/${SLUG}.md`], worktree);
+    await git(['commit', '-m', 'remove track marker'], worktree);
+    await writeCurrentPlanReview(worktree);
+
+    expect(await land(worktree)).toBe(0);
+
+    const events = await registeredEvents();
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ slug: SLUG, added: [] });
   });
 });
