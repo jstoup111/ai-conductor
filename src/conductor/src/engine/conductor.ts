@@ -11770,7 +11770,15 @@ export class Conductor {
               return;
             }
             if (route.kind === 'halt') {
-              await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
+              const disposition = result.publicationDisposition;
+              await emitTracked({
+                type: 'finish_publication_disposition',
+                disposition: 'human_required',
+                ...(disposition.kind === 'human_required' ? {
+                  reason: disposition.reason,
+                  ...(disposition.detail === undefined ? {} : { detail: disposition.detail }),
+                } : {}),
+              });
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason: route.reason,

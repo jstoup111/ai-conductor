@@ -235,6 +235,10 @@ export type FinishPublicationEvent =
   | {
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
+      /** Present for a typed human-required FINISH publication halt. */
+      reason?: string;
+      /** Detail retained from the typed human-required publication disposition. */
+      detail?: string;
     };
 
 /** Stack-publication occurrences remain on the canonical conductor event spine. */
