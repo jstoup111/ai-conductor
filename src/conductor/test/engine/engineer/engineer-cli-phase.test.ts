@@ -1,4 +1,5 @@
 // Covers: task:3
+// Covers: task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -32,6 +33,70 @@ const ghCapability = { probeGhVersion: async () => ({ kind: 'ok' as const }) };
 const phaseSlug = { resolvePlanReviewFeatureSlug: async () => 'demo-idea' };
 
 describe('compose phase', () => {
+  it.each(['', 'plan review', '\u001b[31mplan', 'PLAN'])('rejects invalid phase %j before labeling', async (phase) => {
+    const worktree = await specWorktree();
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const errors: string[] = [];
+
+    const code = await dispatchEngineer(
+      detectEngineerCommand(argv('--worktree', worktree, '--phase', phase))!,
+      {
+        ...ghCapability,
+        ...phaseSlug,
+        env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' },
+        paneLabelRunner: async (command, args) => { calls.push({ command, args }); },
+        printErr: (line) => errors.push(line),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(errors).toEqual([expect.stringContaining(`invalid phase '${phase}'`)]);
+    expect(calls).toEqual([]);
+  });
+
+  it('rejects a worktree that does not resolve to a spec branch before labeling', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'engineer-cli-phase-non-spec-'));
+    temporaryDirectories.push(worktree);
+    await execa('git', ['init', '--initial-branch=main'], { cwd: worktree });
+    await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: worktree });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: worktree });
+    await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: worktree });
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const errors: string[] = [];
+
+    const code = await dispatchEngineer(
+      detectEngineerCommand(argv('--worktree', worktree, '--phase', 'stories'))!,
+      {
+        ...ghCapability,
+        env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' },
+        paneLabelRunner: async (command, args) => { calls.push({ command, args }); },
+        printErr: (line) => errors.push(line),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(errors).toEqual([expect.stringContaining(worktree)]);
+    expect(calls).toEqual([]);
+  });
+
+  it('succeeds without a HERDR_ENV or TMUX_PANE and makes no label call', async () => {
+    const worktree = await specWorktree();
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const code = await dispatchEngineer(
+      detectEngineerCommand(argv('--worktree', worktree, '--phase', 'stories'))!,
+      {
+        ...ghCapability,
+        ...phaseSlug,
+        env: {},
+        paneLabelRunner: async (command, args) => { calls.push({ command, args }); },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
   it('labels the spec worktree pane through the injected herdr runner', async () => {
     const worktree = await specWorktree();
     const calls: Array<{ command: string; args: string[] }> = [];

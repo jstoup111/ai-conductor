@@ -242,8 +242,8 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
 
   if (subCmd === 'phase') {
     const worktree = parseFlag(argv, '--worktree');
-    const phase = parseFlag(argv, '--phase');
-    if (!worktree || !phase) return { kind: 'guide' };
+    const phase = parseOptionalFlagPreservingEmpty(argv, '--phase');
+    if (!worktree || phase === undefined) return { kind: 'guide' };
     const unk = findUnknownFlag(argv, ['--worktree', '--phase']);
     if (unk) return { kind: 'reject', sub: 'phase', flag: unk };
     return { kind: 'phase', worktree, phase };
@@ -1299,17 +1299,23 @@ export async function dispatchEngineer(
 
     // ── phase ─────────────────────────────────────────────────────────────────
     case 'phase': {
-      if (!opts.paneLabelRunner) return 0;
-      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
-      if (slug) {
-        await labelComposerPane({
-          slug,
-          phase: dispatch.phase,
-          env: opts.env ?? process.env,
-          run: opts.paneLabelRunner,
-          warn: printErr,
-        });
+      if (!/^[a-z0-9-]+$/.test(dispatch.phase)) {
+        printErr(`compose phase: invalid phase '${dispatch.phase}'.`);
+        return 1;
       }
+      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
+      if (!slug) {
+        printErr(`compose phase: worktree '${dispatch.worktree}' must be on a canonical spec/<slug> branch.`);
+        return 1;
+      }
+      if (!opts.paneLabelRunner) return 0;
+      await labelComposerPane({
+        slug,
+        phase: dispatch.phase,
+        env: opts.env ?? process.env,
+        run: opts.paneLabelRunner,
+        warn: printErr,
+      });
       return 0;
     }
 
