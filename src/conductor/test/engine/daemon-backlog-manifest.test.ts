@@ -1,8 +1,9 @@
-// Covers: task:15
+// Covers: task:15, task:16
 
 import { describe, expect, it } from 'vitest';
 import type { BacklogTreeSource } from '../../src/engine/backlog-tree-source.js';
 import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
+import { renderShippedRecord } from '../../src/engine/shipped-record.js';
 
 const PLAN = '# Plan\n### Task 1\n**Dependencies:** none\n';
 const STORIES = '# Stories\n**Status:** Accepted\n';
@@ -21,7 +22,9 @@ function tree(files: Record<string, string>): ManifestTree {
       .map((path) => path.slice('.docs/plans/'.length)),
     listFeatureManifests: async () => Object.keys(files)
       .filter((path) => /^\.docs\/[^/]+\/manifest\.json$/.test(path)),
-    listShippedFiles: async () => [],
+    listShippedFiles: async () => Object.keys(files)
+      .filter((path) => path.startsWith('.docs/shipped/') && path.endsWith('.md'))
+      .map((path) => path.slice('.docs/shipped/'.length)),
     listAdrFiles: async () => [],
     readFile: async (path) => {
       reads.push(path);
@@ -102,6 +105,47 @@ describe('daemon backlog manifest discovery', () => {
     ].filter((slug) => slug === 'f');
 
     expect(occurrences).toEqual(['f']);
+  });
+
+  it('blocks a malformed manifest while another manifest-backed feature remains eligible', async () => {
+    const source = tree({
+      '.docs/f/manifest.json': '{ not json',
+      '.docs/good/manifest.json': manifest('good'),
+      ...artifacts('good'),
+    });
+
+    const result = await discoverBacklog('/unused', undefined, undefined, { treeSource: source });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['good']);
+    expect(result.blocked).toEqual([expect.objectContaining({
+      slug: 'f',
+      reason: 'malformed-manifest',
+      remedy: expect.stringContaining('.docs/f/manifest.json'),
+    })]);
+  });
+
+  it('deduplicates malformed manifests before parsing them', async () => {
+    const source = tree({
+      '.docs/processed/manifest.json': '{ not json',
+      '.docs/shipped/manifest.json': '{ not json',
+      '.docs/parked/manifest.json': '{ not json',
+      '.docs/good/manifest.json': manifest('good'),
+      ...artifacts('good'),
+      '.docs/shipped/shipped.md': renderShippedRecord({ slug: 'shipped', specHash: 'fixture' }),
+    });
+
+    const result = await discoverBacklog('/unused', async (slug) => slug === 'processed', undefined, {
+      treeSource: source,
+      isOperatorParked: async (slug) => slug === 'parked',
+    });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['good']);
+    expect(result.blocked).toEqual([]);
+    expect(source.reads).not.toEqual(expect.arrayContaining([
+      '.docs/processed/manifest.json',
+      '.docs/shipped/manifest.json',
+      '.docs/parked/manifest.json',
+    ]));
   });
 
   it('preserves the frozen legacy discovery output and warning log', async () => {

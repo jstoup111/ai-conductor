@@ -29,6 +29,7 @@ import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
 import { parseCoherenceArtifact } from './coherence-parse.js';
 import {
   backlogTreeManifestSource,
+  MalformedFeatureManifestError,
   resolveFeatureArtifact,
 } from './feature-manifest-source.js';
 import {
@@ -674,7 +675,8 @@ export interface BlockedSpecItem {
     | 'stories-not-approved'
     | 'adr-not-approved'
     | 'no-dependency-tree'
-    | 'missing-coherence';
+    | 'missing-coherence'
+    | 'malformed-manifest';
   remedy: string;
 }
 
@@ -953,11 +955,21 @@ export async function discoverBacklog(
       return artifact.paths.find((path) => artifact.origin === 'legacy' || !artifact.missing.includes(path));
     };
     if (candidate.manifestBacked) {
-      const resolvedPlan = await manifestPathFor('plan');
-      if (!resolvedPlan) continue;
-      planRel = resolvedPlan;
-      planContent = await tree.readFile(planRel);
-      if (planContent === null) continue;
+      try {
+        const resolvedPlan = await manifestPathFor('plan');
+        if (!resolvedPlan) continue;
+        planRel = resolvedPlan;
+        planContent = await tree.readFile(planRel);
+        if (planContent === null) continue;
+      } catch (error) {
+        if (!(error instanceof MalformedFeatureManifestError)) throw error;
+        const manifestPath = `.docs/${slug}/manifest.json`;
+        await block(
+          { slug, reason: 'malformed-manifest', remedy: `Fix malformed feature manifest ${manifestPath}: ${error.message}` },
+          `skip ${slug}: merged spec cannot build — malformed feature manifest ${manifestPath}. ${error.message} logged once.`,
+        );
+        continue;
+      }
     }
 
     if (planContent === null) continue;
