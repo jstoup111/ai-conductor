@@ -63,6 +63,10 @@ describe('compose plan-review command surface', () => {
 
   it('refuses invalid and disposition-only prompt-budget flags before dispatch', async () => {
     const { worktree, registryPath } = await fixture(); const calls: any[] = []; const errors: string[] = [];
+    const artifactPath = join(worktree, '.docs', 'plan-review', 'active-feature.md');
+    const artifactBeforeRefusal = 'existing review artifact\n';
+    await mkdir(join(worktree, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(artifactPath, artifactBeforeRefusal, 'utf8');
     for (const args of [
       ['--max-prompt-chars', 'abc'],
       ['--max-prompt-chars', '0'],
@@ -73,7 +77,13 @@ describe('compose plan-review command surface', () => {
       expect(await dispatchEngineer(command, { registryPath, printErr: (line) => errors.push(line), probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any })).toBe(1);
     }
     expect(calls).toEqual([]);
-    expect(errors.join('\n')).toContain('--max-prompt-chars');
+    expect(errors).toEqual([
+      'engineer plan-review: --max-prompt-chars must be a positive integer',
+      'engineer plan-review: --max-prompt-chars must be a positive integer',
+      'engineer plan-review: --max-prompt-chars applies only to a review run',
+      'engineer plan-review: --max-prompt-chars applies only to a review run',
+    ]);
+    expect(await readFile(artifactPath, 'utf8')).toBe(artifactBeforeRefusal);
   });
 
   it('uses the configured budget and lets --max-prompt-chars override it for a review run', async () => {
@@ -88,6 +98,10 @@ describe('compose plan-review command surface', () => {
     };
     expect(await dispatchEngineer(detectEngineerCommand(argv(...base))!, options)).toBe(0);
     expect(calls).toHaveLength(1);
+    const defaultBudget = await fixture();
+    await writeFile(join(defaultBudget.worktree, '.docs', 'plans', 'active-feature.md'), `# Plan\n\n${'x'.repeat(450_000)}`, 'utf8');
+    expect(await dispatchEngineer(detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', defaultBudget.worktree))!, { ...options, registryPath: defaultBudget.registryPath })).toBe(1);
+    expect(errors.join('\n')).toContain('exceeds 400000');
     const overBudget = await fixture();
     await writeFile(join(overBudget.worktree, '.docs', 'plans', 'active-feature.md'), `# Plan\n\n${'x'.repeat(650_000)}`, 'utf8');
     await writeFile(join(overBudget.worktree, '.ai-conductor', 'config.yml'), 'llm_provider: codex\nplan_review:\n  max_prompt_chars: 600000\n', 'utf8');
@@ -99,6 +113,14 @@ describe('compose plan-review command surface', () => {
     expect(calls).toHaveLength(2);
     await rm(join(overBudget.worktree, '.docs', 'plan-review'), { recursive: true, force: true });
     expect(await dispatchEngineer(detectEngineerCommand(argv(...overBudgetBase))!, overBudgetOptions)).toBe(1);
+    const receivedBudgets: number[] = [];
+    const wiredOptions = {
+      ...options,
+      runPlanReview: async (input: any) => { receivedBudgets.push(input.maxPromptChars); return { findings: [] }; },
+    };
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...base, '--max-prompt-chars', '800000'))!, wiredOptions)).toBe(0);
+    expect(await dispatchEngineer(detectEngineerCommand(argv(...base))!, wiredOptions)).toBe(0);
+    expect(receivedBudgets).toEqual([800000, 600000]);
   });
 
   it('lets an operator rerun the CLI size refusal with its advertised one-shot budget', async () => {

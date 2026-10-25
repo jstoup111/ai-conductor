@@ -628,14 +628,35 @@ describe('runPlanReview prompt bounds', () => {
 
   it('refuses before dispatch with every present section, both overrides, and no side effects', async () => {
     const root = await fixture(); const calls: any[] = []; const events: any[] = [];
-    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
-      maxPromptChars: 10,
-      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
-      emit: async (event) => { events.push(event); },
-    })).rejects.toThrow(/plan review prompt is too large: \d+ characters exceeds 10 \(plan \d+, stories \d+, ADR decisions \d+, index \d+, candidates \d+\)\. Largest section: \w+(?: \w+)?\. To proceed, rerun with --max-prompt-chars \d+, or set plan_review\.max_prompt_chars: \d+ in \.ai-conductor\/config\.yml, or shrink the .+ section\./);
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), '# Coherence\n\nThe round-two coherence body.\n', 'utf8');
+    const finding = {
+      id: 'prior-blocker', severity: 'blocking', lens: 'reachability', artifact: '.docs/plans/idea.md',
+      reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'The first round found a blocker.', evidence: ['source.ts:1'],
+    };
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [finding] } })) as any,
+    });
+    const artifactPath = join(root, '.docs/plan-review/idea.md');
+    const artifactBeforeRefusal = await readFile(artifactPath, 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), `# Plan\n\n### Task 1: Changed\n**Steps:**\n1. Change \`reviewFlag\`.\n\n**Done when:**\n- [test] the changed flag works.\n\n**Dependencies:** none\n`, 'utf8');
+    let message = '';
+    try {
+      await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+        maxPromptChars: 10,
+        providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+        emit: async (event) => { events.push(event); },
+      });
+    } catch (error) { message = error instanceof Error ? error.message : String(error); }
+    const promptLength = message.match(/plan review prompt is too large: (\d+) characters exceeds 10/)?.[1];
+    expect(promptLength).toBeDefined();
+    expect(message).toMatch(/\(plan \d+, stories \d+, ADR decisions \d+, coherence \d+, candidates \d+, prior findings \d+\)/);
+    expect(message).toMatch(/Largest section: \w+(?: \w+)?\./);
+    expect(message).toContain(`--max-prompt-chars ${promptLength}`);
+    expect(message).toContain(`plan_review.max_prompt_chars: ${promptLength}`);
     expect(calls).toHaveLength(0);
     expect(events).toEqual([]);
-    await expect(readFile(join(root, '.docs/plan-review/idea.md'), 'utf8')).rejects.toThrow();
+    expect(await readFile(artifactPath, 'utf8')).toBe(artifactBeforeRefusal);
   });
 
   it('uses the 400000-character default budget when no override is supplied', async () => {

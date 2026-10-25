@@ -656,6 +656,8 @@ export interface DispatchEngineerOpts {
   env?: NodeJS.ProcessEnv;
   /** Injectable reviewer executor for the deterministic plan-review boundary. */
   providerExecutor?: RunPlanReviewInput['providerExecutor'];
+  /** Injectable plan-review runner so command wiring can be asserted without a provider call. */
+  runPlanReview?: typeof runPlanReview;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -1508,7 +1510,7 @@ export async function dispatchEngineer(
           const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
           let ledgerError: string | undefined;
           const safeEmit = async (event: any) => { try { await events.emitOrThrow(event); } catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error); } };
-          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr, maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars });
+          const artifact = await (opts.runPlanReview ?? runPlanReview)({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr, maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars });
           if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
           if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
         }
