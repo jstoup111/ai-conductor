@@ -33,7 +33,7 @@ async function labelPane(
       timeoutResult,
     ]);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
     warn(`compose: pane label skipped (${command}): ${reason}`);
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);

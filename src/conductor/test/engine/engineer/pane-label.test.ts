@@ -120,6 +120,23 @@ describe('labelComposerPane', () => {
     expect(warn.mock.calls[0]?.[0]).toMatch(/^compose: pane label skipped \(herdr\): /);
   });
 
+  it('collapses an execa-style multi-line rejection into one warning line', async () => {
+    const warn = vi.fn();
+    const labelComposerPane = await loadLabelComposerPane();
+
+    await expect(labelComposerPane({
+      slug,
+      phase,
+      env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' },
+      run: async () => { throw new Error('Command failed with ENOENT: herdr pane rename w1:p1\nspawn herdr ENOENT'); },
+      warn,
+    })).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/^compose: pane label skipped \(herdr\): /);
+    expect(warn.mock.calls[0]?.[0]).not.toContain('\n');
+  });
+
   it('warns once and resolves after 2000 ms when the herdr runner never settles', async () => {
     vi.useFakeTimers();
     try {
