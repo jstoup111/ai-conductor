@@ -1427,6 +1427,15 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
+        if (opts.paneLabelRunner) {
+          await labelComposerPane({
+            slug: wt.slug,
+            phase: 'worktree',
+            env: opts.env ?? process.env,
+            run: opts.paneLabelRunner,
+            warn: printErr,
+          });
+        }
         // The occurrence rides the one telemetry spine. This CLI process owns no
         // long-lived bus, so it builds the spine for the duration of the emit —
         // a ConductorEventEmitter with EventPersister attached to the canonical
