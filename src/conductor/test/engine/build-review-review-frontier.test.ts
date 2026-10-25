@@ -8,8 +8,13 @@ import {
   settledBuildReviewHunks,
   type BuildReviewPolicyIdentityInputs,
 } from "../../src/engine/build-review-review-frontier.js";
+import { isBuildReviewFindingOutOfDelta } from "../../src/engine/build-review-aggregate.js";
 import type { BuildReviewReviewScope } from "../../src/engine/build-review-artifacts.js";
-import type { BuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import type {
+  BuildReviewCustomFinding,
+  BuildReviewFinding,
+  BuildReviewLapId,
+} from "../../src/engine/build-review-domain.js";
 import type { ChangedFileReference } from "../../src/engine/build-review-projections.js";
 
 function inputs(
@@ -184,5 +189,130 @@ describe("build-review review frontier", () => {
     const lap = { reviewScope: scope(), findings: [{ sourceId: "source-a", finding }] };
     expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]) })).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
     expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]), liveSourceIds: new Set(["source-a"]) })).toEqual([]);
+  });
+
+  // Covers: task:7
+  it("maps built-in anchors by content hash and falls back when their hunk is gone", () => {
+    const files: readonly ChangedFileReference[] = [
+      {
+        path: "src/auth.ts", changeKind: "modified",
+        hunks: [{ oldStart: 1, oldCount: 1, newStart: 4, newCount: 2, contentHash: "sha256:auth" }],
+      },
+      {
+        path: "src/domain.ts", changeKind: "modified",
+        hunks: [{ oldStart: 8, oldCount: 1, newStart: 8, newCount: 1, contentHash: "sha256:domain" }],
+      },
+    ];
+    const security = {
+      concernKind: "injection", summary: "unsafe command", evidenceLocations: [],
+      anchor: { rubric: "security" as const, locus: { path: "src/auth.ts", contentHash: "sha256:auth", display: "command" } },
+    } satisfies BuildReviewFinding;
+    const implementation = {
+      concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/domain.ts", contentHash: "sha256:domain", display: "branch" } },
+    } satisfies BuildReviewFinding;
+
+    expect(mapBuildReviewFindingToHunks(security, files)).toEqual([{ kind: "hunks", hunks: [{ path: "src/auth.ts", contentHash: "sha256:auth" }] }]);
+    expect(mapBuildReviewFindingToHunks(implementation, files)).toEqual([{ kind: "hunks", hunks: [{ path: "src/domain.ts", contentHash: "sha256:domain" }] }]);
+    expect(mapBuildReviewFindingToHunks({
+      ...security,
+      anchor: { ...security.anchor, locus: { ...security.anchor.locus, contentHash: "sha256:gone" } },
+    }, files)).toEqual([{ kind: "file", path: "src/auth.ts" }]);
+  });
+
+  // Covers: task:7
+  it("intersects custom and test-quality source regions with new-side hunks", () => {
+    const files: readonly ChangedFileReference[] = [{
+      path: "test/widget.test.ts", changeKind: "modified",
+      hunks: [
+        { oldStart: 2, oldCount: 1, newStart: 10, newCount: 3, contentHash: "sha256:first" },
+        { oldStart: 20, oldCount: 1, newStart: 30, newCount: 2, contentHash: "sha256:second" },
+      ],
+    }];
+    const testRegion = {
+      path: "test/widget.test.ts", startLine: 12, endLine: 30,
+      contentHash: "sha256:anchored-test", display: "widget persists state",
+    };
+    const testQuality = {
+      concernKind: "test-insensitive", summary: "does not observe", evidenceLocations: [],
+      anchor: { rubric: "testQuality" as const, locus: testRegion },
+    } satisfies BuildReviewFinding;
+    const custom = {
+      concernId: "custom:coverage", summary: "coverage gap", evidenceLocations: [],
+      sourceRegions: [testRegion],
+    } satisfies BuildReviewCustomFinding;
+
+    const expected = [{
+      kind: "hunks",
+      hunks: [
+        { path: "test/widget.test.ts", contentHash: "sha256:first" },
+        { path: "test/widget.test.ts", contentHash: "sha256:second" },
+      ],
+    }];
+    expect(mapBuildReviewFindingToHunks(testQuality, files)).toEqual(expected);
+    expect(mapBuildReviewFindingToHunks(custom, files)).toEqual(expected);
+    expect(mapBuildReviewFindingToHunks({ ...custom, sourceRegions: [{ ...testRegion, startLine: 20, endLine: 21 }] }, files)).toEqual([
+      { kind: "file", path: "test/widget.test.ts" },
+    ]);
+  });
+
+  // Covers: task:7
+  it("preserves every custom path and keeps a fallback path in delta scope", () => {
+    const files: readonly ChangedFileReference[] = [
+      {
+        path: "src/intersects.ts", changeKind: "modified",
+        hunks: [{ oldStart: 2, oldCount: 1, newStart: 10, newCount: 2, contentHash: "sha256:intersects" }],
+      },
+      {
+        path: "src/fallback.ts", changeKind: "modified",
+        hunks: [{ oldStart: 2, oldCount: 1, newStart: 30, newCount: 2, contentHash: "sha256:fallback" }],
+      },
+    ];
+    const finding = {
+      concernId: "custom:two-paths", summary: "cross-file concern", evidenceLocations: [],
+      sourceRegions: [
+        { path: "src/intersects.ts", startLine: 10, endLine: 10, contentHash: "sha256:region-a", display: "first" },
+        { path: "src/fallback.ts", startLine: 3, endLine: 3, contentHash: "sha256:region-b", display: "second" },
+      ],
+    } satisfies BuildReviewCustomFinding;
+
+    expect(mapBuildReviewFindingToHunks(finding, files)).toEqual([
+      { kind: "hunks", hunks: [{ path: "src/intersects.ts", contentHash: "sha256:intersects" }] },
+      { kind: "file", path: "src/fallback.ts" },
+    ]);
+    expect(isBuildReviewFindingOutOfDelta(finding, {
+      changedFiles: files,
+      reviewScope: { mode: "delta", deltaHunks: [{ path: "src/fallback.ts", contentHash: "sha256:fallback" }] },
+    })).toBe(false);
+  });
+
+  // Covers: task:7
+  it("deduplicates identical hunk identities and maps a fused hunk only once", () => {
+    const repeated: readonly ChangedFileReference[] = [{
+      path: "src/repeated.ts", changeKind: "modified",
+      hunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: "sha256:same" },
+        { oldStart: 20, oldCount: 1, newStart: 20, newCount: 1, contentHash: "sha256:same" },
+      ],
+    }];
+    const repeatedFinding = {
+      concernKind: "duplication", summary: "same bytes", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/repeated.ts", contentHash: "sha256:same", display: "duplicate hunk" } },
+    } satisfies BuildReviewFinding;
+    const fused: readonly ChangedFileReference[] = [{
+      path: "src/fused.ts", changeKind: "modified",
+      hunks: [{ oldStart: 10, oldCount: 2, newStart: 10, newCount: 3, contentHash: "sha256:fused" }],
+    }];
+    const fusedFinding = {
+      concernKind: "duplication", summary: "fused edit", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/fused.ts", contentHash: "sha256:fused", display: "fused hunk" } },
+    } satisfies BuildReviewFinding;
+
+    expect(mapBuildReviewFindingToHunks(repeatedFinding, repeated)).toEqual([
+      { kind: "hunks", hunks: [{ path: "src/repeated.ts", contentHash: "sha256:same" }] },
+    ]);
+    expect(mapBuildReviewFindingToHunks(fusedFinding, fused)).toEqual([
+      { kind: "hunks", hunks: [{ path: "src/fused.ts", contentHash: "sha256:fused" }] },
+    ]);
   });
 });

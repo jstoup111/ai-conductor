@@ -228,7 +228,8 @@ export function mapBuildReviewFindingToHunks(
       }
       continue;
     }
-    const hunks = candidates.map((hunk) => ({ path: region.path, contentHash: hunk.contentHash }));
+    const hunks = [...new Set(candidates.map((hunk) => hunk.contentHash))]
+      .map((contentHash) => ({ path: region.path, contentHash }));
     const key = `hunks\u0000${hunks.map(hunkKey).sort().join("\u0001")}`;
     if (!seen.has(key)) {
       seen.add(key);
