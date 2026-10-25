@@ -92,6 +92,10 @@ describe('N=1 golden state', () => {
 
   // Covers: task:17
   it.each(CELLS)('keeps every flat N=1 run free of conductor refs, child state, and slice events while matching the regenerated golden for $name', async (cell) => {
+    // This cell deliberately starts from workspace-only stories and complexity
+    // artifacts so the build seal refuses them. Keep its deterministic UUID
+    // sequence pinned to its pre-removal fixture identity.
+    if (cell.name === 'flag-on-ineligible') uuidState.counter = 57;
     const root = await mkdtemp(join(tmpdir(), `n1-golden-${cell.name}-`));
     roots.push(root);
     const expectSingleSliceMatchesUnsliced = async (suffix: string, actual: string) => {
