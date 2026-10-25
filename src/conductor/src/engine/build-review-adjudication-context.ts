@@ -702,5 +702,9 @@ export function assembleBuildReviewAdjudicationContext(
     priorDigestsOmitted += 1;
     context = contextFor(freezePriorCases(includedDigestKeys), priorDigestsOmitted);
   }
+  const actual = bytes(JSON.stringify(context));
+  if (actual > LIMITS.maxSerializedBytes) {
+    return { ok: false, stop: { code: 'serialized-byte-overflow', limit: LIMITS.maxSerializedBytes, actual } };
+  }
   return { ok: true, context };
 }

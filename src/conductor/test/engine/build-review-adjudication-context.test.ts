@@ -303,6 +303,47 @@ describe('build-review adjudication context', () => {
     expect(Buffer.byteLength(JSON.stringify(expanded.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
   });
 
+  it('returns a typed overflow rather than exceeding the serialized ceiling when multi-digit omissions exhaust headroom', () => {
+    const priorCases = Array.from({ length: 128 }, (_value, index) => priorCase(`case-${index.toString().padStart(3, '0')}`));
+    const minimumContracts = Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p' }));
+    const input = {
+      aggregate: aggregate(finding('current')), priorCases,
+      planContract: { path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: minimumContracts },
+    };
+    const minimum = assembleBuildReviewAdjudicationContext({ ...input, priorFindingDigests: new Map() });
+
+    expect(minimum).toMatchObject({ ok: true });
+    if (!minimum.ok) return;
+    let remainingPadding = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 1 - Buffer.byteLength(JSON.stringify(minimum.context));
+    expect(remainingPadding).toBeGreaterThan(0);
+    const admittedTaskContracts = minimumContracts.map((task) => {
+      const padding = Math.min(7_999, remainingPadding);
+      remainingPadding -= padding;
+      return { ...task, contract: task.contract + 'p'.repeat(padding) };
+    });
+    expect(remainingPadding).toBe(0);
+    const nearCeiling = { ...input, planContract: { ...input.planContract, admittedTaskContracts } };
+    const base = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests: new Map() });
+    expect(base).toMatchObject({ ok: true });
+    if (!base.ok) return;
+    expect(Buffer.byteLength(JSON.stringify(base.context))).toBe(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 1);
+
+    const priorFindingDigests = new Map(priorCases.map((prior) => [prior.sources[0]!.sourceId, {
+      rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
+      evidenceLocations: ['src/prior.ts:1'], lapId: 'lap-prior',
+    }] as const));
+    const result = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests });
+
+    if (result.ok) {
+      expect(result.context.priorDigestsOmitted).toBe(128);
+      expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+      return;
+    }
+    expect(result.stop).toMatchObject({
+      code: 'serialized-byte-overflow', limit: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
+    });
+  });
+
   it('keeps a prior source without a readable artifact digest and does not count it as budget-omitted', () => {
     const prior = priorCase('case-missing-artifact');
     const result = assembleBuildReviewAdjudicationContext({
