@@ -624,6 +624,15 @@ export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
   return { resolved: false, reason: 'rebase skill returned no parseable result' };
 }
 
+/**
+ * Branch artifacts persist out-of-delta ids bare because each artifact is
+ * already per-rubric; frontier sources are rubric-qualified, so qualify the
+ * persisted ids into the same key space before settlement compares them.
+ */
+function rubricQualifiedReviewScope<T extends { readonly outOfDeltaSourceIds: readonly string[] }>(rubric: string, scope: T): T {
+  return { ...scope, outOfDeltaSourceIds: scope.outOfDeltaSourceIds.map((id) => `${rubric}:${id}`) };
+}
+
 type BuildReviewSettledArtifactFinding = {
   readonly sourceId: string;
   readonly finding: BuildReviewFinding | BuildReviewCustomFinding;
@@ -3502,7 +3511,7 @@ export class DefaultStepRunner implements StepRunner {
         unknownSourceIds: new Set(unknownSources.map((source) => source.sourceId)),
         unknownSources,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
-          ? [{ reviewScope: artifact.reviewScope, findings: judgedSourcesFor(entry.id, artifact) }]
+          ? [{ reviewScope: rubricQualifiedReviewScope(entry.id, artifact.reviewScope), findings: judgedSourcesFor(entry.id, artifact) }]
           : []),
         nonBlockingSourceIds: nonBlockingSourcesFor(entry.id, artifacts, entry.policy),
       });
@@ -3557,7 +3566,7 @@ export class DefaultStepRunner implements StepRunner {
         unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
         appliedLiveSourceIds: liveActSourceIds.appliedLiveSourceIds,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
-          ? [{ reviewScope: artifact.reviewScope, findings: customJudgedSourcesFor(entry.id, artifact) }]
+          ? [{ reviewScope: rubricQualifiedReviewScope(entry.id, artifact.reviewScope), findings: customJudgedSourcesFor(entry.id, artifact) }]
           : []),
         nonBlockingSourceIds: nonBlockingSourcesFor(entry.id, artifacts, entry.policy),
       });
