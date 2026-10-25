@@ -108,12 +108,14 @@ describe("build-review review frontier", () => {
     }))).not.toBe(identity);
   });
 
+  // Covers: task:3
   it("uses a full first lap over every current hunk", () => {
     expect(decide()).toEqual(scope({
       headSha: "head-a",
     }));
   });
 
+  // Covers: task:3
   it("uses the latest readable scope to choose merge-base and version full laps", () => {
     const earlier = { lapId: lapId("lap-older"), reviewScope: scope({ sequence: 1, mergeBase: "base-old", policyIdentity: "sha256:policy-old" }) };
     const latest = { lapId: lapId("lap-latest"), reviewScope: scope({ sequence: 2, mergeBase: "base-old", policyIdentity: "sha256:policy-old" }) };
@@ -126,6 +128,7 @@ describe("build-review review frontier", () => {
     });
   });
 
+  // Covers: task:3
   it("does not inspect a rebase kickback cause when the merge base changes", () => {
     for (const { priorLaps } of [
       { kickbackCause: "base-refresh", priorLaps: [{ lapId: lapId("lap-prior"), reviewScope: scope({ mergeBase: "base-old" }) }] },
@@ -136,6 +139,7 @@ describe("build-review review frontier", () => {
     }
   });
 
+  // Covers: task:3
   it("prefers an unaccounted unreadable record over every other full-lap reason", () => {
     const unreadable = { lapId: lapId("lap-unreadable"), reviewScope: { kind: "unreadable" as const } };
     expect(decide({ priorLaps: [unreadable], openSourceUnmapped: true })).toMatchObject({
