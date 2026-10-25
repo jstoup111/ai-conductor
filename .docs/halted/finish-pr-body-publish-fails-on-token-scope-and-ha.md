@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-25T12:33:32.801Z
 Slug: finish-pr-body-publish-fails-on-token-scope-and-ha
 Class: needs-human
 Halting step: prd_audit
