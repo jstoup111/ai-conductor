@@ -10,6 +10,9 @@ import { validatePlanSlices } from '../../src/engine/plan-slices.js';
 const planSkillPath = fileURLToPath(
   new URL('../../../../skills/plan/SKILL.md', import.meta.url),
 );
+const composerSkillPath = fileURLToPath(
+  new URL('../../../../skills/composer/SKILL.md', import.meta.url),
+);
 
 function assertSkillSliceExample(skillText: string): string {
   const sectionStart = skillText.indexOf('## Slice manifest');
@@ -82,5 +85,28 @@ describe('plan skill slice-manifest contract', () => {
 
     expect(() => assertSkillSliceExample(malformedDependencies))
       .toThrow('Task 3 has malformed Dependencies "Tasks 1–3"');
+  });
+
+  it('asks for the stacked-delivery decision before a Slices section is written', async () => {
+    const skill = await readFile(planSkillPath, 'utf8');
+    const composer = await readFile(composerSkillPath, 'utf8');
+    const preconditions = skill.slice(
+      skill.indexOf('### 1. Validate Preconditions'),
+      skill.indexOf('### 2. Read All Stories'),
+    );
+    const verification = skill.slice(skill.lastIndexOf('## Verification'));
+    const sliceSection = skill.slice(
+      skill.indexOf('## Slice manifest'),
+      skill.indexOf('\n### `**Stories:**`', skill.indexOf('## Slice manifest')),
+    );
+    const composerPlanStep = composer.slice(
+      composer.indexOf('8. `/plan`'),
+      composer.indexOf('9. `/coherence-check`'),
+    );
+
+    expect(sliceSection).toMatch(/Ask the operator[\s\S]*before writing the section[\s\S]*never add it unasked/i);
+    expect(preconditions).toMatch(/`## Slices`[\s\S]*Stacked-Delivery: approved/);
+    expect(verification).toMatch(/`## Slices`[\s\S]*Stacked-Delivery: approved/);
+    expect(composerPlanStep).toMatch(/`## Slices`[\s\S]*ask the operator[\s\S]*Stacked-Delivery: approved/i);
   });
 });
