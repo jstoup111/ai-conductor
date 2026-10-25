@@ -6,7 +6,7 @@
  * `finish-publication.ts`; this module is deliberately only its real-boundary
  * adapter.
  */
-import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { ConductorEvent, ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
@@ -55,6 +55,7 @@ import {
   resolveUnattendedPublicationIntent,
   StackPublicationHaltError,
   StackPublicationRetryError,
+  PublicationOperationFailedError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -281,6 +282,59 @@ type ChildPullRequest = {
 function repositoryAndNumber(prUrl: string): { repository: string; number: number } | undefined {
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
   return match === null ? undefined : { repository: match[1]!, number: Number(match[2]) };
+}
+
+/**
+ * Read only the sibling-ledger records produced after one authoring dispatch.
+ * External processes own this ledger, so an unreadable or malformed record
+ * cannot turn a successful provider response into a publication failure.
+ */
+export async function readPassPublishFailure(
+  projectRoot: string,
+  offset: number,
+  pullRequestUrl: string,
+): Promise<void> {
+  const pullRequest = repositoryAndNumber(pullRequestUrl);
+  if (!pullRequest) return;
+
+  let appended: string;
+  try {
+    const ledger = await readFile(join(projectRoot, '.pipeline', 'pipeline-events.jsonl'));
+    appended = ledger.subarray(offset).toString('utf8');
+  } catch {
+    return;
+  }
+
+  let lastFailure: { operation: string; error: string } | undefined;
+  for (const line of appended.split('\n')) {
+    if (line.trim() === '') continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!record || typeof record !== 'object') continue;
+    const candidate = record as {
+      type?: unknown;
+      operation?: unknown;
+      error?: unknown;
+      target?: { kind?: unknown; repository?: unknown; number?: unknown };
+    };
+    if (
+      candidate.type !== 'github_operation_failed'
+      || candidate.operation !== 'pull-request.edit'
+      || candidate.target?.kind !== 'pull-request'
+      || candidate.target.repository !== pullRequest.repository
+      || candidate.target.number !== pullRequest.number
+      || typeof candidate.error !== 'string'
+    ) continue;
+    lastFailure = { operation: candidate.operation, error: candidate.error };
+  }
+
+  if (lastFailure) {
+    throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
+  }
 }
 
 type PullRequestBase = { readonly baseRefName?: unknown };
@@ -1751,6 +1805,11 @@ export function createProductionFinishPublicationCoordinator(
           ...(dispatchAuthoring
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
+                  const passEventOffset = await stat(join(
+                    deps.projectRoot,
+                    '.pipeline',
+                    'pipeline-events.jsonl',
+                  )).then((ledger) => ledger.size).catch(() => 0);
                   const dispatched = await dispatchAuthoring(request);
                   // A failed provider run returns, it does not throw. Passing
                   // it through as a completed pass made the coordinator's
@@ -1760,6 +1819,11 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
+                  await readPassPublishFailure(
+                    deps.projectRoot,
+                    passEventOffset,
+                    request.pullRequestUrl,
+                  );
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
                   }

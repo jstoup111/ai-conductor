@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:24, task:rem-as-built-rem-as-built-r17-5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:24, task:rem-as-built-rem-as-built-r17-5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -8,6 +8,7 @@ import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
   publishAcceptedBuildReviewRiskToRetainedPr,
+  readPassPublishFailure,
 } from '../../src/engine/finish-publication-production.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -26,6 +27,169 @@ import type { ConductState } from '../../src/types/index.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const commandResult = { stdout: '' };
+
+function githubOperationFailedLine(input: {
+  repository?: string;
+  number?: number;
+  operation?: string;
+  error: string;
+}): string {
+  return `${JSON.stringify({
+    type: 'github_operation_failed',
+    operation: input.operation ?? 'pull-request.edit',
+    target: {
+      kind: 'pull-request',
+      repository: input.repository ?? 'owner/repo',
+      number: input.number ?? 7,
+    },
+    error: input.error,
+    ts: '2026-10-24T00:00:00.000Z',
+  })}\n`;
+}
+
+describe('authorProse pass-window publish failures', () => {
+  const pullRequestUrl = 'https://github.com/owner/repo/pull/7';
+
+  async function withLedger(
+    run: (root: string, ledger: string) => Promise<void>,
+  ): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-pass-window-'));
+    const ledger = join(root, '.pipeline', 'pipeline-events.jsonl');
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await run(root, ledger);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  async function runAuthorProsePass(
+    root: string,
+    dispatchAuthoring: () => Promise<{ success: boolean }>,
+  ): Promise<void> {
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication: async (input: {
+        effects: { authorProse?: (request: { pullRequestUrl: string }) => Promise<void> };
+      }) => {
+        await input.effects.authorProse!({ pullRequestUrl });
+        return { kind: 'complete' as const };
+      },
+    }));
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+        acquireInteractiveIntent: async () => 'keep',
+        observeReleaseReadiness: async () => 'present',
+      });
+      await coordinator.advance({
+        state: { feature_desc: 'feature' } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => dispatchAuthoring(),
+        emit: async () => {},
+      });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  }
+
+  it('throws the matching same-PR edit failure appended during this pass', async () => {
+    await withLedger(async (root, ledger) => {
+      const dispatchAuthoring = async () => {
+        await writeFile(ledger, githubOperationFailedLine({ error: 'token lacks pull-request write scope' }));
+        return { success: true };
+      };
+
+      await expect(runAuthorProsePass(root, dispatchAuthoring)).rejects.toMatchObject({
+        name: 'PublicationOperationFailedError',
+        operation: 'pull-request.edit',
+        error: 'token lacks pull-request write scope',
+      });
+    });
+  });
+
+  it('ignores a matching failure that predates this pass', async () => {
+    await withLedger(async (root, ledger) => {
+      const prior = githubOperationFailedLine({ error: 'old token failure' });
+      await writeFile(ledger, prior);
+
+      await expect(readPassPublishFailure(root, Buffer.byteLength(prior), pullRequestUrl)).resolves.toBeUndefined();
+    });
+  });
+
+  it('ignores during-pass records for another PR or operation', async () => {
+    await withLedger(async (root, ledger) => {
+      await writeFile(ledger, [
+        githubOperationFailedLine({ number: 8, error: 'other number' }),
+        githubOperationFailedLine({ repository: 'other/repo', error: 'other repository' }),
+        githubOperationFailedLine({ operation: 'pull-request.comment.create', error: 'other operation' }),
+      ].join(''));
+
+      await expect(readPassPublishFailure(root, 0, pullRequestUrl)).resolves.toBeUndefined();
+    });
+  });
+
+  it('uses the last matching record appended during this pass', async () => {
+    await withLedger(async (root, ledger) => {
+      await writeFile(ledger, [
+        githubOperationFailedLine({ error: 'first failure' }),
+        githubOperationFailedLine({ error: 'last failure' }),
+      ].join(''));
+
+      await expect(readPassPublishFailure(root, 0, pullRequestUrl)).rejects.toMatchObject({ error: 'last failure' });
+    });
+  });
+
+  it('treats a missing or unreadable ledger as no recorded failure', async () => {
+    await withLedger(async (root, ledger) => {
+      await expect(readPassPublishFailure(root, 0, pullRequestUrl)).resolves.toBeUndefined();
+      await mkdir(ledger);
+      await expect(readPassPublishFailure(root, 0, pullRequestUrl)).resolves.toBeUndefined();
+    });
+  });
+
+  it('skips malformed lines beside a matching failure', async () => {
+    await withLedger(async (root, ledger) => {
+      await writeFile(ledger, `not json\n${githubOperationFailedLine({ error: 'recorded after malformed line' })}`);
+
+      await expect(readPassPublishFailure(root, 0, pullRequestUrl)).rejects.toMatchObject({
+        error: 'recorded after malformed line',
+      });
+    });
+  });
+
+  it('ignores other admitted event kinds in the pass window', async () => {
+    await withLedger(async (root, ledger) => {
+      await writeFile(ledger, `${JSON.stringify({
+        type: 'build_review_outer_verdict',
+        verdict: 'pass',
+        ts: '2026-10-24T00:00:00.000Z',
+      })}\n`);
+
+      await expect(readPassPublishFailure(root, 0, pullRequestUrl)).resolves.toBeUndefined();
+    });
+  });
+
+  it('keeps the existing unsuccessful-dispatch error ahead of a recorded failure', async () => {
+    await withLedger(async (root, ledger) => {
+      await expect(runAuthorProsePass(root, async () => {
+        await writeFile(ledger, githubOperationFailedLine({ error: 'token scope missing' }));
+        return { success: false };
+      })).rejects.toThrow('PR prose authoring dispatch did not complete successfully');
+    });
+  });
+});
 
 async function observeImplementationEvidence(input: {
   root: string;
