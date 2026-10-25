@@ -162,6 +162,7 @@ survives a crash, so that every host is repaired exactly once and nothing is ski
 
 #### Happy Path
 - Given a round with hosts 1 and 2 pending in that order and host 1 `restacked`, when the loop continues, then the round's current host becomes child 2 and child 2 is admitted.
+- Given host 1 settled with its entry baseline still on the route record, when child 2 is admitted, then the same write clears host 1's entry baseline, and the advance is not refused.
 - Given a round whose child hosts are all `restacked`, `done` or `rerouted`, whose leaf host is pending, and the queue is empty, when the loop continues, then the leaf host is admitted.
 - Given a round whose every host, including the leaf host, is `restacked`, `done` or `rerouted`, when the last host settles, then the round is marked `closed`.
 - Given a round's leaf host region passes, when region exit runs, then one compare-and-swap marks the leaf host `done` and deletes the marker, and no restack is requested.

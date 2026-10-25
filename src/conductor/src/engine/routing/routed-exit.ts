@@ -133,7 +133,9 @@ export async function advanceRound(
   }
   const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });
   if (admitted.kind !== 'updated') return { kind: 'unavailable', detail: `cannot admit routed host ${next.host}` };
-  const record = { ...admitted.record, currentHostIndex: next.index };
+  // The entry baseline belongs to the settled host; the admitted host records
+  // its own when it enters its BUILD region.
+  const record = { ...admitted.record, currentHostIndex: next.index, entry: undefined };
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record },
     { kind: 'create-marker', marker: { host: next.host, roundId: stored.record.roundId } },
