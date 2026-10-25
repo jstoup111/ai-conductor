@@ -6,8 +6,8 @@ Class: protected-artifact
 Halting step: build
 Phase: BUILD
 Branch: feat/daemon-finish-pr-body-publish-fails-on-token-scope-and-ha
-Head SHA: 192a7c71e72ce9c9896d9c911e552393f1ca6510
-Halted at: 2026-10-25T12:33:48.150Z
+Head SHA: 0d266062cbdeebcdf29dacf96156b5c5d82bcae8
+Halted at: 2026-10-25T12:33:50.852Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
