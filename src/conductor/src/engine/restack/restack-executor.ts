@@ -4,6 +4,7 @@ import { type ChildId } from '../child-context.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
+import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
@@ -501,6 +502,19 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
   let moves: RestackMoveRef[] = [];
   let terminal = false;
   try {
+    // The seal is the authority boundary for the plan that now supplies stack
+    // topology. Verify it before loading that topology so a tampered plan
+    // cannot turn a protected-artifact refusal into a cursor-unavailable
+    // outcome. Supplying HEAD preserves the legacy no-seal path.
+    const seal = await verifyProtectedArtifactSeal({
+      projectRoot: options.worktree,
+      baselineCommit: 'HEAD',
+    });
+    if (!seal.ok) {
+      await writeSealHalt(options.worktree, seal.reason, options.events);
+      terminal = true;
+      return { kind: 'halted' };
+    }
     // The caller has already superseded the committed halt record and consumed
     // any matching authorization.  Do one narrow, terminal-only recheck here
     // so a cleared halt cannot make the next restack look outstanding.

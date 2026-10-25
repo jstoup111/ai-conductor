@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../../src/engine/protected-artifact-seal.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { createSweepRepository, removeAll, sealStack, stackRefs } from './restack-sweepG2-fixture.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture } from '../slice-topology-fixture.js';
+import { createSweepRepository, removeAll, stackRefs } from './restack-sweepG2-fixture.js';
 
 const cleanup: string[] = [];
 
@@ -17,6 +18,16 @@ async function threeChildStack() {
   const subject = await createSweepRepository('restack-sync-sweep-', cleanup);
   await subject.commit('base', 'notes.txt', 'base notes\n');
   await subject.commit('approved plan', '.docs/plans/demo.md', 'approved\n');
+  await writeSliceTopologyFixture(subject.repo, {
+    version: 1,
+    slug: 'demo',
+    runId: 'run-1',
+    status: 'done',
+    entries: [],
+    sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+    storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    materializeTopologyCommit: true,
+  });
   await subject.git(['checkout', '-qb', 'feat/c1/demo']);
   const c1 = await subject.commit('C1', 'c1.txt', 'c1\n');
   await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
@@ -25,10 +36,13 @@ async function threeChildStack() {
   await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
   await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
   const oldLeaf = await subject.commit('L1', 'leaf.txt', 'leaf\n');
+  await sealSliceTopologyPositions(subject.repo, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+  });
   await subject.git(['checkout', '-q', 'main']);
   const advanced = await subject.commit('base advance', 'base.txt', 'advanced\n');
   await subject.git(['checkout', '-q', 'feat/daemon-demo']);
-  await sealStack(subject.repo);
   return { ...subject, oldLeaf, advanced };
 }
 
