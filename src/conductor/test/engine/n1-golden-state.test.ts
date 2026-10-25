@@ -1,5 +1,5 @@
 // Covers: task:3, task:17, task:21, task:35, task:rem-prd-audit-1-r1, task:rem-prd-audit-17-r1, task:rem-prd-audit-17-r2
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The engine mints `executionContext.executionId` via `node:crypto.randomUUID`
 // (there is no runId injection seam on ConductorOptions/Conductor.run()). Make
@@ -53,7 +53,6 @@ const TWO_STORIES = `${ONE_STORY}
 
 describe('N=1 golden state', () => {
   const roots: string[] = [];
-  let siblingGoldenSuitesPassed = false;
 
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -67,27 +66,6 @@ describe('N=1 golden state', () => {
     const golden = goldenRaw.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '');
     const altered = `${golden}X`;
     await expect(expectGolden(fixtureName, altered)).rejects.toThrow(`golden mismatch in ${fixtureName}: line`);
-  });
-
-  // This file is the state member of Task 17's N=1 golden suite. Verify the
-  // sibling rendering and routing members once during suite setup, whose
-  // 30-second hook budget accommodates the two focused real-Git fixtures.
-  // Covers: task:17
-  beforeAll(async () => {
-    await execFile(process.execPath, [
-      'scripts/run-vitest.mjs',
-      'run',
-      '--reporter=dot',
-      '--silent=true',
-      'test/engine/n1-golden-renderings.test.ts',
-      'test/engine/n1-golden-routing-guard.test.ts',
-    ], { cwd: join(import.meta.dirname, '..', '..') });
-    siblingGoldenSuitesPassed = true;
-  });
-
-  // Covers: task:17
-  it('proves the complete N=1 golden suite passes against regenerated goldens', () => {
-    expect(siblingGoldenSuitesPassed).toBe(true);
   });
 
   // Covers: task:17

@@ -27,6 +27,13 @@ import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { BASE_SHA, CELLS, expectGolden, normalizeGolden, partitionConductorRefProbes, RECORD, withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
+const N1_GOLDEN_SUITE_CHILD = 'AI_CONDUCTOR_N1_GOLDEN_SUITE_CHILD';
+const PRE_CHANGE_N1_GOLDEN_SHA = 'd4870bd95b9bfebe09def9a03fa511e370f6af17';
+const GIT_PROBE_GOLDEN_PATH = 'src/conductor/test/fixtures/n1-golden/finish/git-probe-argv.golden';
+const DURABLE_CHILD_STATE_PROBE_PAIR = [
+  ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
+  ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
+] as const;
 
 describe('N=1 golden renderings', () => {
   const roots: string[] = [];
@@ -51,6 +58,47 @@ describe('N=1 golden renderings', () => {
 
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  // Covers: task:17, task:rem-operator-17-r3
+  it('runs the complete N=1 golden suite against regenerated goldens', async () => {
+    // The child includes this file, but skips this coordinator, so this test
+    // directly proves all three Task 17 members pass without recursing.
+    if (RECORD || process.env[N1_GOLDEN_SUITE_CHILD] === '1') return;
+    const result = await execFile(process.execPath, [
+      'scripts/run-vitest.mjs',
+      'run',
+      '--reporter=dot',
+      '--silent=true',
+      'test/engine/n1-golden-state.test.ts',
+      'test/engine/n1-golden-renderings.test.ts',
+      'test/engine/n1-golden-routing-guard.test.ts',
+    ], {
+      cwd: join(import.meta.dirname, '..', '..'),
+      env: { ...process.env, [N1_GOLDEN_SUITE_CHILD]: '1' },
+    });
+    expect(result.stderr).toBe('');
+  });
+
+  // Covers: task:17, task:rem-operator-17-r3
+  it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes and one durable-child-state probe pair', async () => {
+    if (RECORD) return;
+    const projectRoot = join(import.meta.dirname, '..', '..');
+    const [preChange, current] = await Promise.all([
+      execFile('git', ['show', `${PRE_CHANGE_N1_GOLDEN_SHA}:${GIT_PROBE_GOLDEN_PATH}`], { cwd: projectRoot }),
+      readFile(join(projectRoot, GIT_PROBE_GOLDEN_PATH), 'utf8'),
+    ]);
+    const parseProbeGolden = (raw: string) => JSON.parse(raw.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')) as string[][];
+    const coverageBindingProbePairs = Array.from({ length: 8 }, () => DURABLE_CHILD_STATE_PROBE_PAIR).flat();
+
+    // The pre-change fixture contains eight repeated probes from the retired
+    // coverage_binding lifecycle step, followed by the one D3 probe that must
+    // remain for every cardinality when durable child state is checked.
+    expect(parseProbeGolden(preChange.stdout)).toEqual([
+      ...coverageBindingProbePairs,
+      ...DURABLE_CHILD_STATE_PROBE_PAIR,
+    ]);
+    expect(parseProbeGolden(current)).toEqual(DURABLE_CHILD_STATE_PROBE_PAIR);
   });
 
   it.each(CELLS)('matches golden for $name', async (cell) => {
