@@ -6,15 +6,13 @@ Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/c1/build-review-re-raises-already-decided-findings-ev
-Head SHA: 85f9456914794108473e8467e130489305d802a4
-Halted at: 2026-10-25T11:15:32.511Z
+Head SHA: 2a6bea2fc87fb0f12308128f970f9d225bc0f6e5
+Halted at: 2026-10-25T11:15:34.396Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-restack conflict child 2
-commit 819d08b5d30b3726f3ea260b51af115e1e1ad26f; paths: src/conductor/src/engine/build-review-review-frontier.ts, src/conductor/test/engine/build-review-review-frontier.test.ts
-restack resolver unavailable
+child BUILD region refused: routed exit host 1: halted
 ```
