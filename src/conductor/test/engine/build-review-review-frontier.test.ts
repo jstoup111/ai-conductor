@@ -177,6 +177,33 @@ describe("build-review review frontier", () => {
     expect(decide({ priorLaps: [prior, { lapId: lapId("lap-current"), reviewScope: current }] })).toBe(current);
   });
 
+  // Covers: task:11
+  it("does not add reviewed hunks from a scope-empty record", () => {
+    const judgedLap = { reviewScope: scope(), findings: [] };
+    const scopeEmptyLap = {
+      reviewScope: scope({
+        mode: "delta",
+        reason: "delta",
+        sequence: 2,
+        predecessorLapId: lapId("lap-judged"),
+        reviewedHunks: [],
+        deltaHunks: [],
+      }),
+      findings: [],
+    };
+    const input = {
+      changedFiles: changedFiles(),
+      mergeBase: "base-a",
+      policyIdentity: "sha256:policy-a",
+    };
+
+    const beforeScopeEmpty = settledBuildReviewHunks({ ...input, laps: [judgedLap] });
+    const afterScopeEmpty = settledBuildReviewHunks({ ...input, laps: [judgedLap, scopeEmptyLap] });
+
+    expect(beforeScopeEmpty).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
+    expect(afterScopeEmpty).toEqual(beforeScopeEmpty);
+  });
+
   // Covers: task:7, task:8, task:9
   it("maps precise and file-level sources conservatively and keeps live sources unsettled", () => {
     const files: readonly ChangedFileReference[] = [{
