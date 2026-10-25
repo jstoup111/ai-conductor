@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 
 import { describe, expect, it } from 'vitest';
 import {
