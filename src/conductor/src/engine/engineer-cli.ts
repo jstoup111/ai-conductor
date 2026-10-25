@@ -1633,6 +1633,25 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      if (result.added.length > 0) {
+        try {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+          persister.start();
+          try {
+            await events.emitOrThrow({
+              type: 'feature_artifacts_registered',
+              slug: result.slug,
+              added: result.added.map(({ kind, path }) => ({ kind, path })),
+            });
+          } finally {
+            persister.stop();
+          }
+        } catch (error) {
+          printErr(`engineer land: could not record artifact registration event: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
       // Intake write-back (FR-36): when this idea originated from a github issue,
       // comment "Routed to <repo>" and advance the ledger to `routed`. Advisory —
       // a gh failure never fails a successful land.
