@@ -24,6 +24,7 @@ import { readPublicationRecord } from './stack-publication-record.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { pushedTipRef } from './push-lease.js';
 import { validateStackPayload } from './stack-publication-payload-validation.js';
+import { appendCloseoutEvent, type ExternalPipelineEvent } from './closeout-events.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   createGuardedGithubOperationRunner,
@@ -78,6 +79,8 @@ export interface GithubOperationCliInput {
   readonly confirmation?: InteractiveGithubOperationConfirmation;
   /** Existing event spine when this command runs inside a conductor process. */
   readonly events?: GithubOperationEventEmitter;
+  /** Sibling-ledger writer; failures here must not change the operation result. */
+  readonly appendExternalEvent?: (projectRoot: string, event: ExternalPipelineEvent) => void;
   readonly write?: (line: string) => void;
 }
 
@@ -278,6 +281,25 @@ function canonicalCliResult(result: GithubOperationResult, target: GithubOperati
   }
 }
 
+function recordFailedOperation(
+  request: GithubOperationRequest,
+  result: GithubOperationCliResult,
+  input: GithubOperationCliInput,
+): void {
+  if (result.kind !== 'failed' || !['feature-write', 'shared-write', 'remote-ref-write'].includes(request.access)) return;
+  try {
+    (input.appendExternalEvent ?? appendCloseoutEvent)(input.cwd, {
+      type: 'github_operation_failed',
+      operation: request.operation,
+      target: request.target,
+      error: boundGithubOperationFailureText(result.error, request),
+      ts: new Date().toISOString(),
+    });
+  } catch {
+    // A best-effort external diagnostic must not replace the operation failure.
+  }
+}
+
 /** Execute the closed request schema. Raw gh/git argv are deliberately never accepted. */
 export async function dispatchGithubOperationCommand(
   command: GithubOperationCliCommand,
@@ -305,6 +327,7 @@ export async function dispatchGithubOperationCommand(
       { cwd: input.cwd, confirmation: input.confirmation, events: input.events },
     );
     const output = canonicalCliResult(result as GithubOperationResult, decoded.request.target);
+    recordFailedOperation(decoded.request, output, input);
     write(`${JSON.stringify(output)}\n`);
     return result.kind === 'executed' ? 0 : 1;
   }
@@ -353,6 +376,7 @@ export async function dispatchGithubOperationCommand(
       : result.kind === 'refused'
         ? { kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: result.reason }
         : { kind: 'failed', operation: decoded.request.operation, target: decoded.request.target, error: result.kind === 'failed' ? result.error : 'not a remote write' };
+    recordFailedOperation(decoded.request, output, input);
     write(`${JSON.stringify(output)}\n`);
     return result.kind === 'executed' ? 0 : 1;
   }
@@ -382,6 +406,7 @@ export async function dispatchGithubOperationCommand(
     { events: input.events },
   );
   const output = canonicalCliResult(result as GithubOperationResult, decoded.request.target);
+  recordFailedOperation(decoded.request, output, input);
   write(`${JSON.stringify(output)}\n`);
   return result.kind === 'executed' ? 0 : 1;
 }
