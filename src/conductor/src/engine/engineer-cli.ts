@@ -161,6 +161,24 @@ async function resolvePlanReviewFeatureSlug(worktree: string): Promise<string | 
   return isSpecSlug(slug) ? slug : undefined;
 }
 
+async function labelPrimitivePane(
+  worktree: string,
+  phase: string,
+  opts: DispatchEngineerOpts,
+  warn: (line: string) => void,
+): Promise<void> {
+  if (!opts.paneLabelRunner) return;
+  const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(worktree);
+  if (!slug) return;
+  await labelComposerPane({
+    slug,
+    phase,
+    env: opts.env ?? process.env,
+    run: opts.paneLabelRunner,
+    warn,
+  });
+}
+
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
 /**
@@ -1446,6 +1464,7 @@ export async function dispatchEngineer(
 
     case 'plan-review': {
       const { project: projectName, worktree, accept, acknowledge, reason } = dispatch;
+      await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const record = (await reader.listProjects()).find((project) => project.name === projectName);
       if (!record) { printErr(`engineer plan-review: project "${projectName}" not found in registry.`); return 1; }
@@ -1491,6 +1510,7 @@ export async function dispatchEngineer(
         project: projectName, idea, worktree, sourceRef,
         dependsOn = [], declinedDependencies = [], skipDependencyCheck,
       } = dispatch;
+      await labelPrimitivePane(worktree, 'land', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -1692,6 +1712,7 @@ export async function dispatchEngineer(
     // ── handoff ───────────────────────────────────────────────────────────────
     case 'handoff': {
       const { project: projectName, branch, worktree, sourceRef } = dispatch;
+      await labelPrimitivePane(worktree, 'handoff', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
