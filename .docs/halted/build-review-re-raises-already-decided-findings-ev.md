@@ -1,23 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-25T01:14:55.524Z
+Status: halted
 Slug: build-review-re-raises-already-decided-findings-ev
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/c1/build-review-re-raises-already-decided-findings-ev
 Child: 1
-Head SHA: ff43051b293a1f98c74ae369f0f65436bb40b086
-Halted at: 2026-10-25T00:42:34.535Z
+Head SHA: 6f3f225ea9bf7c598d5792c1279bdb2951807e3a
+Halted at: 2026-10-25T01:35:14.335Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Need user decision: Task 11 requires adding `scope-empty` to the closed build-review result union and artifact parser in build-review-domain.ts/build-review-artifacts.ts, which are outside the approved Task 11 file scope; amend the plan to authorize the minimal domain/artifact expansion or choose a different durable representation.
+Need user decision: Task 7 permits custom findings with up to 64 sourceRegions across paths but specifies only a single-path file-level fallback; define the multi-path mapping, and amend Task 11 if its required scope-empty closed-union exhaustiveness update in step-runners.ts is authorized.
 
 
 DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.
