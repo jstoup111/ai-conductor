@@ -129,4 +129,30 @@ describe('github-operation failed external events', () => {
       expect.objectContaining({ type: 'github_operation_failed', operation: 'remote-ref.push', error: 'remote unavailable' }),
     ]);
   });
+
+  it.each([
+    ['pull-request.create', { kind: 'repository' }, { title: 'PR', body: 'body', head: 'feature', base: 'main' }],
+    ['issue.create', { kind: 'repository' }, { title: 'Issue', body: 'body' }],
+    ['intake.issue.close', { kind: 'issue', number: 7 }, undefined],
+    ['issue.read', { kind: 'issue', number: 7 }, undefined],
+  ] as const)('records a failed %s operation regardless of access class', async (operation, resource, payload) => {
+    const cwd = await worktree();
+    const write = vi.fn();
+    const request = {
+      operation, repository: 'owner/repo', resource, context: { actor: 'operator' },
+      ...(payload === undefined ? {} : { payload }),
+    };
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+      cwd, readRequest: readRequest(request), git: noFeatureMutation, write,
+      runner: { run: vi.fn().mockRejectedValue(new Error(`${operation} unavailable`)) },
+    });
+
+    expect(exit).toBe(1);
+    expect(JSON.parse(write.mock.calls[0]?.[0] ?? '{}')).toMatchObject({ kind: 'failed', operation });
+    expect(await ledger(cwd)).toEqual([expect.objectContaining({
+      type: 'github_operation_failed', operation,
+      target: expect.objectContaining({ repository: 'owner/repo', kind: resource.kind }),
+    })]);
+  });
 });

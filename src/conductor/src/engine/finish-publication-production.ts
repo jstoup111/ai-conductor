@@ -1768,7 +1768,17 @@ export function createProductionFinishPublicationCoordinator(
                       lastFailure = { operation: event.operation, error: event.error };
                     }
                   };
-                  if (pullRequest && deps.events) deps.events.on('github_operation_failed', observeFailure);
+                  // Establish the pass boundary before observing failures. The
+                  // pre-subscribe drain advances any earlier sibling-ledger
+                  // records, while the post-dispatch fresh flush projects only
+                  // records produced by this authoring pass.
+                  const canObserveFailures = pullRequest !== undefined
+                    && deps.events !== undefined
+                    && deps.flushSessionEvents !== undefined;
+                  if (canObserveFailures) {
+                    await deps.flushSessionEvents!().catch(() => undefined);
+                    deps.events!.on('github_operation_failed', observeFailure);
+                  }
                   try {
                     const dispatched = await dispatchAuthoring(request);
                   // A failed provider run returns, it does not throw. Passing
@@ -1779,13 +1789,13 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
-                    await deps.flushSessionEvents?.().catch(() => undefined);
+                    if (canObserveFailures) await deps.flushSessionEvents!().catch(() => undefined);
                     if (lastFailure) throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
                   }
                   } finally {
-                    if (pullRequest && deps.events) deps.events.off('github_operation_failed', observeFailure);
+                    if (canObserveFailures) deps.events!.off('github_operation_failed', observeFailure);
                   }
                 },
               }

@@ -9,8 +9,10 @@ import {
   EventPersistError,
   isForwardedFromFeature,
   persistOnActiveEventSpine,
+  startSessionEventTail,
   startFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
+import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
@@ -95,6 +97,35 @@ describe('EventPersister', () => {
       if (value === undefined) throw new Error('scripted clock exhausted');
       return value;
     },
+  });
+
+  it('flushes a fresh ledger read after joining an in-flight poll', async () => {
+    const received: ConductorEvent[] = [];
+    emitter.on('github_operation_failed', (event) => { received.push(event); });
+    let releaseFirstRead: ((content: Buffer) => void) | undefined;
+    let reads = 0;
+    const tail = new CloseoutEventTail({
+      projectRoot: tempDir,
+      events: emitter,
+      readLedger: vi.fn(() => {
+        reads += 1;
+        if (reads === 1) return new Promise<Buffer>((resolve) => { releaseFirstRead = resolve; });
+        return Promise.resolve(Buffer.from(`${JSON.stringify({
+          type: 'github_operation_failed', operation: 'pull-request.edit',
+          target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+          error: 'appended after first read', ts: '2026-10-25T00:00:00.000Z',
+        })}\n`));
+      }),
+    });
+    const scope = startSessionEventTail(tempDir, emitter, undefined, tail);
+
+    const poll = tail.poll();
+    const flushed = scope.flush();
+    releaseFirstRead!(Buffer.from(''));
+    await Promise.all([poll, flushed]);
+
+    expect(received).toEqual([expect.objectContaining({ error: 'appended after first read' })]);
+    expect(reads).toBe(2);
   });
 
   const configuredMember = (executionId: string, member = 'reviewer'): ExecutionContext => ({

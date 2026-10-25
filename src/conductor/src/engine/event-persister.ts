@@ -436,8 +436,10 @@ export function startSessionEventTail(
   projectRoot: string,
   events: ConductorEventEmitter,
   featureSlug?: string,
+  /** Test seam for a controlled in-flight ledger read. */
+  tailOverride?: CloseoutEventTail,
 ): SessionEventTailOwner {
-  const tail = new CloseoutEventTail({ projectRoot, featureSlug, events });
+  const tail = tailOverride ?? new CloseoutEventTail({ projectRoot, featureSlug, events });
   tail.start();
   let drainPromise: Promise<void> | undefined;
   return {
@@ -451,7 +453,7 @@ export function startSessionEventTail(
       }
       return drainPromise;
     },
-    flush: () => tail.poll(),
+    flush: () => tail.flush(),
   };
 }
 

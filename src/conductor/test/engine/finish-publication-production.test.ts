@@ -107,10 +107,13 @@ describe('authorProse pass-window publish failures', () => {
 
   it('throws the matching same-PR edit failure emitted by this pass flush', async () => {
     await withRoot(async (root) => {
+      let flushes = 0;
       await expect(runAuthorProsePass(
         root,
         async () => ({ success: true }),
-        async () => events.emit(githubOperationFailedEvent({ error: 'token lacks pull-request write scope' })),
+        async () => {
+          if (++flushes === 2) await events.emit(githubOperationFailedEvent({ error: 'token lacks pull-request write scope' }));
+        },
       )).rejects.toMatchObject({
         name: 'PublicationOperationFailedError',
         operation: 'pull-request.edit',
@@ -137,10 +140,12 @@ describe('authorProse pass-window publish failures', () => {
 
   it('uses the last matching failure from the pass and removes its handler after rejection', async () => {
     await withRoot(async (root) => {
+      let flushes = 0;
       await expect(runAuthorProsePass(
         root,
         async () => ({ success: true }),
         async () => {
+          if (++flushes !== 2) return;
           await events.emit(githubOperationFailedEvent({ error: 'first failure' }));
           await events.emit(githubOperationFailedEvent({ error: 'last failure' }));
         },
@@ -149,15 +154,31 @@ describe('authorProse pass-window publish failures', () => {
     });
   });
 
-  it('treats a missing or rejected flush as no attributed failure and removes its handler after success', async () => {
+  it('drains a pre-pass failure before subscribing and treats a rejected flush as no attributed failure', async () => {
     await withRoot(async (root) => {
-      await expect(runAuthorProsePass(root, async () => ({ success: true }))).resolves.toBeUndefined();
+      let flushes = 0;
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          if (++flushes === 1) await events.emit(githubOperationFailedEvent({ error: 'pre-pass failure' }));
+        },
+      )).resolves.toBeUndefined();
       await expect(runAuthorProsePass(
         root,
         async () => ({ success: true }),
         async () => { throw new Error('tail unavailable'); },
       )).resolves.toBeUndefined();
       await events.emit(githubOperationFailedEvent({ error: 'after success' }));
+    });
+  });
+
+  it('does not attribute a bus failure when the session tail cannot be flushed', async () => {
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(root, async () => {
+        await events.emit(githubOperationFailedEvent({ error: 'unflushed failure' }));
+        return { success: true };
+      })).resolves.toBeUndefined();
     });
   });
 

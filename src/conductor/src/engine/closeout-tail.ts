@@ -204,4 +204,14 @@ export class CloseoutEventTail {
     await this.poll();
     await this.projectSessionRecords(true);
   }
+
+  /**
+   * Join any poll already reading, then always make one fresh ledger read.
+   * A caller at a dispatch boundary must not mistake the joined poll's
+   * snapshot for a read that includes a producer append that raced it.
+   */
+  async flush(): Promise<void> {
+    await this.poll();
+    await this.poll();
+  }
 }

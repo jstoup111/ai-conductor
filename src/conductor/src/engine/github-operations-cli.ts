@@ -286,7 +286,7 @@ function recordFailedOperation(
   result: GithubOperationCliResult,
   input: GithubOperationCliInput,
 ): void {
-  if (result.kind !== 'failed' || !['feature-write', 'shared-write', 'remote-ref-write'].includes(request.access)) return;
+  if (result.kind !== 'failed') return;
   try {
     (input.appendExternalEvent ?? appendCloseoutEvent)(input.cwd, {
       type: 'github_operation_failed',
