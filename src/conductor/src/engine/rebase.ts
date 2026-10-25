@@ -33,7 +33,7 @@ import {
   resolveFeaturePrdPaths,
 } from './artifacts.js';
 import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
-import { worktreeManifestSource } from './feature-manifest-source.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
 import {
@@ -1326,14 +1326,47 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
   if (context.featureIdentities.length === 0) return delta.filter(isReviewDocumentPath);
-  const inputs = await resolveFeaturePrdPaths(projectRoot, context);
   const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
-  const activePlan = context.activePlanPath ?? planPath;
+  const manifestSlug = featureDesc ?? (planPath ? basename(planPath, '.md') : undefined);
+  const prd = manifestSlug === undefined
+    ? { origin: 'legacy' as const, paths: await resolveFeaturePrdPaths(projectRoot, context).then((paths) => paths.map(repoPath)) }
+    : await resolveFeatureArtifact(
+      worktreeManifestSource(projectRoot),
+      manifestSlug,
+      'prd',
+      async () => (await resolveFeaturePrdPaths(projectRoot, context)).map(repoPath),
+    );
+  const inputs = prd.paths.filter((path) => prd.origin === 'legacy' || !prd.missing.includes(path));
+  // The manifest-backed plan path is authoritative when one exists. The
+  // context's cached active-plan identity remains the legacy fallback.
+  const activePlan = planPath ?? context.activePlanPath;
   if (activePlan) {
     const plan = repoPath(activePlan);
-    inputs.push(plan, `.docs/coherence/${basename(plan, '.md')}.md`);
+    const stem = basename(plan, '.md');
+    const coherence = await resolveFeatureArtifact(
+      worktreeManifestSource(projectRoot),
+      featureDesc ?? stem,
+      'coherence',
+      async () => [`.docs/coherence/${stem}.md`],
+    );
+    const coherencePath = coherence.paths.find((path) =>
+      coherence.origin === 'legacy' || !coherence.missing.includes(path),
+    );
+    inputs.push(plan);
+    if (coherencePath) inputs.push(coherencePath);
     const body = await readFile(join(projectRoot, plan), 'utf8').catch(() => '');
-    const stories = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), plan, body);
+    const storiesResolution = await resolveFeatureArtifact(
+      worktreeManifestSource(projectRoot),
+      featureDesc ?? stem,
+      'stories',
+      async () => {
+        const legacyStories = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), plan, body);
+        return legacyStories === null ? [] : [legacyStories];
+      },
+    );
+    const stories = storiesResolution.paths.find((path) =>
+      storiesResolution.origin === 'legacy' || !storiesResolution.missing.includes(path),
+    );
     if (stories) inputs.push(stories);
   }
   // Same-stem paths also cover removed documents that no longer appear in a glob.

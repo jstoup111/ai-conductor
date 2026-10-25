@@ -2078,8 +2078,19 @@ function dispositionGroundingRefusal(reason: string): CompletionResult {
 async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionContext): Promise<boolean> {
   const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
   if (!planPath) return false;
-  const coherencePath = join(dir, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
+  const stem = basename(planPath, '.md');
   try {
+    const coherence = await resolveFeatureArtifact(
+      worktreeManifestSource(dir),
+      ctx.featureDesc ? slugify(ctx.featureDesc) : stem,
+      'coherence',
+      async () => [`.docs/coherence/${stem}.md`],
+    );
+    const coherenceRepoPath = coherence.paths.find((path) =>
+      coherence.origin === 'legacy' || !coherence.missing.includes(path),
+    );
+    if (coherenceRepoPath === undefined) return false;
+    const coherencePath = join(dir, coherenceRepoPath);
     const text = await readFile(coherencePath, 'utf-8');
     return text.split(/\r?\n/).some((line) => /^\s*\|\s*criterion\s*\|/i.test(line));
   } catch {
