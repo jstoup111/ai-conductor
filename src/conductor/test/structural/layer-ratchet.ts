@@ -32,6 +32,7 @@ interface UpwardViolation {
   line: number;
   imported: string;
   edge: string;
+  allowlistName?: string;
 }
 
 interface CycleViolation {
@@ -40,6 +41,7 @@ interface CycleViolation {
   line: number;
   imported: string;
   cycle: readonly string[];
+  allowlistName?: string;
 }
 
 interface MalformedEntryViolation {
@@ -129,7 +131,30 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
     }
   }
 
-  return { scannedFileCount: files.size, edges, violations };
+  const allowedPairs = new Set(allowlist.flatMap((entry) => {
+    const pair = decodeAllowlistName(entry);
+    return pair === undefined ? [] : [`${pair.from}\u0000${pair.to}`];
+  }));
+  const uncovered = violations.flatMap((violation) => {
+    if (violation.kind !== 'upward' && violation.kind !== 'cycle') return [violation];
+    const allowlistName = encodeAllowlistName(violation.file, violation.imported);
+    if (allowedPairs.has(`${violation.file}\u0000${violation.imported}`)) return [];
+    const named = { ...violation };
+    Object.defineProperty(named, 'allowlistName', { value: allowlistName, enumerable: false });
+    return [named];
+  });
+  return { scannedFileCount: files.size, edges, violations: uncovered };
+}
+
+export function formatRatchetViolations(violations: readonly LayerRatchetViolation[]): string {
+  return violations.map((violation) => {
+    const location = 'line' in violation ? `${violation.file}:${violation.line}` : violation.file;
+    const detail = violation.kind === 'upward' ? violation.edge
+      : violation.kind === 'cycle' ? violation.cycle.join(' -> ') : violation.kind;
+    const name = 'allowlistName' in violation && violation.allowlistName !== undefined
+      ? ` ${violation.allowlistName}` : '';
+    return `${violation.kind} ${location} ${detail}${name}`;
+  }).join('\n');
 }
 
 export function encodeAllowlistName(from: string, to: string): string {

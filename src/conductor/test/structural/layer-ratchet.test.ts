@@ -1,7 +1,7 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6
 import { describe, expect, it } from 'vitest';
 
-import { checkLayerRatchet, decodeAllowlistName, encodeAllowlistName } from './layer-ratchet.js';
+import { checkLayerRatchet, decodeAllowlistName, encodeAllowlistName, formatRatchetViolations } from './layer-ratchet.js';
 
 describe('structural: layer ratchet', () => {
   it('resolves .js specifiers to sibling TypeScript files', () => {
@@ -432,5 +432,25 @@ describe('structural: layer ratchet', () => {
     const result = checkLayerRatchet({ files: new Map(), allowlist: [entry] });
 
     expect(result.violations).toEqual([{ kind: 'malformed-entry', entry }]);
+  });
+
+  it.each([
+    ['an upward edge', new Map([['engine/a.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]), [encodeAllowlistName('engine/a.ts', 'ui/b.ts')]],
+    ['a same-layer cycle', new Map([['engine/a.ts', "import './b.js';"], ['engine/b.ts', "import './a.js';"]]), [encodeAllowlistName('engine/a.ts', 'engine/b.ts'), encodeAllowlistName('engine/b.ts', 'engine/a.ts')]],
+    ['duplicate imports of one pair', new Map([['engine/a.ts', "import '../ui/b.js';\nimport '../ui/b.js';"], ['ui/b.ts', '']]), [encodeAllowlistName('engine/a.ts', 'ui/b.ts')]],
+  ])('covers %s with allowlist entries', (_description, files, allowlist) => {
+    expect(checkLayerRatchet({ files, allowlist }).violations).toEqual([]);
+  });
+
+  it('reports only an unlisted edge inside an otherwise allowlisted cycle', () => {
+    const result = checkLayerRatchet({ files: new Map([
+      ['engine/a.ts', "import './b.js';\nimport './c.js';"], ['engine/b.ts', "import './c.js';"], ['engine/c.ts', "import './a.js';"],
+    ]), allowlist: [encodeAllowlistName('engine/a.ts', 'engine/b.ts'), encodeAllowlistName('engine/b.ts', 'engine/c.ts'), encodeAllowlistName('engine/c.ts', 'engine/a.ts')] });
+    expect(result.violations).toEqual([expect.objectContaining({ kind: 'cycle', file: 'engine/a.ts', imported: 'engine/c.ts' })]);
+  });
+
+  it('formats an unlisted upward violation with its allowlist name', () => {
+    const result = checkLayerRatchet({ files: new Map([['engine/a.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]), allowlist: [] });
+    expect(formatRatchetViolations(result.violations)).toContain(encodeAllowlistName('engine/a.ts', 'ui/b.ts'));
   });
 });
