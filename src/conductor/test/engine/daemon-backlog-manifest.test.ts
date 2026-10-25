@@ -1,4 +1,4 @@
-// Covers: task:15, task:16
+// Covers: task:15, task:16, task:17
 
 import { describe, expect, it } from 'vitest';
 import type { BacklogTreeSource } from '../../src/engine/backlog-tree-source.js';
@@ -34,14 +34,15 @@ function tree(files: Record<string, string>): ManifestTree {
   };
 }
 
-function manifest(slug: string): string {
+function manifest(slug: string, options: { includeCoherence?: boolean } = {}): string {
+  const { includeCoherence = true } = options;
   return JSON.stringify({
     schemaVersion: 1,
     slug,
     artifacts: [
       { kind: 'plan', path: `.docs/plans/${slug}.md` },
       { kind: 'stories', path: `.docs/stories/${slug}.md` },
-      { kind: 'coherence', path: `.docs/coherence/${slug}.md` },
+      ...(includeCoherence ? [{ kind: 'coherence', path: `.docs/coherence/${slug}.md` }] : []),
       { kind: 'complexity', path: `.docs/complexity/${slug}.md` },
       { kind: 'track', path: `.docs/track/${slug}.md` },
       { kind: 'applicability', path: `.docs/applicability/${slug}.md` },
@@ -60,6 +61,10 @@ function artifacts(slug: string): Record<string, string> {
     [`.docs/applicability/${slug}.md`]: 'Inapplicable: manual_test — no UI surface\n',
     [`.docs/intake/${slug}.md`]: 'Source-Ref: acme/project#7\n',
   };
+}
+
+function artifactsWithout(slug: string, path: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(artifacts(slug)).filter(([candidate]) => candidate !== path));
 }
 
 describe('daemon backlog manifest discovery', () => {
@@ -146,6 +151,44 @@ describe('daemon backlog manifest discovery', () => {
       '.docs/shipped/manifest.json',
       '.docs/parked/manifest.json',
     ]));
+  });
+
+  it('blocks manifest-backed and legacy tier M candidates missing coherence', async () => {
+    const source = tree({
+      '.docs/manifest-missing/manifest.json': manifest('manifest-missing', { includeCoherence: false }),
+      ...artifactsWithout('manifest-missing', '.docs/coherence/manifest-missing.md'),
+      ...artifactsWithout('legacy-missing', '.docs/coherence/legacy-missing.md'),
+    });
+
+    const result = await discoverBacklog('/unused', undefined, undefined, { treeSource: source });
+
+    expect(result.items).toEqual([]);
+    expect(result.blocked).toEqual(expect.arrayContaining([
+      expect.objectContaining({ slug: 'manifest-missing', reason: 'missing-coherence' }),
+      expect.objectContaining({ slug: 'legacy-missing', reason: 'missing-coherence' }),
+    ]));
+  });
+
+  it('silently skips a manifest candidate whose listed plan is absent', async () => {
+    const slug = 'abandoned';
+    const logs: string[] = [];
+    const source = tree({
+      [`.docs/${slug}/manifest.json`]: manifest(slug),
+      ...artifactsWithout(slug, `.docs/plans/${slug}.md`),
+    });
+
+    const result = await discoverBacklog('/unused', undefined, (line) => logs.push(line), {
+      treeSource: source,
+      writeBlockedSnapshot: async () => {},
+    });
+    const reported = [
+      ...result.items.map((item) => item.slug),
+      ...result.blocked.map((item) => item.slug),
+      ...result.gated.flatMap((item) => 'slug' in item ? [item.slug] : []),
+    ];
+
+    expect(reported).not.toContain(slug);
+    expect(logs).toEqual([]);
   });
 
   it('preserves the frozen legacy discovery output and warning log', async () => {
