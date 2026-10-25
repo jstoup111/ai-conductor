@@ -6,6 +6,7 @@ import {
   type BuildReviewSourceSnapshot,
   type BuildReviewSourceViewIdentity,
 } from './build-review-inputs.js';
+import type { BuildReviewProjectionReviewScope } from './build-review-projections.js';
 import type { GitRunner } from './rebase.js';
 
 export interface BuildReviewMaterializationMember {
@@ -29,6 +30,8 @@ export interface BuildReviewFrozenInputScope {
   readonly mergeBase: string;
   readonly headSha: string;
   readonly changes: readonly ({ readonly kind: string; readonly path: string; readonly oldPath?: string })[];
+  /** The hunk subset the custom rubric must judge; whole input remains context. */
+  readonly reviewScope?: BuildReviewProjectionReviewScope;
   readonly view?: { readonly baselinePath: string; readonly headPath: string };
 }
 
@@ -36,6 +39,7 @@ export interface BuildReviewFrozenInputScope {
 export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputScope): string {
   return [
     `Frozen build-review input ${scope.contentDigest}.`,
+    `Review scope: ${JSON.stringify({ reviewScope: scope.reviewScope ?? { mode: 'full', deltaHunks: [] } })}`,
     'Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.',
     ...(scope.view === undefined ? [] : [
       `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
