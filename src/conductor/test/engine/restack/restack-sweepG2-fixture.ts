@@ -61,7 +61,7 @@ export async function createSweepRepository(prefix: string, cleanup: string[]): 
 
 /** Seal a stacked feature whose positions are 1..n, the last being the leaf. */
 export async function sealStack(repo: string, positions: readonly number[] = [1, 2, 3]): Promise<void> {
-  await writeSliceTopologyFixture(repo, {
+  const fixture = {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
@@ -72,7 +72,19 @@ export async function sealStack(repo: string, positions: readonly number[] = [1,
       titles: positions.map((position) => position === positions.at(-1) ? 'Leaf' : `Child ${position}`),
     },
     storyOwnership: Object.fromEntries(positions.map((position) => [`S${position}`, position])),
-  }, envelopeFilesystem);
+  };
+  const original = (await execFile('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repo })).stdout.trim();
+  const branches = (await execFile('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat'], { cwd: repo })).stdout
+    .split('\n')
+    .filter((branch) => branch === 'feat/daemon-demo' || /^feat\/c\d+\/demo$/.test(branch));
+  try {
+    for (const branch of branches) {
+      await execFile('git', ['checkout', '-q', branch], { cwd: repo });
+      await writeSliceTopologyFixture(repo, fixture, envelopeFilesystem);
+    }
+  } finally {
+    await execFile('git', ['checkout', '-q', original], { cwd: repo });
+  }
 }
 
 export async function removeAll(cleanup: string[]): Promise<void> {

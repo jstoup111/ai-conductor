@@ -1,18 +1,19 @@
 // Covers: task:31
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRevalidationQueue } from '../../../src/engine/routing/route-record-store.js';
 import { revalidationQueueRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRestackJournal, journalRefFor, writeRestackJournalBlob } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
+import { sealStack } from './restack-sweepG2-fixture.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
@@ -72,20 +73,7 @@ async function fixture(routingEnabled = true) {
   await git(['checkout', '-q', 'main']);
   const advanced = await commit('advance parseA', 'a.ts', 'export function parseA(value: string, radix = 10) { return Number.parseInt(value, radix); }\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
-    version: 1,
-    slug: 'demo',
-    runId: 'queue-run',
-    status: 'done',
-    entries: [],
-    sliceMembership: { taskSlices: { one: 1, two: 2, leaf: 3 }, titles: ['one', 'two', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
-  }, {
-    readFile: (path) => readFile(path, 'utf8'),
-    mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-    writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-    rename,
-  });
+  await sealStack(repo);
   return { repo, advanced, c1, c2, git: makeGitRunner(repo) };
 }
 
@@ -118,19 +106,11 @@ async function leafOnlyFixture() {
   await writeFile(join(repo, 'leaf.ts'), 'export const leaf = true;\n');
   await git(['add', 'leaf.ts']);
   await git(['commit', '-qm', 'leaf']);
-  await writeCoverageBindingEnvelope(repo, {
-    version: 1,
+  await writeSliceTopologyFixture(repo, {
     slug: 'demo',
-    runId: 'leaf-only-queue-run',
-    status: 'done',
-    entries: [],
     sliceMembership: { taskSlices: { leaf: 1 }, titles: ['leaf'] },
     storyOwnership: { S1: 1 },
-  }, {
-    readFile: (path) => readFile(path, 'utf8'),
-    mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-    writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-    rename,
+    materializeTopologyCommit: true,
   });
   return { repo, git: makeGitRunner(repo) };
 }
