@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-25T12:13:15.698Z
 Slug: finish-pr-body-publish-fails-on-token-scope-and-ha
 Class: needs-human
 Halting step: unknown
