@@ -21,7 +21,7 @@ import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
-import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import type { GithubOperationName, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
@@ -32,7 +32,7 @@ const commandResult = { stdout: '' };
 function githubOperationFailedEvent(input: {
   repository?: string;
   number?: number;
-  operation?: string;
+  operation?: GithubOperationName;
   error: string;
 }) {
   return {
