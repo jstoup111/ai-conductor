@@ -97,6 +97,7 @@ operator approval follow §3b instead of the DECIDE list below.
 From `worktreePath`, run the genuine skills in canonical conduct order, honoring each skill's gates
 and writing the complete build-ready `.docs/` set only inside the worktree:
 
+As each DECIDE step starts, run `ai-conductor compose phase --worktree <worktreePath> --phase <step>`.
 1. `/explore` → confirm product/technical track at `.docs/track/<stem>.md`.
 2. Assess S/M/L and record `Tier: <S|M|L>` plus rationale in `.docs/complexity/<plan-stem>.md`.
    The stem **MUST** match the `.docs/plans/<stem>.md` filename so the daemon resolves it.
