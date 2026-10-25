@@ -472,7 +472,7 @@ command. 20 tasks.
 
 **Done when:**
 - [test] The N=1 golden suite (`n1-golden-state.test.ts`, `n1-golden-renderings.test.ts`, `n1-golden-routing-guard.test.ts`) passes against the regenerated goldens.
-- Every retained golden's diff against its pre-change version consists only of removed `coverage_binding` step lines, and the only deleted goldens are `flag-on-ineligible-coverage-binding.golden` and `flag-on-single-slice-coverage-binding.golden`.
+- Every retained golden's diff against its pre-change version consists only of removed `coverage_binding` step lines, plus, in `finish/git-probe-argv.golden` only, exactly one read-only durable-child-state probe pair (`for-each-ref --format=%(refname) refs/heads/feat` and `refs/conductor/<slug>/`) that ADR adr-2026-10-23-slice-topology-from-sealed-plan decision 3 requires (operator amendment 2026-10-25), and the only deleted goldens are `flag-on-ineligible-coverage-binding.golden` and `flag-on-single-slice-coverage-binding.golden`.
 - [test] `n1-golden-state.test.ts` asserts a flat run writes no `refs/conductor/` ref, no `.pipeline/children/` directory and no slice event.
 
 **Files likely touched:**
@@ -741,7 +741,7 @@ Tasks 2–8, 11–13 ──> Task 16 ──┬─> Task 17
 - [test] S6.2 is satisfied by this task.
 - The repair for task rem-prd-audit-17-r1 is committed and its targeted tests pass.
 
-### Task rem-prd-audit-17-r2: Regenerate src/conductor/test/fixtures/n1-golden/ and confirm every retained golden's diff against merge-base is only removed coverage_binding step lines. flag-on-ineligible-events/conduct-state must keep the build seal refusal; gate-paths must not add manual_test.json; flag-on-single-slice events/task-status must keep their startHead and fixture identities
+### Task rem-prd-audit-17-r2: Regenerate src/conductor/test/fixtures/n1-golden/ and confirm every retained golden's diff against merge-base is only removed coverage_binding step lines, plus the one deduplicated durable-child-state probe pair Task 17 allows in finish/git-probe-argv.golden. flag-on-ineligible-events/conduct-state must keep the build seal refusal; gate-paths must not add manual_test.json; flag-on-single-slice events/task-status must keep their startHead and fixture identities
 **Gate:** prd-audit
 **Rationale:** Verified against plan Task 17 (95%). Its Done-when allows retained goldens to differ only by removed coverage_binding step lines. The diffs to flag-on-ineligible conduct-state/events/gate-paths and flag-on-single-slice events/task-status come from test setup: the n1-golden-shared.ts / n1-golden-state.test.ts cells dropped their complexityMd and storiesFixture inputs. This is conforming test drift with no architectural or product decision involved, so it routes to BUILD under Task 17.
 **Criterion:** S6.2
@@ -781,3 +781,13 @@ Tasks 2–8, 11–13 ──> Task 16 ──┬─> Task 17
 **Done when:**
 - adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
 - The repair for task rem-as-built-8-r2 is committed and its targeted tests pass.
+
+### Task rem-operator-17-r3: Deduplicate the durable-child-state probe on the N=1 finish path so finish/git-probe-argv.golden records exactly one read-only probe pair
+**Gate:** operator
+**Rationale:** Operator decision 2026-10-25 resolving the S6.2 / as-built 9f3d9ae6:1 halt. ADR adr-2026-10-23-slice-topology-from-sealed-plan decision 3 (durable-child-state detection for every cardinality) stands, and Task 17's golden-preservation clause is amended to allow its read-only probes. The finish path currently runs `hasDurableChildState` nine times, each recording a `for-each-ref refs/heads/feat` / `refs/conductor/<slug>/` pair (90 golden lines). Detection must stay on every cardinality and stay recorded by the golden's git runner. Do not skip it for unsliced or singleton plans and do not route it around the recorded runner. Reuse one detection result within a single finish-path pass instead of re-probing, so the golden records it once.
+**Criterion:** S6.2
+**Parent task:** 17
+**Done when:**
+- [test] `src/conductor/test/fixtures/n1-golden/finish/git-probe-argv.golden` differs from its pre-change version only by removed `coverage_binding` step lines and exactly one durable-child-state probe pair.
+- [test] A two-child stack whose plan is rewritten unsliced still returns positions-changed (rem-as-built-1-r2 cases keep passing).
+- [test] The N=1 golden suite (`n1-golden-state.test.ts`, `n1-golden-renderings.test.ts`, `n1-golden-routing-guard.test.ts`) passes.
