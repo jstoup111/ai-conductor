@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-25T01:44:38.744Z
 Slug: multi-child-feature-cannot-resume-after-an-operato
 Class: needs-human
 Halting step: unknown
