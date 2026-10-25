@@ -1,5 +1,5 @@
-// Covers: task:5, task:6
-import { afterEach, describe, expect, it } from 'vitest';
+// Covers: task:5, task:6, task:7
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,6 +53,65 @@ function primitiveCommand(kind: 'plan-review' | 'land' | 'handoff', worktree: st
   if (kind === 'plan-review') return detectEngineerCommand(argv(kind, '--project', 'missing', '--worktree', worktree))!;
   if (kind === 'land') return detectEngineerCommand(argv(kind, '--project', 'missing', '--idea', 'Demo idea', '--worktree', worktree))!;
   return detectEngineerCommand(argv(kind, '--project', 'missing', '--branch', 'spec/demo-idea', '--worktree', worktree))!;
+}
+
+type Primitive = 'worktree' | 'plan-review' | 'land' | 'handoff';
+
+interface PrimitiveResult {
+  code: number;
+  stdout: string[];
+  stderr: string[];
+  head: string;
+  status: string;
+  createdWorktree?: string;
+}
+
+async function gitSnapshot(worktree: string): Promise<Pick<PrimitiveResult, 'head' | 'status'>> {
+  const [head, status] = await Promise.all([
+    execa('git', ['rev-parse', 'HEAD'], { cwd: worktree }),
+    execa('git', ['status', '--porcelain'], { cwd: worktree }),
+  ]);
+  return { head: head.stdout, status: status.stdout };
+}
+
+async function runPrimitive(
+  kind: Primitive,
+  paneLabelRunner?: (command: string, args: string[]) => Promise<void>,
+): Promise<PrimitiveResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  if (kind === 'worktree') {
+    const { registryPath, repository } = await worktreeFixture();
+    const command = detectEngineerCommand(argv('worktree', '--project', 'alpha', '--idea', 'Demo idea'))!;
+    const code = await dispatchEngineer(command, {
+      ...ghCapability, registryPath, env: herdrEnvironment, paneLabelRunner,
+      print: (line) => stdout.push(line), printErr: (line) => stderr.push(line),
+    });
+    const createdWorktree = JSON.parse(stdout[0]!).worktreePath as string;
+    return { code, stdout, stderr, ...(await gitSnapshot(repository)), createdWorktree };
+  }
+
+  const { registryPath, worktree } = await fixture();
+  const code = await dispatchEngineer(primitiveCommand(kind, worktree), {
+    ...ghCapability, registryPath, env: herdrEnvironment, paneLabelRunner,
+    print: (line) => stdout.push(line), printErr: (line) => stderr.push(line),
+  });
+  return { code, stdout, stderr, ...(await gitSnapshot(worktree)) };
+}
+
+function normalizeStdout(kind: Primitive, stdout: string[]): string[] {
+  if (kind !== 'worktree') return stdout;
+  return stdout.map((line) => JSON.stringify({ ...JSON.parse(line), worktreePath: '<created-worktree>' }));
+}
+
+function expectFailureParity(kind: Primitive, baseline: PrimitiveResult, failed: PrimitiveResult): void {
+  expect(failed.code).toBe(baseline.code);
+  expect(normalizeStdout(kind, failed.stdout)).toEqual(normalizeStdout(kind, baseline.stdout));
+  expect(failed.head).toBe(baseline.head);
+  expect(failed.status).toBe(baseline.status);
+  const warnings = failed.stderr.filter((line) => line.startsWith('compose: pane label skipped (herdr): '));
+  expect(warnings).toHaveLength(1);
+  expect(failed.stderr.filter((line) => !line.startsWith('compose: pane label skipped (herdr): '))).toEqual(baseline.stderr);
 }
 
 describe('compose primitive pane labels', () => {
@@ -172,4 +231,42 @@ describe('compose primitive pane labels', () => {
       { command: 'herdr', args: ['pane', 'rename', 'w1:p1', 'demo-idea · plan'] },
     ]);
   });
+
+  it.each(['worktree', 'plan-review', 'land', 'handoff'] as const)(
+    'keeps %s results unchanged when pane labeling rejects',
+    async (kind) => {
+      const baseline = await runPrimitive(kind);
+      const failed = await runPrimitive(kind, async () => { throw new Error('multiplexer unavailable'); });
+
+      expectFailureParity(kind, baseline, failed);
+      if (kind === 'worktree') {
+        expect(await execa('git', ['branch', '--show-current'], { cwd: failed.createdWorktree! })).toMatchObject({ stdout: 'spec/demo-idea' });
+      }
+    },
+  );
+
+  it.each(['worktree', 'plan-review', 'land', 'handoff'] as const)(
+    'keeps %s results unchanged when pane labeling times out',
+    async (kind) => {
+      vi.useFakeTimers();
+      let failed: PrimitiveResult;
+      try {
+        let labelStarted!: () => void;
+        const labelStartedPromise = new Promise<void>((resolve) => { labelStarted = resolve; });
+        const run = runPrimitive(kind, async () => {
+          labelStarted();
+          await new Promise<void>(() => {});
+        });
+
+        await labelStartedPromise;
+        await vi.advanceTimersByTimeAsync(2_000);
+        failed = await run;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const baseline = await runPrimitive(kind);
+      expectFailureParity(kind, baseline, failed!);
+    },
+  );
 });
