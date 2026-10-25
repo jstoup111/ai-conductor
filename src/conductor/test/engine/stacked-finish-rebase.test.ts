@@ -42,9 +42,12 @@ afterEach(async () => {
 interface StackOptions {
   /** Commit a default-branch advance on `main` before child 1 branches. */
   readonly preBranchAdvance?: { readonly path: string; readonly value: string };
+  /** Default fixtures retain their three-child history; Task 12 needs two. */
+  readonly childCount?: 2 | 3;
 }
 
 async function stackedFixture(options: StackOptions = {}) {
+  const childCount = options.childCount ?? 3;
   const repo = await mkdtemp(join(tmpdir(), 'stacked-finish-rebase-'));
   repositories.push(repo);
   const git = async (args: string[]) => (await execFile('git', args, { cwd: repo })).stdout.trim();
@@ -71,17 +74,22 @@ async function stackedFixture(options: StackOptions = {}) {
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const closedOne = await commit('closed one', 'src/one.ts', 'export const one = 1;\n');
   await git(['update-ref', 'refs/conductor/demo/closed/c1', closedOne]);
-  await git(['checkout', '-qb', 'feat/c2/demo']);
-  const closedTwo = await commit('closed two', 'src/two.ts', 'export const two = 2;\n');
-  await git(['update-ref', 'refs/conductor/demo/closed/c2', closedTwo]);
+  let closedTwo: string | undefined;
+  if (childCount === 3) {
+    await git(['checkout', '-qb', 'feat/c2/demo']);
+    closedTwo = await commit('closed two', 'src/two.ts', 'export const two = 2;\n');
+    await git(['update-ref', 'refs/conductor/demo/closed/c2', closedTwo]);
+  }
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   const leaf = await commit('leaf', 'src/leaf.ts', 'export const leaf = 3;\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
   await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    sliceMembership: childCount === 2
+      ? { taskSlices: { a: 1, b: 2 }, titles: ['one', 'leaf'] }
+      : { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
+    storyOwnership: childCount === 2 ? { S1: 1, S2: 2 } : { S1: 1, S2: 2, S3: 3 },
   }, envelopeFilesystem);
 
   const statePath = join(repo, '.pipeline', 'conduct-state.json');
@@ -146,12 +154,105 @@ async function runFinishRebaseStep(subject: Fixture, events: ConductorEventEmitt
   return { result, runner };
 }
 
+/**
+ * Exercise the same daemon loop that records `step_completed` and then, on a
+ * new process, lets resume select the child gate the restack reopened.
+ */
+async function runStackedRebaseLifecycle(subject: Fixture) {
+  const firstEvents = new ConductorEventEmitter();
+  const seen = observe(firstEvents, [...OBSERVED, 'step_completed', 'rebase_gate_invalidated']);
+  const firstRunner: StepRunner = { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) };
+  const first = new Conductor({
+    stateFilePath: subject.statePath,
+    stepRunner: firstRunner,
+    events: firstEvents,
+    projectRoot: subject.repo,
+    daemon: true,
+    mode: 'auto',
+    fromStep: 'rebase',
+    // The loop stops after FINISH instead of pulling publication validation
+    // into a test whose only observation is the rebase transition.
+    verifyArtifacts: false,
+  });
+  const before = await readState(subject.statePath);
+  if (!before.ok) throw new Error(before.error.message);
+  await writeState(subject.statePath, { ...before.value, finish: 'done' });
+  await first.run();
+
+  const resumed: string[] = [];
+  const resumeRunner: StepRunner = {
+    run: vi.fn<StepRunner['run']>().mockImplementation(async (step) => {
+      resumed.push(step);
+      // A bounded terminal observation: do not let a mocked suite result
+      // continue into unrelated gates.
+      return { success: false, output: 'expected stop after resumed child gate selection' };
+    }),
+  };
+  const resume = new Conductor({
+    stateFilePath: subject.statePath,
+    stepRunner: resumeRunner,
+    events: new ConductorEventEmitter(),
+    projectRoot: subject.repo,
+    daemon: true,
+    mode: 'auto',
+    resume: true,
+    verifyArtifacts: false,
+  });
+  await resume.run();
+  return { seen, resumed };
+}
+
+async function seedLeafRegionAtPreFinish(subject: Fixture, child: 2 | 3): Promise<void> {
+  const childStore = join(subject.repo, '.pipeline', 'children', String(child));
+  await mkdir(childStore, { recursive: true });
+  await writeState(join(childStore, 'conduct-state.json'), {
+    acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+  } as ConductState);
+}
+
 const OBSERVED = [
   'restack_planned', 'restack_applied', 'restack_refused',
   'rebase_changed', 'rebase_noop', 'rebase_mergeable_skip',
 ] as const;
 
 describe('FINISH rebase step on a stacked feature (real local Git)', () => {
+  // Covers: task:12
+  it('reopens the two-child leaf suite after a non-DECIDE base refresh without reviving coverage_binding', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('src/upstream.ts', 'export const upstream = 1;\n');
+
+    const { seen, resumed } = await runStackedRebaseLifecycle(subject);
+
+    expect(seen.filter((event) => event.type === 'step_completed')).toEqual([
+      expect.objectContaining({ step: 'rebase', status: 'done' }),
+    ]);
+    expect(seen.some((event) => JSON.stringify(event).includes('coverage_binding'))).toBe(false);
+    const leaf = await readState(join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json'));
+    expect(leaf.ok && leaf.value).toMatchObject({ test_suite: 'pending', build_review: 'done' });
+    // Resume reads the durable child overlay and selects exactly the gate the
+    // restack reopened; a state-transition mismatch would reject before this
+    // injected terminal runner is reached.
+    expect(resumed).toEqual(['test_suite']);
+  });
+
+  // Covers: task:12
+  it('reopens only the plan-authorized as-built gate for a two-child stack', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('.docs/plans/demo.md', '# demo plan amended upstream\n');
+    const events = new ConductorEventEmitter();
+    const seen = observe(events, [...OBSERVED, 'rebase_gate_invalidated']);
+
+    await expect(runFinishRebaseStep(subject, events)).resolves.toMatchObject({ result: { success: true } });
+
+    const state = await readState(subject.statePath);
+    expect(state.ok && state.value).toMatchObject({ architecture_review_as_built: 'pending' });
+    expect(seen.filter((event) => event.type === 'rebase_gate_invalidated').map((event) => event.gate))
+      .toEqual(['architecture_review_as_built']);
+    expect(seen.some((event) => JSON.stringify(event).includes('coverage_binding'))).toBe(false);
+  });
+
   // Covers: S10.1, task:rem-prd-audit-R7, task:32
   it('base-refreshes the whole three-child stack onto the advanced default and records the whole-stack tuple', async () => {
     const subject = await stackedFixture();

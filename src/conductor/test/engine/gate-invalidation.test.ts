@@ -160,6 +160,31 @@ describe('classifyGateInvalidation', () => {
     expect(stories.invalidated.sort()).toEqual(['architecture_review_as_built', 'prd_audit'].sort());
   });
 
+  // Covers: task:12
+  it('keeps the flat DECIDE-touching rebase reopen set at the legacy set minus retired coverage_binding', () => {
+    const declared = ['.docs/plans/flat-feature.md'];
+
+    const result = classifyGateInvalidation(
+      ['.docs/plans/flat-feature.md'],
+      [],
+      true,
+      declared,
+    );
+
+    // The plan is an as-built review input, not a runtime/test-suite or PRD
+    // input. Before the retirement this same delta also reopened
+    // coverage_binding; its absence is intentional rather than an accidental
+    // broad preservation of all DECIDE-bound gates.
+    expect(result.invalidated).toEqual(['architecture_review_as_built']);
+    expect([...result.invalidated, ...result.preserved]).not.toContain('coverage_binding');
+    expect(result.preserved.sort()).toEqual([
+      'build_review',
+      'manual_test',
+      'prd_audit',
+      'test_suite',
+    ].sort());
+  });
+
   it('foreignSrc-only touched (feature surface untouched) preserves the feature-scoped judged gates but invalidates all-runtime gates', () => {
     const D = ['src/foreign.ts'];
     const F = ['src/feature.ts'];
