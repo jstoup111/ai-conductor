@@ -1,12 +1,18 @@
 // Covers: task:3, task:4, task:5, task:14, task:23, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   assembleBuildReviewAdjudicationContext,
   BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS,
+  buildReviewAdjudicationSourceId,
   describeBuildReviewAdjudicationContextStop,
 } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { readBuildReviewAdjudicationArtifactFacts } from '../../src/engine/build-review-adjudication-artifact-facts.js';
+import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -178,41 +184,81 @@ function priorAdvisoryCase(id: string): RemediationCaseRecord {
 }
 
 describe('build-review adjudication context', () => {
-  it('projects bounded finding digests onto only a prior case’s four most recent sources', () => {
-    const sources = Array.from({ length: 5 }, (_value, index) => ({
-      sourceId: `testQuality:prior-${index + 1}`,
-      outcome: 'acted' as const,
-      recordedAt: `2026-10-2${index}T12:00:00.000Z`,
-    }));
-    const prior = { ...priorCase('case-digests'), sources };
-    const evidenceLocations = Array.from({ length: 10 }, (_value, index) => `src/prior.ts:${index + 1}`);
-    const priorFindingDigests = new Map(sources.map((source, index) => [source.sourceId, {
-      rubric: 'testQuality', concernKind: 'test-insensitive',
-      summary: `${index + 1}:${'s'.repeat(1_000)}`,
-      evidenceLocations, lapId: `lap-prior-${index + 1}`,
-    }]));
+  it('reads bounded finding digests from only a prior case’s four most recent source-lap branch artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-prior-digests-'));
+    try {
+      const filesystem = {
+        mkdir: (path: string) => mkdir(path, { recursive: true }),
+        writeFile,
+        rename,
+      };
+      const evidenceLocations = Array.from({ length: 10 }, (_value, index) => `src/prior.ts:${index + 1}`);
+      const historical = Array.from({ length: 5 }, (_value, index) => {
+        const number = index + 1;
+        const sourceLapId = parseBuildReviewLapId(`lap-prior-${number}`)!;
+        const sourceFinding: BuildReviewFinding = {
+          concernKind: 'test-insensitive', severity: 'minor',
+          summary: `artifact-${number}:${'s'.repeat(1_000)}`,
+          evidenceLocations,
+          anchor: {
+            rubric: 'testQuality',
+            locus: { path: `test/prior-${number}.test.ts`, contentHash: `sha256:${number.toString().repeat(64)}`, display: `prior ${number}` },
+          },
+        };
+        const sourceAggregate = joinBuildReviewRubricOutcomes({
+          lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+          results: {
+            security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+            testQuality: {
+              kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+              contractVersion: 'v4', findings: [sourceFinding], verdict: 'FAIL',
+            },
+          },
+        });
+        const [source] = projectBuildReviewAggregateSources(sourceAggregate)!;
+        return { number, sourceLapId, sourceFinding, source };
+      });
+      for (const { sourceLapId, sourceFinding, number } of historical) {
+        await writeBuildReviewBranchArtifact(root, {
+          rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+          result: {
+            kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+            contractVersion: 'v4', findings: [sourceFinding], verdict: 'FAIL',
+          },
+          provenance: { kind: 'fresh' },
+        }, filesystem);
+      }
+      const sources = historical.map(({ number, source }) => ({
+        sourceId: buildReviewAdjudicationSourceId(source!),
+        outcome: 'acted' as const,
+        recordedAt: `2026-10-2${number - 1}T12:00:00.000Z`,
+      }));
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
+      const result = assembleBuildReviewAdjudicationContext({
+        aggregate: aggregate(finding('current')), priorCases: [{ ...priorCase('case-digests'), sources }],
+        priorFindingDigests: facts.priorFindingDigests,
+      });
 
-    const result = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests,
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    if (!result.ok) return;
-    expect(result.context.priorDigestsOmitted).toBe(0);
-    expect(result.context.priorCases[0]!.sources).toEqual([
-      sources[0],
-      expect.objectContaining({
-        ...sources[1],
-        finding: {
-          rubric: 'testQuality', concernKind: 'test-insensitive',
-          summary: `2:${'s'.repeat(998)}`,
-          evidenceLocations: evidenceLocations.slice(0, 8), lapId: 'lap-prior-2',
-        },
-      }),
-      expect.objectContaining({ finding: expect.objectContaining({ lapId: 'lap-prior-3' }) }),
-      expect.objectContaining({ finding: expect.objectContaining({ lapId: 'lap-prior-4' }) }),
-      expect.objectContaining({ finding: expect.objectContaining({ lapId: 'lap-prior-5' }) }),
-    ]);
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(result.context.priorDigestsOmitted).toBe(0);
+      expect(result.context.priorCases[0]!.sources).toEqual([
+        sources[0],
+        expect.objectContaining({
+          ...sources[1],
+          finding: {
+            rubric: 'testQuality', concernKind: 'test-insensitive',
+            summary: `artifact-2:${'s'.repeat(989)}`,
+            evidenceLocations: evidenceLocations.slice(0, 8), lapId: 'lap-prior-2',
+          },
+        }),
+        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-3:${'s'.repeat(989)}`, lapId: 'lap-prior-3' }) }),
+        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-4:${'s'.repeat(989)}`, lapId: 'lap-prior-4' }) }),
+        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-5:${'s'.repeat(989)}`, lapId: 'lap-prior-5' }) }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('drops oldest digest candidates first within the base-context headroom and recomputes for added plan bodies', () => {
