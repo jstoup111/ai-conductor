@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:8
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { promisify } from 'node:util';
 import type { BacklogTreeSource } from '../../src/engine/backlog-tree-source.js';
+import { MANIFEST_KIND_LOCATIONS } from '../../src/engine/feature-manifest.js';
+import {
+  contractPatternKind,
+  STEP_ARTIFACT_CONTRACTS,
+} from '../../src/engine/artifacts.js';
 import {
   backlogTreeManifestSource,
   gitRefManifestSource,
@@ -215,5 +220,99 @@ describe('engine/feature-manifest-source — resolveFeatureArtifact', () => {
       });
       expect(legacy, name).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('engine/artifacts — manifest kind contracts', () => {
+  it('maps only the routed feature-scoped contract patterns to manifest kinds', () => {
+    const mapped = [
+      ['prd', 'prd'],
+      ['stories', 'stories'],
+      ['conflict_check', 'conflicts'],
+      ['plan', 'plan'],
+      ['coherence_check', 'coherence'],
+    ] as const;
+
+    for (const [step, kind] of mapped) {
+      const [contract] = STEP_ARTIFACT_CONTRACTS[step];
+      expect(contractPatternKind(step, contract!.pattern)).toBe(kind);
+    }
+
+    const mappedPatterns = new Set(mapped.map(([step]) => {
+      const [contract] = STEP_ARTIFACT_CONTRACTS[step];
+      return `${step}\u0000${contract!.pattern}`;
+    }));
+    for (const [step, contracts] of Object.entries(STEP_ARTIFACT_CONTRACTS)) {
+      for (const contract of contracts) {
+        if (mappedPatterns.has(`${step}\u0000${contract.pattern}`)) continue;
+        expect(contractPatternKind(step as keyof typeof STEP_ARTIFACT_CONTRACTS, contract.pattern)).toBeNull();
+      }
+    }
+  });
+
+  it('pins legacy locations for kinds without step contracts and keeps step contracts unchanged', () => {
+    expect(MANIFEST_KIND_LOCATIONS).toMatchObject({
+      track: { directory: '.docs/track/', identity: 'plan-stem', filePattern: /\.md$/i },
+      complexity: { directory: '.docs/complexity/', identity: 'plan-stem', filePattern: /\.md$/i },
+      intake: { directory: '.docs/intake/', identity: 'plan-stem', filePattern: /\.md$/i },
+      applicability: { directory: '.docs/applicability/', identity: 'plan-stem', filePattern: /\.md$/i },
+      'coherence-waiver': { directory: '.docs/coherence-waivers/', identity: 'plan-stem', filePattern: /\.md$/i },
+    });
+
+    expect(STEP_ARTIFACT_CONTRACTS).toEqual({
+      bootstrap: [],
+      memory: [],
+      assess: [{ pattern: '.docs/decisions/technical-assessment-*.md', scope: 'repository' }],
+      explore: [],
+      prd: [{
+        pattern: '.docs/specs/*.md',
+        scope: 'feature',
+        identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+      }],
+      complexity: [],
+      stories: [{
+        pattern: '.docs/stories/**/*.md',
+        scope: 'feature',
+        identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+      }],
+      conflict_check: [{
+        pattern: '.docs/conflicts/*.md',
+        scope: 'feature',
+        identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+      }],
+      plan: [{ pattern: '.docs/plans/*.md', scope: 'feature', identity: { strategy: 'plan-stem' } }],
+      coherence_check: [{ pattern: '.docs/coherence/*.md', scope: 'feature', identity: { strategy: 'plan-stem' } }],
+      plan_review: [{ pattern: '.docs/plan-review/*.md', scope: 'feature', identity: { strategy: 'plan-stem' } }],
+      architecture_diagram: [{ pattern: '.docs/architecture/*.md', scope: 'repository' }],
+      architecture_review: [
+        {
+          pattern: '.docs/decisions/architecture-review-*.md',
+          scope: 'feature',
+          identity: {
+            strategy: 'normalized-stem',
+            stripDatePrefix: true,
+            stripPrefixes: ['architecture-review'],
+          },
+        },
+        { pattern: '.docs/decisions/adr-*.md', scope: 'repository' },
+      ],
+      worktree: [],
+      coverage_binding: [{ pattern: '.pipeline/coverage-binding.json', scope: 'run' }],
+      acceptance_specs: [
+        'spec/acceptance/**/*', 'spec/requests/**/*', 'spec/system/**/*', 'test/acceptance/**/*',
+        'test/**/*', 'tests/**/*', '__tests__/**/*', '*.test.js', '*.test.ts', '*.test.jsx',
+        '*.test.tsx', '*.spec.js', '*.spec.ts', '*.spec.jsx', '*.spec.tsx',
+      ].map((pattern) => ({ pattern, scope: 'repository' })),
+      build: [{ pattern: '.pipeline/task-status.json', scope: 'run' }],
+      build_review: [{ pattern: '.pipeline/build-review.json', scope: 'run' }],
+      test_suite: [{ pattern: '.pipeline/test-suite-evidence.json', scope: 'run' }],
+      manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
+      prd_audit: [{ pattern: '.pipeline/prd-audit.json', scope: 'run' }],
+      architecture_review_as_built: [{ pattern: '.pipeline/architecture-review-as-built.json', scope: 'run' }],
+      rebase: [],
+      finish: [],
+      remediate: [],
+      attribution_verify: [],
+    });
   });
 });

@@ -49,6 +49,7 @@ import {
 } from './task-progress.js';
 export { HALT_MARKER };
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
+import type { FeatureScopedKind } from './feature-manifest.js';
 import {
   FullSuiteVerifier,
   type FullSuiteInspectionResult,
@@ -145,6 +146,24 @@ export type ArtifactPatternContract =
       scope: Exclude<ArtifactLifecycleScope, 'feature'>;
       identity?: never;
     };
+
+const FEATURE_CONTRACT_PATTERN_KINDS: Partial<
+  Record<StepName, Readonly<Record<string, FeatureScopedKind>>>
+> = {
+  prd: { '.docs/specs/*.md': 'prd' },
+  stories: { '.docs/stories/**/*.md': 'stories' },
+  conflict_check: { '.docs/conflicts/*.md': 'conflicts' },
+  plan: { '.docs/plans/*.md': 'plan' },
+  coherence_check: { '.docs/coherence/*.md': 'coherence' },
+};
+
+/**
+ * Maps only the artifact contracts whose consumers resolve feature manifests.
+ * All other contracts retain their existing resolution path.
+ */
+export function contractPatternKind(step: StepName, pattern: string): FeatureScopedKind | null {
+  return FEATURE_CONTRACT_PATTERN_KINDS[step]?.[pattern] ?? null;
+}
 
 export function artifactMatchesFeatureIdentity(
   artifactPath: string,
