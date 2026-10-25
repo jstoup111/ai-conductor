@@ -279,6 +279,9 @@ jstoup111/ai-conductor#3294.
 **Files:** src/conductor/src/engine/build-review-projections.ts; src/conductor/src/engine/build-review-materialization.ts; src/conductor/test/engine/build-review-projections.test.ts
 
 ### Task 11: A rubric with an empty delta is scope-empty and is not dispatched
+
+> **Amended 2026-10-25 by #3294:** Operator decision on the Task 11 BUILD halt: the `scope-empty` branch outcome that adr-2026-10-24-lap-monotonic-build-review-scope D3 requires also joins the closed build-review result union and its persisted-artifact parser, so `build-review-domain.ts` and `build-review-artifacts.ts` are in scope. The change is limited to admitting the `scope-empty` kind; no other domain or artifact behavior changes.
+
 **Story:** Story 3
 **Type:** happy-path
 **Dependencies:** Task 10
@@ -295,7 +298,7 @@ jstoup111/ai-conductor#3294.
 - [test] A `scope-empty` record adds no reviewed hunks: the next lap's `settledBuildReviewHunks` equals the settled set computed before that lap.
 - [test] `build-tail-rollup` counts a `scope-empty` rubric as a skip with reason `scope-empty` and never as judged, and the absence-retirement input excludes the sources of a `scope-empty` rubric from the sources not raised this lap.
 
-**Files:** src/conductor/src/engine/build-review-coordinator.ts; src/conductor/src/engine/build-review-aggregate.ts; src/conductor/src/engine/build-review-adjudication-coordinator.ts; src/conductor/test/engine/build-review-coordinator.test.ts
+**Files:** src/conductor/src/engine/build-review-coordinator.ts; src/conductor/src/engine/build-review-aggregate.ts; src/conductor/src/engine/build-review-adjudication-coordinator.ts; src/conductor/src/engine/build-review-domain.ts; src/conductor/src/engine/build-review-artifacts.ts; src/conductor/test/engine/build-review-coordinator.test.ts
 
 ### Task 12: The testQuality preflight keeps whole-diff coverage
 **Story:** Story 3
