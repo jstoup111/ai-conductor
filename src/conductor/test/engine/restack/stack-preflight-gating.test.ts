@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -60,6 +61,29 @@ async function appendRepair(subject: Awaited<ReturnType<typeof fixture>>) {
   await subject.git(['checkout', '-q', 'feat/daemon-demo']);
 }
 
+async function expectCursorRefusal(
+  subject: Awaited<ReturnType<typeof fixture>>,
+  cause: string,
+  expectedRecovery: string,
+  git: GitRunner = makeGitRunner(subject.repo),
+): Promise<void> {
+  const events = new ConductorEventEmitter();
+  const loopHalts: string[] = [];
+  events.on('loop_halt', (event) => loopHalts.push(event.reason));
+
+  // A caller can enter a child BUILD region only after a clear preflight.
+  // Keeping this assertion at the preflight boundary proves the refusal is
+  // terminal rather than an `unavailable` result which a daemon could mishandle.
+  await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git, events }))
+    .resolves.toEqual({ kind: 'halted' });
+
+  const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+  expect(halt).toContain(cause);
+  expect(halt).toContain(expectedRecovery);
+  await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  expect(loopHalts).toEqual([expect.stringContaining(cause)]);
+}
+
 describe('stack preflight live-HALT gate', () => {
   it('keeps a non-Git N=1 fixture on the flat path without probing journal refs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stack-preflight-non-git-'));
@@ -98,43 +122,64 @@ describe('stack preflight live-HALT gate', () => {
     expect(prepared).toBe(true);
   });
 
-  it('writes actionable topology details for changed and unreadable sealed positions', async () => {
+  it('writes the exact recorded and planned positions with the reseal recovery for changed sealed positions', async () => {
     const changed = await fixture();
     const planPath = join(changed.repo, '.docs', 'plans', 'demo.md');
     const plan = await readFile(planPath, 'utf8');
     await writeFile(planPath, plan.replace('| 2 | Leaf | 2 |', '| 3 | Leaf | 2 |'));
 
-    await expect(runStackPreflight({ worktree: changed.repo, slug: 'demo', git: makeGitRunner(changed.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
-    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('recorded positions [1,2]; plan positions [1,3]');
-    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      'ai-conductor reseal --slug demo --path .docs/plans/demo.md --reason',
+    await expectCursorRefusal(
+      changed,
+      'positions-changed',
+      'ai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt',
     );
-
-    const unreadable = await fixture();
-    await unreadable.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
-    await expect(runStackPreflight({ worktree: unreadable.repo, slug: 'demo', git: makeGitRunner(unreadable.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
-    await expect(readFile(join(unreadable.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      `git update-ref refs/conductor/demo/positions "$(printf '%s' '[1,2]' | git hash-object -w --stdin)"`,
-    );
+    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toContain('recorded positions [1,2]; plan positions [1,3]');
   });
 
   it.each([
     ['plan-missing', async (subject: Awaited<ReturnType<typeof fixture>>) => unlink(join(subject.repo, '.docs', 'plans', 'demo.md')), '.docs/plans/demo.md'],
     ['plan-invalid', async (subject: Awaited<ReturnType<typeof fixture>>) => writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), '# broken\n\n## Slices\n\nnot a table\n'), 'plan-invalid'],
-  ] as const)('halts and emits loop_halt for %s instead of returning unavailable', async (_cause, arrange, expectedText) => {
+  ] as const)('halts needs-human and emits loop_halt for %s instead of returning unavailable', async (cause, arrange, expectedText) => {
     const subject = await fixture();
     await arrange(subject);
-    const events: string[] = [];
-    const emitter = new ConductorEventEmitter();
-    emitter.on('loop_halt', () => events.push('loop_halt'));
+    await expectCursorRefusal(subject, cause, expectedText);
+  });
 
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo), events: emitter }))
-      .resolves.toEqual({ kind: 'halted' });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('needs-human');
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(expectedText);
-    expect(events).toContain('loop_halt');
+  it('halts needs-human and emits loop_halt when the positions ref cannot be read', async () => {
+    const subject = await fixture();
+    await subject.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+    await expectCursorRefusal(
+      subject,
+      'positions-ref-unreadable',
+      `git update-ref refs/conductor/demo/positions "$(printf '%s' '[1,2]' | git hash-object -w --stdin)"`,
+    );
+  });
+
+  it('halts needs-human and emits loop_halt when Git fails at the durable-child-state probe', async () => {
+    const subject = await fixture();
+    const realGit = makeGitRunner(subject.repo);
+    const git: GitRunner = async (args, options) => {
+      if (args.join('\0') === ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'].join('\0')) {
+        return { exitCode: 2, stdout: '', stderr: 'injected durable-state failure' };
+      }
+      return realGit(args, options);
+    };
+
+    await expectCursorRefusal(subject, 'git-error', 'rm -f .pipeline/HALT .pipeline/HALT.class', git);
+  });
+
+  it('halts needs-human and emits loop_halt when Git throws while reading sealed positions', async () => {
+    const subject = await fixture();
+    const realGit = makeGitRunner(subject.repo);
+    const git: GitRunner = async (args, options) => {
+      if (args.join('\0') === ['cat-file', '-p', 'refs/conductor/demo/positions'].join('\0')) {
+        throw new Error('injected positions-ref read failure');
+      }
+      return realGit(args, options);
+    };
+
+    await expectCursorRefusal(subject, 'git-error', 'rm -f .pipeline/HALT .pipeline/HALT.class', git);
   });
 
   it('runs the printed positions-ref recovery and clears preflight to child 2', async () => {
@@ -151,13 +196,13 @@ describe('stack preflight live-HALT gate', () => {
 
     await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
       .resolves.toEqual({ kind: 'clear' });
+    await expect(resolveActiveChild(subject.repo, 'demo', { git: makeGitRunner(subject.repo) }))
+      .resolves.toMatchObject({ kind: 'active', child: 2, position: 2 });
   });
 
   it('prioritizes detached-head recovery over reseal discovery', async () => {
     const subject = await fixture();
     await subject.git(['checkout', '-q', '--detach']);
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('git switch feat/daemon-demo');
+    await expectCursorRefusal(subject, 'detached-head', 'git switch feat/daemon-demo');
   });
 });
