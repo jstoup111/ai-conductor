@@ -104,6 +104,9 @@ build_review:
       # Raised from the 1 MiB default 2026-10-11: a large changed-test scope
       # (130+ new test files) measured 1,091,894 bytes and halted needs-human.
       max_projection_bytes: 1572864
+      # Operator, 2026-10-24: nit-severity findings are advisory (recorded and
+      # published, never a kickback); minor and above still block (#3298).
+      min_severity: minor
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
     # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
     # same Claude opus routing. Enabled 2026-09-18.
@@ -116,6 +119,8 @@ build_review:
       # low-confidence security findings (35-55) cost a 30-minute lap and a
       # kickback charge each while rarely surviving a second look.
       min_confidence: 60
+      # Operator, 2026-10-24: nit-severity findings are advisory (#3298).
+      min_severity: minor
   # Repository-local guard against bypassing this repository's event spine.
   # Routed to Codex terra 2026-10-07 (operator order) to split rubrics across
   # providers without paying for astra.
@@ -236,11 +241,14 @@ coverage_binding:
     enabled: false
 
 # Operator, 2026-10-21: stacked delivery on for testing native stack
-# publication (#2945/#3311). Routed whole-feature fixes stay off until the
-# exit restack and child revalidation land (#3212).
+# publication (#2945/#3311). Routed whole-feature fixes are on by default
+# (route_whole_feature_fixes); the exit restack and child revalidation they
+# depend on landed with #3212.
+# Operator, 2026-10-24: max_slices raised 3 -> 5 (the highest value that loads
+# without a review-size warning).
 stacked_prs:
   enabled: true
-  max_slices: 3
+  max_slices: 5
 
 # Remediation append allowance. The effective cap is
 # min(max_appended_tasks, floor(authored_count * max_appended_ratio)), so BOTH
