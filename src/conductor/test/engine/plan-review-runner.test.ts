@@ -183,7 +183,7 @@ D2. Second new decision.
     expect(calls[0].options.prompt).toContain('D2. Second new decision.');
   });
 
-  it('keeps a #2945-shaped review prompt under the default budget', async () => {
+  it('dispatches the reviewer for a generated #2945-shaped fixture with a prompt under 400,000 characters', async () => {
     const root = await fixture();
     const plan = `# Plan\n\n${'p'.repeat(125_627)}\n`;
     const stories = `# Stories\n\n${'s'.repeat(33_172)}\n`;
@@ -229,6 +229,65 @@ D2. Second new decision.
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('1. The numbered replacement is allowed.');
     expect(prompts[1]).not.toContain('D1. The flag is allowed.');
+  });
+
+  it('keeps the round-two prompt byte-identical to the pre-index layout with coherence and prior blocking findings', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    const coherence = '# Coherence\n\nThe full coherence body remains in round two.\n';
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), coherence, 'utf8');
+    const prompts: string[] = [];
+    const finding = {
+      id: 'prior-blocker', severity: 'blocking', lens: 'reachability',
+      artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null,
+      summary: 'The first round found a blocker.', evidence: ['source.ts:1'],
+    };
+    const input = {
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => {
+        prompts.push(request.options.prompt);
+        return { success: true, finalStructuredResult: { findings: prompts.length === 1 ? [finding] : [] } };
+      }) as any,
+    };
+
+    await runPlanReview(input);
+    const changedPlan = `# Plan
+
+This plan follows adr-review.
+
+### Task 1: Configure the revised flag
+**Steps:**
+1. Add \`reviewFlag\`.
+
+**Done when:**
+- [test] the revised flag works.
+
+**Dependencies:** none
+`;
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), changedPlan, 'utf8');
+    await runPlanReview(input);
+
+    const selectedTask = changedPlan.slice(changedPlan.indexOf('### Task 1:'));
+    expect(prompts[1]).toBe(`$plan-review
+
+PLAN:
+${selectedTask}
+
+STORIES:
+
+
+ADR DECISIONS:
+{}
+
+COHERENCE:
+${coherence}
+
+CANDIDATES:
+[]
+
+PRIOR BLOCKING AND SIGNIFICANT FINDINGS:
+${JSON.stringify([finding])}`);
   });
 
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {
