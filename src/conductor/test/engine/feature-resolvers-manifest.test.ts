@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:10, task:rem-prd-audit-10
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -137,6 +137,19 @@ describe('feature resolvers — manifest routing', () => {
       { kind: 'prd', path: '.docs/specs/f.md' },
     ]));
     await assertLegacyOutputs();
+  });
+
+  it('falls through legacy PRD identities when the active plan and feature description stems do not match', async () => {
+    const root = await writeTree({
+      '.docs/specs/approved-prd.md': '# Requirements\n',
+    });
+
+    await expect(resolveFeaturePrdPaths(root, {
+      activePlanPath: join(root, '.docs/plans/active-plan.md'),
+      featureDesc: 'feature-description',
+      featureIdentities: ['active-plan', 'feature-description', 'approved-prd'],
+      changedPaths: new Set(),
+    })).resolves.toEqual([join(root, '.docs/specs/approved-prd.md')]);
   });
 
   it('fails closed on a malformed manifest instead of resolving the legacy feature plan', async () => {

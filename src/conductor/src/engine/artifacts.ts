@@ -1082,13 +1082,18 @@ export async function resolveFeaturePrdPaths(
     const matchesIdentity = (identity: string): string[] => prdFiles.filter((path) =>
       artifactMatchesFeatureIdentity(path, identity, prdIdentity),
     );
-    const matches = context.activePlanPath
-      ? matchesIdentity(planStem(context.activePlanPath))
-      : context.featureDesc
-        ? matchesIdentity(slugify(context.featureDesc))
-        : prdFiles.filter((path) => context.featureIdentities.some((identity) =>
-          artifactMatchesFeatureIdentity(path, identity, prdIdentity),
-        ));
+    const identities = [
+      context.activePlanPath ? planStem(context.activePlanPath) : undefined,
+      context.featureDesc ? slugify(context.featureDesc) : undefined,
+    ];
+    for (const identity of identities) {
+      if (!identity) continue;
+      const matches = matchesIdentity(identity);
+      if (matches.length > 0) return matches.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
+    }
+    const matches = prdFiles.filter((path) => context.featureIdentities.some((identity) =>
+      artifactMatchesFeatureIdentity(path, identity, prdIdentity),
+    ));
     return matches.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
   };
   const slug = context.activePlanPath
