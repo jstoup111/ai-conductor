@@ -4,13 +4,6 @@ spec_hash: 1329640eaede4c24e1c2a4c3c9981729d5dd1ae5b706054145e768d2906a2011
 pr: https://github.com/jstoup111/ai-conductor/pull/3406
 shipped: 2026-10-25
 engine_version: 20261024T094223Z-8d8e019bfff7
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This is an unplanned reference-doc edit, but it only describes the behavior the stories require and adds no runtime behavior."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
@@ -30,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","6abec29d-ff9b-41c6-9246-ff5371da71d1","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 2
