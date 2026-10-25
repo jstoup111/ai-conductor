@@ -1,4 +1,4 @@
-// Covers: task:3, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
+// Covers: task:3, task:4, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
