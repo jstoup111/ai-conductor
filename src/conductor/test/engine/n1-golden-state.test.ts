@@ -1,4 +1,4 @@
-// Covers: task:3, task:17, task:21, task:35, task:rem-prd-audit-1-r1
+// Covers: task:3, task:17, task:21, task:35, task:rem-prd-audit-1-r1, task:rem-prd-audit-17-r1, task:rem-prd-audit-17-r2
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // The engine mints `executionContext.executionId` via `node:crypto.randomUUID`
@@ -107,11 +107,28 @@ describe('N=1 golden state', () => {
       expect(comparable(actual)).toBe(comparable(unsliced.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')));
     };
 
+    const seedCellArtifacts = async () => {
+      if (!cell.complexityMd || !cell.storiesFixture) return;
+      await Promise.all([
+        mkdir(join(root, '.docs', 'stories'), { recursive: true }),
+        mkdir(join(root, '.docs', 'complexity'), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY),
+        writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd),
+      ]);
+      if (cell.fixtureSeed === 'initial-commit') {
+        await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
+        await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
+      }
+    };
+
     // Setup fixture root
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
     await writeFile(join(root, '.ai-conductor', 'config.yml'), cell.configYaml);
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(join(root, '.docs', 'plans', 'n1-golden.md'), cell.planMd);
+    if (cell.fixtureSeed === 'initial-commit') await seedCellArtifacts();
 
     // Git init with pinned identity and dates
     await execFile('git', ['init', '-b', 'main', '-q'], { cwd: root });
@@ -125,6 +142,9 @@ describe('N=1 golden state', () => {
       '.gitignore',
       '.docs/plans/n1-golden.md',
       '.ai-conductor/config.yml',
+      ...(cell.fixtureSeed === 'initial-commit'
+        ? ['.docs/stories/n1-golden.md', '.docs/complexity/n1-golden.md', 'skills/tdd/SKILL.md']
+        : []),
     ], { cwd: root });
     const env = {
       ...process.env,
@@ -133,6 +153,7 @@ describe('N=1 golden state', () => {
       USER: 'test-user',
     };
     await execFile('git', ['commit', '-m', 'init'], { cwd: root, env });
+    if (cell.fixtureSeed === 'workspace') await seedCellArtifacts();
 
     // Seed conduct-state: every step before acceptance_specs is done
     const pipeline = join(root, '.pipeline');

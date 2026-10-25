@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:5, task:8
+// Covers: task:2, task:3, task:5, task:8, task:rem-as-built-1-r2, task:rem-as-built-8-r1, task:rem-as-built-8-r2
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -481,6 +481,66 @@ describe('dispatchResealCommand', () => {
       })).resolves.toBe(1);
 
       expect(err).toHaveBeenCalledWith(`reseal: cannot change sealed stack positions: recorded [1,2] and proposed [${proposed.join(',')}].`);
+      expect(reseal).not.toHaveBeenCalled();
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['removes all slices', async (worktree: string, planPath: string) =>
+      writeFile(join(worktree, planPath), '# Implementation Plan: repair\n\n### Task 1: Flat\n**Dependencies:** none\n'), []],
+    ['shrinks to one slice', async (worktree: string, planPath: string) => {
+      const plan = await readFile(join(worktree, planPath), 'utf8');
+      await writeFile(join(worktree, planPath), plan
+        .replace('| 1 | Slice 1 | 1 |\n| 2 | Slice 2 | 2 |', '| 1 | Slice 1 | 1, 2 |'));
+    }, [1]],
+  ] as const)('refuses resealing a plan that %s from a durable two-child stack', async (_label, rewrite, proposed) => {
+    const fixture = await stackFixture({ 1: [1], 2: [2] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.', '--clear-halt'));
+    if (!command) throw new Error('expected valid reseal command');
+    try {
+      await rewrite(fixture.worktree, fixture.planPath);
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      const sealBefore = await readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8');
+      const reseal = vi.fn();
+      const err = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith(`reseal: cannot change sealed stack positions: recorded [1,2] and proposed [${proposed.join(',')}].`);
+      expect(reseal).not.toHaveBeenCalled();
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['a membership error', (plan: string) => plan.replace('| 1 | Slice 1 | 1 |', '| 1 | Slice 1 | 1, 2 |')],
+    ['a dependency error', (plan: string) => plan.replace('### Task 1: Task 1\n**Story:** Story 1\n**Dependencies:** none', '### Task 1: Task 1\n**Story:** Story 1\n**Dependencies:** 2')],
+  ])('refuses before resealing when changed positions also carry %s', async (_label, invalidate) => {
+    const fixture = await stackFixture({ 1: [1], 3: [2] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.', '--clear-halt'));
+    if (!command) throw new Error('expected valid reseal command');
+    try {
+      const plan = await readFile(join(fixture.worktree, fixture.planPath), 'utf8');
+      await writeFile(join(fixture.worktree, fixture.planPath), invalidate(plan));
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      const sealBefore = await readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8');
+      const reseal = vi.fn();
+      const err = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith('reseal: cannot establish proposed sealed stack positions: recorded [1,2]; cause plan-invalid.');
       expect(reseal).not.toHaveBeenCalled();
       await expect(readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
       await expect(readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');

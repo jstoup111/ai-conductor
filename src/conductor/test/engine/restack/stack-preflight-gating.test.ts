@@ -1,4 +1,4 @@
-// Covers: task:9, task:31.1
+// Covers: task:9, task:31.1, task:rem-as-built-1-r2
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -138,6 +138,23 @@ describe('stack preflight live-HALT gate', () => {
     );
     await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves
       .toContain('recorded positions [1,2]; plan positions [1,3]');
+  });
+
+  it.each([
+    ['an unsliced plan', async (planPath: string) => writeFile(planPath, '# Implementation Plan: demo\n\n### Task 1: Flat\n**Dependencies:** none\n')],
+    ['a singleton plan', async (planPath: string) => {
+      const plan = await readFile(planPath, 'utf8');
+      await writeFile(planPath, plan.replace('| 1 | One | 1 |\n| 2 | Leaf | 2 |', '| 1 | One | 1, 2 |'));
+    }],
+  ] as const)('halts instead of returning no-stack for %s after a two-child stack was sealed', async (_label, rewrite) => {
+    const subject = await fixture();
+    await rewrite(join(subject.repo, '.docs', 'plans', 'demo.md'));
+
+    await expectCursorRefusal(
+      subject,
+      'positions-changed',
+      'ai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt',
+    );
   });
 
   it.each([

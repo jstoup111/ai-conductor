@@ -206,15 +206,23 @@ async function positionChangeRefusal(
   const planText = await readFile(planPath, 'utf8').catch(() => undefined);
   if (planText === undefined) return undefined;
   const positions = slicePositionsFromPlan(planText);
-  if (positions === undefined) return undefined;
   const topology = await verifySlicePositions(
     worktree,
     slug,
-    positions,
+    // An invalid manifest cannot establish proposed positions. Probe with an
+    // empty proposal only to recover the sealed positions for a useful refusal;
+    // never treat that placeholder as a valid unsliced plan.
+    positions ?? [],
     makeGitRunner(worktree),
     repositoryRelativePath(worktree, planPath),
   );
-  if (topology?.cause !== 'positions-changed') return undefined;
+  if (!topology) return undefined;
+  if (positions === undefined) {
+    return `cannot establish proposed sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}]; cause plan-invalid`;
+  }
+  if (topology.cause !== 'positions-changed') {
+    return `cannot verify sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}], proposed [${topology.planPositions?.join(',') ?? ''}]; cause ${topology.cause}`;
+  }
   return `cannot change sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}] and proposed [${topology.planPositions?.join(',') ?? ''}]`;
 }
 

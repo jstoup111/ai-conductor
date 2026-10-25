@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
+// Covers: task:2, task:4, task:5, task:20, task:29, task:rem-as-built-1-r2, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -138,6 +138,20 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'topology-unavailable', cause: 'positions-changed',
       planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: [1, 3],
+    });
+  });
+
+  it.each([
+    ['an unsliced plan', '# Implementation Plan: demo\n\n### Task 1: Flat\n**Dependencies:** none\n', []],
+    ['a singleton plan', undefined, [1]],
+  ] as const)('does not resolve %s as no-child after a two-child stack was sealed', async (_label, plan, proposed) => {
+    await writeTopology(repository, plan === undefined ? [1] : [1, 2], true);
+    if (plan !== undefined) await writeFile(join(repository, '.docs', 'plans', 'demo.md'), plan);
+    await recordPositions(repository, [1, 2]);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'topology-unavailable', cause: 'positions-changed',
+      planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: proposed,
     });
   });
 

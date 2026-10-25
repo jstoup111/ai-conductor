@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:rem-as-built-1-r1, task:rem-as-built-1-r2
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -157,6 +157,19 @@ describe('loadSliceTopology', () => {
     await mkdir(join(unreadable, '.pipeline', 'children', '1'), { recursive: true });
     await expect(loadSliceTopology(unreadable, 'demo')).resolves.toMatchObject({
       kind: 'unavailable', cause: 'positions-ref-unreadable', positionsRef: 'refs/conductor/demo/positions',
+    });
+  });
+
+  it.each([
+    ['an unsliced plan', '# Implementation Plan: demo\n\n### Task 1: Flat\n**Dependencies:** none\n', []],
+    ['a singleton plan', slicedPlan([1]), [1]],
+  ] as const)('refuses %s that rewrites a durable two-child stack', async (_label, plan, proposed) => {
+    const root = await fixture({ plan, git: true });
+    await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+    await recordPositions(root, [1, 2]);
+
+    await expect(loadSliceTopology(root, 'demo')).resolves.toMatchObject({
+      kind: 'unavailable', cause: 'positions-changed', recordedPositions: [1, 2], planPositions: proposed,
     });
   });
 

@@ -201,12 +201,17 @@ export async function loadSliceTopology(
   const validation = validatePlanSlices(planText);
   if (validation.kind === 'invalid') return unavailable('plan-invalid', { planPath: planRepoPath, violations: validation.violations });
 
-  if (validation.kind === 'unsliced') {
-    // An unsliced plan cannot start a stack. Avoid durable-ref discovery for
-    // ordinary flat consumers; a reseal of an existing stack performs the
-    // independent proposed-position guard before it can make this change.
-    return { kind: 'unsliced' };
-  }
+  const positions = validation.kind === 'sliced' ? validation.slices.map((slice) => slice.position) : [];
+
+  // Flat and singleton plans are cheap for ordinary consumers: the durable
+  // probe returns immediately when no child state exists. Once child state
+  // does exist, however, every proposed cardinality must match the sealed
+  // positions ref. Otherwise an operator could flatten or shrink a stack and
+  // make its child cursor appear to be an ordinary N=1 feature.
+  const positionFailure = await verifySlicePositions(worktree, slug, positions, git, planRepoPath);
+  if (positionFailure) return positionFailure;
+
+  if (validation.kind === 'unsliced') return { kind: 'unsliced' };
 
   const membership: SliceTopologyMembership = {
     taskSlices: Object.fromEntries(validation.slices.flatMap((slice) =>
@@ -216,16 +221,6 @@ export async function loadSliceTopology(
     )),
     titles: validation.slices.map((slice) => slice.title),
   };
-  const positions = validation.slices.map((slice) => slice.position);
-
-  // The sealed stack positions are an invariant independent of story
-  // ownership. Check them before a malformed ownership declaration can mask
-  // a topology-changing proposed plan during an operator reseal.
-  if (positions.length >= 2) {
-    const positionFailure = await verifySlicePositions(worktree, slug, positions, git, planRepoPath);
-    if (positionFailure) return positionFailure;
-  }
-
   const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
   if (storiesPath === null) {
     return unavailable('plan-invalid', {
