@@ -270,7 +270,7 @@ automatically, so that I no longer recover a "restack required" halt by hand.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a three-child stack in which the operator committed `X` on `feat/c1/demo` past `closed/c1`, when the next daemon dispatch or conductor resume runs with no `refs/conductor/<slug>/repairing` marker, then: a `feature-repair` restack moves `closed/c1` to `X`; child 2 and the leaf are replayed onto it; no needs-human halt is written.
+- Given a three-child stack with `stacked_prs.route_whole_feature_fixes: false` in which the operator committed `X` on `feat/c1/demo` past `closed/c1`, when the next daemon dispatch or conductor resume runs with no `refs/conductor/<slug>/repairing` marker, then: a `feature-repair` restack moves `closed/c1` to `X`; child 2 and the leaf are replayed onto it; no needs-human halt is written.
 - Given that state before the restack runs, when `consumeResumeAuthorizations`, `kickback-budget` inspection, `task` or `rewind` reads the active child, then: they report the active child; none throws; none moves a ref or starts a restack (`kickback-budget raise` or `reset --gate restack` updates `cascades` by design; see Story 13).
 - Given an operator commit on a closed child and a default advance at the same resume, with no `repairing` marker, no route record that is not `closed`, and no queued child after the repair applies, when it runs, then a `feature-repair` restack applies first, and a `base-refresh` restack second, with distinct opIds.
 - Given the operator committed `X` from another worktree that still has `feat/c1/demo` checked out, when the repair runs, then it applies.
@@ -286,7 +286,7 @@ automatically, so that I no longer recover a "restack required" halt by hand.
 - Given the repair reached `applied` and the process died before the base refresh started, when the next resume runs with no `repairing` marker, no route record that is not `closed`, and no queued child, then the base-refresh restack runs.
 - Given routing is on and the repair's `applied` transaction queued a closed child, when the follow-on base refresh would run, then it is suppressed, `restack_refused` with reason `deferred-base-refresh` is persisted, and the request is retained until the queue drains.
 - Given the repair's journal is `applied` with a pending follow-on, when an unrelated restack is planned, then it is refused `restack-outstanding`, and the follow-on still runs unless the deferral below applies.
-- Given `rewind --child 1` on a closed child, when it runs, then it is refused with a message naming #3203.
+- Given `rewind --child 1` on a closed child with no live HALT, when it runs, then it is refused naming the missing HALT.
 
 ### Done When
 - [ ] The preflight runs after the park checks, and before resume authorization, the re-kick

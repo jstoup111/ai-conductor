@@ -87,10 +87,10 @@ under repair, so that my commands and the engine's writes never land on the leaf
 - Given host 1 `repairing`, when the operator runs `daemon status`, then it shows child 1 as the child being worked, as `1/3`.
 - Given host 1 `repairing`, when region state is read or written, then child 1's per-child region state is used.
 - Given host 1 `repairing`, when the operator runs `kickback-budget raise --gate prd_audit`, then the raise lands in the flat feature ledger, ignoring the execution-child default.
-- Given a closed child 2 and no open round, when the operator runs `rewind --child 2`, then it is refused with a message naming #3203.
+- Given a closed child 2, no open round and no live HALT, when the operator runs `rewind --child 2 --reason "x"`, then it is refused naming the missing HALT.
 
 #### Negative Paths
-- Given host 1 `repairing` and an operator commit with no `Round:` stamp past `closed/c2`, when the cursor runs, then it accepts `repair-pending` with child 2 as a co-origin, and does not halt.
+- Given host 1 `repairing` in an operator round that carries child 2, and an operator commit with no `Round:` stamp past `closed/c2`, when the cursor runs, then it accepts `repair-pending` with child 2 as a co-origin, and does not halt.
 - Given host 1 `repairing`, when the cursor reports `repair-pending` for children 1 and 2 and child 2's commits carry another round's `Round:` stamp, then the feature halts needs-human naming child 2.
 - Given host 1 `repairing`, when the restack executor reads the cursor, then it does not throw, because the cursor kind is unchanged.
 

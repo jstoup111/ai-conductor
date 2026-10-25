@@ -150,6 +150,8 @@ The decisions below incorporate the fixes.
 
 > **Amended 2026-10-23 by #3365:** With the envelope gone, "child refs present and no sealed envelope" cannot occur. A cursor that cannot resolve (`topology-unavailable` with its cause, `git-error`, or `detached-head`) makes the resume stack preflight write its own needs-human HALT naming the cause and a recovery command (adr-2026-10-23-slice-topology-from-sealed-plan decision 5). `coverage_binding` no longer precedes the region.
 
+> **Amended 2026-10-24 by #3203:** With routing eligible, the shared stack preflight no longer repairs commits appended past a closure. `repair-pending` with no marker halts `unlanded-closed-child-commits`; with routing off it repairs as written (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
+
 3. **Child branch creation, switching and the leaf move.**
    - **Creation** happens at the active child's region entry, only after:
      - `stacked_prs.max_slices` is re-checked;

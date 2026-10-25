@@ -321,6 +321,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > exception is whole-feature gate budgets, which stay flat
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 8 and 10).
 
+    > **Amended 2026-10-24 by #3203:** For a closed `k`, `rewind --child k` is no longer refused. It is validated against `k`'s closure ref rather than `.pipeline/children/<k>/`, opens a declared operator round, and demotes only `k`'s region from the target; children above and the whole-feature steps are not demoted (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
+
 14. **The N=1 contract is structural and proven by golden tests.**
     - With no child there is no `children/` directory, no new key, and no event field.
     - A golden suite of committed fixture files, recorded from the pre-change base, is added in the

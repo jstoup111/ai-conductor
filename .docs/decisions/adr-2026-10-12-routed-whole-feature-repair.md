@@ -294,7 +294,7 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      entry enters the execution child's region instead of the leaf's. The leaf's whole-feature
      gates are restaged stale and are not re-pended until the queue drains (decision 15).
 
-   > **Amended 2026-10-24 by #3203:** A closed non-host child with unstamped post-closure commits is a co-origin only when the open operator round adopted it. Any other co-origin halts `unlanded-closed-child-commits`, in every round kind. An explicit closed `rewind --child` opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
+   > **Amended 2026-10-24 by #3203:** A closed non-host child with unstamped post-closure commits is a co-origin only when the open operator round carried it. Any other co-origin halts `unlanded-closed-child-commits`, in every round kind. An explicit closed `rewind --child` opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 9. **Routed tasks are appended on the host's checked-out branch, carry their child in committed
    text, and merge deterministically on replay.**
@@ -466,7 +466,7 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     > escalates it. A host's exit that acknowledges its own queue entry records `child_revalidated`
     > for that host, with outcome `fixed` on the restack exit and `passed` on the no-commit exit.
 
-    > **Amended 2026-10-24 by #3203:** Unstamped operator commits on other closed children are no longer automatic co-origins: the exit halts `unlanded-closed-child-commits` unless the open operator round adopted them. Adopted children originate the exit restack with the host (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
+    > **Amended 2026-10-24 by #3203:** Unstamped operator commits on other closed children are no longer automatic co-origins: the exit halts `unlanded-closed-child-commits` unless the open operator round carried them. Carried children originate the exit restack with the host. A closed-child rewind whose host tip still equals its closure is a further case that reaches the no-commit exit (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 14. **A durable re-validation queue re-judges every closed child a restack moved.**
     - **Production.** Every restack carries, in its journal, the closed-child invalidation set
@@ -515,6 +515,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     > - **Last entry.** When an acknowledgement empties the queue and no other round is open, it
     >   removes the entry and deletes the marker but leaves the `revalidate` round open.
     >   `returnToLeaf` records the switch in that round, then closes it (decisions 4 and 6).
+
+    > **Amended 2026-10-24 by #3203:** With routing eligible, operator commits on closed children reach the queue only as children an operator round carried; uncarried ones halt `unlanded-closed-child-commits` instead (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
 
 15. **The leaf gates re-run when the queue drains, under their existing caps.**
     - When no marker and no queue entry remain, the leaf's whole-feature gates are re-pended under
@@ -599,6 +601,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
 | A8 | One routed-repair `build_review` credit per round is enough for a repair-sized diff | inferred | 80% | yes | Routed repairs would cap out and halt needs-human more often | APPROVED by operator 2026-10-12 |
 | A9 | A deterministic union merge of appended rem blocks covers the plan conflicts routed repairs produce; other plan conflicts are rare and go to the resolver | inferred | 85% | yes | Restacks after routed repairs would halt on plan conflicts | APPROVED by operator 2026-10-12 |
 | A10 | Freezing every host's rem allocation at admission, and charging declared growth at the first host, is an acceptable reading of "settles exactly once at the target child's dispatch" | inferred | 85% | yes | Growth would need charging per host, adding a lap-split rule | APPROVED by operator 2026-10-12 |
+
+> **Amended 2026-10-24 by #3203:** Assumption A2 now holds only with routing off. With routing eligible, a non-halt commit past a closure with no marker halts `unlanded-closed-child-commits` at the next preflight (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
 
 ## Consequences
 

@@ -120,6 +120,8 @@ the field, expected value, and current value; it never falls back to a direct wr
 (`selector.ts:59`, `state.ts:203`), which is exactly "this must re-run, and its dependents are not
 thereby invalid". The hand-edit used `pending` because it had no way to express the distinction.
 
+> **Amended 2026-10-24 by #3203:** For a closed target child, the restage sets the demoted region steps to `pending`, through the routed host restage, not to `stale` (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
+
 ### D3 — The demotion set is the target and its downstream, computed from the resolved registry
 
 Rewinding to a step demotes that step and every non-skipped step after it in the resolved list. A

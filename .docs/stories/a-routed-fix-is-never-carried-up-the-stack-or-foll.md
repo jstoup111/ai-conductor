@@ -112,7 +112,7 @@ stop safely at every limit, so that it neither drops work nor rewrites what revi
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an operator committed unstamped work on closed child 2 during round `r1`, when host 1's exit restack is planned, then its origins are children 1 and 2, and `applied` charges one cascade on each.
+- Given an operator round `r1` hosted on child 1 that carries closed child 2 with unstamped work, when host 1's exit restack is planned, then its origins are children 1 and 2, and `applied` charges one cascade on each.
 
 #### Negative Paths
 - Given child 2's post-closure commits carry a `Round:` stamp of a different round, when host 1's exit restack is planned, then it halts needs-human naming child 2 and creates no journal.
@@ -214,7 +214,7 @@ queued for re-validation, so that a lower fix cannot silently break an upper chi
 
 #### Happy Path
 - Given host 1's exit restack moved closed child 2 and invalidated child 2's `test_suite`, when `applied` commits, then the queue's next generation holds one entry for child 2 with its new closure SHA, its position, its invalidated gates and its old and new replay parent.
-- Given a base-refresh restack, or a repair caused by an operator commit on a closed child, when its `applied` transaction commits, then every moved closed child with an invalidated gate is queued in that same transaction.
+- Given a base-refresh restack, or a repair caused by an operator commit on a closed child (carried by an operator round, or with routing off), when its `applied` transaction commits, then every moved closed child with an invalidated gate is queued in that same transaction.
 - Given a restack moved closed child 2 whose verdict files are missing or unreadable, when the queue is written, then child 2 is queued.
 - Given a delta that changes the signature of `parseA` in `src/a.ts`, a file child 2 does not own, when the restack moves child 2, then child 2 is queued because its `test_suite` is invalidated.
 - Given a restack whose replay of child 2 is proven unchanged and which leaves each of child 2's region gate verdicts present and fresh, when the queue is written, then child 2 is not queued.

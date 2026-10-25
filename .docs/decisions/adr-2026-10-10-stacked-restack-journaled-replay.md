@@ -558,7 +558,7 @@ Operator decisions (2026-10-10):
 > due base refresh is deferred with `restack_refused` reason `deferred-base-refresh`
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
 
-> **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that adopts the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
+> **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that carries the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
