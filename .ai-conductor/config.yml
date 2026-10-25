@@ -238,9 +238,11 @@ coverage_binding:
 # Operator, 2026-10-21: stacked delivery on for testing native stack
 # publication (#2945/#3311). Routed whole-feature fixes stay off until the
 # exit restack and child revalidation land (#3212).
+# Operator, 2026-10-24: max_slices raised 3 -> 5 (the highest value that loads
+# without a review-size warning).
 stacked_prs:
   enabled: true
-  max_slices: 3
+  max_slices: 5
 
 # Remediation append allowance. The effective cap is
 # min(max_appended_tasks, floor(authored_count * max_appended_ratio)), so BOTH
