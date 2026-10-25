@@ -177,6 +177,7 @@ import { classifyBuildReviewCacheLookup, readBuildReviewCacheEntry, tryWriteBuil
 import {
   BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,
   parseBuildReviewCustomArtifactMember,
+  parseBuildReviewBranchArtifact,
   buildReviewRubricPromptPath,
   readBuildReviewBranchArtifact,
   writeBuildReviewBranchArtifact,
@@ -184,6 +185,8 @@ import {
   type BuildReviewCustomArtifactMember,
 } from './build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes, type BuildReviewAggregate } from './build-review-aggregate.js';
+import { buildReviewPolicyIdentity, decideBuildReviewReviewScope, settledBuildReviewHunks } from './build-review-review-frontier.js';
+import { deriveChangedFileReferences } from './build-review-projections.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import {
   buildReviewConfidenceFloors,
@@ -3223,6 +3226,58 @@ export class DefaultStepRunner implements StepRunner {
 
     const engineIdentity = await this.resolveBuildReviewEngineIdentity();
 
+    // Scope evidence is branch-local and precedes projection/cache selection.
+    // Read every older lap directly rather than trusting the aggregate: an
+    // aggregate deliberately has no per-rubric settlement authority.
+    const changedFiles = deriveChangedFileReferences(inputs.sourceSnapshot.diff);
+    const priorArtifactsFor = async (rubric: string) => {
+      const root = join(this.projectDir, '.pipeline', 'build-review');
+      let lapDirectories: readonly string[] = [];
+      try { lapDirectories = await readdir(root); } catch { return []; }
+      const artifacts = await Promise.all(lapDirectories.filter((name) => name.startsWith('lap-')).map(async (priorLapId) => {
+        try {
+          const parsed = parseBuildReviewBranchArtifact(JSON.parse(await readFile(join(root, priorLapId, `${rubric}.json`), 'utf8')));
+          return parsed?.rubric === rubric ? parsed : undefined;
+        } catch { return undefined; }
+      }));
+      return artifacts.filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== undefined);
+    };
+    const reviewScopes: Partial<Record<BuildReviewRubricResult['rubric'], import('./build-review-artifacts.js').BuildReviewReviewScope>> = {};
+    for (const entry of config.catalog.filter((candidate): candidate is import('./resolved-config.js').ResolvedBuildReviewBuiltinCatalogEntry => candidate.kind === 'builtin')) {
+      const descriptor = getBuildReviewRubricDescriptor(entry.id).contract;
+      const skill = engineIdentity.skillDigests[entry.id];
+      const policyIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: descriptor.output.version,
+        projectionVersion: descriptor.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        effectiveBundleDigest: skill?.kind === 'resolved' ? skill.digest : 'unavailable',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
+      });
+      const artifacts = await priorArtifactsFor(entry.id);
+      const settled = settledBuildReviewHunks({
+        changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
+        laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged' && 'contractVersion' in artifact.result
+          ? [{ reviewScope: artifact.reviewScope, findings: (artifact.result as import('./build-review-domain.js').BuildReviewJudgedResult).findings.map((finding) => {
+            const typedFinding = finding as import('./build-review-domain.js').BuildReviewFinding;
+            const identity = canonicalizeBuildReviewFindingIdentity({ rubric: entry.id, contractVersion: (artifact.result as import('./build-review-domain.js').BuildReviewJudgedResult).contractVersion, concernKind: typedFinding.concernKind, anchor: typedFinding.anchor });
+            return identity ? { sourceId: identity.id, finding: typedFinding } : undefined;
+          }).filter((source): source is NonNullable<typeof source> => source !== undefined) }]
+          : []),
+      });
+      const decision = decideBuildReviewReviewScope({
+        lapId, changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
+        policyIdentity, priorLaps: artifacts.map((artifact) => ({ lapId: artifact.lapId, reviewScope: artifact.reviewScope })),
+        settledHunks: settled, openSourceUnmapped: false,
+      });
+      if (decision !== undefined) {
+        reviewScopes[entry.id] = decision;
+        await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: settled.length });
+      }
+    }
+
     // Custom policies are loaded only inside the prepared provider candidate.
     // The fixed coordinator still owns the legacy testQuality branch; dynamic
     // artifact/aggregate persistence is deliberately introduced by its own
@@ -3231,6 +3286,25 @@ export class DefaultStepRunner implements StepRunner {
     const customEntries = config.catalog.filter(
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
+    const customReviewScopes: Record<string, import('./build-review-artifacts.js').BuildReviewReviewScope> = {};
+    for (const entry of customEntries) {
+      const policyIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: 'pending-candidate-policy', provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      const artifacts = await priorArtifactsFor(entry.id);
+      const decision = decideBuildReviewReviewScope({
+        lapId, changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha, policyIdentity,
+        priorLaps: artifacts.map((artifact) => ({ lapId: artifact.lapId, reviewScope: artifact.reviewScope })), openSourceUnmapped: false,
+      });
+      if (decision !== undefined) {
+        customReviewScopes[entry.id] = decision;
+        await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: 0 });
+      }
+    }
     const builtinEntries = config.catalog.filter((entry) => entry.kind === 'builtin');
     // Consume startup observations first. When a provider was not among the
     // custom-entry providers probed at startup (for example a built-in peer's
@@ -3394,7 +3468,7 @@ export class DefaultStepRunner implements StepRunner {
         customEntries.length,
         async (_id, entry) => {
           try {
-            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext);
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext, customReviewScopes[entry.id]);
           } finally {
             lapGate?.arrive(entry.id);
           }
@@ -3413,6 +3487,7 @@ export class DefaultStepRunner implements StepRunner {
             lapId,
             securityLeafOnly: child !== undefined && inputs.securitySourceSnapshot === undefined,
             engineIdentity,
+            reviewScopes,
             useCandidateCache: true,
             ...(customPolicyLap ? { joinsCustomPolicyLap: true } : {}),
             preflight: async () => this.runTautologyPreflight(inputs),
@@ -3741,6 +3816,7 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(config), minSeverity: buildReviewSeverityThresholds(config),
+      scopes: Object.fromEntries([...Object.entries(reviewScopes), ...Object.entries(customReviewScopes)].map(([rubric, reviewScope]) => [rubric, { reviewScope, changedFiles }])),
       child,
       adjudicationEnabled: config.adjudication.enabled,
     });
@@ -3818,6 +3894,7 @@ export class DefaultStepRunner implements StepRunner {
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
     pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline'),
     executionContext?: ExecutionContext,
+    reviewScope?: import('./build-review-artifacts.js').BuildReviewReviewScope,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -3846,6 +3923,7 @@ export class DefaultStepRunner implements StepRunner {
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       changes: inputs.sourceSnapshot.sourceChanges ?? [],
+      ...(reviewScope === undefined ? {} : { reviewScope }),
       ...(source === undefined ? {} : { view: source }),
     });
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
@@ -4404,6 +4482,7 @@ export class DefaultStepRunner implements StepRunner {
           ...(cacheProvenance === undefined ? {} : {
             reuse: { sourceLapId: cacheProvenance.cachedLapId, sourceSnapshotDigest: cacheProvenance.cachedSnapshotDigest },
           }),
+          ...(reviewScope === undefined ? {} : { reviewScope }),
         }, {
           readFile: async (path) => readFile(path, 'utf-8'),
           mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,
@@ -4585,6 +4664,7 @@ export class DefaultStepRunner implements StepRunner {
         ? { suppressedFindings: suppressionEntries.filter((entry): entry is Extract<typeof entry, { kind: 'confidence' }> => entry.kind === 'confidence').map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
         : {}),
       ...(advisoryEntries.length > 0 ? { advisoryFindings: advisoryEntries.filter((entry): entry is Extract<typeof entry, { kind: 'severity' }> => entry.kind === 'severity').map(({ findingId, rubric, severity, threshold }) => ({ findingId, rubric, severity, threshold })) } : {}),
+      ...(effective.ok && (effective.effective.outOfDeltaFindingIds?.length ?? 0) > 0 ? { outOfDeltaCount: effective.effective.outOfDeltaFindingIds!.length } : {}),
     });
     return [...suppressionEntries, ...advisoryEntries];
   }

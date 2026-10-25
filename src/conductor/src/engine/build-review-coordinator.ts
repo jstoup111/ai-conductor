@@ -807,6 +807,7 @@ export async function coordinateBuildReviewRubrics(
           snapshotDigest: projection.snapshotDigest,
           result: cachedResult,
           provenance: cache.hit.provenance,
+          ...(input.reviewScopes?.[branch.rubric] === undefined ? {} : { reviewScope: input.reviewScopes[branch.rubric] }),
         }), branch.rubric, projection);
         resolved.set(branch.rubric, result
           ? { kind: "cache-hit", rubric: branch.rubric, result }
@@ -885,6 +886,7 @@ export async function coordinateBuildReviewRubrics(
             snapshotDigest: projection.snapshotDigest,
             result,
             provenance: { kind: "fresh" },
+            ...(input.reviewScopes?.[rubric] === undefined ? {} : { reviewScope: input.reviewScopes[rubric] }),
           }), rubric, projection);
         } catch {
           return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };

@@ -13883,6 +13883,7 @@ export class Conductor {
                   const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
                   const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
+                  const outOfDeltaFindingIds = effective.effective.outOfDeltaFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
                   // already persisted these rows for this lap; the coordinator
                   // re-runs that same idempotent upsert rather than owning a
@@ -13909,6 +13910,7 @@ export class Conductor {
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     advisoryFindingIds: new Set(advisoryFindingIds),
+                    outOfDeltaFindingIds: new Set(outOfDeltaFindingIds),
                     declaredSeverityThresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                     suppressions: [...suppressions, ...advisories],
                     resolveOperatorResolvedFindingIds,

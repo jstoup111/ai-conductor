@@ -7,6 +7,7 @@ import {
   deriveEffectiveBuildReviewVerdict,
   deriveEffectiveBuildReviewVerdictWithDispositions,
   joinBuildReviewRubricOutcomes,
+  type BuildReviewEffectiveScope,
   parseBuildReviewAggregate,
   projectBuildReviewAggregateSources,
 } from '../../src/engine/build-review-aggregate.js';
@@ -93,6 +94,28 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
+  // Covers: task:15
+  it('classifies a non-critical settled-hunk finding as out of delta without accepting risk', () => {
+    const securityFinding: BuildReviewFinding = {
+      concernKind: 'injection', summary: 'A stale sink remains.', evidenceLocations: ['src/a.ts:8'],
+      anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: HASH, display: 'sink' } }, severity: 'major',
+    };
+    const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), securityJudged([securityFinding])) });
+    const scope: BuildReviewEffectiveScope = {
+      reviewScope: { mode: 'delta', deltaHunks: [{ path: 'src/other.ts', contentHash: 'sha256:other' }] },
+      changedFiles: [
+        { path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: HASH }] },
+        { path: 'src/other.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: 'sha256:other' }] },
+      ],
+    };
+    const id = canonicalizeBuildReviewFindingIdentity({ rubric: 'security', contractVersion: 'v3', concernKind: securityFinding.concernKind, anchor: securityFinding.anchor })!.id;
+    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: scope })).toMatchObject({
+      verdict: 'PASS', outOfDeltaFindingIds: [id], unresolvedFindingIds: [], acceptedFindingIds: [],
+    });
+    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: { ...scope, reviewScope: { ...scope.reviewScope, deltaHunks: [{ path: 'src/a.ts', contentHash: HASH }] } } })).toMatchObject({
+      verdict: 'FAIL', unresolvedFindingIds: [id],
+    });
+  });
   it('preserves passing peers beside an implementation-quality failure and suppresses a declared replication identity', () => {
     const finding = implementationQualityFinding();
     const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;

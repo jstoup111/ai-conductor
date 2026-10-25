@@ -27,7 +27,11 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 import {
   parseBuildReviewCustomArtifactMember,
   type BuildReviewCustomArtifactMember,
+  type BuildReviewReviewScope,
 } from './build-review-artifacts.js';
+import { mapBuildReviewFindingToHunks } from './build-review-review-frontier.js';
+import type { ChangedFileReference } from './build-review-projections.js';
+import type { BuildReviewCustomFinding, BuildReviewFinding } from './build-review-domain.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
 const CUSTOM_AGGREGATE_VERSION = 'v2' as const;
@@ -98,6 +102,8 @@ export interface BuildReviewEffectiveVerdict {
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
   readonly suppressedFindingIds: readonly string[];
+  /** Findings observed outside this delta lap's review frontier. */
+  readonly outOfDeltaFindingIds?: readonly string[];
   /** Findings below a declared severity threshold; visible but non-blocking. */
   readonly advisoryFindingIds?: readonly string[];
   /**
@@ -127,6 +133,30 @@ export interface BuildReviewEffectiveVerdict {
   readonly scopeIncompleteRubrics?: readonly BuildReviewRubricId[];
   /** Operator-reduced coverage releases retries but is not absence evidence. */
   readonly hasRecordedReducedCoverage?: boolean;
+}
+
+/** Ephemeral, engine-computed scope facts shared by all current-lap readers. */
+export interface BuildReviewEffectiveScope {
+  readonly reviewScope: Pick<BuildReviewReviewScope, 'mode' | 'deltaHunks'>;
+  readonly changedFiles: readonly ChangedFileReference[];
+}
+
+function scopedHunkKey(hunk: { readonly path: string; readonly contentHash: string }): string {
+  return `${hunk.path}\u0000${hunk.contentHash}`;
+}
+
+/** Delta bookkeeping is never accepted risk and critical findings remain live. */
+export function isBuildReviewFindingOutOfDelta(
+  finding: BuildReviewFinding | BuildReviewCustomFinding,
+  scope: BuildReviewEffectiveScope | undefined,
+): boolean {
+  if (scope?.reviewScope.mode !== 'delta' || finding.severity === 'critical') return false;
+  const delta = new Set(scope.reviewScope.deltaHunks.map(scopedHunkKey));
+  if (finding.causeHunk && delta.has(scopedHunkKey(finding.causeHunk))) return false;
+  const targets = mapBuildReviewFindingToHunks(finding, scope.changedFiles);
+  return targets.length > 0 && targets.every((target) => target.kind === 'hunks'
+    ? target.hunks.every((hunk) => !delta.has(scopedHunkKey(hunk)))
+    : !scope.reviewScope.deltaHunks.some((hunk) => hunk.path === target.path));
 }
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
@@ -527,6 +557,7 @@ export function deriveEffectiveBuildReviewVerdict(
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
   minSeverity: Partial<Record<BuildReviewRubricId, BuildReviewSeverity>> = {},
+  scopes: Partial<Record<BuildReviewRubricId, BuildReviewEffectiveScope>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -535,6 +566,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const unresolved: string[] = [];
   const suppressed: string[] = [];
   const advisory: string[] = [];
+  const outOfDelta: string[] = [];
   const declaredReplicationIds = new Set(aggregate.declaredReplicationSuppressions?.map((entry) => entry.findingId) ?? []);
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
@@ -576,6 +608,7 @@ export function deriveEffectiveBuildReviewVerdict(
       if (!identity) return undefined;
       if (acceptedFindingIds.has(identity.id)) accepted.push(identity.id);
       else if (settledSourceIds.has(`${rubric}:${identity.id}`)) settled.push(identity.id);
+      else if (isBuildReviewFindingOutOfDelta(finding, scopes[rubric])) outOfDelta.push(identity.id);
       else if (declaredReplicationIds.has(identity.id)) suppressed.push(identity.id);
       else if (finding.confidence !== undefined && finding.confidence < (minConfidence[rubric] ?? 0)) suppressed.push(identity.id);
       else if (finding.severity !== undefined && minSeverity[rubric] !== undefined && isBelowSeverityThreshold(finding.severity, minSeverity[rubric]!)) advisory.push(identity.id);
@@ -587,6 +620,7 @@ export function deriveEffectiveBuildReviewVerdict(
     verdict: completedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved), suppressedFindingIds: Object.freeze(suppressed),
     ...(advisory.length === 0 ? {} : { advisoryFindingIds: Object.freeze(advisory) }),
+    ...(outOfDelta.length === 0 ? {} : { outOfDeltaFindingIds: Object.freeze(outOfDelta) }),
     ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
@@ -609,6 +643,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
   minSeverity: Partial<Record<BuildReviewRubricId, BuildReviewSeverity>> = {},
+  scopes: Partial<Record<BuildReviewRubricId, BuildReviewEffectiveScope>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -646,5 +681,6 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
     minConfidence,
     settledSourceIds,
     minSeverity,
+    scopes,
   );
 }

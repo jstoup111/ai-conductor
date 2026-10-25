@@ -413,6 +413,7 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
     ...cases.map((caseRecord) => renderCase(caseRecord, cases)),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
+    `Out-of-delta findings: ${effective.outOfDeltaFindingIds?.join(', ') || 'none'}`,
     `Advisory build-review findings: ${advisories.length === 0 ? 'none' : ''}`,
     ...advisories.map((advisory) => `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`),
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,

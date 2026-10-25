@@ -1,12 +1,14 @@
 import { isRegisteredRubric } from './build-review-registry.js';
-import { realpath as realpathDefault } from 'node:fs/promises';
+import { readFile, realpath as realpathDefault } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import {
   deriveEffectiveBuildReviewVerdictWithDispositions,
+  isBuildReviewFindingOutOfDelta,
   parseBuildReviewAggregate,
   type BuildReviewAggregate,
   type BuildReviewEffectiveVerdict,
+  type BuildReviewEffectiveScope,
 } from './build-review-aggregate.js';
 import {
   BuildReviewDispositionStore,
@@ -25,6 +27,7 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { projectBuildReviewCustomSuppressionSources } from './build-review-suppression-history.js';
+import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { ResolvedBuildReviewConfig } from './resolved-config.js';
 import type { ChildId } from './child-context.js';
 
@@ -79,6 +82,8 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly minConfidence?: Partial<Record<string, number>>;
   /** Resolved per-rubric advisory thresholds. */
   readonly minSeverity?: Partial<Record<string, BuildReviewSeverity>>;
+  /** Current engine-owned delta frontier, never reconstructed from prose. */
+  readonly scopes?: Partial<Record<string, BuildReviewEffectiveScope>>;
   /** The active stacked child; settled links are never read from its sibling. */
   readonly child: ChildId | undefined;
   /** Disabled adjudication has no case-store authority. */
@@ -118,6 +123,7 @@ function applyCurrentCustomEffectiveVerdict(
   minConfidence: Partial<Record<string, number>>,
   settledSourceIds: ReadonlySet<string>,
   minSeverity: Partial<Record<string, BuildReviewSeverity>>,
+  scopes: Partial<Record<string, BuildReviewEffectiveScope>>,
 ): BuildReviewEffectiveVerdict | undefined {
   const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
   if (!customSources) return undefined;
@@ -143,6 +149,7 @@ function applyCurrentCustomEffectiveVerdict(
   const unresolved = [...effective.unresolvedFindingIds];
   const suppressed = [...effective.suppressedFindingIds];
   const advisory = [...(effective.advisoryFindingIds ?? [])];
+  const outOfDelta = [...(effective.outOfDeltaFindingIds ?? [])];
   const settled = [...(effective.settledFindingIds ?? [])];
   const acceptedCustomFindingIds = new Set(Object.values(aggregate.customResults ?? {}).flatMap((member) =>
     member.result.kind !== 'judged' ? [] : member.result.findings.flatMap((finding) => {
@@ -156,6 +163,18 @@ function applyCurrentCustomEffectiveVerdict(
     if (acceptedCustomFindingIds.has(source.findingId)) continue;
     if (settledSourceIds.has(`${source.rubric}:${source.findingId}`)) {
       settled.push(source.findingId);
+      continue;
+    }
+    const member = aggregate.customResults?.[source.rubric]?.result;
+    const finding = member?.kind === 'judged'
+      ? member.findings.find((candidate) => typeof candidate === 'object' && candidate !== null &&
+        'identity' in candidate && (candidate as { identity?: { id?: unknown } }).identity?.id === source.findingId)
+      : undefined;
+    if (finding !== undefined && isBuildReviewFindingOutOfDelta(
+      finding as import('./build-review-domain.js').BuildReviewCustomFinding,
+      scopes[source.rubric],
+    )) {
+      outOfDelta.push(source.findingId);
       continue;
     }
     if (source.confidence !== undefined && source.confidence < (minConfidence[source.rubric] ?? 0)) suppressed.push(source.findingId);
@@ -174,6 +193,7 @@ function applyCurrentCustomEffectiveVerdict(
     acceptedFindingIds: Object.freeze([...new Set([...effective.acceptedFindingIds, ...acceptedCustomFindingIds])]),
     suppressedFindingIds: Object.freeze(suppressed),
     ...(advisory.length === 0 ? {} : { advisoryFindingIds: Object.freeze(advisory) }),
+    ...(outOfDelta.length === 0 ? {} : { outOfDeltaFindingIds: Object.freeze(outOfDelta) }),
     ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
   });
 }
@@ -193,11 +213,13 @@ export function deriveComposedBuildReviewEffectiveVerdict(
   minConfidence: Partial<Record<string, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
   minSeverity: Partial<Record<string, BuildReviewSeverity>> = {},
+  scopes: Partial<Record<string, BuildReviewEffectiveScope>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const builtinDispositions = dispositions.filter((record) => isRegisteredRubric(record.finding.canonicalPayload.rubric) && 'concernKind' in record.finding.canonicalPayload);
-  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>, settledSourceIds, minSeverity as Partial<Record<import('../types/config.js').BuildReviewRubricId, BuildReviewSeverity>>);
+  const builtinScopes = Object.fromEntries(Object.entries(scopes).filter(([rubric]) => isRegisteredRubric(rubric))) as Partial<Record<import('../types/config.js').BuildReviewRubricId, BuildReviewEffectiveScope>>;
+  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>, settledSourceIds, minSeverity as Partial<Record<import('../types/config.js').BuildReviewRubricId, BuildReviewSeverity>>, builtinScopes);
   return builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
-    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence, settledSourceIds, minSeverity,
+    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence, settledSourceIds, minSeverity, scopes,
   );
 }
 
@@ -240,6 +262,33 @@ async function readSettledBuildReviewSourceIds(
     deps.log?.('remediation case state unavailable; no finding treated as settled');
   }
   return new Set();
+}
+
+/**
+ * Recover the durable frontier for readers entered after the runner exited
+ * (CLI, gate completion and conductor).  Exact hunk identity is retained for
+ * built-ins; custom regions without full line references fall back safely to
+ * their delta path and therefore cannot be incorrectly excluded.
+ */
+async function readCurrentLapScopes(
+  projectRoot: string,
+  aggregate: BuildReviewAggregate,
+): Promise<Partial<Record<string, BuildReviewEffectiveScope>>> {
+  const rubrics = [...Object.keys(aggregate.results), ...(aggregate.currentCustomRubrics ?? [])];
+  const entries = await Promise.all(rubrics.map(async (rubric) => {
+    try {
+      const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review', aggregate.lapId, `${rubric}.json`), 'utf8')));
+      if (!artifact?.reviewScope || 'kind' in artifact.reviewScope) return undefined;
+      return [rubric, {
+        reviewScope: artifact.reviewScope,
+        changedFiles: artifact.reviewScope.deltaHunks.map((hunk) => ({
+          path: hunk.path, changeKind: 'modified' as const,
+          hunks: [{ oldStart: 0, oldCount: 0, newStart: 0, newCount: 0, contentHash: hunk.contentHash }],
+        })),
+      }] as const;
+    } catch { return undefined; }
+  }));
+  return Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined));
 }
 
 /**
@@ -296,8 +345,9 @@ export async function resolveEffectiveBuildReviewVerdict(
     }
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
+  const scopes = deps.scopes ?? await readCurrentLapScopes(projectRoot, aggregate);
   try {
-    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, new Set(), deps.minSeverity ?? {});
+    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, new Set(), deps.minSeverity ?? {}, scopes);
     // The adjudication coordinator finalizes cases and marks the step done; this
     // completion check must honor the same settlement or the gate re-selects a
     // settled lap until the loop guard halts it. Unreadable case state settles
@@ -305,7 +355,7 @@ export async function resolveEffectiveBuildReviewVerdict(
     if (effective && effective.unresolvedFindingIds.length > 0) {
       const settledSourceIds = await readSettledBuildReviewSourceIds(projectRoot, feature, deps);
       if (settledSourceIds.size > 0) {
-        effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds, deps.minSeverity ?? {});
+        effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds, deps.minSeverity ?? {}, scopes);
       }
     }
   } catch {

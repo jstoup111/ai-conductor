@@ -236,6 +236,8 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly suppressedFindingIds?: ReadonlySet<string>;
   /** Threshold-advisory findings are history, not remediate sources. */
   readonly advisoryFindingIds?: ReadonlySet<string>;
+  /** Delta-excluded findings are observable scope bookkeeping, never work. */
+  readonly outOfDeltaFindingIds?: ReadonlySet<string>;
   readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
   /** Re-reads the separate operator authority before every provider boundary. */
@@ -332,7 +334,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
    * question is this helper's whole job; choosing a route belongs to `finalize`,
    * which reads the store first.
    */
-  const nonActionable = (findingId: string): boolean => input.suppressedFindingIds?.has(findingId) === true || input.advisoryFindingIds?.has(findingId) === true;
+  const nonActionable = (findingId: string): boolean => input.suppressedFindingIds?.has(findingId) === true || input.advisoryFindingIds?.has(findingId) === true || input.outOfDeltaFindingIds?.has(findingId) === true;
   const allOperatorResolved = (accepted: ReadonlySet<string>): boolean =>
     sources.every((source) => accepted.has(source.findingId) || nonActionable(source.findingId));
   /** Settlement is per rubric-namespaced SOURCE; see `finalizedBuildReviewSourceIds`. */

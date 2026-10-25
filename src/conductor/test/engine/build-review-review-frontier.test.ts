@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildReviewPolicyIdentity,
   decideBuildReviewReviewScope,
+  mapBuildReviewFindingToHunks,
+  settledBuildReviewHunks,
   type BuildReviewPolicyIdentityInputs,
 } from "../../src/engine/build-review-review-frontier.js";
 import type { BuildReviewReviewScope } from "../../src/engine/build-review-artifacts.js";
@@ -153,5 +155,34 @@ describe("build-review review frontier", () => {
       ],
       openSourceUnmapped: true,
     })).toMatchObject({ mode: "full", reason: "open-source-unmapped", sequence: 2, unreadableLapIds: [] });
+  });
+
+  // Covers: task:4, task:8, task:9
+  it("uses only unsettled hunks for a compatible later lap and reuses a same-lap decision", () => {
+    const prior = { lapId: lapId("lap-prior"), reviewScope: scope() };
+    const settled = [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }];
+    expect(decide({ priorLaps: [prior], settledHunks: settled })).toMatchObject({
+      mode: "delta", reason: "delta", sequence: 2, predecessorLapId: lapId("lap-prior"), deltaHunks: [],
+    });
+    const current = scope({ sequence: 2, mode: "delta", reason: "delta", predecessorLapId: lapId("lap-prior"), deltaHunks: [] });
+    expect(decide({ priorLaps: [prior, { lapId: lapId("lap-current"), reviewScope: current }] })).toBe(current);
+  });
+
+  // Covers: task:7, task:8, task:9
+  it("maps precise and file-level sources conservatively and keeps live sources unsettled", () => {
+    const files: readonly ChangedFileReference[] = [{
+      path: "src/example.ts", changeKind: "modified",
+      hunks: [{ oldStart: 1, oldCount: 1, newStart: 10, newCount: 3, contentHash: "sha256:hunk-a" }],
+    }];
+    const finding = {
+      concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:hunk-a", display: "line" } },
+    };
+    expect(mapBuildReviewFindingToHunks(finding, files)).toEqual([{ kind: "hunks", hunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }] }]);
+    const imprecise = { ...finding, anchor: { ...finding.anchor, locus: { ...finding.anchor.locus, contentHash: "sha256:missing" } } };
+    expect(mapBuildReviewFindingToHunks(imprecise, files)).toEqual([{ kind: "file", path: "src/example.ts" }]);
+    const lap = { reviewScope: scope(), findings: [{ sourceId: "source-a", finding }] };
+    expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]) })).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
+    expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]), liveSourceIds: new Set(["source-a"]) })).toEqual([]);
   });
 });

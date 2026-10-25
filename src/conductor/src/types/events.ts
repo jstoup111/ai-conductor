@@ -930,6 +930,8 @@ type ConductorEventBody =
       suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
       /** Below-threshold findings are durable advisory history, never a route. */
       advisoryFindings?: readonly { findingId: string; rubric: string; severity: 'critical' | 'major' | 'minor' | 'nit'; threshold: 'critical' | 'major' | 'minor' | 'nit' }[];
+      /** Scope bookkeeping: visible, never accepted risk or remediation work. */
+      outOfDeltaCount?: number;
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */
