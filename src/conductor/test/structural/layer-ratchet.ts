@@ -7,7 +7,10 @@ export interface LayerRatchetEdge {
   line: number;
 }
 
-export type LayerRatchetViolation = UnclassifiableFileViolation | UnresolvedSpecifierViolation;
+export type LayerRatchetViolation =
+  | UnclassifiableFileViolation
+  | UnresolvedSpecifierViolation
+  | UpwardViolation;
 
 interface UnclassifiableFileViolation {
   kind: 'unclassifiable-file';
@@ -21,6 +24,14 @@ interface UnresolvedSpecifierViolation {
   specifier: string;
 }
 
+interface UpwardViolation {
+  kind: 'upward';
+  file: string;
+  line: number;
+  imported: string;
+  edge: string;
+}
+
 export interface LayerRatchetResult {
   scannedFileCount: number;
   edges: LayerRatchetEdge[];
@@ -32,14 +43,23 @@ export interface LayerRatchetInput {
   allowlist: readonly string[];
 }
 
-const LAYERS = new Set(['types', 'execution', 'engine', 'ui', 'tools']);
+type Layer = 'types' | 'execution' | 'engine' | 'ui' | 'tools' | 'entry';
+
+const LAYERS = new Set<Layer>(['types', 'execution', 'engine', 'ui', 'tools']);
+const LAYER_RANK: Readonly<Record<Exclude<Layer, 'tools'>, number>> = {
+  types: 0,
+  execution: 1,
+  engine: 2,
+  ui: 3,
+  entry: 4,
+};
 
 export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetResult {
   const edges: LayerRatchetEdge[] = [];
   const violations: LayerRatchetViolation[] = [];
 
   for (const [file, source] of files) {
-    if (!isClassifiable(file)) violations.push({ kind: 'unclassifiable-file', file });
+    if (layerFor(file) === undefined) violations.push({ kind: 'unclassifiable-file', file });
 
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     for (const statement of sourceFile.statements) {
@@ -52,18 +72,40 @@ export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetRes
       const line = sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).line + 1;
       if (imported === undefined) {
         violations.push({ kind: 'unresolved-specifier', file, line, specifier });
-      } else {
+      } else if (!edges.some((edge) => edge.file === file && edge.imported === imported)) {
         edges.push({ file, imported, line });
       }
+    }
+  }
+
+  for (const edge of edges) {
+    const from = layerFor(edge.file);
+    const to = layerFor(edge.imported);
+    if (from !== undefined && to !== undefined && isForbiddenEdge(from, to)) {
+      violations.push({
+        kind: 'upward',
+        file: edge.file,
+        line: edge.line,
+        imported: edge.imported,
+        edge: `${from} -> ${to}`,
+      });
     }
   }
 
   return { scannedFileCount: files.size, edges, violations };
 }
 
-function isClassifiable(file: string): boolean {
+function layerFor(file: string): Layer | undefined {
   const [firstSegment, ...remainingSegments] = file.split('/');
-  return remainingSegments.length === 0 || LAYERS.has(firstSegment);
+  if (remainingSegments.length === 0) return 'entry';
+  return LAYERS.has(firstSegment as Layer) ? firstSegment as Layer : undefined;
+}
+
+function isForbiddenEdge(from: Layer, to: Layer): boolean {
+  if (to === 'tools') return from !== 'tools';
+  if (from === 'tools') return to !== 'engine' && to !== 'types';
+  if (to === 'entry') return from !== 'entry';
+  return LAYER_RANK[to] > LAYER_RANK[from];
 }
 
 function resolveSpecifier(
