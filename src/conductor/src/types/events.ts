@@ -92,6 +92,13 @@ export interface GithubOperationRefusedEvent {
   reason: GithubOperationRefusalReason;
   remedy: GithubOperationRefusalRemedy;
 }
+/** A guarded GitHub operation executed but GitHub rejected or failed it. */
+export interface GithubOperationFailedEvent {
+  type: 'github_operation_failed';
+  target: GithubOperationTarget;
+  operation: GithubOperationName;
+  error: string;
+}
 /** A bot credential was unavailable for an authorized write; the operation retried once as the operator. */
 export interface GithubWriteCredentialFallbackEvent {
   type: 'github_write_credential_fallback';
@@ -228,6 +235,10 @@ export type FinishPublicationEvent =
   | {
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
+      /** Present for a typed human-required FINISH publication halt. */
+      reason?: string;
+      /** Detail retained from the typed human-required publication disposition. */
+      detail?: string;
     };
 
 /** Stack-publication occurrences remain on the canonical conductor event spine. */
@@ -506,6 +517,7 @@ type ConductorEventBody =
       pullRequestUrl?: string;
     }
   | BotCoAuthorSkippedEvent
+  | GithubOperationFailedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
   | GithubBypassResultEvent

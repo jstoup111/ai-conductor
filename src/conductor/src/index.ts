@@ -1964,6 +1964,7 @@ async function dispatchCliCommand(): Promise<void> {
       git: finishPublicationGit,
       gh: finishPublicationGh,
       events,
+      flushSessionEvents: sessionTail.flush,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot,
         git: finishPublicationGit,

@@ -109,7 +109,7 @@ import {
   renderedSessionOccurrenceTypes,
 } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
-import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from './engine/github-operations.js';
 import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
 import { installDaemonProcessServices } from './engine/daemon-process-bootstrap.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
@@ -1759,6 +1759,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
   // records and the worktree-owned records share one immutable attribution.
   const featureLogs = new Map<string, (message: string) => void>();
+  const featureEventFlushers = new WeakMap<ConductorEventEmitter, () => Promise<void>>();
   const featureLogFor = (slug: string): ((message: string) => void) => {
     let featureLog = featureLogs.get(slug);
     if (!featureLog) {
@@ -1775,6 +1776,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
+    featureEventFlushers.set(featureEvents, persistence.flush);
     const featureLog = featureLogFor(item.slug);
     const providerExecution = createProviderExecution(featureEvents, featureLog);
     const provider = providerExecution.configuredProviders[0];
@@ -1831,6 +1833,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           } finally {
             if (visualizer) activeDispatchVisualizers.delete(visualizer);
             detachFeatureEventRenderer();
+            featureEventFlushers.delete(featureEvents);
             persistence.stop();
           }
         }
@@ -1966,6 +1969,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         git: finishPublicationGit,
         gh: finishPublicationGh,
         events: featureEvents,
+        flushSessionEvents: featureEventFlushers.get(featureEvents),
         repairPresentation: createProvenanceGuardedFinishPresentationRepair({
           projectRoot: wt.path,
           git: finishPublicationGit,
@@ -3670,6 +3674,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'github_operation_failed':
+      log(`${dot} ${chalk.red('✗')} ${chalk.red(`GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`)}`);
       break;
     case 'session_command_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);

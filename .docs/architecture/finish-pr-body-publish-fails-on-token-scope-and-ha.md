@@ -28,7 +28,7 @@ graph TD
     end
 
     subgraph Engine["Engine FINISH publication"]
-        AUTH["authorProse effect<br/>finish-publication-production.ts<br/>NEW: after dispatch, read failures<br/>for this PR in the pass window"]
+        AUTH["authorProse effect<br/>finish-publication-production.ts<br/>NEW: subscribe to bus during dispatch,<br/>flush tail, keep failures for this PR"]
         COORD["advanceFinishPublication<br/>finish-publication.ts author branch<br/>NEW: publish failure → human_required<br/>publication_operation_failed + error"]
         UNMOVED["existing: publication_transition_unmoved<br/>'left pr.prose unchanged at placeholder'"]
         HALT["FINISH halt reason + loop_halt event"]
@@ -42,7 +42,8 @@ graph TD
     SIB --> TAIL
     TAIL -->|re-emit on bus| LOG
     AUTH -->|dispatch| PROV
-    AUTH -->|read records after pre-dispatch offset| SIB
+    AUTH -->|flush after dispatch| TAIL
+    TAIL -->|github_operation_failed on bus| AUTH
     AUTH -->|publish failure observed| COORD
     COORD -->|failure present| HALT
     COORD -->|no failure, placeholder remains| UNMOVED
@@ -56,14 +57,19 @@ sequenceDiagram
     participant P as Provider session
     participant G as github-operation CLI
     participant S as pipeline-events.jsonl
+    participant T as Session tail / bus
     C->>A: author_pr_prose (placeholder observed)
-    A->>S: record ledger byte offset
+    A->>T: flush tail (drain pre-pass records)
+    A->>T: subscribe github_operation_failed
     A->>P: dispatch FINISH author pass
     P->>G: pull-request.edit «pr»
     G-->>P: kind failed (missing scope)
     G->>S: github_operation_failed «pr», error text
     P-->>A: provider attempt success
-    A->>S: read failures for «pr» after offset
+    A->>T: flush tail
+    T->>S: read new records
+    T-->>A: github_operation_failed «pr» (re-emitted)
+    A->>T: unsubscribe
     A-->>C: publish failure with error text
     C->>C: re-observe PR (prose still placeholder)
     C-->>C: human_required publication_operation_failed
@@ -73,8 +79,11 @@ sequenceDiagram
 
 - **NEW** marks behavior this change adds; unmarked nodes exist today.
 - `«pr»` is the feature's pull-request target (repository + number).
-- The pass window is the sibling ledger's byte length recorded before dispatch; only
-  `pull-request.edit` failures for the feature's own PR target appended after it count.
+- The pass window is the bus subscription from before dispatch until the post-dispatch tail flush.
+  A flush before subscribing drains records appended before the pass, and every flush is a fresh
+  ledger read, so pre-pass records are never delivered inside the window;
+  only `pull-request.edit` failures for the feature's own PR target delivered in it count. The
+  session tail stays the sibling ledger's only reader (operator decision 2026-10-25).
 - The CLI never writes the engine-owned `events.jsonl` for this event (adr-2026-08-08 D2); the
   session tail re-emits it there.
 - Re-observation stays authoritative: if the PR prose moved despite a recorded failure (e.g. a later
@@ -87,3 +96,5 @@ sequenceDiagram
 | 2026-10-24 | Initial generation | Spec for jstoup111/ai-conductor#3376 |
 | 2026-10-24 | Route the event through the sibling ledger and tail | Architecture review: one writer per ledger |
 | 2026-10-24 | Plan update: no structural change; the diagram matches plan Tasks 1–6 | /plan step 8b |
+| 2026-10-25 | authorProse observes failures on the feature bus after a tail flush, not by reading the sibling ledger | Operator decision resolving build_review eventSpine stop 64898260 |
+| 2026-10-25 | Drain the tail before subscribing; flushes are fresh reads | Operator decision resolving as-built review pass-boundary finding (77725c2c:4) |

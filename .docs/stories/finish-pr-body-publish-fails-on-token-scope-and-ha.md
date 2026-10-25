@@ -59,7 +59,7 @@ As an operator, I want a FINISH halt caused by a failed PR publish to name that 
 ### Done When
 - [ ] A coordinator test reproduces #3376 (placeholder before and after, a matching recorded failure, a successful dispatch) and asserts `human_required` / `publication_operation_failed` with the error text in its detail
 - [ ] `HUMAN_REQUIRED_REASONS` contains `publication_operation_failed` with a message and next action, and the rendered halt reason contains the error text
-- [ ] Production `authorProse` tests assert attribution only for same-PR `pull-request.edit` failures appended after the pre-dispatch offset, with last-failure selection, and that a missing ledger and malformed lines are tolerated
+- [ ] Production `authorProse` tests assert attribution only for same-PR `pull-request.edit` failures delivered on the feature event bus during the pass, with last-failure selection, and that a missing or failing tail flush is tolerated
 - [ ] A test asserts that a recorded failure with moved prose advances the transition
 
 ## Story 3: A genuinely unchanged authoring pass keeps the existing halt
