@@ -115,6 +115,11 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
     }
   }
   if (contract === undefined) {
+    // A disposition-only child closed with no acceptance run: every criterion
+    // is proven below this layer, so there is nothing to re-run.  Only the
+    // close-time digest can vouch for the marker, so it must match exactly.
+    const verified = await dispositionOnlyVerified(childDir, git, input.slug, input.host);
+    if (verified) return recordVerifiedGreen(git, childDir, recordPath, input);
     return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing command or cwd` };
   }
   let observed: Record<string, unknown>;
@@ -146,6 +151,29 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   } catch {
     return { kind: 'refused', reason: `child ${input.host} RED marker or ref is invalid` };
   }
+  return recordVerifiedGreen(git, childDir, recordPath, input);
+}
+
+async function dispositionOnlyVerified(childDir: string, git: GitRunner, slug: string, host: ChildId): Promise<boolean> {
+  try {
+    const marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8');
+    if ((JSON.parse(marker) as Record<string, unknown>).outcome !== 'disposition-only') return false;
+    const ref = await git(['rev-parse', '-q', '--verify', redRefFor(slug, host)]);
+    if (ref.exitCode !== 0) return false;
+    const blob = await git(['cat-file', '-p', ref.stdout.trim()]);
+    const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
+    return blob.exitCode === 0 && parseRoutedRedRecord(blob.stdout)?.digest === digest;
+  } catch {
+    return false;
+  }
+}
+
+async function recordVerifiedGreen(
+  git: GitRunner,
+  childDir: string,
+  recordPath: string,
+  input: VerifyGreenAcceptanceInput,
+): Promise<VerifyGreenAcceptanceResult> {
   const resolvedHead = await resolveGitRef(git, 'HEAD');
   if (typeof resolvedHead !== 'string') return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
   const head = resolvedHead;
