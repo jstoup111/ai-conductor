@@ -16,6 +16,9 @@ import type {
 } from "./build-review-domain.js";
 import type { ChangedFileReference } from "./build-review-projections.js";
 import type { BuildReviewUnresolvedMarker } from "./build-review-inputs.js";
+import { buildReviewAdjudicationSourceId } from "./build-review-adjudication-context.js";
+import { canonicalizeBuildReviewFindingIdentity } from "./build-review-finding-identity.js";
+import type { RemediationCaseRow } from "./remediation-case-artifact.js";
 import {
   currentBuildReviewSourceLinks,
   type RemediationCaseRecord,
@@ -420,5 +423,88 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
       }
     }
     return true;
+  });
+}
+
+/** The branch-artifact facts needed to join predecessor findings to case sources. */
+export interface BuildReviewProvenanceArtifact {
+  readonly rubric: string;
+  readonly result: {
+    readonly kind: string;
+    readonly contractVersion?: string;
+    readonly findings?: readonly unknown[];
+  };
+}
+
+export interface BuildReviewProvenanceCaseSource {
+  readonly sourceId: string;
+  readonly targets: readonly BuildReviewFindingHunkTarget[];
+}
+
+export interface BuildReviewProvenanceCandidatesInput {
+  readonly caseRow: RemediationCaseRow;
+  readonly caseSources: readonly BuildReviewProvenanceCaseSource[];
+  readonly deltaHunks: readonly ReviewedHunk[];
+  readonly predecessorArtifacts: readonly BuildReviewProvenanceArtifact[];
+  readonly cases: readonly RemediationCaseRecord[];
+}
+
+function predecessorSourcePaths(
+  artifacts: readonly BuildReviewProvenanceArtifact[],
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const pathsBySource = new Map<string, Set<string>>();
+  const add = (sourceId: string, path: string): void => {
+    const paths = pathsBySource.get(sourceId) ?? new Set<string>();
+    paths.add(path);
+    pathsBySource.set(sourceId, paths);
+  };
+  for (const artifact of artifacts) {
+    const result = artifact.result;
+    if (result.kind !== "judged" || result.findings === undefined) continue;
+    if (artifact.rubric === "testQuality" || artifact.rubric === "security" || artifact.rubric === "implementationQuality") {
+      for (const finding of result.findings) {
+        const identity = canonicalizeBuildReviewFindingIdentity({
+          ...(finding as Record<string, unknown>), rubric: artifact.rubric, contractVersion: result.contractVersion,
+        });
+        if (identity) add(buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: identity.id }), identity.canonicalPayload.anchor.locus.path);
+      }
+      continue;
+    }
+    for (const finding of result.findings) {
+      const source = finding as { readonly identity?: { readonly id?: unknown }; readonly sourceRegions?: readonly { readonly path?: unknown }[] };
+      if (typeof source.identity?.id !== "string") continue;
+      for (const region of source.sourceRegions ?? []) {
+        if (typeof region.path === "string") add(buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: source.identity.id }), region.path);
+      }
+    }
+  }
+  return pathsBySource;
+}
+
+/**
+ * Finds applied repairs whose predecessor-lap source shares a path with a new
+ * delta-hunk source. This deliberately joins only durable branch artifacts and
+ * the case store; commit history (including Task trailers) is not provenance.
+ */
+export function buildReviewProvenanceCandidates(
+  input: BuildReviewProvenanceCandidatesInput,
+): readonly RemediationCaseRecord[] {
+  if (input.caseRow.disposition !== "act" || input.caseRow.existingCaseId !== undefined) return [];
+  const sourceLinks = currentBuildReviewSourceLinks(input.cases);
+  if (input.caseSources.some(({ sourceId }) => {
+    const owner = sourceLinks.get(sourceId)?.record;
+    return owner?.resolution === "resolved" && owner.disposition === "act";
+  })) return [];
+
+  const delta = new Set(input.deltaHunks.map(hunkKey));
+  const deltaPaths = new Set(input.caseSources.flatMap(({ targets }) => targets.flatMap((target) =>
+    target.kind === "hunks" ? target.hunks.filter((hunk) => delta.has(hunkKey(hunk))).map((hunk) => hunk.path) : [],
+  )));
+  if (deltaPaths.size === 0) return [];
+
+  const predecessor = predecessorSourcePaths(input.predecessorArtifacts);
+  return input.cases.filter((record) => {
+    if (record.disposition !== "act" || record.effect.kind !== "action" || record.effect.status !== "applied") return false;
+    return record.sources.some(({ sourceId }) => [...(predecessor.get(sourceId) ?? [])].some((path) => deltaPaths.has(path)));
   });
 }
