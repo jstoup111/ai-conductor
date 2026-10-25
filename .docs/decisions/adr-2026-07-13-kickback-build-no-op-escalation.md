@@ -48,6 +48,8 @@ decision; audit-logged via the existing `kickback` event plus a new distinguishi
 > host child's checked-out tree at region entry, not the leaf's
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 11).
 
+> **Amended 2026-10-24 by #3203:** The guard does not run at an operator round's host entry: a `land` round's change is already committed, and a `rewind` round re-runs gates (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 1).
+
 ### D2 — Zero-progress + unchanged-verdict escalation (post-build re-entry)
 
 Track, per gate, that the current build entry was reached via a kickback and record the prior gate
