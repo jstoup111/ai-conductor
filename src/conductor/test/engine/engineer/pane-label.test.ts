@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:rem-prd-audit-2
 import { describe, expect, it, vi } from 'vitest';
 
 const PANE_LABEL_MODULE = '../../../src/engine/engineer/pane-label.js';
@@ -132,9 +132,9 @@ describe('labelComposerPane', () => {
       warn,
     })).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toMatch(/^compose: pane label skipped \(herdr\): /);
-    expect(warn.mock.calls[0]?.[0]).not.toContain('\n');
+    expect(warn.mock.calls).toEqual([[
+      'compose: pane label skipped (herdr): Command failed with ENOENT: herdr pane rename w1:p1 spawn herdr ENOENT',
+    ]]);
   });
 
   it('warns once and resolves after 2000 ms when the herdr runner never settles', async () => {
