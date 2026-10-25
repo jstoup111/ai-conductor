@@ -406,9 +406,9 @@ describe('TerminalRenderer', () => {
   });
 
   it('does not summarize non-renderable branchless events', async () => {
-    await renderer.handle({ type: 'coverage_binding_judged' } as ConductorEvent);
+    await renderer.handle({ type: 'otel_spool_drop' } as ConductorEvent);
 
-    expect(stream.output()).not.toContain('coverage_binding_judged');
+    expect(stream.output()).not.toContain('otel_spool_drop');
   });
 
   it('renders active build stalls with their elapsed time and selected action', async () => {

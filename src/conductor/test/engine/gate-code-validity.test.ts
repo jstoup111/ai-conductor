@@ -20,7 +20,6 @@ import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   gateVerdictStillValid,
   classifyRebaseOperation,
-  currentPreservedJudgeIdentity,
   rebaseOperationPublicationBlocker,
   verdictProducedByRun,
 } from '../../src/engine/gate-code-validity.js';

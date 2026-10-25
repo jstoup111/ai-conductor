@@ -72,7 +72,7 @@ async function expectCursorRefusal(
 ): Promise<void> {
   const events = new ConductorEventEmitter();
   const loopHalts: string[] = [];
-  events.on('loop_halt', (event) => loopHalts.push(event.reason));
+  events.on('loop_halt', (event) => { if (event.type === 'loop_halt') loopHalts.push(event.reason); });
 
   // A caller can enter a child BUILD region only after a clear preflight.
   // Keeping this assertion at the preflight boundary proves the refusal is

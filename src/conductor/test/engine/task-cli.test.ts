@@ -277,26 +277,24 @@ describe('task command child slice membership', () => {
     if (currentTask !== undefined) await fsPromises.writeFile(join(pipeline, 'current-task'), currentTask);
   }
 
-  async function writeEnvelope(root: string, membership = true): Promise<void> {
+  async function writeEnvelope(root: string): Promise<void> {
     await writeSliceTopologyFixture(root, {
       version: 1,
       slug: 'feature',
       runId: 'run-1',
       status: 'done',
       entries: [],
-      ...(membership ? { sliceMembership: { taskSlices: { '3': 1, '7': 2 }, titles: ['Foundation', 'Delivery'] } } : {}),
+      sliceMembership: { taskSlices: { '3': 1, '7': 2 }, titles: ['Foundation', 'Delivery'] },
     }, coverageBindingFilesystem);
-    if (membership) {
-      await fsPromises.mkdir(join(root, '.docs', 'plans'), { recursive: true });
-      await fsPromises.mkdir(join(root, '.docs', 'stories'), { recursive: true });
-      await fsPromises.writeFile(join(root, '.docs', 'plans', 'feature.md'), [
-        '# Implementation Plan: feature', '', '**Stories:** .docs/stories/feature.md', '', '## Slices', '',
-        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 3 |', '| 2 | Delivery | 7 |', '',
-        '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
-        '### Task 7: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
-      ].join('\n'));
-      await fsPromises.writeFile(join(root, '.docs', 'stories', 'feature.md'), '# Stories: feature\n\n## Story 1: Foundation\n\n## Story 2: Delivery\n');
-    }
+    await fsPromises.mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await fsPromises.writeFile(join(root, '.docs', 'plans', 'feature.md'), [
+      '# Implementation Plan: feature', '', '**Stories:** .docs/stories/feature.md', '', '## Slices', '',
+      '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 3 |', '| 2 | Delivery | 7 |', '',
+      '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+      '### Task 7: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(root, '.docs', 'stories', 'feature.md'), '# Stories: feature\n\n## Story 1: Foundation\n\n## Story 2: Delivery\n');
   }
 
   async function snapshotPipeline(root: string): Promise<Record<string, string>> {

@@ -9,6 +9,11 @@ import { readVerdict, writeVerdict } from '../../../src/engine/gate-verdicts.js'
 import { applyRestackTransition } from '../../../src/engine/restack/restack-transition.js';
 import { parseCommitSha, parseRefName } from '../../../src/engine/restack/restack-types.js';
 import { readState } from '../../../src/engine/state.js';
+import type { StepName } from '../../../src/types/steps.js';
+
+// A verdict persisted under the retired coverage_binding step, as an
+// in-flight feature may still carry on disk.
+const RETIRED_COVERAGE_BINDING = 'coverage_binding' as StepName;
 
 const directories: string[] = [];
 
@@ -86,7 +91,7 @@ describe('applyRestackTransition', () => {
     await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
     await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({ build_review: 'done' }));
     await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 1, reason: 'approved' }, child);
-    await writeVerdict(root, 'coverage_binding', { satisfied: true, checkedAt: 1, reason: 'whole feature approved' });
+    await writeVerdict(root, RETIRED_COVERAGE_BINDING, { satisfied: true, checkedAt: 1, reason: 'whole feature approved' });
 
     const git = async (args: string[]) => {
       if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/child.ts\n', stderr: '' };
@@ -106,7 +111,7 @@ describe('applyRestackTransition', () => {
       git,
     });
 
-    expect(await readVerdict(root, 'coverage_binding')).toEqual({
+    expect(await readVerdict(root, RETIRED_COVERAGE_BINDING)).toEqual({
       satisfied: true,
       checkedAt: 1,
       reason: 'whole feature approved',
@@ -239,7 +244,7 @@ describe('applyRestackTransition', () => {
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
     await writeFile(join(root, '.pipeline', 'conduct-state.json'), '{}');
     await writeFile(join(root, '.docs', 'stories', 'demo.md'), 'Story\n');
-    await writeVerdict(root, 'coverage_binding', { satisfied: true, checkedAt: 1, reason: 'approved' });
+    await writeVerdict(root, RETIRED_COVERAGE_BINDING, { satisfied: true, checkedAt: 1, reason: 'approved' });
 
     const git = async (args: string[]) => {
       if (args[0] === 'diff') return { exitCode: 0, stdout: '.docs/stories/demo.md\n', stderr: '' };
@@ -259,7 +264,7 @@ describe('applyRestackTransition', () => {
       git,
     });
 
-    expect(await readVerdict(root, 'coverage_binding')).toMatchObject({
+    expect(await readVerdict(root, RETIRED_COVERAGE_BINDING)).toMatchObject({
       satisfied: true,
       reason: 'approved',
     });

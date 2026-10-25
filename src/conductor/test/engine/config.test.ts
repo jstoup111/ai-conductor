@@ -11,7 +11,6 @@ import {
   loadConfig,
   loadMergedConfig,
   validateConfig,
-  CONFIG_CONSUMER_KEY_SETS,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
   customStepEntries,

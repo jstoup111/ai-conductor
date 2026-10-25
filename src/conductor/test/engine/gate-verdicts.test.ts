@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  checkGateCompletion,
   computeAndWriteVerdict,
   readAllVerdicts,
   readVerdict,

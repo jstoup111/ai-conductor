@@ -64,9 +64,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       run: async (step) => {
         ran.push(step);
         haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
-        return step === 'coverage_binding'
-          ? { success: true }
-          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
@@ -129,9 +127,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       run: async (step) => {
         ran.push(step);
         haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
-        return step === 'coverage_binding'
-          ? { success: true }
-          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
@@ -161,9 +157,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     await conductorFor(fixture, {
       run: async (step) => {
         ran.push(step);
-        return step === 'coverage_binding'
-          ? { success: true }
-          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 

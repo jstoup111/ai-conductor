@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hasDurableChildState, resolveActiveChild, resolveChildBase, resolveSealedFirst, resolveSealedLeaf } from '../../src/engine/child-cursor.js';
 import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import { loadSliceTopology } from '../../src/engine/slice-topology.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCallback);
@@ -113,7 +114,7 @@ describe('resolveActiveChild', () => {
     });
     await expect(resolveSealedFirst(repository)).resolves.toBe(1);
     await expect(resolveSealedLeaf(repository)).resolves.toBe(2);
-    await expect(resolveChildBase(repository, 'demo', 2)).resolves.toMatchObject({ kind: 'parent', parent: 1, sha: tip });
+    await expect(resolveChildBase(repository, 'demo', parseChildId(2)!)).resolves.toMatchObject({ kind: 'parent', parent: 1, sha: tip });
   });
 
   // Covers: task:2

@@ -174,7 +174,6 @@ describe('task-status recovery after abrupt daemon death', () => {
       conflict_check: 'done',
       plan: 'done',
       coherence_check: 'done',
-      coverage_binding: 'done',
       acceptance_specs: 'done',
       build: 'in_progress',
       last_step: 'acceptance_specs',
