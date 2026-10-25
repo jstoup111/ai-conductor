@@ -106,6 +106,7 @@ import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
 import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
+import { labelComposerPane, type PaneLabelRunner } from './engineer/pane-label.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -116,6 +117,7 @@ type EngineerDispatchDescriptor =
   | { kind: 'projects' }
   | { kind: 'dep-audit'; project: string }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
+  | { kind: 'phase'; worktree: string; phase: string }
   | {
     kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
@@ -142,7 +144,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -236,6 +238,15 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, [...WORKTREE_ACCEPTED_FLAGS]);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
     return { kind: 'worktree', project, idea, sourceRef, body };
+  }
+
+  if (subCmd === 'phase') {
+    const worktree = parseFlag(argv, '--worktree');
+    const phase = parseFlag(argv, '--phase');
+    if (!worktree || !phase) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--worktree', '--phase']);
+    if (unk) return { kind: 'reject', sub: 'phase', flag: unk };
+    return { kind: 'phase', worktree, phase };
   }
 
   if (subCmd === 'land') {
@@ -583,6 +594,10 @@ export interface DispatchEngineerOpts {
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
   printErr?: (s: string) => void;
+  /** Optional pane-label process seam; only production injects the real runner. */
+  paneLabelRunner?: PaneLabelRunner;
+  /** Test seam for the checked-out spec branch lookup used by `compose phase`. */
+  resolvePlanReviewFeatureSlug?: (worktree: string) => Promise<string | undefined>;
   /** Injected gh runner (for tests). */
   gh?: GhRunner;
   /** Injectable canonical tracker seam for `compose dep-audit`. */
@@ -869,6 +884,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas), --body <text> (optional — stages the intake body).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
+  phase:
+    'compose phase --worktree <path> --phase <phase> — label the current composer pane for an active DECIDE phase.\n' +
+    'Flags: --worktree <path> (required), --phase <phase> (required).\n' +
+    'Mutates: updates only the current herdr or tmux pane label when one is identified by the environment.\n' +
+    'Loop fit: informational phase marker during DECIDE; it does not change authored artifacts or workflow state.',
   land:
     'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — commit the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
@@ -1274,6 +1294,22 @@ export async function dispatchEngineer(
     // Per-subcommand `--help`/`-h` (#524): zero side effects, single print.
     case 'help': {
       print(SUBCOMMAND_HELP[dispatch.topic as keyof typeof SUBCOMMAND_HELP] ?? '');
+      return 0;
+    }
+
+    // ── phase ─────────────────────────────────────────────────────────────────
+    case 'phase': {
+      if (!opts.paneLabelRunner) return 0;
+      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
+      if (slug) {
+        await labelComposerPane({
+          slug,
+          phase: dispatch.phase,
+          env: opts.env ?? process.env,
+          run: opts.paneLabelRunner,
+          warn: printErr,
+        });
+      }
       return 0;
     }
 
