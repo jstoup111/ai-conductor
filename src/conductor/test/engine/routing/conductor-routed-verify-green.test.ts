@@ -79,12 +79,12 @@ async function routedFixture() {
   return { root };
 }
 
-function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner) {
+function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner, host = child) {
   const cursor = {
     kind: 'repair-pending' as const,
     child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
-    branch: 'feat/daemon-demo', repairChildren: [child],
-    routedRepair: { child, roundId },
+    branch: 'feat/daemon-demo', repairChildren: [host],
+    routedRepair: { child: host, roundId },
   };
   return new Conductor({
     projectRoot: root,
@@ -321,5 +321,22 @@ describe('Conductor routed acceptance verify-green path', () => {
       type: 'acceptance_red', state: 'satisfied', step: 'acceptance_specs', mode: 'verify-green',
     }));
     expect(receipts.find((receipt) => receipt.mode === 'verify-green')).not.toHaveProperty('viaException');
+  });
+
+  it('dispatches the leaf host through ordinary acceptance_specs instead of verify-green', async () => {
+    const { root } = await routedFixture();
+    const leaf = parseChildId(2)!;
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'pending', build: 'skipped', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+
+    await routedConductor(root, new ConductorEventEmitter(), runner, leaf).run();
+
+    // The leaf never closes, so it has no close-time RED ref for verify-green
+    // to compare against; it proves itself through the ordinary step.
+    expect(mocks.verifyGreenAcceptance).not.toHaveBeenCalled();
+    expect(runner.run.mock.calls.map((call) => (call as unknown[])[0])).toContain('acceptance_specs');
   });
 });

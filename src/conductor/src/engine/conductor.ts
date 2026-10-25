@@ -10653,7 +10653,10 @@ export class Conductor {
           const verifyExecution = verifyCursor === undefined || verifySlug === undefined
             ? undefined
             : resolveExecutionChild(verifyCursor, verifySlug);
-          if (verifySlug !== undefined && verifyExecution?.source === 'routed-host') {
+          // Verify-green re-proves an already-closed child against its
+          // close-time RED ref. The leaf never closes, so a routed leaf host
+          // proves itself through the ordinary acceptance_specs step.
+          if (verifySlug !== undefined && verifyExecution?.source === 'routed-host' && !verifyExecution.target.isLeaf) {
             const verified = await verifyGreenAcceptance({
               worktree: this.projectRoot,
               slug: verifySlug,
