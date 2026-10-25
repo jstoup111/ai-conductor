@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
 import { describe, expect, it } from 'vitest';
 
 import { checkLayerRatchet, decodeAllowlistName, encodeAllowlistName, formatRatchetViolations } from './layer-ratchet.js';
@@ -452,5 +452,31 @@ describe('structural: layer ratchet', () => {
   it('formats an unlisted upward violation with its allowlist name', () => {
     const result = checkLayerRatchet({ files: new Map([['engine/a.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]), allowlist: [] });
     expect(formatRatchetViolations(result.violations)).toContain(encodeAllowlistName('engine/a.ts', 'ui/b.ts'));
+  });
+
+  it.each([
+    ["import type { B } from '../ui/b.js';", 'type-only import'],
+    ['', 'no import'],
+  ])('reports edge-missing for an entry with %s', (source, _description) => {
+    const entry = encodeAllowlistName('engine/a.ts', 'ui/b.ts');
+    expect(checkLayerRatchet({ files: new Map([['engine/a.ts', source], ['ui/b.ts', 'export type B = string;']]), allowlist: [entry] }).violations)
+      .toEqual([{ kind: 'stale-entry', entry, reason: 'edge-missing' }]);
+  });
+
+  it('reports not-a-violation after a two-file cycle is broken', () => {
+    const entry = encodeAllowlistName('engine/a.ts', 'engine/b.ts');
+    expect(checkLayerRatchet({ files: new Map([['engine/a.ts', "import './b.js';"], ['engine/b.ts', '']]), allowlist: [entry] }).violations)
+      .toEqual([{ kind: 'stale-entry', entry, reason: 'not-a-violation' }]);
+  });
+
+  it('reports every freed entry after a four-file cycle is broken', () => {
+    const entries = ['a+b', 'b+c', 'c+d'].map((pair) => {
+      const [from, to] = pair.split('+');
+      return encodeAllowlistName(`engine/${from}.ts`, `engine/${to}.ts`);
+    });
+    const result = checkLayerRatchet({ files: new Map([
+      ['engine/a.ts', "import './b.js';"], ['engine/b.ts', "import './c.js';"], ['engine/c.ts', "import './d.js';"], ['engine/d.ts', ''],
+    ]), allowlist: entries });
+    expect(result.violations).toEqual(entries.map((entry) => ({ kind: 'stale-entry', entry, reason: 'not-a-violation' })));
   });
 });

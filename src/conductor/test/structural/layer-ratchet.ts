@@ -12,7 +12,8 @@ export type LayerRatchetViolation =
   | UnresolvedSpecifierViolation
   | UpwardViolation
   | CycleViolation
-  | MalformedEntryViolation;
+  | MalformedEntryViolation
+  | StaleEntryViolation;
 
 interface UnclassifiableFileViolation {
   kind: 'unclassifiable-file';
@@ -48,6 +49,8 @@ interface MalformedEntryViolation {
   kind: 'malformed-entry';
   entry: string;
 }
+
+interface StaleEntryViolation { kind: 'stale-entry'; entry: string; reason: 'edge-missing' | 'not-a-violation'; }
 
 export interface AllowlistPair {
   from: string;
@@ -135,6 +138,19 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
     const pair = decodeAllowlistName(entry);
     return pair === undefined ? [] : [`${pair.from}\u0000${pair.to}`];
   }));
+  const livePairs = new Set(violations.flatMap((violation) => (
+    violation.kind === 'upward' || violation.kind === 'cycle' ? [`${violation.file}\u0000${violation.imported}`] : []
+  )));
+  for (const entry of allowlist) {
+    const pair = decodeAllowlistName(entry);
+    if (pair === undefined) continue;
+    const key = `${pair.from}\u0000${pair.to}`;
+    if (!edges.some((edge) => edge.file === pair.from && edge.imported === pair.to)) {
+      violations.push({ kind: 'stale-entry', entry, reason: 'edge-missing' });
+    } else if (!livePairs.has(key)) {
+      violations.push({ kind: 'stale-entry', entry, reason: 'not-a-violation' });
+    }
+  }
   const uncovered = violations.flatMap((violation) => {
     if (violation.kind !== 'upward' && violation.kind !== 'cycle') return [violation];
     const allowlistName = encodeAllowlistName(violation.file, violation.imported);
