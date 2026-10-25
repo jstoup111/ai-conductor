@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 
 import { boundGithubOperationFailureText } from '../../src/engine/github-operations-cli.js';
