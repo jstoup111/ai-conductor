@@ -91,7 +91,7 @@ describe('executor broker', () => {
     const channel = pair();
     const attachment = fixture.broker.attach('feature', channel.supervisor);
     const received: unknown[] = [];
-    attachment.events.on('bot_co_author_skipped', (event) => received.push(event));
+    attachment.events.on('bot_co_author_skipped', (event) => { received.push(event); });
 
     channel.child.send({ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason } });
     channel.flush();
