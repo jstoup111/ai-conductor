@@ -220,6 +220,7 @@ describe('FINISH publish-failure diagnosis', () => {
       'A FINISH pull-request publish failed, so the authored prose never reached the pull request.',
     );
     expect(result.halt).toContain('Resolve the failure named below, then retry FINISH.');
+    expect(result.halt).not.toContain('Reason: publication_operation_failed.');
     expect(result.halt).toContain('GraphQL: missing required scope read:org');
     expect(result.halt).not.toContain('left pr.prose unchanged at placeholder');
     expect(result.publicationEvents).toContainEqual(expect.objectContaining({

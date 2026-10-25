@@ -20,6 +20,7 @@ import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
@@ -154,16 +155,24 @@ describe('authorProse pass-window publish failures', () => {
     });
   });
 
-  it('drains a pre-pass failure before subscribing and treats a rejected flush as no attributed failure', async () => {
+  it('ignores an unre-emitted sibling-ledger failure that predates the authorProse pass', async () => {
     await withRoot(async (root) => {
-      let flushes = 0;
+      appendCloseoutEvent(root, githubOperationFailedEvent({ error: 'failure from an earlier pass' }));
+      await expect(readFile(join(root, '.pipeline', 'pipeline-events.jsonl'), 'utf8'))
+        .resolves.toContain('failure from an earlier pass');
+
       await expect(runAuthorProsePass(
         root,
         async () => ({ success: true }),
-        async () => {
-          if (++flushes === 1) await events.emit(githubOperationFailedEvent({ error: 'pre-pass failure' }));
-        },
+        // This is the pre-subscribe drain. It deliberately does not re-emit
+        // the existing sibling-ledger record onto the event bus.
+        async () => undefined,
       )).resolves.toBeUndefined();
+    });
+  });
+
+  it('treats a rejected pre-pass flush as no attributed failure', async () => {
+    await withRoot(async (root) => {
       await expect(runAuthorProsePass(
         root,
         async () => ({ success: true }),
