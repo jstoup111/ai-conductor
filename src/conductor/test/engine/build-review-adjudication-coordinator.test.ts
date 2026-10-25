@@ -53,6 +53,14 @@ const aggregate = joinBuildReviewRubricOutcomes({
     },
   },
 });
+const scopeEmptyAggregate = joinBuildReviewRubricOutcomes({
+  lapId: 'lap-scope-empty' as never,
+  snapshotDigest: 'snapshot-scope-empty',
+  results: {
+    testQuality: { kind: 'scope-empty', rubric: 'testQuality' },
+    security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+  },
+});
 // The judge receives namespaced ids from the context and returns them
 // verbatim, so the fixture must use the same identity the coordinator
 // validates against. Deriving the bare findingId here is what let the
@@ -693,6 +701,28 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(settled.ok && settled.state.cases[0]).toMatchObject({
       resolution: 'resolved',
       operatorAcceptance: { origins: [{ sourceId: currentSourceId, lapId: currentAggregate.lapId }] },
+    });
+  });
+
+  it('does not retire a prior source merely because its rubric was scope-empty', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-unreviewed', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The settled hunk is not evidence this source disappeared.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-prior', outcome: 'acted', recordedAt: '2026-10-24T00:00:00.000Z' }],
+        effect: { id: 'effect-unreviewed', kind: 'action', status: 'applied', workOrderId: 'order-unreviewed' },
+      }],
+    });
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), aggregate: scopeEmptyAggregate,
+    });
+
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true, state: { cases: [{ id: 'case-unreviewed', resolution: 'open' }] },
     });
   });
 

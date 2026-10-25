@@ -296,7 +296,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // Legacy direct coordinator callers did not carry the distinct signal. The
   // conductor always supplies it; retain the historical value for those tests
   // and integrations until they adopt the new boundary input.
-  const absenceRetirementMechanicallyHealthy = input.absenceRetirementMechanicallyHealthy ?? input.mechanical === 'healthy';
+  // A scope-empty rubric deliberately did not inspect its already-settled
+  // sources, so its absence cannot retire any prior case.
+  const absenceRetirementMechanicallyHealthy =
+    (input.absenceRetirementMechanicallyHealthy ?? input.mechanical === 'healthy') &&
+    !Object.values(input.aggregate.results).some((result) => result.kind === 'scope-empty');
   const store = new RemediationCaseStore(input.projectRoot, input.feature, {
     ...(input.child === undefined ? {} : { child: input.child }),
   });

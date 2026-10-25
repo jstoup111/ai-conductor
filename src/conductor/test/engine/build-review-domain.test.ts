@@ -21,6 +21,7 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewRubricResult,
+  parseBuildReviewScopeEmpty,
   parseBuildReviewSeverity,
   parseBuildReviewSkip,
   renderBuildReviewUnresolvedSkillRemedy,
@@ -117,6 +118,13 @@ describe('build-review domain', () => {
     const skipped = { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' };
     expect(parseBuildReviewSkip(skipped)).toEqual(skipped);
     expect(parseBuildReviewSkip({ ...skipped, rubric: 'security' })).toBeUndefined();
+  });
+
+  it('admits only a closed scope-empty rubric result', () => {
+    const scopeEmpty = { kind: 'scope-empty', rubric: 'testQuality' } as const;
+    expect(parseBuildReviewScopeEmpty(scopeEmpty)).toEqual(scopeEmpty);
+    expect(parseBuildReviewRubricResult(scopeEmpty)).toEqual(scopeEmpty);
+    expect(parseBuildReviewScopeEmpty({ ...scopeEmpty, extra: true })).toBeUndefined();
   });
 
   it('accepts security content-region anchors only for a projected changed content region', () => {

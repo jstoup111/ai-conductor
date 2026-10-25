@@ -140,6 +140,57 @@ function coordinationInput(
 }
 
 describe("build-review coordinator: registered dispatch", () => {
+  it('records an empty delta as scope-empty without preflight, cache, or provider dispatch', async () => {
+    const reviewScope = {
+      mode: 'delta' as const,
+      reason: 'delta' as const,
+      sequence: 2,
+      unreadableLapIds: [],
+      mergeBase: 'base',
+      headSha: 'head',
+      policyIdentity: 'policy',
+      predecessorLapId: parseBuildReviewLapId('lap-prior')!,
+      reviewedHunks: [],
+      deltaHunks: [],
+      outOfDeltaSourceIds: [],
+    };
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput['emit']>>[0]) => undefined);
+    const input = coordinationInput(true, {
+      projections: {
+        testQuality: {
+          rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4', lapId: parseBuildReviewLapId('lap-current')!,
+          snapshotDigest: 'sha256:snapshot', digest: 'sha256:scope-empty', reviewScope: { mode: 'delta', deltaHunks: [] },
+        },
+      } as never,
+      reviewScopes: { testQuality: reviewScope },
+      preflight: vi.fn(),
+      emit,
+      writeArtifact: vi.fn(async (artifact) => ({ version: 2, ...artifact })),
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(result).toEqual({
+      kind: 'ready',
+      branches: [
+        { kind: 'scope-empty', rubric: 'testQuality' },
+        disabledSecurityBranch,
+        disabledImplementationQualityBranch,
+      ],
+    });
+    expect(input.preflight).not.toHaveBeenCalled();
+    expect(input.readCache).not.toHaveBeenCalled();
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(input.writeCache).not.toHaveBeenCalled();
+    expect(input.writeArtifact).toHaveBeenCalledWith({
+      rubric: 'testQuality', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
+      result: { kind: 'scope-empty', rubric: 'testQuality' }, provenance: { kind: 'fresh' }, reviewScope,
+    });
+    expect(emit).toHaveBeenCalledWith({
+      type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-current', reason: 'scope-empty',
+    });
+  });
+
   it('skips enabled security at a non-leaf child without dispatching it', async () => {
     const dispatchModel = vi.fn(async () => ({ findings: [] }));
 

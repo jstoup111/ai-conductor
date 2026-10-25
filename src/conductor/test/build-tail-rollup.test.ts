@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { computeBuildTailRollup, readBuildWindows } from '../src/engine/build-tail-rollup.js';
+import { computeBuildReviewMetrics, computeBuildTailRollup, readBuildWindows } from '../src/engine/build-tail-rollup.js';
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
@@ -15,6 +15,16 @@ async function ledger(events: object[], pipeline: object[] = []): Promise<string
 }
 
 describe('build tail rollup', () => {
+  it('counts scope-empty as a skip rather than a judged rubric result', () => {
+    expect(computeBuildReviewMetrics([
+      { type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-2', reason: 'scope-empty' },
+    ])).toMatchObject({
+      skipped: 1,
+      skipReasons: { 'scope-empty': 1 },
+      rubricFailureRates: {},
+    });
+  });
+
   it('measures task execution and post-resolution ticks without a closeout duration', () => {
     const rollup = computeBuildTailRollup([{ startedAt: 10, endedAt: 50, events: [
       { type: 'build_progress', resolved: 1, total: 2, ts: 20 }, { type: 'build_progress', resolved: 2, total: 2, ts: 30 },

@@ -3580,7 +3580,7 @@ export class DefaultStepRunner implements StepRunner {
           detail: 'missing or invalid current-lap branch artifact',
         }];
       }
-      return [branch.rubric, branch.kind === 'skipped'
+      return [branch.rubric, branch.kind === 'skipped' || branch.kind === 'scope-empty'
         ? branch
         : {
             kind: 'infrastructure-failure' as const,

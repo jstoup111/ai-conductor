@@ -169,6 +169,17 @@ describe('build-review current-lap branch artifacts', () => {
     expect(await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
+  it('round-trips a scope-empty result with its durable review scope', async () => {
+    const fs = filesystem();
+    const artifact = await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot',
+      result: { kind: 'scope-empty', rubric: 'testQuality' }, provenance: { kind: 'fresh' }, reviewScope,
+    }, fs);
+
+    expect(artifact.result).toEqual({ kind: 'scope-empty', rubric: 'testQuality' });
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toEqual(artifact);
+  });
+
   it('round-trips the durable review scope record field-for-field', async () => {
     const fs = filesystem();
     const artifact = await writeBuildReviewBranchArtifact('/feature', {

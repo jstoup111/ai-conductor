@@ -415,6 +415,25 @@ describe('build-review raw aggregate', () => {
     });
   });
 
+  it('treats scope-empty coverage as a passing non-judged result', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: results(
+        { kind: 'scope-empty', rubric: 'testQuality' },
+        { kind: 'scope-empty', rubric: 'security' },
+      ),
+    });
+
+    expect(aggregate).toMatchObject({
+      verdict: 'PASS',
+      coverage: { testQuality: 'scope-empty', security: 'scope-empty' },
+      rubric: { testQuality: false, security: false },
+    });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
+      rawVerdict: 'PASS', verdict: 'PASS', skippedRubrics: ['implementationQuality'],
+    });
+  });
+
   it('records an infrastructure failure as blocking coverage rather than a judgement', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest,

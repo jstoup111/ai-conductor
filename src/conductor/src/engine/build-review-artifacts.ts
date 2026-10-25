@@ -172,6 +172,8 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
     ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.scopeResolutions === undefined ? [] : ['scopeResolutions']), ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), ...(candidate.counterfactualSensitivity === undefined ? [] : ['counterfactualSensitivity']), 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
+      : candidate.kind === 'scope-empty'
+        ? ['kind', 'rubric']
       : candidate.kind === 'infrastructure-failure'
         ? ['kind', 'rubric', 'reason', 'detail']
         : [];
