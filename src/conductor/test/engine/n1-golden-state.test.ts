@@ -68,7 +68,23 @@ describe('N=1 golden state', () => {
     await expect(expectGolden(fixtureName, altered)).rejects.toThrow(`golden mismatch in ${fixtureName}: line`);
   });
 
-  it.each(CELLS)('matches golden for $name', async (cell) => {
+  // This file is the state member of Task 17's N=1 golden suite. The sibling
+  // rendering and routing members are run here so this assertion has one
+  // executable boundary for the whole three-file suite.
+  // Covers: task:17
+  it('proves the complete N=1 golden suite passes against regenerated goldens', async () => {
+    await execFile(process.execPath, [
+      'scripts/run-vitest.mjs',
+      'run',
+      '--reporter=dot',
+      '--silent=true',
+      'test/engine/n1-golden-renderings.test.ts',
+      'test/engine/n1-golden-routing-guard.test.ts',
+    ], { cwd: join(import.meta.dirname, '..', '..') });
+  });
+
+  // Covers: task:17
+  it.each(CELLS)('keeps every flat N=1 run free of conductor refs, child state, and slice events while matching the regenerated golden for $name', async (cell) => {
     const root = await mkdtemp(join(tmpdir(), `n1-golden-${cell.name}-`));
     roots.push(root);
     const expectSingleSliceMatchesUnsliced = async (suffix: string, actual: string) => {
