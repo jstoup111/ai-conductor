@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt
+// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt, task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
