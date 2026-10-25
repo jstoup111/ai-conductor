@@ -1468,6 +1468,7 @@ export type AdvanceFinishPublicationResult =
       reason:
         | 'publication_transition_unmoved'
         | 'publication_coordinator_unavailable'
+        | 'publication_operation_failed'
         | 'ambiguous_pr_identity'
         | 'invalid_shipped_record'
         | 'stack_tip_diverged'
