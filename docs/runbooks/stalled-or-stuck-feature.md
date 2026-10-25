@@ -900,11 +900,10 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
    edited is sealed — any plan amended after first BUILD entry is — reseal it first, per
    [the protected-artifact recovery](#the-halt-is-a-protected-artifact-violation).
 
-   **Stacked features:** a reseal of amended DECIDE artifacts voids the coverage binding, so no
-   child is active until `coverage_binding` re-runs, and `rewind` refuses with `coverage binding was
-   voided by a DECIDE change`. Clear the halt instead
-   (`rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class`): resume
-   re-runs `coverage_binding`, then re-enters BUILD on the active child.
+   **Stacked features:** the child cursor is derived from the sealed plan, so a reseal that keeps the
+   plan's slice positions leaves the active child resolvable. Clear the halt and resume re-enters
+   BUILD on that child; `rewind` works as usual. A reseal that changes slice positions halts with
+   `positions-changed` instead.
 
 If the feature is parked while you do this, unpark it last — the daemon re-dispatches as soon as it
 is eligible.

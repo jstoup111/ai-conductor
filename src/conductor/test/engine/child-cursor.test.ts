@@ -172,20 +172,18 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing', planPath: '.docs/plans/demo.md' });
   });
 
-  it('marks an envelope voided by a DECIDE change, but not a torn or absent one', async () => {
-    await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
-    await writeCoverageBindingEnvelope(repository, {
-      version: 1, slug: 'demo', runId: 'run-1', status: 'invalidated', entries: [],
-      sliceMembership: { taskSlices: { 1: 1, 2: 2 }, titles: ['Child 1', 'Child 2'] },
-      predecessor: { status: 'done', recordedDigests: false },
-    }, envelopeFilesystem);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing', voided: true });
+  // Covers: #3408
+  it('keeps the active child after a positions-preserving DECIDE amendment, with no rebinding step to wait on', async () => {
+    await writeTopology(repository, [1, 2], true);
+    const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+    await recordPositions(repository, [1, 2]);
+    await writeFile(join(repository, '.docs', 'plans', 'demo.md'), `${slicedPlan([1, 2])}\nOperator clarified the leaf scope.\n`);
 
-    await writeCoverageBindingEnvelope(repository, {
-      version: 1, slug: 'demo', runId: 'run-1', status: 'invalidated', entries: [],
-      sliceMembership: { taskSlices: { 1: 1, 2: 2 }, titles: ['Child 1', 'Child 2'] },
-    }, envelopeFilesystem);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo',
+    });
   });
 
   // Covers: task:rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push

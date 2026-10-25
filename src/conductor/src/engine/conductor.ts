@@ -15412,7 +15412,7 @@ export class Conductor {
               const next = await this.resolveActiveChild(this.projectRoot, slug);
               const nextExecution = resolveExecutionChild(next, slug);
               if (nextExecution.source !== 'cursor' && nextExecution.source !== 'routed-host' && nextExecution.source !== 'revalidating') {
-                await this.haltChildRegionRefusal(this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+                await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
                 return;
               }
               activeChild = nextExecution.target;
