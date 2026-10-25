@@ -3291,21 +3291,28 @@ export class DefaultStepRunner implements StepRunner {
       return artifacts.filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== undefined);
     };
     const resolvedAppliedActSourceIds = await this.resolvedAppliedBuildReviewActSourceIds(config, child);
+    const builtInJudgedResultFor = (
+      artifact: Awaited<ReturnType<typeof priorArtifactsFor>>[number],
+    ): import('./build-review-domain.js').BuildReviewJudgedResult | undefined => {
+      const result = artifact.result;
+      if (result.kind !== 'judged' || !('contractVersion' in result) || result.contractVersion === 'custom-v1') return undefined;
+      return result as import('./build-review-domain.js').BuildReviewJudgedResult;
+    };
     const liveActSourceIds = await this.liveBuildReviewActSourceIds(config, child);
     const judgedSourcesFor = (
       rubric: BuildReviewRubricResult['rubric'],
       artifact: Awaited<ReturnType<typeof priorArtifactsFor>>[number],
-    ): readonly BuildReviewSettledHunkFinding[] =>
-      artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged' && 'contractVersion' in artifact.result
-        ? (artifact.result as import('./build-review-domain.js').BuildReviewJudgedResult).findings.map((finding) => {
-          const typedFinding = finding as import('./build-review-domain.js').BuildReviewFinding;
-          const identity = canonicalizeBuildReviewFindingIdentity({
-            rubric, contractVersion: (artifact.result as import('./build-review-domain.js').BuildReviewJudgedResult).contractVersion,
-            concernKind: typedFinding.concernKind, anchor: typedFinding.anchor,
-          });
-          return identity ? { sourceId: `${rubric}:${identity.id}`, finding: typedFinding } : undefined;
-        }).filter((source): source is BuildReviewSettledHunkFinding => source !== undefined)
-        : [];
+    ): readonly BuildReviewSettledHunkFinding[] => {
+      const result = builtInJudgedResultFor(artifact);
+      if (!artifact.reviewScope || 'kind' in artifact.reviewScope || result === undefined) return [];
+      return result.findings.flatMap((finding) => {
+        const identity = canonicalizeBuildReviewFindingIdentity({
+          rubric, contractVersion: result.contractVersion,
+          concernKind: finding.concernKind, anchor: finding.anchor,
+        });
+        return identity === undefined ? [] : [{ sourceId: `${rubric}:${identity.id}`, finding }];
+      });
+    };
     const reviewScopes: Partial<Record<BuildReviewRubricResult['rubric'], import('./build-review-artifacts.js').BuildReviewReviewScope>> = {};
     for (const entry of config.catalog.filter((candidate): candidate is import('./resolved-config.js').ResolvedBuildReviewBuiltinCatalogEntry => candidate.kind === 'builtin')) {
       const descriptor = getBuildReviewRubricDescriptor(entry.id).contract;
@@ -3324,9 +3331,12 @@ export class DefaultStepRunner implements StepRunner {
       const sources = artifacts.flatMap((artifact) => judgedSourcesFor(entry.id, artifact));
       const unknownSources = entry.id !== 'testQuality' ? [] : buildReviewTestScopeUnknownSources({
         unresolvedMarkers: inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [],
-        indeterminateCandidates: artifacts.flatMap((artifact) => artifact.result.kind === 'judged' && artifact.result.rubric === 'testQuality'
-          ? artifact.result.scopeResolutions?.filter((candidate): candidate is import('./build-review-domain.js').BuildReviewCandidateScopeResolutionIndeterminate => candidate.status === 'indeterminate') ?? []
-          : []),
+        indeterminateCandidates: artifacts.flatMap((artifact) => {
+          const result = builtInJudgedResultFor(artifact);
+          return result?.rubric === 'testQuality'
+            ? result.scopeResolutions?.filter((candidate): candidate is import('./build-review-domain.js').BuildReviewCandidateScopeResolutionIndeterminate => candidate.status === 'indeterminate') ?? []
+            : [];
+        }),
       });
       const settled = settledBuildReviewHunks({
         changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
