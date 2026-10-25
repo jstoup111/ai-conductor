@@ -83,7 +83,7 @@ describe('N=1 golden renderings', () => {
   // Covers: task:17, task:rem-operator-17-r3
   it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes and one durable-child-state probe pair', async () => {
     if (RECORD) return;
-    const repositoryRoot = join(import.meta.dirname, '..', '..', '..');
+    const repositoryRoot = join(import.meta.dirname, '..', '..', '..', '..');
     const [preChange, current] = await Promise.all([
       execFile('git', ['show', `${PRE_CHANGE_N1_GOLDEN_SHA}:${GIT_PROBE_GOLDEN_PATH}`], { cwd: repositoryRoot }),
       readFile(join(repositoryRoot, GIT_PROBE_GOLDEN_PATH), 'utf8'),
