@@ -139,9 +139,10 @@ function applyCurrentCustomEffectiveVerdict(
 ): BuildReviewEffectiveVerdict | undefined {
   const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
   if (!customSources) return undefined;
-  const customJudged = (aggregate.currentCustomRubrics ?? []).filter((rubric) =>
-    aggregate.customResults?.[rubric]?.result.kind === 'judged',
-  ).length;
+  const customCompleted = (aggregate.currentCustomRubrics ?? []).filter((rubric) => {
+    const result = aggregate.customResults?.[rubric]?.result;
+    return result?.kind === 'judged' || result?.kind === 'scope-empty';
+  }).length;
   const customFailures = (aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
     const member = aggregate.customResults?.[rubric];
     if (member?.result.kind !== 'infrastructure-failure' || member.declaration === undefined) return [];
@@ -150,7 +151,7 @@ function applyCurrentCustomEffectiveVerdict(
   const hasCustomFailure = (aggregate.currentCustomRubrics ?? []).some((rubric) =>
     aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
   );
-  if (customJudged === 0 && !hasCustomFailure) return effective;
+  if (customCompleted === 0 && !hasCustomFailure) return effective;
   const uncoveredCustomFailure = customFailures.length !== (aggregate.currentCustomRubrics ?? []).filter((rubric) =>
     aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
   ).length || customFailures.some((member) => !matchesBuildReviewReducedCoverageDisposition(
@@ -193,10 +194,12 @@ function applyCurrentCustomEffectiveVerdict(
     else if (source.severity !== undefined && minSeverity[source.rubric] !== undefined && isBelowSeverityThreshold(source.severity, minSeverity[source.rubric]!)) advisory.push(source.findingId);
     else unresolved.push(source.findingId);
   }
-  const builtinJudged = Object.values(aggregate.results).filter((result) => result.kind === 'judged').length;
+  const builtinCompleted = Object.values(aggregate.results).filter((result) =>
+    result.kind === 'judged' || result.kind === 'scope-empty',
+  ).length;
   return Object.freeze({
     ...effective,
-    verdict: builtinJudged + customJudged > 0 && unresolved.length === 0 &&
+    verdict: builtinCompleted + customCompleted > 0 && unresolved.length === 0 &&
       effective.uncoveredInfrastructureFailureRubrics.length === 0 &&
       (effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0 && !uncoveredCustomFailure
       ? 'PASS'

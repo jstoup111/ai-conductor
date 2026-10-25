@@ -180,6 +180,37 @@ describe('live build-review effective resolver', () => {
     ].map(isBuildReviewLapHealthyForAbsenceRetirement)).toEqual([false, false, false, true]);
   });
 
+  // Covers: task:11
+  it('counts scope-empty built-in and custom rubrics as completed effective evidence', () => {
+    const customScopeEmpty = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      customResults: { portablePolicy: { result: { kind: 'scope-empty', rubric: 'portablePolicy' } } },
+      currentCustomRubrics: ['portablePolicy'],
+    } as never);
+    const builtinScopeEmptyWithCoveredCustomFailure = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'scope-empty', rubric: 'testQuality' } },
+      customResults: {
+        portablePolicy: {
+          declaration: customStamp.declaration,
+          result: { kind: 'infrastructure-failure', rubric: 'portablePolicy', reason: 'policy-load-failed', detail: 'policy could not be loaded' },
+        },
+      },
+      currentCustomRubrics: ['portablePolicy'],
+    } as never);
+    const reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [{
+      kind: 'reduced-coverage', version: 'v1', feature,
+      identity: { declaration: customStamp.declaration, reason: 'policy-load-failed' },
+      rationale: 'The policy loader outage is already recorded.', operator: 'operator', acceptedAt: '2026-10-25T00:00:00.000Z',
+    }];
+
+    expect(deriveComposedBuildReviewEffectiveVerdict(customScopeEmpty, feature, [], [])).toMatchObject({ verdict: 'PASS' });
+    expect(deriveComposedBuildReviewEffectiveVerdict(
+      builtinScopeEmptyWithCoveredCustomFailure, feature, [], reducedCoverage,
+    )).toMatchObject({ verdict: 'PASS' });
+  });
+
   it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
     const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },

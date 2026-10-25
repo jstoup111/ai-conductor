@@ -727,6 +727,61 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  // Covers: task:11
+  it('keeps custom scope-empty sources live at every absence-retirement seam', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'reserved-action', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The custom source was not judged in this lap.', resolution: 'open',
+          sources: [{ sourceId: 'portablePolicy:sha256-prior-reserved', outcome: 'acted', recordedAt: '2026-10-24T00:00:00.000Z' }],
+          effect: { id: 'effect-reserved-action', kind: 'action', status: 'reserved' },
+        },
+        {
+          id: 'failed-action', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The custom source was not judged in this lap.', resolution: 'open',
+          sources: [{ sourceId: 'portablePolicy:sha256-prior-failed', outcome: 'acted', recordedAt: '2026-10-24T00:00:00.000Z' }],
+          effect: { id: 'effect-failed-action', kind: 'action', status: 'failed', diagnostic: 'prior failure' },
+        },
+        {
+          id: 'reserved-deferral', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+          rationale: 'The custom source was not judged in this lap.', resolution: 'open',
+          sources: [{ sourceId: 'portablePolicy:sha256-prior-deferral', outcome: 'deferred', recordedAt: '2026-10-24T00:00:00.000Z' }],
+          effect: { id: 'effect-reserved-deferral', kind: 'deferral', status: 'reserved' },
+        },
+        {
+          id: 'applied-action', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The custom source was not judged in this lap.', resolution: 'open',
+          sources: [{ sourceId: 'portablePolicy:sha256-prior-applied', outcome: 'acted', recordedAt: '2026-10-24T00:00:00.000Z' }],
+          effect: { id: 'effect-applied-action', kind: 'action', status: 'applied', workOrderId: 'prior-order' },
+        },
+      ],
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-custom-scope-empty' as never, snapshotDigest: 'snapshot-custom-scope-empty',
+      results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      customResults: { portablePolicy: { result: { kind: 'scope-empty', rubric: 'portablePolicy' } } },
+      currentCustomRubrics: ['portablePolicy'],
+    } as never);
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), aggregate,
+    });
+
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: expect.arrayContaining([
+        expect.objectContaining({ id: 'reserved-action', resolution: 'open' }),
+        expect.objectContaining({ id: 'failed-action', resolution: 'open' }),
+        expect.objectContaining({ id: 'reserved-deferral', resolution: 'open' }),
+        expect.objectContaining({ id: 'applied-action', resolution: 'open' }),
+      ]) },
+    });
+  });
+
   it.each([
     ['an empty list', []],
     ['an empty reason', [{ caseId: 'R', reason: '' }]],
