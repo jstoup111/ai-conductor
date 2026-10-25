@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5, task:14, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
+// Covers: task:3, task:4, task:5, task:14, task:23, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -178,6 +178,90 @@ function priorAdvisoryCase(id: string): RemediationCaseRecord {
 }
 
 describe('build-review adjudication context', () => {
+  it('projects bounded finding digests onto only a prior case’s four most recent sources', () => {
+    const sources = Array.from({ length: 5 }, (_value, index) => ({
+      sourceId: `testQuality:prior-${index + 1}`,
+      outcome: 'acted' as const,
+      recordedAt: `2026-10-2${index}T12:00:00.000Z`,
+    }));
+    const prior = { ...priorCase('case-digests'), sources };
+    const evidenceLocations = Array.from({ length: 10 }, (_value, index) => `src/prior.ts:${index + 1}`);
+    const priorFindingDigests = new Map(sources.map((source, index) => [source.sourceId, {
+      rubric: 'testQuality', concernKind: 'test-insensitive',
+      summary: `${index + 1}:${'s'.repeat(1_000)}`,
+      evidenceLocations, lapId: `lap-prior-${index + 1}`,
+    }]));
+
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorDigestsOmitted).toBe(0);
+    expect(result.context.priorCases[0]!.sources).toEqual([
+      sources[0],
+      expect.objectContaining({
+        ...sources[1],
+        finding: {
+          rubric: 'testQuality', concernKind: 'test-insensitive',
+          summary: `2:${'s'.repeat(998)}`,
+          evidenceLocations: evidenceLocations.slice(0, 8), lapId: 'lap-prior-2',
+        },
+      }),
+      expect.objectContaining({ finding: expect.objectContaining({ lapId: 'lap-prior-3' }) }),
+      expect.objectContaining({ finding: expect.objectContaining({ lapId: 'lap-prior-4' }) }),
+      expect.objectContaining({ finding: expect.objectContaining({ lapId: 'lap-prior-5' }) }),
+    ]);
+  });
+
+  it('drops oldest digest candidates first within the base-context headroom and recomputes for added plan bodies', () => {
+    const priorCases = Array.from({ length: 30 }, (_value, caseIndex) => ({
+      ...priorCase(`case-${caseIndex.toString().padStart(3, '0')}`),
+      sources: Array.from({ length: 4 }, (_source, sourceIndex) => ({
+        sourceId: `testQuality:case-${caseIndex.toString().padStart(3, '0')}-${sourceIndex}`,
+        outcome: 'acted' as const,
+        recordedAt: `2026-10-24T12:00:0${sourceIndex}.000Z`,
+      })),
+    }));
+    const priorFindingDigests = new Map(priorCases.flatMap((prior) => prior.sources.map((source) => [source.sourceId, {
+      rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
+      evidenceLocations: ['src/prior.ts:1'], lapId: 'lap-prior',
+    }] as const)));
+    const input = { aggregate: aggregate(finding('current')), priorCases, priorFindingDigests };
+    const ordinary = assembleBuildReviewAdjudicationContext(input);
+    const expanded = assembleBuildReviewAdjudicationContext({
+      ...input,
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p'.repeat(1_500) })),
+      },
+    });
+
+    expect(ordinary).toMatchObject({ ok: true });
+    expect(expanded).toMatchObject({ ok: true });
+    if (!ordinary.ok || !expanded.ok) return;
+    const countDigests = (context: typeof ordinary.context) => context.priorCases
+      .flatMap((prior) => prior.sources).filter((source) => source.finding !== undefined).length;
+    expect(ordinary.context.priorDigestsOmitted).toBe(120 - countDigests(ordinary.context));
+    expect(expanded.context.priorDigestsOmitted).toBe(120 - countDigests(expanded.context));
+    expect(expanded.context.priorDigestsOmitted).toBeGreaterThan(ordinary.context.priorDigestsOmitted);
+    expect(expanded.context.priorCases[0]!.sources[0]).not.toHaveProperty('finding');
+    expect(Buffer.byteLength(JSON.stringify(expanded.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+  });
+
+  it('keeps a prior source without a readable artifact digest and does not count it as budget-omitted', () => {
+    const prior = priorCase('case-missing-artifact');
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests: new Map(),
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      priorDigestsOmitted: 0,
+      priorCases: [expect.objectContaining({ sources: [prior.sources[0]] })],
+    } });
+  });
+
   it('admits a prior advisory case with no effect as non-blocking history', () => {
     const advisory = priorAdvisoryCase('case-advisory');
 
@@ -644,7 +728,7 @@ describe('build-review adjudication context', () => {
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
       'admittedDispositions', 'currentFindings', 'declaredSeverityThresholds', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
-      'planContract', 'policyContext', 'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
+      'planContract', 'policyContext', 'priorCases', 'priorDigestsOmitted', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({
       mode: 'case-v1',
