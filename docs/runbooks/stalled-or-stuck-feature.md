@@ -902,8 +902,8 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
 
    **Stacked features:** the child cursor is derived from the sealed plan, so a reseal that keeps the
    plan's slice positions leaves the active child resolvable. Clear the halt and resume re-enters
-   BUILD on that child; `rewind` works as usual. A reseal that changes slice positions halts with
-   `positions-changed` instead.
+   BUILD on that child; `rewind` works as usual. `reseal` refuses a plan change that moves, adds, or
+   removes a slice position once children exist.
 
 If the feature is parked while you do this, unpark it last — the daemon re-dispatches as soon as it
 is eligible.
@@ -911,28 +911,47 @@ is eligible.
 If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
 clearing it again.
 
-### coverage_binding refused a plan conflict
+### Stack cursor cannot be resolved
 
-`coverage_binding` is a no-op step: it no longer judges plan conflicts, criterion coverage, DECIDE
-amendments, or ADR obligations, never reopens tasks, and never halts on plan content. An invalid slice
-manifest or a plan ineligible for stacked delivery builds flat instead of halting.
+**Symptom:** a stacked feature halts `needs-human` before BUILD, and `.pipeline/HALT` begins
+`cannot resolve stack cursor: <cause>:`. The body names the cause, any plan path, positions ref,
+recorded positions, and plan positions, then a `Recovery:` command.
 
-**Symptom:** `.pipeline/HALT` still contains a `coverage_binding refused:` reason written before this
-change (plan conflicts, cited Done when checks, architecture obligation coverage, plan slices, or
-stacked-delivery eligibility).
+**Diagnosis:** the stack preflight derives the active child from the sealed plan's `## Slices`
+manifest and `refs/conductor/<slug>/positions`. Match the cause:
 
-**Recovery:** Clear the halt with `rm -f .worktrees/<slug>/.pipeline/HALT
-.worktrees/<slug>/.pipeline/HALT.class` and let the daemon re-dispatch. The step re-runs and passes.
+| Cause | Meaning | Printed recovery |
+| --- | --- | --- |
+| `plan-missing` | The feature plan cannot be found or read. | `ai-conductor reseal` for the plan path |
+| `plan-invalid` | The `## Slices` manifest is invalid, or the plan's stories artifact is missing, unreadable, or does not map every story to one slice. | `ai-conductor reseal` for the plan path |
+| `positions-changed` | The plan's slice positions differ from the recorded positions. | `ai-conductor reseal` for the plan path |
+| `positions-ref-unreadable` | Child state exists but the positions ref is absent or malformed. | `git update-ref` that rewrites the ref from the plan positions |
+| `detached-head` | The worktree is not on a branch. | `git switch feat/daemon-<slug>` |
+| `git-error` | A git probe of child state, journal recovery, or the cursor failed. | `rm -f .pipeline/HALT .pipeline/HALT.class` |
 
-**Exception: sealed child positions.** The only refusal the step still raises is
-`coverage_binding refused: sealed child positions are immutable after child state exists`. It fires
-when a stacked feature that has already started building children has a plan whose slice positions
-differ from `refs/conductor/<slug>/positions`. Restore the plan's `## Slices` positions to the sealed
-set, then clear the halt. A [restack](../reference/configuration.md#restack) carries changes through
-the existing positions; it never changes them.
+**Recovery:**
 
-**Verification:** The next `.pipeline/coverage-binding.json` has status `disabled` and no entries, and
-the step is marked done.
+1. For `plan-missing` or `plan-invalid`, restore or repair the plan and its stories so the manifest
+   validates with the recorded positions, then run the printed `reseal` command from an interactive
+   terminal.
+2. For `positions-changed`, restore the plan's `## Slices` positions to the recorded set first.
+   `reseal` refuses any position change once children exist, so the printed command succeeds only
+   after the positions match. Task membership may change within the recorded positions. A
+   [restack](../reference/configuration.md#restack) carries changes through the existing positions;
+   it never changes them.
+3. For `positions-ref-unreadable`, confirm the printed positions match the plan, then run the
+   printed `git update-ref` command from the feature worktree.
+4. For `detached-head`, run the printed `git switch` command in the feature worktree.
+5. For `git-error`, fix the underlying git failure, then clear the halt.
+6. Clear any remaining halt with `rm -f .worktrees/<slug>/.pipeline/HALT
+   .worktrees/<slug>/.pipeline/HALT.class` and let the daemon re-dispatch.
+
+**Verification:** the next dispatch passes the stack preflight and enters BUILD on the active child;
+`ai-conductor daemon status` shows that child.
+
+**Legacy halts.** The `coverage_binding` step is retired. A HALT beginning `coverage_binding refused:`
+was written by an older engine; clear it as in step 6. Resume selects the next step from the
+current lifecycle and ignores a leftover `.pipeline/coverage-binding.json`.
 
 ### The halt is a plan gap
 
@@ -1183,9 +1202,8 @@ the daemon log. That approval is bound to the content it was taken against, not 
 artifact again after resealing and it refuses exactly as before, because the sealed fingerprint no
 longer matches. Reseal again only after reviewing the new amendment.
 
-For a changed path in the feature's coverage-binding DECIDE set, a successful reseal also invalidates
-completed coverage evidence. On the next re-kick, the no-op `coverage_binding` step re-runs before
-BUILD and re-records only the plan's slice topology; it never reopens work.
+For a stacked feature with child state, `reseal` of its plan refuses a change to the `## Slices`
+positions; see [stack cursor cannot be resolved](#stack-cursor-cannot-be-resolved).
 
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase

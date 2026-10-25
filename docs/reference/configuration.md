@@ -249,7 +249,6 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
-| `coverage_binding` | object (retired, ignored) | `{ judge: { enabled: false, batch_size: 8 } }` | [coverage_binding](#coverage_binding) |
 | `feature_applicability` | object | `{ enabled: false }` | [feature_applicability](#feature_applicability) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
@@ -1289,19 +1288,10 @@ Consumed at `src/conductor/src/engine/conductor.ts:10364-10365, 10886-10887`.
 
 ## coverage_binding
 
-Retired. The `coverage_binding` step is a no-op: it never dispatches a judge, never checks criterion,
-amendment, conflict, or ADR-obligation claims, never reopens tasks, and never halts on plan content.
-It still runs at its pipeline position, records the plan's slice topology for
-[stacked delivery](#stacked_prs), and completes as passed. These keys remain accepted and validated so
-existing configurations load, but the engine ignores them.
-
-| Key | Type | Validation | Default |
-| --- | --- | --- | --- |
-| `coverage_binding.judge.enabled` | boolean | Boolean, else hard error; ignored | `false` |
-| `coverage_binding.judge.batch_size` | integer | Positive integer, else hard error; ignored | `8` |
-
-Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. The plan skill's
-pre-land coverage judgement is unaffected.
+Retired with the `coverage_binding` step. A top-level `coverage_binding` block and a
+`steps.coverage_binding` entry each load with a warning that the key is retired and ignored; neither
+is validated. The plan skill's pre-land coverage judgement is unaffected. Stacked delivery reads slice
+topology from the sealed plan; see [child-by-child build](#child-by-child-build).
 
 ## feature_applicability
 
@@ -1508,7 +1498,7 @@ While a repair host is recorded, a closed child other than the host whose post-c
 a `Round: r<n>` line halts `needs-human` with `routing foreign-round commit`. With the setting
 `false`, or for a feature without children, the engine never reads or writes a routing ref.
 
-With the setting on and two or more slice positions in the sealed `coverage_binding` envelope, an
+With the setting on and two or more slice positions in the sealed plan, an
 admitted remediation lap that the ordinary path would send to `build` is admitted as
 a routed round instead of appended to the leaf plan:
 
@@ -1590,17 +1580,18 @@ gate at `engineer/land` refuses the plan unless all of these hold:
 - No custom step sits between `acceptance_specs` and `build_review`, and no custom BUILD step
   before `build_review` is a loop gate or kickback target.
 
-The land-gate refusal lists every failed condition. At BUILD entry, `coverage_binding` re-evaluates
-the same conditions without refusing: an invalid slice manifest or an ineligible plan builds flat. On
-success, `coverage_binding` records the story-to-slice mapping as `storyOwnership` in
-[`coverage-binding.json`](artifacts.md).
+The land-gate refusal lists every failed condition. Before the first child exists, the engine
+re-evaluates the same conditions from the sealed plan, its stories, its complexity record, and the
+main repository's config, without refusing: an ineligible plan builds flat.
 
 ### Child-by-child build
 
-A feature has children when `enabled` is `true` and the sealed `coverage_binding` envelope records
-`storyOwnership` and two or more slice positions. Each position is a child; the last is the leaf. A
-single-slice or ineligible plan builds flat, unchanged. Once a child branch, closure ref, or
-`.pipeline/children/` directory exists, the engine uses them whatever the flag says.
+A feature has children when its sealed plan declares two or more slice positions, every story maps
+to one slice, and the plan is eligible. Each position is a child; the last is the leaf. A
+single-slice or ineligible plan builds flat, unchanged. The engine derives positions, task
+membership, and story ownership from the sealed plan on every read; no separate binding artifact
+exists. Once a child branch, a stack-owned `refs/conductor/<slug>/` ref, or a non-empty
+`.pipeline/children/` directory exists, the engine uses the stack whatever the flag says.
 
 The **active child** is the lowest non-leaf position without a closure ref, otherwise the leaf. The
 engine runs the BUILD region (`acceptance_specs`, `build`, `test_suite`, `build_review`) once per
@@ -1629,9 +1620,12 @@ child, in declared order:
 - **Rebase.** The re-kick rebase and the finish-time `rebase` step refresh the whole stack from the
   default branch with a `base-refresh` [restack](#restack), whichever child is active. Open-PR
   autoresolve never rewrites a stacked feature; it escalates with `published-stack` (#2945).
-- **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions`. Once child state
-  exists, a `coverage_binding` run that moves, adds, or removes a position refuses `needs-human`.
-  This is the step's only remaining refusal.
+- **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions` when the first
+  child starts. Once child state exists, [`reseal`](cli.md#ai-conductor-reseal) refuses a plan change
+  that moves, adds, or removes a position; task membership may change within the recorded positions.
+- **Unresolvable cursor.** If the stack preflight cannot resolve the active child, it halts
+  `needs-human` with `cannot resolve stack cursor: <cause>`, the topology details, and one recovery
+  command. See [stack cursor cannot be resolved](../runbooks/stalled-or-stuck-feature.md#stack-cursor-cannot-be-resolved).
 - **Execution child.** While a routed repair or a child revalidation is recorded, its host child runs
   the BUILD region and is the default for [`--child`](cli.md#per-child-selection---child) and
   `daemon status`. The active child keeps the restack range and restack cap evidence.

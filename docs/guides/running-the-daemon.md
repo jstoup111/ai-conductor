@@ -158,7 +158,7 @@ the effective verdict. A `projection-oversized` infrastructure failure includes 
 counts and halts for an operator without consuming the shared mechanical-fault allowance. The optional
 excerpt, deterministic reason, and unresolved-marker count are included only when the event supplies them.
 
-A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Coverage binding is a no-op that only re-records the plan's slice topology, so a rerun never halts or reopens work. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
+A rebase that changes the active feature’s stories or PRD reruns its PRD audit. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
 
 ### Protected-artifact rebaselines
 
@@ -1137,7 +1137,7 @@ resumes, even when it is cleanly mergeable. This play-forward path is intentiona
 normal finish: the pending gate must observe the advanced base in its worktree.
 When that rebase changes code, test paths, or an active review input, the downstream judged gates —
 `test_suite`, `build_review`, and (when they ran) `manual_test`, `prd_audit`,
-`coverage_binding`, `architecture_review_as_built` — are candidates for re-opening. Which ones
+`architecture_review_as_built` — are candidates for re-opening. Which ones
 actually re-open depends on the delta: each judged gate declares the surface its verdict depends on,
 and only a delta that lands inside that surface invalidates it.
 
@@ -1147,7 +1147,6 @@ and only a delta that lands inside that surface invalidates it.
 | `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit` | the feature's own runtime source, active stories, and PRD | the feature's own source, active story, or active PRD |
-| `coverage_binding` (no-op; re-records slice topology) | the feature's own runtime source, active stories, PRD, plan, coherence carrier, and ADRs the feature's documents cite | the feature's own source or one of those active review inputs |
 | `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
 `build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`
