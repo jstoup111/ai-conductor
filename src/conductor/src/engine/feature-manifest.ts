@@ -16,6 +16,34 @@ export const ARTIFACT_KINDS = [
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 export type FeatureScopedKind = Exclude<ArtifactKind, 'architecture' | 'decision'>;
 
+export type ManifestKindIdentity = 'normalized-stem' | 'plan-stem' | 'repository';
+
+export interface ManifestKindLocation {
+  readonly directory: string;
+  readonly identity: ManifestKindIdentity;
+  readonly filePattern: RegExp;
+}
+
+/**
+ * The legacy home and identity convention for every manifest kind. Keeping the
+ * closed kind set as the key makes a new kind impossible to add without first
+ * declaring how it maps back to the pre-manifest layout.
+ */
+export const MANIFEST_KIND_LOCATIONS = {
+  plan: { directory: '.docs/plans/', identity: 'plan-stem', filePattern: /\.md$/i },
+  stories: { directory: '.docs/stories/', identity: 'normalized-stem', filePattern: /\.md$/i },
+  prd: { directory: '.docs/specs/', identity: 'normalized-stem', filePattern: /\.md$/i },
+  track: { directory: '.docs/track/', identity: 'plan-stem', filePattern: /\.md$/i },
+  complexity: { directory: '.docs/complexity/', identity: 'plan-stem', filePattern: /\.md$/i },
+  conflicts: { directory: '.docs/conflicts/', identity: 'normalized-stem', filePattern: /\.md$/i },
+  coherence: { directory: '.docs/coherence/', identity: 'plan-stem', filePattern: /\.md$/i },
+  'coherence-waiver': { directory: '.docs/coherence-waivers/', identity: 'plan-stem', filePattern: /\.md$/i },
+  architecture: { directory: '.docs/architecture/', identity: 'repository', filePattern: /\.md$/i },
+  intake: { directory: '.docs/intake/', identity: 'plan-stem', filePattern: /\.md$/i },
+  applicability: { directory: '.docs/applicability/', identity: 'plan-stem', filePattern: /\.md$/i },
+  decision: { directory: '.docs/decisions/', identity: 'repository', filePattern: /^adr-.*\.md$/i },
+} as const satisfies Record<ArtifactKind, ManifestKindLocation>;
+
 declare const featureSlugBrand: unique symbol;
 export type FeatureSlug = string & { readonly [featureSlugBrand]: 'FeatureSlug' };
 
@@ -39,6 +67,62 @@ export type ParseFeatureManifestResult =
 
 export function featureManifestPath(slug: string): DocsPath {
   return `.docs/${slug}/manifest.json` as DocsPath;
+}
+
+/**
+ * Turn the authored feature change set into the manifest land will write.
+ * Repository-wide records and the current manifest are deliberately excluded:
+ * they are either transient indexes or the output being rebuilt.
+ */
+export function buildFeatureManifest(
+  slug: string,
+  featureFiles: Iterable<string>,
+  changedAdrPaths: Iterable<string>,
+): FeatureManifest {
+  const artifacts: FeatureManifestEntry[] = [];
+  const seen = new Set<string>();
+  const manifestPath = featureManifestPath(slug);
+  const add = (rawPath: string): void => {
+    const path = rawPath.replaceAll('\\', '/');
+    if (isExcludedManifestPath(path, manifestPath)) return;
+
+    const kind = manifestKindForPath(path);
+    if (kind === undefined) return;
+
+    const key = `${kind}\u0000${path}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    artifacts.push({ kind, path: path as DocsPath });
+  };
+
+  for (const path of featureFiles) add(path);
+  for (const path of changedAdrPaths) add(path);
+
+  return {
+    schemaVersion: 1,
+    slug: slug as FeatureSlug,
+    artifacts,
+  };
+}
+
+function isExcludedManifestPath(path: string, manifestPath: DocsPath): boolean {
+  return path === manifestPath
+    || path.startsWith('.docs/plan-review/')
+    || path.startsWith('.docs/shipped/')
+    || path.startsWith('.docs/halted/')
+    || path.startsWith('.docs/release-waivers/');
+}
+
+function manifestKindForPath(path: string): ArtifactKind | undefined {
+  for (const kind of ARTIFACT_KINDS) {
+    const location = MANIFEST_KIND_LOCATIONS[kind];
+    if (!path.startsWith(location.directory)) continue;
+
+    const fileName = path.slice(location.directory.length);
+    if (location.filePattern.test(fileName)) return kind;
+  }
+
+  return undefined;
 }
 
 export function renderFeatureManifest(manifest: FeatureManifest): string {
