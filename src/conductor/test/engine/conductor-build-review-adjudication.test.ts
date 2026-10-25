@@ -1295,6 +1295,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     ]);
   });
 
+  // Covers: task:11
   it('keeps a scope-empty rubric source live during clean-PASS settlement', async () => {
     const caseId = 'case-scope-empty';
     const run = await fixture({

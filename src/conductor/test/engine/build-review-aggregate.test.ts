@@ -227,6 +227,7 @@ describe('build-review raw aggregate', () => {
     expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
   });
 
+  // Covers: task:11
   it('treats an all-scope-empty custom lap as a passing non-judged result', () => {
     const scopeEmpty = {
       declaration: {
@@ -459,6 +460,7 @@ describe('build-review raw aggregate', () => {
     });
   });
 
+  // Covers: task:11
   it('treats scope-empty coverage as a passing non-judged result', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest,

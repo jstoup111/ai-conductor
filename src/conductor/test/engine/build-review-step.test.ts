@@ -1016,6 +1016,7 @@ describe('build_review structured rubric dispatch', () => {
     expect(customInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
   });
 
+  // Covers: task:11
   it('settles an empty custom delta without catalog or provider dispatch', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-scope-empty-'));
     const invoke = vi.fn();

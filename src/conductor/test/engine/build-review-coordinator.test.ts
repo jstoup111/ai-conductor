@@ -140,6 +140,7 @@ function coordinationInput(
 }
 
 describe("build-review coordinator: registered dispatch", () => {
+  // Covers: task:11
   it('records an empty delta as scope-empty without preflight, cache, or provider dispatch', async () => {
     const reviewScope = {
       mode: 'delta' as const,

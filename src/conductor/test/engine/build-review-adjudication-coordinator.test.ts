@@ -704,6 +704,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  // Covers: task:11
   it('does not retire a prior source merely because its rubric was scope-empty', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

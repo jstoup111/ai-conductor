@@ -169,6 +169,7 @@ describe('build-review current-lap branch artifacts', () => {
     expect(await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
+  // Covers: task:11
   it('round-trips a scope-empty result with its durable review scope', async () => {
     const fs = filesystem();
     const artifact = await writeBuildReviewBranchArtifact('/feature', {
