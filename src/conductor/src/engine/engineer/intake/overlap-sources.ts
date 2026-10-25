@@ -171,7 +171,7 @@ export async function traceBranchIssue({
 
   try {
     const legacyMarker = `.docs/intake/${slug}.md`;
-    const isSpecBranch = branch === `spec/${slug}`;
+    const isSpecBranch = parseFeatureRef(branch).kind === 'spec';
     const paths = isSpecBranch
       ? (await resolveFeatureArtifact(
         gitRefManifestSource(cwd ?? process.cwd(), branch),
