@@ -102,6 +102,7 @@ export function isBuildReviewCustomInfrastructureFailureReason(
 
 export type BuildReviewCustomArtifactResult =
   | { readonly kind: 'judged'; readonly contractVersion: 'custom-v1'; readonly rubric: string; readonly lapId: string; readonly declaration: BuildReviewCustomEvidenceDescriptor['declaration']; readonly policy: BuildReviewCustomEvidenceDescriptor['effectivePolicy']; readonly candidate: BuildReviewCustomEvidenceDescriptor['producer']; readonly reviewedInput: BuildReviewCustomEvidenceDescriptor['reviewedInput']; readonly findings: readonly unknown[]; readonly verdict: 'PASS' | 'FAIL'; readonly identity: { readonly id: string; readonly canonicalPayload: unknown; readonly canonicalJson: string } }
+  | { readonly kind: 'scope-empty'; readonly rubric: string }
   | { readonly kind: 'unsupported-policy'; readonly rubric: string; readonly requirement: string }
   | { readonly kind: 'infrastructure-failure'; readonly rubric: string; readonly reason: BuildReviewCustomInfrastructureFailureReason; readonly detail: string };
 
@@ -277,6 +278,12 @@ export function parseBuildReviewCustomArtifactMember(value: unknown): BuildRevie
       ...(declaration === undefined ? {} : { declaration }),
       result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'infrastructure-failure' }>,
     };
+  }
+  if (result.kind === 'scope-empty') {
+    const declaration = source.declaration === undefined ? undefined : parseBuildReviewCustomDeclaration(source.declaration);
+    if (!exactKeys(source, declaration === undefined ? ['result'] : ['declaration', 'result']) || !exactKeys(result, ['kind', 'rubric']) ||
+      !isCustomRubric(result.rubric) || (declaration !== undefined && declaration.rubricId !== result.rubric)) return undefined;
+    return { ...(declaration === undefined ? {} : { declaration }), result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'scope-empty' }> };
   }
   if (result.kind === 'unsupported-policy') {
     const declaration = source.declaration === undefined ? undefined : parseBuildReviewCustomDeclaration(source.declaration);

@@ -555,7 +555,7 @@ function validWrittenScopeEmptyArtifact(
   const result = artifact?.result;
   return artifact?.rubric === rubric && artifact.lapId === projection.lapId &&
     artifact.snapshotDigest === projection.snapshotDigest && result?.kind === 'scope-empty' &&
-    result.rubric === rubric ? result : undefined;
+    result.rubric === rubric ? result as BuildReviewScopeEmpty : undefined;
 }
 
 /**

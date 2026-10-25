@@ -1,4 +1,4 @@
-// Covers: S3.2, task:3, task:15, task:26
+// Covers: S3.2, task:3, task:11, task:15, task:26
 import { describe, expect, it } from 'vitest';
 
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -225,6 +225,27 @@ describe('build-review raw aggregate', () => {
 
     expect(active.verdict).toBe('FAIL');
     expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
+  });
+
+  it('treats an all-scope-empty custom lap as a passing non-judged result', () => {
+    const scopeEmpty = {
+      declaration: {
+        version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+        question: 'Does this preserve the portable policy contract?', source: 'project', resources: [],
+      },
+      result: { kind: 'scope-empty', rubric: 'portablePolicy' },
+    } as const;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      customResults: { portablePolicy: scopeEmpty }, currentCustomRubrics: ['portablePolicy'],
+    } as never);
+
+    expect(aggregate).toMatchObject({
+      verdict: 'PASS',
+      customResults: { portablePolicy: { result: { kind: 'scope-empty', rubric: 'portablePolicy' } } },
+    });
+    expect(parseBuildReviewAggregate(aggregate)?.customResults?.portablePolicy.result).toEqual(scopeEmpty.result);
   });
 
   it('keeps a disabled rubric\'s cached findings inspectable while supplying no current blocker or repair source', () => {

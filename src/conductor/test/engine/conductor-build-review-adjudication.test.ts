@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:5, task:7, task:8, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1, task:rem-as-built-rem-as-built-r12-2
+// Covers: task:1, task:4, task:5, task:7, task:8, task:11, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1, task:rem-as-built-rem-as-built-r12-2
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -106,6 +106,23 @@ function passAggregate(): unknown {
         kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
         contractVersion: 'v3', findings: [], verdict: 'PASS',
       },
+      security: {
+        kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+  });
+}
+
+function scopeEmptyAggregate(): unknown {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: { kind: 'scope-empty', rubric: 'testQuality' },
       security: {
         kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
         contractVersion: 'v3', findings: [], verdict: 'PASS',
@@ -328,6 +345,8 @@ interface FixtureOptions {
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
   readonly rawVerdict?: 'PASS' | 'FAIL';
+  /** A clean lap where testQuality deliberately did not inspect settled sources. */
+  readonly scopeEmpty?: boolean;
   /** Drives the built-in-only effective-PASS advisory path. */
   readonly advisory?: boolean;
   /** Adds an infrastructure failure to the advisory-only aggregate. */
@@ -376,7 +395,7 @@ async function fixture(options: FixtureOptions = {}) {
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : options.advisory ? advisoryAggregate({ infrastructure: options.advisoryInfrastructure }) : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = options.scopeEmpty ? scopeEmptyAggregate() : clean ? passAggregate() : options.advisory ? advisoryAggregate({ infrastructure: options.advisoryInfrastructure }) : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -1274,6 +1293,35 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.lifecycle.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === caseId)).toEqual([
       expect.objectContaining({ resolution: 'resolved', eventId: expect.any(String) }),
     ]);
+  });
+
+  it('keeps a scope-empty rubric source live during clean-PASS settlement', async () => {
+    const caseId = 'case-scope-empty';
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      scopeEmpty: true,
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: caseId, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The source was not judged in this lap.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: 'effect-scope-empty', kind: 'action', status: 'failed', diagnostic: 'prior effect failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+      },
+    });
+
+    expect(await run.readJson('.pipeline/remediation-cases.json')).toMatchObject({
+      cases: [expect.objectContaining({ id: caseId, resolution: 'open' })],
+    });
   });
 
   // Covers: task:rem-as-built-rem-as-built-R17g

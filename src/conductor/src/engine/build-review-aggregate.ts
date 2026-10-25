@@ -354,9 +354,10 @@ function aggregateVerdict(
   custom?: { readonly results: Readonly<Record<string, BuildReviewCustomArtifactMember>>; readonly current: readonly string[] },
 ): 'PASS' | 'FAIL' {
   const currentCustom = custom?.current.map((rubric) => custom.results[rubric]!) ?? [];
-  const completedCount = RUBRICS.filter((name) => results[name].kind === 'judged' || results[name].kind === 'scope-empty').length + currentCustom.filter((member) => member.result.kind === 'judged').length;
+  const completedCount = RUBRICS.filter((name) => results[name].kind === 'judged' || results[name].kind === 'scope-empty').length + currentCustom.filter((member) => member.result.kind === 'judged' || member.result.kind === 'scope-empty').length;
   return completedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) && !currentCustom.some((member) =>
-    member.result.kind !== 'judged' || member.result.verdict === 'FAIL',
+    (member.result.kind !== 'judged' && member.result.kind !== 'scope-empty') ||
+    (member.result.kind === 'judged' && member.result.verdict === 'FAIL'),
   ) ? 'PASS' : 'FAIL';
 }
 

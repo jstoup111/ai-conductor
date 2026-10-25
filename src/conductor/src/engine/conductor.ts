@@ -5490,13 +5490,28 @@ export class Conductor {
       .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
         record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
       .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
+    // `scope-empty` says this rubric deliberately did not judge its settled
+    // sources.  Keep only those sources live: other rubrics can still prove
+    // absence in this same clean lap.
+    const scopeEmptyRubrics = new Set([
+      ...Object.entries(aggregate.results)
+        .filter(([, result]) => result.kind === 'scope-empty')
+        .map(([rubric]) => rubric),
+      ...(aggregate.currentCustomRubrics ?? []).filter((rubric) =>
+        aggregate.customResults?.[rubric]?.result.kind === 'scope-empty',
+      ),
+    ]);
+    let scopeEmptySourceIds = new Set<string>();
     // A clean PASS is the evidence that the content set is empty, whether or
     // not an earlier lap left a work order on disk: absent non-action history
     // settles benignly here too, while the reconciler's shared effect-status
     // test keeps any reserved or failed effect open.
     const retirement = await store.mutate(async (state) => {
+      scopeEmptySourceIds = new Set(state.cases.flatMap((record) => record.sources
+        .filter((source) => scopeEmptyRubrics.has(source.sourceId.split(':', 1)[0]!))
+        .map((source) => source.sourceId)));
       const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
-        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        liveSourceIds: scopeEmptySourceIds, effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
         allowAppliedByAbsence: attemptEvidence.ok,
         resolveAbsentOpenNonActionCases: true,
         referenced: false,
@@ -5530,6 +5545,7 @@ export class Conductor {
       lapId: aggregate.lapId,
       effectiveAcceptedSourceIds: acceptedSourceIds,
       mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+      liveSourceIds: scopeEmptySourceIds,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {

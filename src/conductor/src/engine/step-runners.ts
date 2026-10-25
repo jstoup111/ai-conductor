@@ -3906,6 +3906,30 @@ export class DefaultStepRunner implements StepRunner {
       declaration,
       result: { kind: 'infrastructure-failure', rubric: entry.id, reason, detail },
     });
+    if (reviewScope?.mode === 'delta' && reviewScope.deltaHunks.length === 0) {
+      const member: BuildReviewCustomArtifactMember = {
+        declaration,
+        result: { kind: 'scope-empty', rubric: entry.id },
+      };
+      try {
+        await writeBuildReviewBranchArtifact(this.projectDir, {
+          rubric: entry.id,
+          lapId,
+          snapshotDigest: inputs.sourceSnapshot.digest,
+          result: member.result,
+          provenance: { kind: 'fresh' },
+          declaration,
+          reviewScope,
+        }, {
+          readFile: async (path) => readFile(path, 'utf-8'),
+          mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,
+        });
+      } catch (error) {
+        return { id: entry.id, success: false, output: `Installed build-review policy ${entry.skill} could not persist its branch artifact: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      await this.events?.emit({ type: 'build_review_rubric_skipped', rubric: entry.id, lapId, reason: 'scope-empty' });
+      return { id: entry.id, success: true, output: `build_review custom policy ${entry.id} scope-empty`, member };
+    }
     if (!this.providerRuntimes || !this.sessionStore || !this.buildReviewPolicyCatalog) {
       const output = `build_review custom policy ${entry.id} requires a candidate policy catalog adapter`;
       return { id: entry.id, success: true, output, member: failedMember('policy-load-failed', output) };
