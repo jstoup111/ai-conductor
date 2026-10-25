@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:1, task:2
 /**
  * Regression coverage for issue #1010: copying
  * templates/ai-conductor-config.yml.template produced an invalid
