@@ -199,6 +199,12 @@ function lineIntersectsHunk(
   return region.startLine <= end && region.endLine >= start;
 }
 
+function hasLineRange(
+  region: BuildReviewFinding["anchor"]["locus"] | BuildReviewCustomFinding["sourceRegions"][number],
+): region is (BuildReviewFinding["anchor"]["locus"] & { readonly startLine: number; readonly endLine: number }) | BuildReviewCustomFinding["sourceRegions"][number] {
+  return region.startLine !== undefined && region.endLine !== undefined;
+}
+
 /**
  * Maps every source region independently.  The file fallback is intentional:
  * an imprecise anchor must remain in the delta, never silently become settled.
@@ -216,7 +222,7 @@ export function mapBuildReviewFindingToHunks(
   for (const region of regions) {
     const file = byPath.get(region.path);
     const candidates = file === undefined ? [] : (
-      "startLine" in region
+      hasLineRange(region)
         ? file.hunks.filter((hunk) => lineIntersectsHunk(region, hunk))
         : file.hunks.filter((hunk) => hunk.contentHash === region.contentHash)
     );

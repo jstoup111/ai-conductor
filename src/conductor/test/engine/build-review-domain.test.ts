@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:7
 // Covers: task:5, task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -879,6 +879,7 @@ describe('build-review domain', () => {
         obligationReferences: ['S5.4'], missingEvidenceReason: 'Pinned source cannot establish the marker association.',
       }]).changedTestRegions).toContainEqual({
         path: candidateRegion.path, contentHash: HASH, display: candidateRegion.display,
+        startLine: candidateRegion.startLine, endLine: candidateRegion.endLine,
       });
       expect(buildReviewFindingReferenceContext(projection, [{
         candidateId: 'candidate-unresolved', status: 'indeterminate', sourceRegion: candidateRegion,
@@ -939,8 +940,8 @@ describe('build-review domain', () => {
       ]);
 
       expect(references.changedTestRegions).toEqual([
-        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > first candidate'), display: 'shared setup > first candidate' },
-        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'shared setup > second candidate' },
+        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > first candidate'), display: 'shared setup > first candidate', startLine: 4, endLine: 9 },
+        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'shared setup > second candidate', startLine: 4, endLine: 9 },
       ]);
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'second' } }, references)).toBeDefined();
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: HASH, display: 'source bytes' } }, references)).toBeUndefined();
@@ -968,7 +969,7 @@ describe('build-review domain', () => {
         obligationReferences: ['S5.4'], associationReason: 'The second declared assertion is the pinned candidate.',
       }]);
       const first = { path: 'test/duplicate.test.ts', contentHash: titleHash('duplicate assertion'), display: 'duplicate assertion' };
-      const second = { ...first, occurrence: 1 };
+      const second = { ...first, occurrence: 1, startLine: 12, endLine: 16 };
 
       expect(references.changedTestRegions).toEqual([first, second]);
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: first }, references)).toBeDefined();
@@ -989,7 +990,7 @@ describe('build-review domain', () => {
 
       expect(references.changedTestRegions).toEqual([
         { path: selector, contentHash: coarseHash, display: `${selector} changed test` },
-        { path: selector, contentHash: coarseHash, display: 'fallback candidate', occurrence: 1 },
+        { path: selector, contentHash: coarseHash, display: 'fallback candidate', occurrence: 1, startLine: 4, endLine: 8 },
       ]);
     });
 

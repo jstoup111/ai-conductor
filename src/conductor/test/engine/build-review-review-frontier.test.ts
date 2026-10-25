@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:7
 import { describe, expect, it } from "vitest";
 
 import {
@@ -14,6 +14,10 @@ import type {
   BuildReviewCustomFinding,
   BuildReviewFinding,
   BuildReviewLapId,
+} from "../../src/engine/build-review-domain.js";
+import {
+  buildReviewFindingReferenceContext,
+  parseBuildReviewFindingAnchor,
 } from "../../src/engine/build-review-domain.js";
 import type { ChangedFileReference } from "../../src/engine/build-review-projections.js";
 
@@ -221,7 +225,7 @@ describe("build-review review frontier", () => {
   });
 
   // Covers: task:7
-  it("intersects custom and test-quality source regions with new-side hunks", () => {
+  it("intersects custom and parsed test-quality regions with new-side hunks", () => {
     const files: readonly ChangedFileReference[] = [{
       path: "test/widget.test.ts", changeKind: "modified",
       hunks: [
@@ -233,14 +237,41 @@ describe("build-review review frontier", () => {
       path: "test/widget.test.ts", startLine: 12, endLine: 30,
       contentHash: "sha256:anchored-test", display: "widget persists state",
     };
-    const testQuality = {
-      concernKind: "test-insensitive", summary: "does not observe", evidenceLocations: [],
-      anchor: { rubric: "testQuality" as const, locus: testRegion },
-    } satisfies BuildReviewFinding;
     const custom = {
       concernId: "custom:coverage", summary: "coverage gap", evidenceLocations: [],
       sourceRegions: [testRegion],
     } satisfies BuildReviewCustomFinding;
+    const references = buildReviewFindingReferenceContext({
+      rubric: "testQuality",
+      changedTestSelectors: [testRegion.path],
+      changedFiles: files,
+      testScope: {
+        targets: [{
+          source: { fileName: testRegion.path, side: "head" },
+          declaration: {
+            kind: "test", titleChain: [testRegion.display], occurrence: 0,
+            span: { start: 30, end: 90 },
+          },
+        }],
+        evidence: [{
+          source: { fileName: testRegion.path, side: "head" },
+          region: { start: 30, end: 90 },
+          startLine: testRegion.startLine, endLine: testRegion.endLine,
+        }],
+      },
+    } as never);
+    const anchor = parseBuildReviewFindingAnchor({
+      rubric: "testQuality",
+      locus: {
+        path: testRegion.path,
+        contentHash: "sha256:66f03846005a531480a01c22ab5e34b127efca5d4dbd2e0a92c9222be72f7c3d",
+        display: testRegion.display,
+      },
+    }, references)!;
+    const testQuality = {
+      concernKind: "test-insensitive", summary: "does not observe", evidenceLocations: [],
+      anchor,
+    } satisfies BuildReviewFinding;
 
     const expected = [{
       kind: "hunks",

@@ -63,7 +63,15 @@ export function classifyBuildReviewPolicyIncompatibility(
   };
 }
 
-export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
+export interface BuildReviewContentRegionReference {
+  readonly path: string;
+  readonly contentHash: string;
+  readonly display: string;
+  readonly occurrence?: number;
+  /** Engine-bound source lines for test-quality regions; never reviewer-controlled identity. */
+  readonly startLine?: number;
+  readonly endLine?: number;
+}
 export type BuildReviewFindingAnchor =
   | { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference }
   | { readonly rubric: 'security'; readonly locus: BuildReviewContentRegionReference }
@@ -450,7 +458,7 @@ export function parseBuildReviewRubricContractVersion(value: unknown): BuildRevi
 // `occurrence` is the 0-based ordinal among equal-content regions in one path;
 // 0 is the unique/first region and normalizes away so identities never differ
 // on an explicit-versus-omitted zero.
-function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalBuildReviewRepoRelativePath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined); }
+function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalBuildReviewRepoRelativePath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0)) || ((source.startLine === undefined) !== (source.endLine === undefined)) || (source.startLine !== undefined && (!Number.isInteger(source.startLine) || (source.startLine as number) < 1 || !Number.isInteger(source.endLine) || (source.endLine as number) < (source.startLine as number)))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined, source.startLine as number | undefined, source.endLine as number | undefined); }
 function strictRegion(value: unknown): BuildReviewContentRegionReference | undefined {
   const source = object(value);
   const parsed = region(value);
@@ -461,7 +469,7 @@ function strictRegion(value: unknown): BuildReviewContentRegionReference | undef
     ? parsed
     : undefined;
 }
-function contentRegionReference(path: string, contentHash: string, display: string, occurrence = 0): BuildReviewContentRegionReference { return { path, contentHash, display, ...(occurrence > 0 ? { occurrence } : {}) }; }
+function contentRegionReference(path: string, contentHash: string, display: string, occurrence = 0, startLine?: number, endLine?: number): BuildReviewContentRegionReference { return { path, contentHash, display, ...(occurrence > 0 ? { occurrence } : {}), ...(startLine === undefined ? {} : { startLine, endLine }) }; }
 function candidateScopeSourceRegion(value: unknown): BuildReviewCandidateScopeSourceRegion | undefined {
   const source = object(value);
   return source && parseBuildReviewCanonicalPathReference(source.path) &&
@@ -576,7 +584,7 @@ function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionRef
     // use the next free ordinal in that same namespace.
     const occurrence = reference.occurrence ?? next;
     seen.set(key, Math.max(next, occurrence + 1));
-    return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence);
+    return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence, reference.startLine, reference.endLine);
   });
 }
 function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewContentRegionReference): boolean { return left.path === right.path && left.contentHash === right.contentHash && left.occurrence === right.occurrence; }
@@ -588,9 +596,10 @@ function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewC
  * ordinal.
  */
 function resolveContentRegion(regions: readonly BuildReviewContentRegionReference[], locus: BuildReviewContentRegionReference): BuildReviewContentRegionReference | undefined {
-  if (regions.some((candidate) => sameRegion(candidate, locus))) return locus;
+  const exact = regions.find((candidate) => sameRegion(candidate, locus));
+  if (exact) return contentRegionReference(locus.path, locus.contentHash, locus.display, exact.occurrence, exact.startLine, exact.endLine);
   const sameContent = regions.filter((candidate) => candidate.path === locus.path && candidate.contentHash === locus.contentHash);
-  return sameContent.length === 1 ? contentRegionReference(locus.path, locus.contentHash, locus.display, sameContent[0]!.occurrence) : undefined;
+  return sameContent.length === 1 ? contentRegionReference(locus.path, locus.contentHash, locus.display, sameContent[0]!.occurrence, sameContent[0]!.startLine, sameContent[0]!.endLine) : undefined;
 }
 /**
  * adr-2026-08-18 fixes finding identity as `sha256(whitespace-normalized
@@ -617,13 +626,21 @@ function declaredHeadTestTarget(entry: unknown): {
   readonly path: string;
   readonly title: string;
   readonly occurrence: number;
+  readonly span?: { readonly start: number; readonly end: number };
 } | undefined {
-  const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source);
+  const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source); const span = declaration && object(declaration.span);
   const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
   const titleChain = declaration?.titleChain;
   const occurrence = declaration?.occurrence;
   if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) return undefined;
-  return { path, title: titleChain.join(' > '), occurrence: occurrence as number };
+  return {
+    path,
+    title: titleChain.join(' > '),
+    occurrence: occurrence as number,
+    ...(span && Number.isInteger(span.start) && Number.isInteger(span.end) && (span.start as number) >= 0 && (span.end as number) >= (span.start as number)
+      ? { span: { start: span.start as number, end: span.end as number } }
+      : {}),
+  };
 }
 
 function declaredTitleOccurrenceIndex(projection: TestQualityProjection): DeclaredTitleOccurrenceIndex {
@@ -671,13 +688,25 @@ function declaredTitleOccurrenceIndex(projection: TestQualityProjection): Declar
   }
   return { targets, candidatesById, candidates };
 }
+function targetLines(scope: Record<string, unknown>, target: { readonly path: string; readonly span?: { readonly start: number; readonly end: number } }): { readonly startLine: number; readonly endLine: number } | undefined {
+  if (!target.span || !Array.isArray(scope.evidence)) return undefined;
+  for (const entry of scope.evidence) {
+    const evidence = object(entry); const source = evidence && object(evidence.source); const region = evidence && object(evidence.region);
+    if (!evidence || source?.fileName !== target.path || source.side !== 'head' || region?.start !== target.span.start || region.end !== target.span.end) continue;
+    if (Number.isInteger(evidence.startLine) && (evidence.startLine as number) > 0 && Number.isInteger(evidence.endLine) && (evidence.endLine as number) >= (evidence.startLine as number)) {
+      return { startLine: evidence.startLine as number, endLine: evidence.endLine as number };
+    }
+  }
+  return undefined;
+}
 function targetRegions(projection: TestQualityProjection, declaredTitles: DeclaredTitleOccurrenceIndex): readonly BuildReviewContentRegionReference[] | undefined {
   const scope = object(projection.testScope);
   if (!scope || !Array.isArray(scope.targets)) return undefined;
   return scope.targets.flatMap((target) => {
     const declared = declaredHeadTestTarget(target);
     if (!declared || !declaredTitles.targets.get(`${declared.path}\u0000${declared.title}`)?.includes(declared.occurrence)) return [];
-    return [contentRegionReference(declared.path, normalizedTitleHash(declared.title), declared.title, declared.occurrence)];
+    const lines = targetLines(scope, declared);
+    return [contentRegionReference(declared.path, normalizedTitleHash(declared.title), declared.title, declared.occurrence, lines?.startLine, lines?.endLine)];
   });
 }
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
@@ -711,6 +740,8 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
       contentHash: declaredCandidate || occurrences ? normalizedTitleHash(title) : resolution.sourceRegion.contentHash,
       display: resolution.sourceRegion.display,
       ...(occurrence === undefined ? {} : { occurrence }),
+      startLine: resolution.sourceRegion.startLine,
+      endLine: resolution.sourceRegion.endLine,
     }];
   });
   const changedTestRegions = withOccurrenceOrdinals(targets !== undefined
@@ -727,7 +758,13 @@ function securityRegion(value: unknown): BuildReviewContentRegionReference | und
 export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFindingAnchor | undefined {
   const source = object(value);
   const locus = source && region(source.locus);
-  if (source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus)))) return { rubric: 'testQuality', locus };
+  if (source?.rubric === 'testQuality' && locus) {
+    if (!references?.changedTestRegions) return { rubric: 'testQuality', locus };
+    const resolved = references.changedTestRegions.find((candidate) => sameRegion(candidate, locus));
+    return resolved
+      ? { rubric: 'testQuality', locus: contentRegionReference(locus.path, locus.contentHash, locus.display, resolved.occurrence, resolved.startLine, resolved.endLine) }
+      : undefined;
+  }
   const contentRubric = source?.rubric === 'security' || source?.rubric === 'implementationQuality'
     ? source.rubric
     : undefined;
