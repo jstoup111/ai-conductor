@@ -165,7 +165,13 @@ import { renderBuildReviewFrozenInputScope } from './build-review-materializatio
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES } from './build-review-input-integrity.js';
 import { BuildReviewLapGate } from './build-review-lap-gate.js';
-import { canonicalizeBuildReviewCustomFindingIdentity, canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
+import {
+  canonicalizeBuildReviewCustomFindingIdentity,
+  canonicalizeBuildReviewFindingIdentity,
+  stampBuildReviewCustomJudgedResult,
+  type BuildReviewCustomFindingIdentity,
+  type BuildReviewFindingIdentity,
+} from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
   emitBuildReviewCacheDiscard,
@@ -185,6 +191,7 @@ import {
   buildReviewRubricPromptPath,
   readBuildReviewBranchArtifact,
   writeBuildReviewBranchArtifact,
+  type BuildReviewBranchArtifact,
   type BuildReviewBranchProvenance,
   type BuildReviewCustomArtifactMember,
 } from './build-review-artifacts.js';
@@ -223,10 +230,14 @@ import {
   diagnoseBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
+  parseBuildReviewCustomReviewerPayload,
+  parseBuildReviewJudgedResult,
   parseBuildReviewRubricResult,
   renderBuildReviewJudgedResultRejection,
   renderBuildReviewUnresolvedSkillRemedy,
   isBelowSeverityThreshold,
+  type BuildReviewCustomFinding,
+  type BuildReviewFinding,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import { buildReviewSeverityThresholdPolicies, finalizedBuildReviewSourceIds, RemediationCaseStore } from './remediation-case-store.js';
@@ -611,6 +622,58 @@ export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
     }
   }
   return { resolved: false, reason: 'rebase skill returned no parseable result' };
+}
+
+type BuildReviewSettledArtifactFinding = {
+  readonly sourceId: string;
+  readonly finding: BuildReviewFinding | BuildReviewCustomFinding;
+  readonly identity: BuildReviewFindingIdentity | BuildReviewCustomFindingIdentity;
+};
+
+/**
+ * Converts durable artifact findings back into the typed shape the frontier
+ * needs. Custom branch artifacts deliberately retain untrusted findings as
+ * unknown, so malformed historical evidence stays unsettled rather than
+ * becoming scope authority.
+ */
+function settledBuildReviewArtifactFindings(
+  artifact: BuildReviewBranchArtifact,
+): readonly BuildReviewSettledArtifactFinding[] {
+  if (artifact.result.kind !== 'judged') return [];
+
+  const builtin = parseBuildReviewJudgedResult(artifact.result);
+  if (builtin !== undefined && builtin.rubric === artifact.rubric) {
+    return builtin.findings.flatMap((finding) => {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric: builtin.rubric,
+        contractVersion: builtin.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
+      });
+      return identity === undefined ? [] : [{ sourceId: identity.id, finding, identity }];
+    });
+  }
+
+  return artifact.result.findings.flatMap((value): readonly BuildReviewSettledArtifactFinding[] => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+    const source = value as Record<string, unknown>;
+    const payload = parseBuildReviewCustomReviewerPayload({
+      kind: 'custom-findings',
+      version: source.severity === undefined ? 'v1' : 'v2',
+      findings: [{
+        concernId: source.concernId,
+        summary: source.summary,
+        evidenceLocations: source.evidenceLocations,
+        sourceRegions: source.sourceRegions,
+        ...(source.confidence === undefined ? {} : { confidence: source.confidence }),
+        ...(source.severity === undefined ? {} : { severity: source.severity }),
+        ...(source.causeHunk === undefined ? {} : { causeHunk: source.causeHunk }),
+      }],
+    });
+    const finding = payload?.kind === 'custom-findings' ? payload.findings[0] : undefined;
+    const identity = canonicalizeBuildReviewCustomFindingIdentity(value);
+    return finding === undefined || identity === undefined ? [] : [{ sourceId: identity.id, finding, identity }];
+  });
 }
 
 export interface StepRunnerOptions {
@@ -3360,19 +3423,7 @@ export class DefaultStepRunner implements StepRunner {
     ): ReadonlySet<string> => {
       const settled = new Set<string>();
       for (const artifact of artifacts) {
-        if (artifact.result.kind !== 'judged' || !('findings' in artifact.result)) continue;
-        const findings = artifact.result.findings as readonly (import('./build-review-domain.js').BuildReviewFinding | import('./build-review-domain.js').BuildReviewCustomFinding)[];
-        for (const finding of findings) {
-          const identity = rubric === artifact.rubric && 'concernKind' in finding
-            ? canonicalizeBuildReviewFindingIdentity({
-              rubric: artifact.rubric as BuildReviewRubricId,
-              contractVersion: artifact.result.contractVersion as 'v4',
-              concernKind: finding.concernKind,
-              anchor: finding.anchor,
-            })
-            : canonicalizeBuildReviewCustomFindingIdentity(finding);
-          if (!identity) continue;
-          const sourceId = identity.id;
+        for (const { sourceId, finding, identity } of settledBuildReviewArtifactFindings(artifact)) {
           const sourceSettledByCase = finalizedSources.has(`${rubric}:${sourceId}`);
           const sourceSettledByDisposition = feature !== undefined && matchesBuildReviewDisposition(feature, identity, dispositions);
           const sourceSettledByThreshold = (finding.confidence !== undefined && finding.confidence < policy.min_confidence) ||
