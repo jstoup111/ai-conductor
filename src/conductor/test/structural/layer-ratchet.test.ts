@@ -1,7 +1,7 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { describe, expect, it } from 'vitest';
 
-import { checkLayerRatchet } from './layer-ratchet.js';
+import { checkLayerRatchet, decodeAllowlistName, encodeAllowlistName } from './layer-ratchet.js';
 
 describe('structural: layer ratchet', () => {
   it('resolves .js specifiers to sibling TypeScript files', () => {
@@ -408,5 +408,29 @@ describe('structural: layer ratchet', () => {
         cycle: ['engine/x.ts', 'ui/y.ts'],
       },
     ]);
+  });
+
+  it.each([
+    ['engine/conductor.ts', 'ui/events.ts'],
+    ['engine/engineer/intake/x.ts', 'cli.ts'],
+  ])('round-trips allowlist names for %s and %s', (from, to) => {
+    expect(decodeAllowlistName(encodeAllowlistName(from, to))).toEqual({ from, to });
+  });
+
+  it('encodes collision-prone file pairs differently', () => {
+    expect(encodeAllowlistName('engine/a-b.ts', 'ui/c.ts')).not.toBe(
+      encodeAllowlistName('engine/a/b.ts', 'ui/c.ts'),
+    );
+  });
+
+  it.each([
+    'not-an-edge.txt',
+    'engine%2Fa.ts+ui%2Fb.ts+types%2Fc.ts.edge',
+    '..%2Fx.ts+ui%2Fb.ts.edge',
+    'engine%2fa.ts+ui%2Fb.ts.edge',
+  ])('reports malformed allowlist entry %s', (entry) => {
+    const result = checkLayerRatchet({ files: new Map(), allowlist: [entry] });
+
+    expect(result.violations).toEqual([{ kind: 'malformed-entry', entry }]);
   });
 });

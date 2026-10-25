@@ -11,7 +11,8 @@ export type LayerRatchetViolation =
   | UnclassifiableFileViolation
   | UnresolvedSpecifierViolation
   | UpwardViolation
-  | CycleViolation;
+  | CycleViolation
+  | MalformedEntryViolation;
 
 interface UnclassifiableFileViolation {
   kind: 'unclassifiable-file';
@@ -41,6 +42,16 @@ interface CycleViolation {
   cycle: readonly string[];
 }
 
+interface MalformedEntryViolation {
+  kind: 'malformed-entry';
+  entry: string;
+}
+
+export interface AllowlistPair {
+  from: string;
+  to: string;
+}
+
 export interface LayerRatchetResult {
   scannedFileCount: number;
   edges: LayerRatchetEdge[];
@@ -63,9 +74,13 @@ const LAYER_RANK: Readonly<Record<Exclude<Layer, 'tools'>, number>> = {
   entry: 4,
 };
 
-export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetResult {
+export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): LayerRatchetResult {
   const edges: LayerRatchetEdge[] = [];
   const violations: LayerRatchetViolation[] = [];
+
+  for (const entry of allowlist) {
+    if (decodeAllowlistName(entry) === undefined) violations.push({ kind: 'malformed-entry', entry });
+  }
 
   for (const [file, source] of files) {
     if (layerFor(file) === undefined) violations.push({ kind: 'unclassifiable-file', file });
@@ -115,6 +130,29 @@ export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetRes
   }
 
   return { scannedFileCount: files.size, edges, violations };
+}
+
+export function encodeAllowlistName(from: string, to: string): string {
+  return `${encodeURIComponent(from)}+${encodeURIComponent(to)}.edge`;
+}
+
+export function decodeAllowlistName(name: string): AllowlistPair | undefined {
+  if (!name.endsWith('.edge')) return undefined;
+  const parts = name.slice(0, -'.edge'.length).split('+');
+  if (parts.length !== 2) return undefined;
+  try {
+    const [from, to] = parts.map((part) => decodeURIComponent(part));
+    if (!isAllowlistPath(from) || !isAllowlistPath(to)) return undefined;
+    return encodeAllowlistName(from, to) === name ? { from, to } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isAllowlistPath(path: string): boolean {
+  return path.endsWith('.ts')
+    && !path.startsWith('/')
+    && path.split('/').every((segment) => segment !== '' && segment !== '..');
 }
 
 interface TarjanFrame {
