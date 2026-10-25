@@ -1,4 +1,4 @@
-// Covers: task:1, task:rem-as-built-1-r1, task:rem-as-built-1-r2
+// Covers: task:1, task:rem-as-built-1-r1, task:rem-as-built-1-r2, task:rem-operator-17-r3
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
