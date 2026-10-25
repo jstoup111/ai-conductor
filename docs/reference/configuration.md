@@ -2133,9 +2133,12 @@ it never includes the token, token-file path, or command output.
 
 The daemon also reads this token once while preparing a worktree to resolve the bot's GitHub
 identity. When that succeeds, daemon-created commits carry a `Co-authored-by:` trailer for that
-identity; the operator remains the commit author. An unavailable token or identity read simply
-omits the trailer and emits a secret-safe `bot_co_author_skipped` event. Operator-run commits are
-never stamped.
+identity; the operator remains the commit author. The daemon process and each executor child
+install the identity resolver before feature dispatch. An unavailable token or identity read simply
+omits the trailer and emits a secret-safe `bot_co_author_skipped` event. A daemon dispatch that
+reaches worktree preparation without an installed resolver also omits the trailer and emits the
+same event with reason `resolver-absent`, rendered in the daemon log as `bot co-author skipped:
+resolver not installed for daemon dispatch`. Operator-run commits are never stamped.
 
 ## spec_owner
 
