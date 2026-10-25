@@ -74,6 +74,9 @@ export async function startChild(
   // rather than a feature worktree's potentially uncommitted config edit.
   const projectRoot = await resolveMainRepoRoot(worktree);
   const topology = await loadSliceTopology(worktree, slug, { git, projectRoot });
+  if (topology.kind === 'unavailable') {
+    return refused(`child ${child} cannot start: sealed-plan topology is unavailable (${topology.cause})`);
+  }
   const positions = topology.kind === 'sliced'
     ? topology.positions.map((position) => parseChildId(position)).filter((position): position is ChildId => position !== undefined)
     : [];

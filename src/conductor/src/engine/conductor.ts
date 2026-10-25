@@ -714,6 +714,7 @@ export class Conductor {
   /** The feature-level store is restored after a routed return reaches leaf. */
   private readonly rootStateStore: ConductStateStore<ConductState>;
   private readonly resolveActiveChild: typeof resolveActiveChild;
+  private readonly stackPreflight: typeof runStackPreflight;
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
@@ -2561,6 +2562,7 @@ export class Conductor {
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.resolveActiveChild = opts.childRegionLifecycle?.resolveActiveChild ?? resolveActiveChild;
+    this.stackPreflight = opts.stackPreflight ?? runStackPreflight;
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
     this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
@@ -6771,7 +6773,7 @@ export class Conductor {
             return;
           }
         }
-        const preflight = await runStackPreflight({
+        const preflight = await this.stackPreflight({
           worktree: this.projectRoot,
           slug: resumeSlug,
           events: this.events,
@@ -16766,7 +16768,7 @@ export class Conductor {
         await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
         return { success: true };
       }
-      const preflight = await runStackPreflight({
+      const preflight = await this.stackPreflight({
         worktree: this.projectRoot,
         slug: stackSlug,
         events: this.events,

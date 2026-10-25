@@ -5,7 +5,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveActiveChild } from '../../src/engine/child-cursor.js';
+import { startChild } from '../../src/engine/child-lifecycle.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { resolveChildTaskScope } from '../../src/engine/task-progress.js';
+import { runTaskMembershipCheck } from '../../src/engine/task-membership-check-cli.js';
+import { detectTaskCommand, dispatchTaskCommand } from '../../src/engine/task-cli.js';
+import { deriveTaskBoundOwner } from '../../src/engine/routing/owner-derivation.js';
+import { routeAdmittedRound } from '../../src/engine/routing/round-router.js';
 import { loadSliceTopology } from '../../src/engine/slice-topology.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const engineRoot = join(dirname(fileURLToPath(import.meta.url)), '../../src/engine');
 
@@ -23,21 +31,6 @@ const IMPORTERS = [
  * entries are topology readers and must inspect the loader result rather than
  * manufacture an unsliced fallback.
  */
-const READER_ENTRY_POINTS: Readonly<Record<string, readonly string[]>> = {
-  'artifacts.ts': ['checkStepCompletion'],
-  'child-cursor.ts': ['resolveActiveChild'],
-  'child-lifecycle.ts': ['startChild', 'moveLeaf'],
-  'conductor.ts': ['Conductor'],
-  'daemon-dashboard.ts': ['scanInheritedState'],
-  'daemon-observe-cli.ts': ['runDaemonStatus'],
-  'finish-publication-production.ts': ['readyStackChildren', 'assembleStack'],
-  'reseal-cli.ts': ['dispatchResealCommand'],
-  'step-runners.ts': ['DefaultStepRunner'],
-  'task-cli.ts': ['dispatchTaskCommand'],
-  'task-membership-check-cli.ts': ['runTaskMembershipCheck'],
-  'task-progress.ts': ['resolveChildTaskScope'],
-};
-
 let projectRoot: string;
 
 async function malformedTwoChildPlan(): Promise<void> {
@@ -78,7 +71,7 @@ describe('slice-topology consumer boundary', () => {
     expect(importers).toEqual(IMPORTERS);
   });
 
-  it('keeps a malformed two-child plan as plan-invalid at every consumer boundary, never a flat topology', async () => {
+  it('keeps a malformed two-child plan as plan-invalid at its runtime consumer boundaries, never a flat topology', async () => {
     const topology = await loadSliceTopology(projectRoot, 'demo');
     expect(topology).toMatchObject({ kind: 'unavailable', cause: 'plan-invalid' });
     if (topology.kind !== 'unavailable') throw new Error('fixture must remain malformed');
@@ -91,33 +84,50 @@ describe('slice-topology consumer boundary', () => {
       kind: 'topology-unavailable', cause: 'plan-invalid',
     });
 
-    const sources = new Map((await Promise.all(IMPORTERS.map(async (path) => [
-      path,
-      await readFile(join(engineRoot, path), 'utf8'),
-    ] as const))));
+    // These public reader boundaries each load the sealed topology themselves.
+    // A malformed stack-shaped plan must be refused with its typed cause, never
+    // flattened into a no-child or unsliced fallback.
+    await expect(startChild(projectRoot, 'demo', parseChildId(1)!, new ConductorEventEmitter()))
+      .resolves.toMatchObject({ kind: 'refused', reason: expect.stringContaining('plan-invalid') });
+    await expect(resolveChildTaskScope(projectRoot, parseChildId(1)!))
+      .resolves.toMatchObject({ kind: 'refused', reason: expect.stringContaining('plan-invalid') });
 
-    for (const [importer, entryPoints] of Object.entries(READER_ENTRY_POINTS)) {
-      const source = sources.get(importer)!;
-      for (const entryPoint of entryPoints) {
-        expect(source, `${importer} must retain ${entryPoint}`).toContain(entryPoint);
-      }
-      // Every runtime reader must branch on the sealed loader result.  This is
-      // the point that carries `plan-invalid` through its own public boundary;
-      // `kind: 'unsliced'` is not an error recovery representation.
-      expect(source, `${importer} must inspect the unavailable topology`).toMatch(/topology\??\.(?:kind|cause)/);
-    }
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await writeFile(messagePath, 'fix: malformed stack\n\nTask: 1\n');
+    const membershipOutput: string[] = [];
+    await expect(runTaskMembershipCheck({
+      projectRoot,
+      commitMessagePath: messagePath,
+      symbolicRef: async () => 'feat/c1/demo',
+      print: (line) => membershipOutput.push(line),
+    })).resolves.toBe(1);
+    expect(membershipOutput.join('\n')).toContain('plan-invalid');
 
-    // Routing helpers cannot read a plan (the import is type-only), so their
-    // entry points require the sealed membership handed to them by a reader.
-    // This prevents a malformed plan from reaching routing as flat input.
-    for (const [importer, entryPoint] of [
-      ['routing/owner-derivation.ts', 'deriveTaskBoundOwner'],
-      ['routing/round-router.ts', 'routeAdmittedRound'],
-    ] as const) {
-      const source = sources.get(importer)!;
-      expect(source, `${importer} entry point`).toContain(`function ${entryPoint}`);
-      expect(source, `${importer} consumes sealed membership`).toContain('sliceMembership');
-      expect(source, `${importer} cannot synthesize flat topology`).not.toContain("kind: 'unsliced'");
+    const taskErrors: string[] = [];
+    const originalError = console.error;
+    console.error = (line: string) => { taskErrors.push(line); };
+    try {
+      await expect(dispatchTaskCommand(
+        detectTaskCommand(['node', 'conduct', 'task', 'status', '--child', '1'])!,
+        projectRoot,
+      )).resolves.toBe(1);
+    } finally {
+      console.error = originalError;
     }
+    expect(taskErrors.join('\n')).toContain('plan-invalid');
+
+    // Routing is deliberately type-only. Give it the no-membership value a
+    // reader retains when topology is unavailable; neither helper may invent
+    // an unsliced/flat owner from it.
+    const unavailableMembership = { taskSlices: {}, titles: [] };
+    expect(deriveTaskBoundOwner({
+      taskIds: ['1'], sliceMembership: unavailableMembership, planText: '', appendedChildren: {}, declaredPositions: [],
+    })).toMatchObject({ kind: 'halt', detail: expect.stringContaining('cannot derive an owner') });
+    await expect(routeAdmittedRound({
+      admitted: [{ id: 'malformed', provenance: { kind: 'task-bound' }, ownerTaskIds: ['1'], citedPaths: [], gateSource: 'build_review', gap: { criterion: 'C', rationale: 'r' } } as never],
+      sliceMembership: unavailableMembership,
+      planText: '', appendedChildren: {}, declaredPositions: [], leafTip: 'unused', roundId: 'r1' as never,
+      git: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    })).resolves.toMatchObject({ kind: 'halt', detail: expect.stringContaining('cannot derive an owner') });
   });
 });

@@ -9,6 +9,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
+import { runDaemonRekickStackPreflight } from '../../../src/daemon-cli.js';
+import { Conductor } from '../../../src/engine/conductor.js';
+import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -204,5 +207,81 @@ describe('stack preflight live-HALT gate', () => {
     const subject = await fixture();
     await subject.git(['checkout', '-q', '--detach']);
     await expectCursorRefusal(subject, 'detached-head', 'git switch feat/daemon-demo');
+  });
+});
+
+describe('stack preflight dispatch boundaries', () => {
+  type Cause = 'positions-changed' | 'positions-ref-unreadable' | 'plan-missing' | 'plan-invalid' | 'detached-head' | 'git-error';
+  type Arrange = (subject: Awaited<ReturnType<typeof fixture>>) => Promise<GitRunner | undefined>;
+
+  const cases: readonly [Cause, Arrange][] = [
+    ['positions-changed', async (subject) => {
+      const path = join(subject.repo, '.docs', 'plans', 'demo.md');
+      await writeFile(path, (await readFile(path, 'utf8')).replace('| 2 | Leaf | 2 |', '| 3 | Leaf | 2 |'));
+      return undefined;
+    }],
+    ['positions-ref-unreadable', async (subject) => {
+      await subject.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+      return undefined;
+    }],
+    ['plan-missing', async (subject) => {
+      await unlink(join(subject.repo, '.docs', 'plans', 'demo.md'));
+      return undefined;
+    }],
+    ['plan-invalid', async (subject) => {
+      await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), '# broken\n\n## Slices\n\nnot a table\n');
+      return undefined;
+    }],
+    ['detached-head', async (subject) => {
+      await subject.git(['checkout', '-q', '--detach']);
+      return undefined;
+    }],
+    ['git-error', async (subject) => {
+      const realGit = makeGitRunner(subject.repo);
+      return async (args, options) => args.join('\0') === ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'].join('\0')
+        ? { exitCode: 2, stdout: '', stderr: 'injected durable-state failure' }
+        : realGit(args, options);
+    }],
+  ];
+
+  it.each(cases)('daemon re-kick writes this dispatch\'s %s HALT without a generic no-marker/unavailable log', async (cause, arrange) => {
+    const subject = await fixture();
+    const git = await arrange(subject);
+    const log: string[] = [];
+
+    await expect(runDaemonRekickStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      ...(git ? { git } : {}),
+    }, (line) => log.push(line))).resolves.toEqual({ kind: 'halted' });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cause);
+    expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+    expect(log.join('\n')).not.toContain('stack preflight: unavailable');
+  });
+
+  it.each(cases)('a fresh Conductor dispatch writes its own %s HALT before entering a child region', async (cause, arrange) => {
+    const subject = await fixture();
+    const git = await arrange(subject);
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({
+      ...state, feature_desc: 'demo', complexity_tier: 'M',
+    }));
+    const dispatched: string[] = [];
+    await new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      ...(git ? { stackPreflight: (options: Parameters<typeof runStackPreflight>[0]) => runStackPreflight({ ...options, git }) } : {}),
+      stepRunner: { run: async (step) => { dispatched.push(step); return { success: true }; } },
+    }).run();
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cause);
+    expect(dispatched).toEqual([]);
   });
 });
