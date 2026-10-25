@@ -1,5 +1,5 @@
-// Covers: task:1
-import { describe, expect, it } from 'vitest';
+// Covers: task:1, task:2
+import { describe, expect, it, vi } from 'vitest';
 
 const PANE_LABEL_MODULE = '../../../src/engine/engineer/pane-label.js';
 
@@ -102,5 +102,44 @@ describe('labelComposerPane', () => {
     await labelComposerPane({ slug, phase, env: { TMUX: '/tmp/tmux-1000/default,1,0' }, run: runner.run, warn: () => {} });
 
     expect(runner.calls).toEqual([]);
+  });
+
+  it('warns once and resolves when the herdr runner rejects', async () => {
+    const warn = vi.fn();
+    const labelComposerPane = await loadLabelComposerPane();
+
+    await expect(labelComposerPane({
+      slug,
+      phase,
+      env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' },
+      run: async () => { throw new Error('herdr unavailable'); },
+      warn,
+    })).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/^compose: pane label skipped \(herdr\): /);
+  });
+
+  it('warns once and resolves after 2000 ms when the herdr runner never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const warn = vi.fn();
+      const labelComposerPane = await loadLabelComposerPane();
+      const result = labelComposerPane({
+        slug,
+        phase,
+        env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' },
+        run: async () => new Promise<void>(() => {}),
+        warn,
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(result).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/^compose: pane label skipped \(herdr\): /);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
