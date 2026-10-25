@@ -121,8 +121,8 @@ describe('remediate build_review case-mode contract', () => {
     ]);
     const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
 
-    expect(caseMode.replace(/\s+/g, ' ')).toContain(
-      'An entry may name either a provenance candidate of the row or a resolved act owner of a row source; other entries are ignored.',
+    expect(caseMode).toMatch(
+      /An entry may name either a provenance\s+candidate of the row or a resolved act owner of a row source;\s+an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate\./,
     );
     expect(files.filter((file) => file.endsWith('SKILL.md'))).toEqual(['SKILL.md']);
   });
