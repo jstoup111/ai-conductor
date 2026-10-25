@@ -197,6 +197,9 @@ jstoup111/ai-conductor#3294.
 **Files:** src/conductor/src/engine/step-runners.ts; src/conductor/test/engine/build-review-lap-scope-runner.test.ts
 
 ### Task 7: Map every finding to hunks
+
+> **Amended 2026-10-25 by #3294:** Operator decision on the Task 7 BUILD halt: a custom finding's `sourceRegions` may span several paths, so the mapping is per region. The result is a non-empty list of targets, one per region (deduplicated): `{ kind: "hunks", hunks }` for the hunks the region intersects on its own path, or `{ kind: "file", path }` for that region's path when it intersects none. The finding is in scope when any target is (a hunk target in the delta, or a file target whose path has a delta hunk), so uncertainty still fails toward in scope (adr-2026-10-24-lap-monotonic-build-review-scope D3). A single-path finding yields one target, so the single-target checks below are unchanged in meaning.
+
 **Story:** Story 2
 **Type:** infrastructure
 **Dependencies:** none
@@ -204,13 +207,14 @@ jstoup111/ai-conductor#3294.
 **Steps:**
 1. Write failing tests in `src/conductor/test/engine/build-review-review-frontier.test.ts` for each rubric kind's mapping.
 2. Verify RED.
-3. Implement `mapBuildReviewFindingToHunks(finding, changedFiles)` in `src/conductor/src/engine/build-review-review-frontier.ts` returning a closed union: `{ kind: "hunks", hunks }` or `{ kind: "file", path }`. Security and implementationQuality use the anchor's content hash. Custom `sourceRegions` and testQuality anchored test regions intersect new-side hunk ranges (`newStart`, `newCount`) on the same path. Reuse `contentHashForHunk` identity from `build-review-projections.ts`; do not re-hash.
+3. Implement `mapBuildReviewFindingToHunks(finding, changedFiles)` in `src/conductor/src/engine/build-review-review-frontier.ts` returning a non-empty list of targets, each a closed union: `{ kind: "hunks", hunks }` or `{ kind: "file", path }`; custom findings map each `sourceRegion` on its own path. Security and implementationQuality use the anchor's content hash. Custom `sourceRegions` and testQuality anchored test regions intersect new-side hunk ranges (`newStart`, `newCount`) on the same path. Reuse `contentHashForHunk` identity from `build-review-projections.ts`; do not re-hash.
 4. Verify GREEN and commit: "feat(build-review): map findings onto diff hunks".
 
 **Done when:**
 - [test] `mapBuildReviewFindingToHunks` returns the anchor hunk for a security or implementationQuality finding, keyed by path and `contentHashForHunk`.
 - [test] `mapBuildReviewFindingToHunks` returns the hunks whose new-side range intersects a custom finding's `sourceRegions`, or a testQuality finding's anchored test region, on the same path.
 - [test] `mapBuildReviewFindingToHunks` returns `{ kind: "file", path }` for a custom or testQuality finding whose region intersects no hunk.
+- [test] For a custom finding whose `sourceRegions` span two paths, one intersecting a hunk and one intersecting none, `mapBuildReviewFindingToHunks` returns the intersected hunks on the first path and `{ kind: "file", path }` for the second, and that finding is in scope when only the second path has a delta hunk.
 - [test] Two hunks with identical `+`/`-` content at different line numbers map to the same `(path, contentHash)` identity, and two adjacent edits that git fuses into one hunk map to the fused hunk's new content hash only.
 - [test] A prior-lap security or implementationQuality source whose anchor `contentHash` is absent from the current diff maps to `{ kind: "file", path }`.
 
@@ -280,7 +284,7 @@ jstoup111/ai-conductor#3294.
 
 ### Task 11: A rubric with an empty delta is scope-empty and is not dispatched
 
-> **Amended 2026-10-25 by #3294:** Operator decision on the Task 11 BUILD halt: the `scope-empty` branch outcome that adr-2026-10-24-lap-monotonic-build-review-scope D3 requires also joins the closed build-review result union and its persisted-artifact parser, so `build-review-domain.ts` and `build-review-artifacts.ts` are in scope. The change is limited to admitting the `scope-empty` kind; no other domain or artifact behavior changes.
+> **Amended 2026-10-25 by #3294:** Operator decision on the Task 11 BUILD halt: the `scope-empty` branch outcome that adr-2026-10-24-lap-monotonic-build-review-scope D3 requires also joins the closed build-review result union and its persisted-artifact parser, so `build-review-domain.ts` and `build-review-artifacts.ts` are in scope, and `step-runners.ts` for the exhaustive switch over branch outcomes. The change is limited to admitting the `scope-empty` kind; no other domain or artifact behavior changes.
 
 **Story:** Story 3
 **Type:** happy-path
@@ -298,7 +302,7 @@ jstoup111/ai-conductor#3294.
 - [test] A `scope-empty` record adds no reviewed hunks: the next lap's `settledBuildReviewHunks` equals the settled set computed before that lap.
 - [test] `build-tail-rollup` counts a `scope-empty` rubric as a skip with reason `scope-empty` and never as judged, and the absence-retirement input excludes the sources of a `scope-empty` rubric from the sources not raised this lap.
 
-**Files:** src/conductor/src/engine/build-review-coordinator.ts; src/conductor/src/engine/build-review-aggregate.ts; src/conductor/src/engine/build-review-adjudication-coordinator.ts; src/conductor/src/engine/build-review-domain.ts; src/conductor/src/engine/build-review-artifacts.ts; src/conductor/test/engine/build-review-coordinator.test.ts
+**Files:** src/conductor/src/engine/build-review-coordinator.ts; src/conductor/src/engine/build-review-aggregate.ts; src/conductor/src/engine/build-review-adjudication-coordinator.ts; src/conductor/src/engine/build-review-domain.ts; src/conductor/src/engine/build-review-artifacts.ts; src/conductor/src/engine/step-runners.ts; src/conductor/test/engine/build-review-coordinator.test.ts
 
 ### Task 12: The testQuality preflight keeps whole-diff coverage
 **Story:** Story 3
