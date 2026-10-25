@@ -13,6 +13,7 @@ const integrityCommand = 'test/test_harness_integrity.sh';
 function expectVerificationEntries(testSuite: TestSuiteConfig | undefined): void {
   expect(testSuite?.commands, `missing ${integrityCommand} verification entry`).toEqual([
     { command: 'npm run typecheck --silent', working_directory: 'src/conductor' },
+    { command: 'npm run typecheck:test --silent', working_directory: 'src/conductor' },
     { command: 'npm test', working_directory: 'src/conductor' },
     { command: integrityCommand, working_directory: '.' },
   ]);
@@ -31,6 +32,9 @@ describe('self-host verification entries', () => {
       timeout_seconds: 1800,
       verification: { mode: 'changed', full_suite: 'once' },
     });
+    // Vitest strips types without checking them; CI's typecheck:test is the
+    // only check over test files, so every changed-mode lap runs it too.
+    expect(loaded.config.test_suite?.changed_command).toContain('npm run typecheck:test --silent');
   });
 
   it('names the missing integrity entry instead of accepting only the vitest entry', () => {
