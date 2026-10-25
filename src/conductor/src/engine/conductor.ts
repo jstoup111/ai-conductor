@@ -33,7 +33,8 @@ import {
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
-import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { parseBuildReviewAggregate, type BuildReviewAggregate } from './build-review-aggregate.js';
+import { buildReviewAdjudicationSourceId, type BuildReviewAdjudicationPriorFindingDigest } from './build-review-adjudication-context.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
@@ -85,8 +86,10 @@ import { executeGithubOperation } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
-import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
+import { parseBuildReviewBranchArtifact, type BuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
+import { canonicalizeBuildReviewCustomFindingIdentity, canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import type { BuildReviewFindingHunkTarget, BuildReviewProvenanceArtifact } from './build-review-review-frontier.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import type {
   CodexProbeFailure,
@@ -703,6 +706,151 @@ const PUBLICATION_REDISPATCH_BUDGET = 1;
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
+
+type BuildReviewAdjudicationArtifactFacts = {
+  readonly priorFindingDigests: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest>;
+  readonly provenance?: {
+    readonly deltaHunks: readonly { readonly path: string; readonly contentHash: string }[];
+    readonly predecessorArtifacts: readonly BuildReviewProvenanceArtifact[];
+    readonly sourceTargets: Readonly<Record<string, readonly BuildReviewFindingHunkTarget[]>>;
+    readonly sources: Readonly<Record<string, {
+      readonly deltaHunks: readonly { readonly path: string; readonly contentHash: string }[];
+      readonly predecessorArtifacts: readonly BuildReviewProvenanceArtifact[];
+      readonly targets: readonly BuildReviewFindingHunkTarget[];
+    }>>;
+  };
+};
+
+function buildReviewArtifactFinding(
+  artifact: BuildReviewBranchArtifact,
+  value: unknown,
+): { readonly sourceId: string; readonly digest: BuildReviewAdjudicationPriorFindingDigest; readonly targets: readonly BuildReviewFindingHunkTarget[] } | undefined {
+  if (artifact.rubric === 'testQuality' || artifact.rubric === 'security' || artifact.rubric === 'implementationQuality') {
+    const finding = value as BuildReviewFinding;
+    const identity = canonicalizeBuildReviewFindingIdentity({
+      ...finding,
+      rubric: artifact.rubric,
+      contractVersion: artifact.result.kind === 'judged' ? artifact.result.contractVersion : undefined,
+    });
+    if (!identity) return undefined;
+    return {
+      sourceId: buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: identity.id }),
+      digest: {
+        rubric: artifact.rubric,
+        concernKind: finding.concernKind,
+        summary: finding.summary,
+        evidenceLocations: finding.evidenceLocations,
+        lapId: artifact.lapId,
+      },
+      targets: [{ kind: 'hunks', hunks: [{ path: finding.anchor.locus.path, contentHash: finding.anchor.locus.contentHash }] }],
+    };
+  }
+  const identity = canonicalizeBuildReviewCustomFindingIdentity(value);
+  const finding = value as { readonly summary?: unknown; readonly evidenceLocations?: unknown };
+  if (!identity || typeof finding.summary !== 'string' || !Array.isArray(finding.evidenceLocations) ||
+    !finding.evidenceLocations.every((location) => typeof location === 'string')) return undefined;
+  return {
+    sourceId: buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: identity.id }),
+    digest: {
+      rubric: artifact.rubric,
+      concernKind: identity.canonicalPayload.concernId,
+      summary: finding.summary,
+      evidenceLocations: finding.evidenceLocations,
+      lapId: artifact.lapId,
+    },
+    targets: identity.canonicalPayload.sourceRegions.map((region) => ({
+      kind: 'hunks' as const,
+      hunks: [{ path: region.path, contentHash: region.contentHash }],
+    })),
+  };
+}
+
+/**
+ * Branch artifacts are the durable owner of both lap scope and historical
+ * findings. Keep their asynchronous reads at the conductor boundary; the
+ * coordinator receives only source-id keyed, schema-checked facts.
+ */
+export async function readBuildReviewAdjudicationArtifactFacts(
+  projectRoot: string,
+  aggregate: BuildReviewAggregate,
+  child?: ChildId,
+): Promise<BuildReviewAdjudicationArtifactFacts> {
+  const byLap = new Map<string, BuildReviewBranchArtifact[]>();
+  const artifactRoot = pipelinePathFor(projectRoot, 'build-review', child);
+  try {
+    const lapIds = await readdir(artifactRoot);
+    for (const lapId of lapIds) {
+      let files: readonly string[];
+      try {
+        files = await readdir(join(artifactRoot, lapId));
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue;
+        try {
+          const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(
+            join(artifactRoot, lapId, file), 'utf-8',
+          )));
+          if (artifact === undefined) continue;
+          const entries = byLap.get(artifact.lapId) ?? [];
+          entries.push(artifact);
+          byLap.set(artifact.lapId, entries);
+        } catch {
+          // One missing or malformed historical artifact is not authority to
+          // discard readable evidence from the rest of the lap history.
+        }
+      }
+    }
+  } catch {
+    // Missing branch-artifact state is valid for legacy and first-lap runs.
+  }
+
+  const priorFindingDigests = new Map<string, BuildReviewAdjudicationPriorFindingDigest>();
+  for (const artifacts of byLap.values()) {
+    for (const artifact of artifacts) {
+      if (artifact.result.kind !== 'judged' || artifact.lapId === aggregate.lapId) continue;
+      for (const finding of artifact.result.findings) {
+        const projected = buildReviewArtifactFinding(artifact, finding);
+        if (projected !== undefined) priorFindingDigests.set(projected.sourceId, projected.digest);
+      }
+    }
+  }
+
+  const sources: Record<string, {
+    readonly deltaHunks: readonly { readonly path: string; readonly contentHash: string }[];
+    readonly predecessorArtifacts: readonly BuildReviewProvenanceArtifact[];
+    readonly targets: readonly BuildReviewFindingHunkTarget[];
+  }> = {};
+  for (const artifact of byLap.get(aggregate.lapId) ?? []) {
+    const scope = artifact.reviewScope;
+    if (artifact.result.kind !== 'judged' || scope === undefined || 'kind' in scope || scope.predecessorLapId === undefined) continue;
+    const predecessorArtifacts = byLap.get(scope.predecessorLapId) ?? [];
+    for (const finding of artifact.result.findings) {
+      const projected = buildReviewArtifactFinding(artifact, finding);
+      if (projected === undefined) continue;
+      sources[projected.sourceId] = {
+        deltaHunks: scope.deltaHunks,
+        predecessorArtifacts,
+        targets: projected.targets,
+      };
+    }
+  }
+  const values = Object.values(sources);
+  return {
+    priorFindingDigests,
+    ...(values.length === 0 ? {} : {
+      provenance: {
+        // Legacy direct coordinator callers use this shared shape. The
+        // conductor uses `sources`, preserving each rubric's own predecessor.
+        deltaHunks: values[0]!.deltaHunks,
+        predecessorArtifacts: values[0]!.predecessorArtifacts,
+        sourceTargets: Object.fromEntries(Object.entries(sources).map(([sourceId, value]) => [sourceId, value.targets])),
+        sources,
+      },
+    }),
+  };
+}
 
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
@@ -13916,6 +14064,7 @@ export class Conductor {
                     advisoryFindingIds,
                     thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                   });
+                  const artifactFacts = await readBuildReviewAdjudicationArtifactFacts(this.projectRoot, aggregate, this.activeRegionChild);
                   // Settlement gate: `verdictRaw` is the aggregate the join
                   // recorded after every branch settled; the shared operation
                   // refuses anything that does not parse as that complete lap.
@@ -13935,6 +14084,8 @@ export class Conductor {
                     resolveEffectiveAcceptedSourceIds,
                     mechanical,
                     absenceRetirementMechanicallyHealthy,
+                    priorFindingDigests: artifactFacts.priorFindingDigests,
+                    ...(artifactFacts.provenance === undefined ? {} : { provenance: artifactFacts.provenance }),
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
                       resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),

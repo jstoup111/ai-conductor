@@ -12,6 +12,7 @@ import {
   buildReviewAdjudicationSourceId,
   describeBuildReviewAdjudicationContextStop,
   type BuildReviewAdjudicationPlanContract,
+  type BuildReviewAdjudicationPriorFindingDigest,
   type BuildReviewAdjudicationTaskStatus,
 } from './build-review-adjudication-context.js';
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -251,7 +252,19 @@ export interface BuildReviewAdjudicationCoordinatorInput {
     readonly deltaHunks: readonly ReviewedHunk[];
     readonly predecessorArtifacts: readonly BuildReviewProvenanceArtifact[];
     readonly sourceTargets: Readonly<Record<string, readonly BuildReviewFindingHunkTarget[]>>;
+    /**
+     * Per-source scope facts from the current branch artifact. Different
+     * rubrics can have different predecessor laps, so conductor callers use
+     * this form rather than accidentally sharing one rubric's delta.
+     */
+    readonly sources?: Readonly<Record<string, {
+      readonly deltaHunks: readonly ReviewedHunk[];
+      readonly predecessorArtifacts: readonly BuildReviewProvenanceArtifact[];
+      readonly targets: readonly BuildReviewFindingHunkTarget[];
+    }>>;
   };
+  /** Bounded source detail recovered by the conductor from branch artifacts. */
+  readonly priorFindingDigests?: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest>;
   /** Re-reads the separate operator authority before every provider boundary. */
   readonly resolveOperatorResolvedFindingIds?: () => Promise<ReadonlySet<string>>;
   /**
@@ -312,15 +325,30 @@ function provenanceCandidatesForJudgement(
   cases: readonly RemediationCaseRecord[],
 ): ReadonlyMap<string, readonly RemediationCaseRecord[]> {
   if (provenance === undefined) return new Map();
-  return new Map(judgement.cases.map((caseRow) => [caseRow.caseRef, buildReviewProvenanceCandidates({
-    caseRow,
-    caseSources: judgement.sourceOutcomes
-      .filter((source) => source.caseRef === caseRow.caseRef)
-      .map((source) => ({ sourceId: source.sourceId, targets: provenance.sourceTargets[source.sourceId] ?? [] })),
-    deltaHunks: provenance.deltaHunks,
-    predecessorArtifacts: provenance.predecessorArtifacts,
-    cases,
-  })]));
+  return new Map(judgement.cases.map((caseRow) => {
+    const sources = judgement.sourceOutcomes.filter((source) => source.caseRef === caseRow.caseRef);
+    const scopedCandidates = sources.flatMap((source) => {
+      const scoped = provenance.sources?.[source.sourceId];
+      if (scoped === undefined) return [];
+      return buildReviewProvenanceCandidates({
+        caseRow,
+        caseSources: [{ sourceId: source.sourceId, targets: scoped.targets }],
+        deltaHunks: scoped.deltaHunks,
+        predecessorArtifacts: scoped.predecessorArtifacts,
+        cases,
+      });
+    });
+    const candidates = provenance.sources === undefined
+      ? buildReviewProvenanceCandidates({
+        caseRow,
+        caseSources: sources.map((source) => ({ sourceId: source.sourceId, targets: provenance.sourceTargets[source.sourceId] ?? [] })),
+        deltaHunks: provenance.deltaHunks,
+        predecessorArtifacts: provenance.predecessorArtifacts,
+        cases,
+      })
+      : [...new Map(scopedCandidates.map((candidate) => [candidate.id, candidate])).values()];
+    return [caseRow.caseRef, candidates] as const;
+  }));
 }
 
 function selectProvenanceRecurrenceOwner(
@@ -856,6 +884,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, declaredSeverityThresholds: input.declaredSeverityThresholds, operatorResolvedFindingIds: resolved, carryInput,
     excludedSourceIds: new Set([...settledSourceIdsAtEntry, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
     planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, preDispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
+    priorFindingDigests: input.priorFindingDigests,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -909,6 +938,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
     planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
+    priorFindingDigests: input.priorFindingDigests,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   let dispatchContext = freshContext.context;
@@ -979,6 +1009,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
         operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
         planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
+        priorFindingDigests: input.priorFindingDigests,
       });
       if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = expandedContext.context;

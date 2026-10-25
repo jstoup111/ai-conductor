@@ -1,6 +1,6 @@
-// Covers: task:6, task:25
+// Covers: task:6, task:25, task:26
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -13,6 +13,11 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
 import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { readBuildReviewAdjudicationArtifactFacts } from '../../src/engine/conductor.js';
+import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -468,6 +473,62 @@ describe('build-review lap scope runner', () => {
     // the scope-decision suite, which installs its own dispatch per test.
     const actual = await vi.importActual<typeof import('../../src/engine/build-review-coordinator.js')>('../../src/engine/build-review-coordinator.js');
     vi.mocked(coordinateBuildReviewRubrics).mockImplementation(actual.coordinateBuildReviewRubrics);
+  });
+
+  it('supplies per-source predecessor provenance and historical finding digests from conductor-owned artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-conductor-artifacts-'));
+    try {
+      const l1 = parseBuildReviewLapId('lap-artifact-l1')!;
+      const l2 = parseBuildReviewLapId('lap-artifact-l2')!;
+      const h1 = `sha256:${'1'.repeat(64)}`;
+      const h2 = `sha256:${'2'.repeat(64)}`;
+      const first = {
+        concernKind: 'obscured-intent', severity: 'major' as const, summary: 'Original repair target.', evidenceLocations: ['src/feature.ts:1'],
+        anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/feature.ts', contentHash: h1, display: 'src/feature.ts:1' } },
+      };
+      const recurrence = {
+        concernKind: 'duplication', severity: 'major' as const, summary: 'Repair introduced a new defect.', evidenceLocations: ['src/feature.ts:2'],
+        anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/feature.ts', contentHash: h2, display: 'src/feature.ts:2' } },
+      };
+      const filesystem = {
+        readFile: (path: string) => readFile(path, 'utf8'),
+        mkdir: (path: string) => mkdir(path, { recursive: true }),
+        writeFile,
+        rename,
+      };
+      await writeBuildReviewBranchArtifact(root, {
+        rubric: 'implementationQuality', lapId: l1, snapshotDigest: 'sha256:l1',
+        result: { kind: 'judged', rubric: 'implementationQuality', lapId: l1, snapshotDigest: 'sha256:l1', contractVersion: 'v4', findings: [first], verdict: 'FAIL' },
+        provenance: { kind: 'fresh' },
+        reviewScope: { mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'l1', policyIdentity: 'policy', reviewedHunks: [{ path: 'src/feature.ts', contentHash: h1 }], deltaHunks: [{ path: 'src/feature.ts', contentHash: h1 }], outOfDeltaSourceIds: [] },
+      }, filesystem);
+      await writeBuildReviewBranchArtifact(root, {
+        rubric: 'implementationQuality', lapId: l2, snapshotDigest: 'sha256:l2',
+        result: { kind: 'judged', rubric: 'implementationQuality', lapId: l2, snapshotDigest: 'sha256:l2', contractVersion: 'v4', findings: [recurrence], verdict: 'FAIL' },
+        provenance: { kind: 'fresh' },
+        reviewScope: { mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'l2', policyIdentity: 'policy', predecessorLapId: l1, reviewedHunks: [{ path: 'src/feature.ts', contentHash: h1 }, { path: 'src/feature.ts', contentHash: h2 }], deltaHunks: [{ path: 'src/feature.ts', contentHash: h2 }], outOfDeltaSourceIds: [] },
+      }, filesystem);
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: l2, snapshotDigest: 'sha256:l2',
+        results: { implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId: l2, snapshotDigest: 'sha256:l2', contractVersion: 'v4', findings: [recurrence], verdict: 'FAIL' }, testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      });
+
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate);
+      const [firstSource] = projectBuildReviewAggregateSources(joinBuildReviewRubricOutcomes({
+        lapId: l1, snapshotDigest: 'sha256:l1',
+        results: { implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId: l1, snapshotDigest: 'sha256:l1', contractVersion: 'v4', findings: [first], verdict: 'FAIL' }, testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      }))!.filter((source) => source.rubric === 'implementationQuality');
+      const [currentSource] = projectBuildReviewAggregateSources(aggregate)!.filter((source) => source.rubric === 'implementationQuality');
+
+      expect(facts.priorFindingDigests.get(buildReviewAdjudicationSourceId(firstSource!))).toMatchObject({ summary: first.summary, lapId: l1 });
+      expect(facts.provenance?.sources[buildReviewAdjudicationSourceId(currentSource!)]).toMatchObject({
+        deltaHunks: [{ path: 'src/feature.ts', contentHash: h2 }],
+        predecessorArtifacts: [expect.objectContaining({ lapId: l1 })],
+        targets: [{ kind: 'hunks', hunks: [{ path: 'src/feature.ts', contentHash: h2 }] }],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps an operator-settled hunk out of the next lap and records its re-raise as out of delta', async () => {
