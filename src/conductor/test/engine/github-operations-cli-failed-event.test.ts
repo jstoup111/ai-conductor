@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, rem-prd-audit-rem-s1.2-1, rem-prd-audit-rem-s1.2-2
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
