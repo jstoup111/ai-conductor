@@ -6,7 +6,7 @@ import { basename, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectEngineerCommand, dispatchEngineer, SUBCOMMAND_HELP } from '../../../src/engine/engineer-cli.js';
-import { parsePlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
+import { parsePlanReviewArtifact, type PlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -116,7 +116,24 @@ describe('compose plan-review command surface', () => {
     const receivedBudgets: number[] = [];
     const wiredOptions = {
       ...options,
-      runPlanReview: async (input: any) => { receivedBudgets.push(input.maxPromptChars); return { findings: [] }; },
+      runPlanReview: async (input: any): Promise<PlanReviewArtifact> => {
+        receivedBudgets.push(input.maxPromptChars);
+        return {
+          round: 1,
+          authoringHost: 'claude',
+          reviewerProvider: 'codex',
+          independence: 'cross-provider',
+          findings: [],
+          dispositions: [],
+          reviewedDigest: {
+            digest: 'sha256:mock',
+            planTaskDigests: {},
+            storyDigests: {},
+            adrDecisionDigests: {},
+            artifactDigests: {},
+          },
+        };
+      },
     };
     expect(await dispatchEngineer(detectEngineerCommand(argv(...base, '--max-prompt-chars', '800000'))!, wiredOptions)).toBe(0);
     expect(await dispatchEngineer(detectEngineerCommand(argv(...base))!, wiredOptions)).toBe(0);
