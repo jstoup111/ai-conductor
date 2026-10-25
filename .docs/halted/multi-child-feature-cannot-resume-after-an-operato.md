@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-25T10:15:20.193Z
 Slug: multi-child-feature-cannot-resume-after-an-operato
 Class: needs-human
 Halting step: prd_audit
