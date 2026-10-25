@@ -9,9 +9,9 @@ import { classifyIndependence, orderReviewerCandidates, resolveAuthoringHost } f
 import type { ProviderRuntimeSet } from './provider-runtime.js';
 import type { ProviderSessionStore } from './provider-session.js';
 import { executeProviderCandidates, type ExecuteProviderCandidatesInput } from './provider-execution.js';
-import { resolveIdeaFiles } from './engineer/spec-change-set.js';
+import { readMergeBaseTexts, resolveIdeaFiles } from './engineer/spec-change-set.js';
 import { parseAdrDecisions } from './artifacts.js';
-import { selectPlanReviewAdrDecisionSections, selectPlanReviewAdrStems, selectPlanReviewAdrTexts } from './plan-review-adr-scope.js';
+import { selectPlanReviewAdrDecisionSections, selectPlanReviewAdrStems, selectPlanReviewAdrTexts, splitPlanReviewAdrDecisions } from './plan-review-adr-scope.js';
 
 function isSchemaValidFinding(value: unknown): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -38,7 +38,11 @@ async function files(root: string, at = root): Promise<string[]> {
 async function reviewInputs(worktreePath: string, planStem: string, canonicalPath?: string) {
   const planText = await readFile(join(worktreePath, '.docs', 'plans', `${planStem}.md`), 'utf8');
   const storiesText = await readFile(join(worktreePath, '.docs', 'stories', `${planStem}.md`), 'utf8').catch(() => '');
-  const coherenceText = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').catch(() => '');
+  const coherenceResult = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').then(
+    (text) => ({ text, exists: true }),
+    () => ({ text: '', exists: false }),
+  );
+  const coherenceText = coherenceResult.text;
   const architectureReviewText = await (async () => {
     try {
       const review = (await readdir(join(worktreePath, '.docs', 'decisions')))
@@ -61,10 +65,20 @@ async function reviewInputs(worktreePath: string, planStem: string, canonicalPat
   const adrScope = { planText, adrTexts: allAdrTexts, changedPaths: [...changedPaths] };
   const adrTexts = selectPlanReviewAdrTexts(adrScope);
   const adrDecisionSections = selectPlanReviewAdrDecisionSections(adrScope);
+  const changedAdrPaths = selectPlanReviewAdrStems(adrScope)
+    .map((stem) => `.docs/decisions/${stem}.md`)
+    .filter((path) => changedPaths.has(path));
+  const baseByPath = canonicalPath
+    ? await readMergeBaseTexts(worktreePath, canonicalPath, changedAdrPaths)
+    : undefined;
+  const baseAdrTexts = baseByPath === undefined ? undefined : Object.fromEntries(
+    changedAdrPaths.map((path) => [path.slice('.docs/decisions/'.length, -'.md'.length), baseByPath[path]!]),
+  );
+  const adrDecisionSplit = splitPlanReviewAdrDecisions({ ...adrScope, baseAdrTexts });
   const sourceFiles: Record<string, string> = {};
   for (const path of await files(worktreePath)) if (!path.startsWith('.pipeline/')) sourceFiles[path] = await readFile(join(worktreePath, path), 'utf8').catch(() => '');
   const digest = computeReviewedDigest({ planText, storiesText, adrTexts: allAdrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [...changedPaths] });
-  return { planText, storiesText, coherenceText, architectureReviewText, adrTexts, adrDecisionSections, sourceFiles, digest };
+  return { planText, storiesText, coherenceText, hasCoherence: coherenceResult.exists, architectureReviewText, adrTexts, adrDecisionSections, adrDecisionSplit, sourceFiles, digest };
 }
 
 function selectedPlanTasks(planText: string, ids: readonly string[]): string {
@@ -140,14 +154,19 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const reviewStories = changed ? selectedStories(source.storiesText, changed.storyIds) : source.storiesText;
   const reviewDecisions = changed
     ? selectedDecisions(source.adrTexts, changed.adrDecisionIds)
-    : source.adrDecisionSections;
+    : source.adrDecisionSplit.inline;
   const priorFindings = prior?.findings.filter((finding) => finding.severity === 'blocking' || finding.severity === 'significant') ?? [];
   const roundCandidates = changed
     ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId))
     : rows.flat();
   const decisionsJson = JSON.stringify(reviewDecisions);
   const candidatesJson = JSON.stringify(promptCandidates(roundCandidates));
-  const prompt = `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${decisionsJson}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${candidatesJson}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`;
+  const index = source.adrDecisionSplit.indexed.map((entry) => `- ${entry.id} | ${entry.title} | ${entry.path}`);
+  if (source.hasCoherence) index.push(`- coherence | .docs/coherence/${input.planStem}.md`);
+  const indexText = index.join('\n');
+  const prompt = changed
+    ? `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${decisionsJson}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${candidatesJson}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`
+    : `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS (changed in this spec):\n${decisionsJson}\n\nINDEX (not inlined; read each item from its listed worktree path, and open it before a finding quotes or relies on it):\n${indexText}\n\nCANDIDATES:\n${candidatesJson}`;
   const maxPromptChars = input.maxPromptChars ?? PLAN_REVIEW_MAX_PROMPT_CHARS;
   if (prompt.length > maxPromptChars) {
     throw new Error(`plan review prompt is too large: ${prompt.length} characters exceeds ${maxPromptChars} (plan ${reviewPlan.length}, stories ${reviewStories.length}, ADR decisions ${decisionsJson.length}, coherence ${source.coherenceText.length}, candidates ${candidatesJson.length})`);

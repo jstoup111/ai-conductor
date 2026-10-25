@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parsePlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
+import { computeReviewedDigest, parsePlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import { runPlanReview } from '../../src/engine/plan-review-runner.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -68,7 +68,7 @@ describe('runPlanReview', () => {
   });
 
   // Covers: task:rem-as-built-rem-validation-AB4
-  it('loads cited and changed ADR Decision sections while excluding unchanged unrelated ADRs and review files from the prompt', async () => {
+  it('indexes cited unchanged ADR decisions while inlining changed ADR decisions and excluding unrelated review files', async () => {
     const root = await fixture(true);
     const uncitedAdr = join(root, '.docs/decisions/adr-uncited.md');
     await writeFile(uncitedAdr, '## Decision\n\nD1. This changed uncited ADR must reach the prompt.\n', 'utf8');
@@ -85,9 +85,128 @@ describe('runPlanReview', () => {
     });
 
     expect(artifact.reviewedDigest.adrDecisionDigests).toHaveProperty('adr-uncited#D1');
-    expect(calls[0].options.prompt).toContain('D1. The flag is allowed.');
+    expect(calls[0].options.prompt).toContain('- adr-review#D1 | D1. The flag is allowed. | .docs/decisions/adr-review.md');
+    expect(calls[0].options.prompt).not.toContain('ADR DECISIONS (changed in this spec):\n{"adr-review#D1":"D1. The flag is allowed."}');
     expect(calls[0].options.prompt).toContain('This changed uncited ADR must reach the prompt.');
     expect(calls[0].options.prompt).not.toContain('This unrelated review must not reach the prompt.');
+  });
+
+  it('assembles round one from changed decision passages and an index of stable decisions', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), '# Coherence\n\nThis body is indexed, not inlined.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-review.md'), `# ADR review
+
+## Decision
+
+D1. Stable first decision.
+
+D2. Stable second decision.
+`, 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-b.md'), `# ADR B
+
+## Decision
+
+D1. Stable B decision.
+
+D2. Original B decision.
+`, 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), `# Plan
+
+This plan follows adr-review and adr-b.
+
+### Task 1: Configure
+**Steps:**
+1. Add \`reviewFlag\`.
+
+**Done when:**
+- [test] the flag works.
+
+**Dependencies:** none
+`, 'utf8');
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'add decisions'], { cwd: root });
+    await writeFile(join(root, '.docs', 'decisions', 'adr-b.md'), `# ADR B
+
+## Decision
+
+D1. Stable B decision.
+
+D2. Amended B decision.
+`, 'utf8');
+
+    const calls: any[] = [];
+    const artifact = await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('### Task 1: Configure');
+    expect(prompt).toContain('## Story 1: Review');
+    expect(prompt).toContain('D2. Amended B decision.');
+    expect(prompt).toContain('- adr-review#D1 | D1. Stable first decision. | .docs/decisions/adr-review.md');
+    expect(prompt).toContain('- adr-review#D2 | D2. Stable second decision. | .docs/decisions/adr-review.md');
+    expect(prompt).toContain('- adr-b#D1 | D1. Stable B decision. | .docs/decisions/adr-b.md');
+    expect(prompt).toContain('- coherence | .docs/coherence/idea.md');
+    expect(prompt).not.toContain('This body is indexed, not inlined.');
+    expect(artifact.reviewedDigest).toEqual(computeReviewedDigest({
+      planText: await readFile(join(root, '.docs', 'plans', 'idea.md'), 'utf8'),
+      storiesText: await readFile(join(root, '.docs', 'stories', 'idea.md'), 'utf8'),
+      adrTexts: {
+        'adr-b': await readFile(join(root, '.docs', 'decisions', 'adr-b.md'), 'utf8'),
+        'adr-review': await readFile(join(root, '.docs', 'decisions', 'adr-review.md'), 'utf8'),
+      },
+      artifactTexts: { '.docs/coherence/idea.md': await readFile(join(root, '.docs', 'coherence', 'idea.md'), 'utf8') },
+      changedPaths: ['.docs/decisions/adr-b.md'],
+    }));
+  });
+
+  it('inlines every decision from an ADR added after the merge base', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'decisions', 'adr-new.md'), `# New ADR
+
+## Decision
+
+D1. First new decision.
+
+D2. Second new decision.
+`, 'utf8');
+    const calls: any[] = [];
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls[0].options.prompt).toContain('D1. First new decision.');
+    expect(calls[0].options.prompt).toContain('D2. Second new decision.');
+  });
+
+  it('keeps a #2945-shaped review prompt under the default budget', async () => {
+    const root = await fixture();
+    const plan = `# Plan\n\n${'p'.repeat(125_627)}\n`;
+    const stories = `# Stories\n\n${'s'.repeat(33_172)}\n`;
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), plan, 'utf8');
+    await writeFile(join(root, '.docs', 'stories', 'idea.md'), stories, 'utf8');
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), `# Coherence\n\n${'c'.repeat(50_769)}\n`, 'utf8');
+    for (let index = 1; index <= 15; index += 1) {
+      await writeFile(join(root, '.docs', 'decisions', `adr-${index}.md`), `# ADR ${index}\n\n## Decision\n\nD1. ${'d'.repeat(9_360)}\n`, 'utf8');
+    }
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'large review baseline'], { cwd: root });
+    for (let index = 1; index <= 6; index += 1) {
+      await writeFile(join(root, '.docs', 'decisions', `adr-${index}.md`), `# ADR ${index}\n\n## Decision\n\nD1. ${'x'.repeat(9_360)}\n`, 'utf8');
+    }
+    const calls: any[] = [];
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.prompt.length).toBeLessThan(400_000);
   });
 
   // Covers: task:rem-as-built-R6
