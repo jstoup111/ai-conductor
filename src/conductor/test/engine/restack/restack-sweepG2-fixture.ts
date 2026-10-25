@@ -77,9 +77,19 @@ export async function sealStack(repo: string, positions: readonly number[] = [1,
   const branches = (await execFile('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat'], { cwd: repo })).stdout
     .split('\n')
     .filter((branch) => branch === 'feat/daemon-demo' || /^feat\/c\d+\/demo$/.test(branch));
+  const closedRefs = (await execFile('git', ['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/closed/'], { cwd: repo })).stdout
+    .split('\n')
+    .filter(Boolean);
+  // Every commit in the fixture's graph must carry the same replacement-tree
+  // topology. Replacing only ref tips changes the parent tree of an ordinary
+  // child commit, making the fixture docs look like a child-owned deletion.
+  const revisions = [...new Set(['main', ...branches, ...closedRefs])];
+  const commits = (await execFile('git', ['--no-replace-objects', 'rev-list', ...revisions], { cwd: repo })).stdout
+    .split('\n')
+    .filter(Boolean);
   try {
-    for (const branch of branches) {
-      await execFile('git', ['checkout', '-q', branch], { cwd: repo });
+    for (const commit of commits) {
+      await execFile('git', ['checkout', '-q', '--detach', commit], { cwd: repo });
       await writeSliceTopologyFixture(repo, fixture, envelopeFilesystem);
     }
   } finally {
