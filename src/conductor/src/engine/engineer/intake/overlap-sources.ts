@@ -13,6 +13,7 @@ import {
 import { runTrackerRead, type GhRunner } from '../../tracker-client.js';
 import { parseIntakeSourceRef } from '../../artifacts.js';
 import { parseSourceRef } from '../issue-ref.js';
+import { gitRefManifestSource, resolveFeatureArtifact } from '../../feature-manifest-source.js';
 import { extractCitedPaths } from './cited-paths.js';
 import { sanitizeInboundText, INBOUND_ARMOR_LINE } from './sanitize-inbound.js';
 import type { IssueOverlap } from './overlap-suggestions.js';
@@ -155,31 +156,48 @@ export async function traceBranchIssue({
   repository,
   readIssueState,
   strictIssueState = false,
+  cwd,
 }: {
   git: GitRunner;
   branch: string;
   repository: string;
   readIssueState: IssueStateReader;
   strictIssueState?: boolean;
+  /** Repository root used for manifest reads at the in-flight branch ref. */
+  cwd?: string;
 }): Promise<string | null> {
   const slug = inFlightSlug(branch);
   if (!slug) return null;
 
   try {
-    const marker = await git(['show', `${branch}:.docs/intake/${slug}.md`]);
-    if (marker.exitCode !== 0) return null;
-    const parsed = parseSourceRef(parseIntakeSourceRef(marker.stdout));
-    if (!parsed || parsed.repo !== repository) return null;
-    try {
-      return await readIssueState(parsed.number) === 'OPEN'
-        ? `${parsed.repo}#${parsed.number}`
-        : null;
-    } catch (error) {
-      if (strictIssueState) {
-        throw new BranchIssueStateReadError(error instanceof Error ? error.message : String(error));
+    const legacyMarker = `.docs/intake/${slug}.md`;
+    const isSpecBranch = branch === `spec/${slug}`;
+    const paths = isSpecBranch
+      ? (await resolveFeatureArtifact(
+        gitRefManifestSource(cwd ?? process.cwd(), branch),
+        slug,
+        'intake',
+        async () => [legacyMarker],
+      )).paths
+      : [legacyMarker];
+
+    for (const path of paths) {
+      const marker = await git(['show', `${branch}:${path}`]);
+      if (marker.exitCode !== 0) continue;
+      const parsed = parseSourceRef(parseIntakeSourceRef(marker.stdout));
+      if (!parsed || parsed.repo !== repository) continue;
+      try {
+        return await readIssueState(parsed.number) === 'OPEN'
+          ? `${parsed.repo}#${parsed.number}`
+          : null;
+      } catch (error) {
+        if (strictIssueState) {
+          throw new BranchIssueStateReadError(error instanceof Error ? error.message : String(error));
+        }
+        return null;
       }
-      return null;
     }
+    return null;
   } catch (error) {
     if (error instanceof BranchIssueStateReadError) throw error;
     return null;
@@ -288,7 +306,7 @@ export async function collectInFlightOverlaps({
       const sharedPaths = intersectFiles([...citedPaths], changedPaths);
       if (sharedPaths.length > 0) {
         const issue = repository && issueStateReader
-          ? await traceBranchIssue({ git, branch, repository, readIssueState: issueStateReader, strictIssueState })
+          ? await traceBranchIssue({ git, branch, repository, readIssueState: issueStateReader, strictIssueState, cwd })
           : null;
         overlaps.push({ branch, sharedPaths, issue });
       }
