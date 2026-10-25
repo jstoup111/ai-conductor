@@ -332,6 +332,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'group_member_step',
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'land_gate_rejected',
+  'feature_artifacts_registered',
   'test_suite_verification',
   'gate_verdict',
   'github_write_credential_fallback',
