@@ -1,7 +1,11 @@
 // Covers: task:1
 
 import { describe, expect, it } from 'vitest';
-import { featureManifestPath, parseFeatureManifest } from '../../src/engine/feature-manifest.js';
+import {
+  featureManifestPath,
+  parseFeatureManifest,
+  renderFeatureManifest,
+} from '../../src/engine/feature-manifest.js';
 
 const allKindsManifest = {
   schemaVersion: 1,
@@ -55,5 +59,61 @@ describe('feature manifest', () => {
 
   it('builds the manifest path from a feature slug', () => {
     expect(featureManifestPath('f')).toBe('.docs/f/manifest.json');
+  });
+
+  it('renders differently ordered entries as byte-identical kind-then-path JSON', () => {
+    const entries = [
+      { kind: 'stories', path: '.docs/stories/f.md' },
+      { kind: 'plan', path: '.docs/plans/z-f.md' },
+      { kind: 'plan', path: '.docs/plans/a-f.md' },
+    ] as const;
+    const manifest = { schemaVersion: 1, slug: 'f', artifacts: entries } as const;
+    const reversedManifest = {
+      ...manifest,
+      artifacts: [...entries].reverse(),
+    } as const;
+
+    const rendered = renderFeatureManifest(manifest);
+
+    expect(renderFeatureManifest(reversedManifest)).toBe(rendered);
+    expect(rendered).toBe(
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          slug: 'f',
+          artifacts: [
+            { kind: 'plan', path: '.docs/plans/a-f.md' },
+            { kind: 'plan', path: '.docs/plans/z-f.md' },
+            { kind: 'stories', path: '.docs/stories/f.md' },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  });
+
+  it('renders only manifest fields that parse back to the same entries', () => {
+    const manifest = {
+      schemaVersion: 1,
+      slug: 'f',
+      artifacts: [
+        { kind: 'stories', path: '.docs/stories/f.md' },
+        { kind: 'plan', path: '.docs/plans/f.md' },
+      ],
+    } as const;
+    const rendered = renderFeatureManifest(manifest);
+
+    expect(Object.keys(JSON.parse(rendered))).toEqual(['schemaVersion', 'slug', 'artifacts']);
+    expect(parseFeatureManifest(rendered, '.docs/f/manifest.json', 'f')).toEqual({
+      kind: 'parsed',
+      manifest: {
+        ...manifest,
+        artifacts: [
+          { kind: 'plan', path: '.docs/plans/f.md' },
+          { kind: 'stories', path: '.docs/stories/f.md' },
+        ],
+      },
+    });
   });
 });

@@ -41,6 +41,30 @@ export function featureManifestPath(slug: string): DocsPath {
   return `.docs/${slug}/manifest.json` as DocsPath;
 }
 
+export function renderFeatureManifest(manifest: FeatureManifest): string {
+  const artifacts = [...manifest.artifacts].sort((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind < right.kind ? -1 : 1;
+    }
+
+    if (left.path === right.path) {
+      return 0;
+    }
+
+    return left.path < right.path ? -1 : 1;
+  });
+
+  return `${JSON.stringify(
+    {
+      schemaVersion: manifest.schemaVersion,
+      slug: manifest.slug,
+      artifacts,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 /**
  * Task 1 intentionally accepts only the established valid manifest shape.
  * Validation and malformed-result branches are added by Task 3.
