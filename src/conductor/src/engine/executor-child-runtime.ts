@@ -36,6 +36,7 @@ import type { ConductState } from '../types/index.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { ExecutorChildRunInput } from './executor-child.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { startSessionEventTail } from './event-persister.js';
 
 export interface ExecutorChildFeatureRunnerInput {
   order: ExecutorChildRunInput['order'];
@@ -185,6 +186,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
 
   const pipelineDir = join(worktree.path, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
+  const sessionTail = startSessionEventTail(worktree.path, events, order.slug);
   const sessionId = uuidv4();
   const stepRunner = new DefaultStepRunner(runtime.provider, sessionId, worktree.path, {
     featureDesc: order.slug,
@@ -230,6 +232,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
       git,
       gh: (await import('./pr-labels.js')).makeProductionGh(),
       events,
+      flushSessionEvents: sessionTail.flush,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({ projectRoot: worktree.path, git, gh: (await import('./pr-labels.js')).makeProductionGh(), baseBranch, events }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({ projectRoot: worktree.path, config }),
     }),
@@ -345,10 +348,14 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     project: basename(projectRoot),
     log: input.log,
   });
-  const result = await runner();
-  if (signal.aborted && result.status !== 'parked') {
-    await beginShutdown();
-    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+  try {
+    const result = await runner();
+    if (signal.aborted && result.status !== 'parked') {
+      await beginShutdown();
+      return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+    }
+    return result;
+  } finally {
+    await sessionTail.drain();
   }
-  return result;
 }

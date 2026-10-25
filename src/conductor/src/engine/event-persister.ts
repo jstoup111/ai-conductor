@@ -423,6 +423,8 @@ export interface SessionEventTailOwner {
   stop(): void;
   /** Stop polling, join an in-flight read, then make one settled final pass. */
   drain(): Promise<void>;
+  /** Poll once without stopping the tail, joining any in-flight poll. */
+  flush(): Promise<void>;
 }
 
 /**
@@ -449,6 +451,7 @@ export function startSessionEventTail(
       }
       return drainPromise;
     },
+    flush: () => tail.poll(),
   };
 }
 
@@ -475,7 +478,7 @@ export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
   slug?: string,
-): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
+): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void>; flush: () => Promise<void> } {
   const featureEvents = createForwardingFeatureEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
@@ -523,6 +526,7 @@ export function startFeatureEventPersistence(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 

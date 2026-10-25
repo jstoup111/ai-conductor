@@ -1594,21 +1594,16 @@ describe('Conductor FINISH publication routing', () => {
     ] satisfies StepName[]) state[step] = 'done';
     state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
+    const queuedPublishFailures: Array<{
+      type: 'github_operation_failed'; operation: 'pull-request.edit';
+      target: { kind: 'pull-request'; repository: string; number: number }; error: string; ts: string;
+    }> = [];
     const runner: StepRunner = { run: vi.fn(async () => {
       if (writeFailures) {
-        await writeFile(join(pipeline, 'pipeline-events.jsonl'), [
-          '{ malformed sibling ledger input',
-          JSON.stringify({
-            type: 'github_operation_failed', operation: 'pull-request.edit',
-            target: { kind: 'pull-request', repository: 'acme/repo', number: 17 },
-            error: 'first missing-scope error',
-          }),
-          JSON.stringify({
-            type: 'github_operation_failed', operation: 'pull-request.edit',
-            target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: missingScope,
-          }),
-          '',
-        ].join('\n'));
+        queuedPublishFailures.push(
+          { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: 'first missing-scope error', ts: '2026-10-25T00:00:00.000Z' },
+          { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: missingScope, ts: '2026-10-25T00:00:01.000Z' },
+        );
       }
       return { success: true };
     }) };
@@ -1631,6 +1626,10 @@ describe('Conductor FINISH publication routing', () => {
         throw new Error(`unexpected gh command: ${args.join(' ')}`);
       },
       operations: { run: async () => ({}) }, observeReleaseReadiness: async () => 'present',
+      events,
+      flushSessionEvents: async () => {
+        for (const event of queuedPublishFailures) await events.emit(event);
+      },
     });
     const conductor = new Conductor({
       stateFilePath: productionStatePath, stepRunner: runner, finishPublication: coordinator, events,
