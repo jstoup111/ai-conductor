@@ -10,6 +10,7 @@ import { pushedTipRef } from '../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import type { GithubMutationExecutionContext, GhRunner } from '../../src/engine/tracker-client.js';
 import type { ConductState } from '../../src/types/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const c1 = parseChildId(1)!;
 const c3 = parseChildId(3)!;
@@ -66,6 +67,14 @@ function listedPullRequests(listed: readonly number[]): GhRunner {
 
 const operations = { run: async () => ({}) };
 
+function recordingEvents(records: unknown[]): ConductorEventEmitter {
+  const events = new ConductorEventEmitter();
+  events.on('stack_tip_diverged', (event) => { records.push(event); });
+  events.on('stack_member_redrafted', (event) => { records.push(event); });
+  events.on('stack_member_published', (event) => { records.push(event); });
+  return events;
+}
+
 async function establishThroughProductionCoordinator(gh: GhRunner, events: unknown[]): Promise<unknown> {
   vi.resetModules();
   vi.doMock('../../src/engine/finish-publication.js', async (importOriginal) => {
@@ -88,7 +97,7 @@ async function establishThroughProductionCoordinator(gh: GhRunner, events: unkno
       gh,
       operations,
       remoteMutation: {} as GithubMutationExecutionContext,
-      events: { emit: async (event) => { events.push(event); } },
+      events: recordingEvents(events),
     }).advance({
       state: { feature_desc: 'demo', pr_url: leafUrl } as ConductState,
       mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {},
@@ -164,7 +173,7 @@ async function establishThroughTargetBoundProductionCoordinator(
           }],
         };
       },
-      events: { emit: async (event) => { events.push(event); } },
+      events: recordingEvents(events),
     }).advance({
       state: { feature_desc: 'demo', worktree_branch: 'feat/daemon-demo', pr_url: leafUrl } as ConductState,
       mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {},

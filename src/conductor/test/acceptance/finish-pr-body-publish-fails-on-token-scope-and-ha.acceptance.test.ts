@@ -128,7 +128,6 @@ describe('FINISH publish-failure diagnosis', () => {
               operation: 'pull-request.edit',
               target: { kind: 'pull-request', repository: 'acme/repo', number: 17 },
               error,
-              ts: new Date().toISOString(),
             });
           }
         }

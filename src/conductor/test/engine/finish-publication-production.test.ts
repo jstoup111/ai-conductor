@@ -44,7 +44,6 @@ function githubOperationFailedEvent(input: {
       number: input.number ?? 7,
     },
     error: input.error,
-    ts: '2026-10-24T00:00:00.000Z',
   } as const;
 }
 
@@ -133,7 +132,7 @@ describe('authorProse pass-window publish failures', () => {
           await events.emit(githubOperationFailedEvent({ number: 8, error: 'other number' }));
           await events.emit(githubOperationFailedEvent({ repository: 'other/repo', error: 'other repository' }));
           await events.emit(githubOperationFailedEvent({ operation: 'pull-request.comment.create', error: 'other operation' }));
-          await events.emit({ type: 'build_review_outer_verdict', verdict: 'pass', ts: '2026-10-25T00:00:00.000Z' });
+          await events.emit({ type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS' });
         },
       )).resolves.toBeUndefined();
     });
@@ -157,7 +156,10 @@ describe('authorProse pass-window publish failures', () => {
 
   it('ignores an unre-emitted sibling-ledger failure that predates the authorProse pass', async () => {
     await withRoot(async (root) => {
-      appendCloseoutEvent(root, githubOperationFailedEvent({ error: 'failure from an earlier pass' }));
+      appendCloseoutEvent(root, {
+        ...githubOperationFailedEvent({ error: 'failure from an earlier pass' }),
+        ts: '2026-10-24T00:00:00.000Z',
+      });
       await expect(readFile(join(root, '.pipeline', 'pipeline-events.jsonl'), 'utf8'))
         .resolves.toContain('failure from an earlier pass');
 
