@@ -3363,6 +3363,19 @@ export class DefaultStepRunner implements StepRunner {
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
     const customReviewScopes: Record<string, import('./build-review-artifacts.js').BuildReviewReviewScope> = {};
+    const customJudgedSourcesFor = (
+      rubric: string,
+      artifact: Awaited<ReturnType<typeof priorArtifactsFor>>[number],
+    ): readonly BuildReviewSettledHunkFinding[] =>
+      artifact.result.kind === 'judged' && artifact.result.rubric === rubric && 'findings' in artifact.result
+        ? artifact.result.findings.flatMap((finding) => {
+          const identity = canonicalizeBuildReviewCustomFindingIdentity(finding);
+          return identity === undefined ? [] : [{
+            sourceId: `${rubric}:${identity.id}`,
+            finding: finding as import('./build-review-domain.js').BuildReviewCustomFinding,
+          }];
+        })
+        : [];
     for (const entry of customEntries) {
       const policyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: entry.contract.output.version,
@@ -3372,20 +3385,19 @@ export class DefaultStepRunner implements StepRunner {
         model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
       });
       const artifacts = await priorArtifactsFor(entry.id);
-      const sources: BuildReviewSettledHunkFinding[] = artifacts.flatMap((artifact) =>
-        artifact.result.kind === 'judged' && artifact.result.rubric === entry.id && 'findings' in artifact.result
-          ? artifact.result.findings.flatMap((finding) => {
-            const identity = canonicalizeBuildReviewCustomFindingIdentity(finding);
-            return identity === undefined ? [] : [{
-              sourceId: `${entry.id}:${identity.id}`,
-              finding: finding as import('./build-review-domain.js').BuildReviewCustomFinding,
-            }];
-          })
-          : [],
-      );
+      const sources = artifacts.flatMap((artifact) => customJudgedSourcesFor(entry.id, artifact));
+      const settled = settledBuildReviewHunks({
+        changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
+        resolvedAppliedActSourceIds,
+        liveSourceIds: liveActSourceIds.liveSourceIds,
+        laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
+          ? [{ reviewScope: artifact.reviewScope, findings: customJudgedSourcesFor(entry.id, artifact) }]
+          : []),
+      });
       const decision = decideBuildReviewReviewScope({
         lapId, changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha, policyIdentity,
         priorLaps: artifacts.map((artifact) => ({ lapId: artifact.lapId, reviewScope: artifact.reviewScope })),
+        settledHunks: settled,
         openSourceUnmapped: hasUnappliedLiveSourceWithoutCurrentHunk({
           sources,
           unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
@@ -3394,7 +3406,7 @@ export class DefaultStepRunner implements StepRunner {
       });
       if (decision !== undefined) {
         customReviewScopes[entry.id] = decision;
-        await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: 0 });
+        await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: settled.length });
       }
     }
     const builtinEntries = config.catalog.filter((entry) => entry.kind === 'builtin');
