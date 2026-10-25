@@ -854,7 +854,7 @@ function renderHumanRequiredHaltReason(
   }
   const { message, nextAction } = guidance;
   const detail = disposition.detail ? ` Detail: ${disposition.detail}` : '';
-  return `${message} Next action: ${nextAction}${detail}`;
+  return `${message} Next action: ${nextAction} Reason: ${disposition.reason}.${detail}`;
 }
 
 /**
