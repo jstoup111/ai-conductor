@@ -1,7 +1,24 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8
+import { readFile, readdir } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { checkLayerRatchet, decodeAllowlistName, encodeAllowlistName, formatRatchetViolations } from './layer-ratchet.js';
+
+const structuralDirectory = dirname(fileURLToPath(import.meta.url));
+const sourceDirectory = join(structuralDirectory, '../../src');
+const allowlistDirectory = join(structuralDirectory, 'layer-allowlist');
+
+async function sourceFiles(directory = sourceDirectory): Promise<Map<string, string>> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(path);
+    return entry.isFile() && entry.name.endsWith('.ts') ? new Map([[relative(sourceDirectory, path), await readFile(path, 'utf8')]]) : new Map();
+  }));
+  return new Map(nested.flatMap((files) => [...files]));
+}
 
 describe('structural: layer ratchet', () => {
   it('resolves .js specifiers to sibling TypeScript files', () => {
@@ -478,5 +495,17 @@ describe('structural: layer ratchet', () => {
       ['engine/a.ts', "import './b.js';"], ['engine/b.ts', "import './c.js';"], ['engine/c.ts', "import './d.js';"], ['engine/d.ts', ''],
     ]), allowlist: entries });
     expect(result.violations).toEqual(entries.map((entry) => ({ kind: 'stale-entry', entry, reason: 'not-a-violation' })));
+  });
+
+  it('ratchets the real source tree against the committed allowlist', async () => {
+    const entries = await readdir(allowlistDirectory);
+    const result = checkLayerRatchet({ files: await sourceFiles(), allowlist: entries });
+
+    expect(result.scannedFileCount).toBeGreaterThan(0);
+    expect(result.violations, formatRatchetViolations(result.violations)).toEqual([]);
+    expect(entries.every((entry) => {
+      const pair = decodeAllowlistName(entry);
+      return pair !== undefined && encodeAllowlistName(pair.from, pair.to) === entry;
+    })).toBe(true);
   });
 });
