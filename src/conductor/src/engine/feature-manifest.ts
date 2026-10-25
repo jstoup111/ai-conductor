@@ -65,17 +65,126 @@ export function renderFeatureManifest(manifest: FeatureManifest): string {
   )}\n`;
 }
 
-/**
- * Task 1 intentionally accepts only the established valid manifest shape.
- * Validation and malformed-result branches are added by Task 3.
- */
 export function parseFeatureManifest(
   raw: string,
-  _manifestPath: string,
-  _folderSlug: string,
+  manifestPath: string,
+  folderSlug: string,
 ): ParseFeatureManifestResult {
+  const malformed = (reason: string): ParseFeatureManifestResult => ({
+    kind: 'malformed',
+    manifestPath: manifestPath as DocsPath,
+    reason,
+  });
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return malformed(`${manifestPath} is not valid JSON: ${detail}`);
+  }
+
+  if (!isRecord(value)) {
+    return malformed(`${manifestPath} must contain a JSON object`);
+  }
+
+  for (const field of Object.keys(value)) {
+    if (field !== 'schemaVersion' && field !== 'slug' && field !== 'artifacts') {
+      return malformed(`${manifestPath} has unknown top-level field "${field}"`);
+    }
+  }
+
+  if (value.schemaVersion !== 1) {
+    return malformed(`${manifestPath} has unsupported schema version ${String(value.schemaVersion)}`);
+  }
+
+  if (typeof value.slug !== 'string') {
+    return malformed(`${manifestPath} must name a string slug`);
+  }
+
+  if (value.slug !== folderSlug) {
+    return malformed(`${manifestPath} slug "${value.slug}" does not match folder slug "${folderSlug}"`);
+  }
+
+  if (!Array.isArray(value.artifacts)) {
+    return malformed(`${manifestPath} must contain an artifacts array`);
+  }
+
+  const artifacts: FeatureManifestEntry[] = [];
+  for (const entry of value.artifacts) {
+    if (!isRecord(entry)) {
+      return malformed(`${manifestPath} has an artifact entry that is not an object`);
+    }
+
+    for (const field of Object.keys(entry)) {
+      if (field !== 'kind' && field !== 'path') {
+        return malformed(`${manifestPath} has unknown artifact field "${field}"`);
+      }
+    }
+
+    if (!isArtifactKind(entry.kind)) {
+      return malformed(`${manifestPath} has unknown artifact kind "${String(entry.kind)}"`);
+    }
+
+    if (typeof entry.path !== 'string') {
+      return malformed(`${manifestPath} artifact ${entry.kind} must have a string path`);
+    }
+
+    const pathError = validateArtifactPath(entry.kind, entry.path);
+    if (pathError !== undefined) {
+      return malformed(`${manifestPath} ${pathError}`);
+    }
+
+    artifacts.push({ kind: entry.kind, path: entry.path as DocsPath });
+  }
+
+  const planCount = artifacts.filter((entry) => entry.kind === 'plan').length;
+  if (planCount !== 1) {
+    return malformed(`${manifestPath} has ${planCount} plan entries; expected exactly one`);
+  }
+
   return {
     kind: 'parsed',
-    manifest: JSON.parse(raw) as FeatureManifest,
+    manifest: {
+      schemaVersion: 1,
+      slug: value.slug as FeatureSlug,
+      artifacts,
+    },
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isArtifactKind(value: unknown): value is ArtifactKind {
+  return typeof value === 'string' && ARTIFACT_KINDS.some((kind) => kind === value);
+}
+
+function validateArtifactPath(kind: ArtifactKind, path: string): string | undefined {
+  if (!path.startsWith('.docs/') || path.split('/').includes('..')) {
+    return `artifact path "${path}" is outside .docs/`;
+  }
+
+  switch (kind) {
+    case 'plan':
+    case 'stories':
+    case 'prd':
+    case 'track':
+    case 'complexity':
+    case 'conflicts':
+    case 'coherence':
+    case 'coherence-waiver':
+    case 'architecture':
+    case 'intake':
+    case 'applicability':
+      return undefined;
+    case 'decision':
+      return path.startsWith('.docs/decisions/')
+        ? undefined
+        : `decision path "${path}" is outside .docs/decisions/`;
+  }
+
+  const exhaustiveKind: never = kind;
+  return exhaustiveKind;
 }
