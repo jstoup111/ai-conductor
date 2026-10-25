@@ -119,6 +119,47 @@ describe('build-review findings CLI', () => {
     caseRead.mockRestore();
   });
 
+  // Covers: task:19
+  it('reports an out-of-delta finding from the shared resolver using the persisted lap scope', async () => {
+    const raw = aggregateWithTestQuality({
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3',
+      findings: [finding], verdict: 'FAIL',
+    });
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const reviewScope = {
+      mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity: 'policy',
+      reviewedHunks: [{ path: 'test/a.test.ts', contentHash: finding.anchor.locus.contentHash }],
+      deltaHunks: [{ path: 'test/a.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }],
+      outOfDeltaSourceIds: [],
+    } as const;
+    const print = vi.fn();
+    const changedFileCalls: unknown[] = [];
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async (path) => path.endsWith('/testQuality.json')
+        ? JSON.stringify({ version: 2, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: raw.results.testQuality, provenance: { kind: 'fresh' }, reviewScope })
+        : JSON.stringify(raw),
+      readCurrentLapChangedFiles: async (input) => {
+        changedFileCalls.push(input);
+        return [{
+          path: 'test/a.test.ts', changeKind: 'modified', hunks: [
+            { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: finding.anchor.locus.contentHash },
+            { oldStart: 10, oldCount: 1, newStart: 10, newCount: 1, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+          ],
+        }];
+      },
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
+      readMechanicalFaults: async () => 0, print,
+    })).resolves.toBe(0);
+
+    expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
+      verdict: 'PASS', unresolvedFindingIds: [], outOfDeltaFindingIds: [identity.id],
+    });
+    expect(changedFileCalls).toEqual([{ projectRoot: '/main/.worktrees/review-rubrics', mergeBase: 'base', headSha: 'head' }]);
+  });
+
   // Covers: task:12
   it('renders refuted autonomous cases separately from operator dispositions in human and JSON output', async () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
@@ -648,6 +689,9 @@ describe('build-review findings CLI', () => {
     })).resolves.toBe(0);
     expect(readFile.mock.calls.map(([path]) => path)).toEqual([
       '/main/.worktrees/review-rubrics/.pipeline/build-review.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review/lap-current/testQuality.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review/lap-current/security.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review/lap-current/implementationQuality.json',
     ]);
     expect(store.list).toHaveBeenCalledWith({ version: 'v1', repository: '/main', feature: 'review-rubrics' });
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({

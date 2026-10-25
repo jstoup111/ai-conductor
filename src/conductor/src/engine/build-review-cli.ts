@@ -6,9 +6,9 @@ import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggr
 import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
-import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
-import { BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, buildReviewSeverityThresholdPolicies, currentBuildReviewSourceLinks, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, currentBuildReviewSourceLinks, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -31,6 +31,8 @@ export interface BuildReviewFindingsDeps {
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
+  /** Reads the exact diff named by a persisted lap scope for shared verdict resolution. */
+  readonly readCurrentLapChangedFiles?: import('./build-review-effective.js').BuildReviewEffectiveResolverDeps['readCurrentLapChangedFiles'];
   readonly createStore?: (worktree: string) => DispositionStore;
   readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreReader;
   readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
@@ -511,9 +513,28 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
           }
           return ledger.gates.build_review;
         })();
-    // The same composed reducer the live gate uses, over the full record list.
-    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases, buildReviewSeverityThresholdPolicies(minSeverity)), minSeverity);
-    if (!effective) throw new Error('current findings are invalid');
+    // The shared resolver is the only reader that combines current-lap scope,
+    // dispositions, and case settlement.  Keeping this command on that seam
+    // prevents a findings report from disagreeing with the live gate.
+    const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
+    if (!loaded.ok) throw new Error(loaded.error.message);
+    const resolution = await resolveEffectiveBuildReviewVerdict(worktree, aggregate, {
+      resolveMainRoot: deps.resolveMainRoot,
+      realpath: deps.realpath,
+      createStore: () => ({
+        list: async () => listed,
+        listReducedCoverage: async () => reducedCoverage,
+      }),
+      createCaseStore: deps.createCaseStore,
+      minConfidence,
+      minSeverity,
+      readFile,
+      readCurrentLapChangedFiles: deps.readCurrentLapChangedFiles,
+      child,
+      adjudicationEnabled: resolveBuildReviewConfig(loaded.config).adjudication.enabled,
+    });
+    if (!resolution.ok) throw new Error(resolution.reason);
+    const effective = resolution.effective;
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const advisories = advisoryFindings(aggregate, effective, cases, minSeverity);
     if (advisories === undefined) throw new Error('current advisory findings are invalid');

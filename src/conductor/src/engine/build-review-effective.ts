@@ -1,6 +1,8 @@
 import { isRegisteredRubric } from './build-review-registry.js';
-import { readFile, realpath as realpathDefault } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   deriveEffectiveBuildReviewVerdictWithDispositions,
@@ -25,11 +27,13 @@ import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION, isBelowSeverityThreshold,
 import { buildReviewSeverityThresholdPolicies, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
-import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
+import { deriveChangedFileReferences, renderBuildReviewReducedCoverageEvidence, type ChangedFileReference } from './build-review-projections.js';
 import { projectBuildReviewCustomSuppressionSources } from './build-review-suppression-history.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { ResolvedBuildReviewConfig } from './resolved-config.js';
 import type { ChildId } from './child-context.js';
+
+const execFile = promisify(execFileCallback);
 
 /** Projects the shared threshold view into confidence floors for effective verdicts. */
 export function buildReviewConfidenceFloors(config: Pick<ResolvedBuildReviewConfig, 'catalog' | 'rubrics'>): Partial<Record<string, number>> {
@@ -84,6 +88,14 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly minSeverity?: Partial<Record<string, BuildReviewSeverity>>;
   /** Current engine-owned delta frontier, never reconstructed from prose. */
   readonly scopes?: Partial<Record<string, BuildReviewEffectiveScope>>;
+  /** Testable reader for the exact frozen diff referenced by a persisted lap scope. */
+  readonly readCurrentLapChangedFiles?: (input: {
+    readonly projectRoot: string;
+    readonly mergeBase: string;
+    readonly headSha: string;
+  }) => Promise<readonly ChangedFileReference[]>;
+  /** Testable branch-artifact reader used only when a caller did not supply scopes. */
+  readonly readFile?: (path: string) => Promise<string>;
   /** The active stacked child; settled links are never read from its sibling. */
   readonly child: ChildId | undefined;
   /** Disabled adjudication has no case-store authority. */
@@ -273,18 +285,42 @@ async function readSettledBuildReviewSourceIds(
 async function readCurrentLapScopes(
   projectRoot: string,
   aggregate: BuildReviewAggregate,
+  deps: Pick<BuildReviewEffectiveResolverDeps, 'readCurrentLapChangedFiles' | 'readFile'>,
 ): Promise<Partial<Record<string, BuildReviewEffectiveScope>>> {
+  const readCurrentLapChangedFiles = deps.readCurrentLapChangedFiles ?? (async ({
+    projectRoot: scopeProjectRoot,
+    mergeBase,
+    headSha,
+  }: {
+    readonly projectRoot: string;
+    readonly mergeBase: string;
+    readonly headSha: string;
+  }) => {
+    const { stdout } = await execFile('git', ['diff', '--no-ext-diff', `${mergeBase}..${headSha}`, '--', '.'], {
+      cwd: scopeProjectRoot,
+    });
+    return deriveChangedFileReferences(stdout);
+  });
+  const readBranchArtifact = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
+  const changedFilesBySnapshot = new Map<string, Promise<readonly ChangedFileReference[]>>();
+  const changedFilesFor = (mergeBase: string, headSha: string): Promise<readonly ChangedFileReference[]> => {
+    const key = `${mergeBase}\u0000${headSha}`;
+    let changedFiles = changedFilesBySnapshot.get(key);
+    if (changedFiles === undefined) {
+      changedFiles = readCurrentLapChangedFiles({ projectRoot, mergeBase, headSha });
+      changedFilesBySnapshot.set(key, changedFiles);
+    }
+    return changedFiles;
+  };
   const rubrics = [...Object.keys(aggregate.results), ...(aggregate.currentCustomRubrics ?? [])];
   const entries = await Promise.all(rubrics.map(async (rubric) => {
     try {
-      const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review', aggregate.lapId, `${rubric}.json`), 'utf8')));
+      const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readBranchArtifact(join(projectRoot, '.pipeline', 'build-review', aggregate.lapId, `${rubric}.json`))));
       if (!artifact?.reviewScope || 'kind' in artifact.reviewScope) return undefined;
+      const changedFiles = await changedFilesFor(artifact.reviewScope.mergeBase, artifact.reviewScope.headSha);
       return [rubric, {
         reviewScope: artifact.reviewScope,
-        changedFiles: artifact.reviewScope.deltaHunks.map((hunk) => ({
-          path: hunk.path, changeKind: 'modified' as const,
-          hunks: [{ oldStart: 0, oldCount: 0, newStart: 0, newCount: 0, contentHash: hunk.contentHash }],
-        })),
+        changedFiles,
       }] as const;
     } catch { return undefined; }
   }));
@@ -345,18 +381,16 @@ export async function resolveEffectiveBuildReviewVerdict(
     }
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
-  const scopes = deps.scopes ?? await readCurrentLapScopes(projectRoot, aggregate);
+  const scopes = deps.scopes ?? await readCurrentLapScopes(projectRoot, aggregate, deps);
   try {
     effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, new Set(), deps.minSeverity ?? {}, scopes);
     // The adjudication coordinator finalizes cases and marks the step done; this
     // completion check must honor the same settlement or the gate re-selects a
     // settled lap until the loop guard halts it. Unreadable case state settles
     // nothing, so it can only keep a finding unresolved, never pass one.
-    if (effective && effective.unresolvedFindingIds.length > 0) {
-      const settledSourceIds = await readSettledBuildReviewSourceIds(projectRoot, feature, deps);
-      if (settledSourceIds.size > 0) {
-        effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds, deps.minSeverity ?? {}, scopes);
-      }
+    const settledSourceIds = await readSettledBuildReviewSourceIds(projectRoot, feature, deps);
+    if (effective && settledSourceIds.size > 0) {
+      effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds, deps.minSeverity ?? {}, scopes);
     }
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
