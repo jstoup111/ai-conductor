@@ -63,6 +63,16 @@ export interface LoadSliceTopologyDependencies extends DurableChildStateDependen
   readonly planPath?: string;
 }
 
+/**
+ * Extract proposed stack positions through the sealed-topology boundary.
+ * `undefined` preserves the caller's existing invalid-plan refusal path.
+ */
+export function slicePositionsFromPlan(planText: string): number[] | undefined {
+  const parsed = validatePlanSlices(planText);
+  if (parsed.kind === 'invalid') return undefined;
+  return parsed.kind === 'sliced' ? parsed.slices.map((slice) => slice.position) : [];
+}
+
 async function runGit(git: GitRunner, args: string[]) {
   try {
     return await git(args);

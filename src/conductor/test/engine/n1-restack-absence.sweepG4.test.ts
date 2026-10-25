@@ -53,8 +53,6 @@ import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
 import { openShipDraftPr } from '../../src/engine/ship-draft-pr.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { CELLS, type Cell } from './n1-golden-shared.js';
@@ -253,30 +251,21 @@ const ONE_STORY = `# Stories: n1-golden
 - Given a golden cell, when it runs, then it remains stable.
 `;
 
-const TWO_STORIES = `${ONE_STORY}
-
-## Story 2: Golden coverage follow-up
-
-### Acceptance Criteria
-
-- Given a golden cell, when it runs, then it remains stable.
-`;
-
 /** The #3019 golden cell run up to its park boundary, as n1-golden-state runs it. */
 async function runGoldenCell(cell: Cell, root: string, events: ConductorEventEmitter) {
   await mkdir(join(root, '.ai-conductor'), { recursive: true });
   await writeFile(join(root, '.ai-conductor', 'config.yml'), cell.configYaml);
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await writeFile(join(root, '.docs', 'plans', `${SLUG}.md`), cell.planMd);
-  const writeCoverageInputs = async () => {
+  const writeTopologyInputs = async () => {
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
     await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
     await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
-    await writeFile(join(root, '.docs', 'stories', `${SLUG}.md`), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
-    await writeFile(join(root, '.docs', 'complexity', `${SLUG}.md`), cell.complexityMd!);
+    await writeFile(join(root, '.docs', 'stories', `${SLUG}.md`), ONE_STORY);
+    await writeFile(join(root, '.docs', 'complexity', `${SLUG}.md`), 'Tier: M\nStacked-Delivery: approved\n');
     await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
   };
-  if (cell.name === 'flag-on-single-slice') await writeCoverageInputs();
+  if (cell.name === 'flag-on-single-slice') await writeTopologyInputs();
   await git(root, 'init', '-q', '-b', 'main');
   await git(root, 'config', 'user.email', 'test@example.com');
   await git(root, 'config', 'user.name', 'Test User');
@@ -284,21 +273,6 @@ async function runGoldenCell(cell: Cell, root: string, events: ConductorEventEmi
   await writeFile(join(root, '.gitignore'), '.pipeline/\n');
   await git(root, 'add', '.');
   await git(root, 'commit', '-qm', 'init');
-  if (cell.coverageBinding) {
-    if (cell.name !== 'flag-on-single-slice') await writeCoverageInputs();
-    const coverageRunner = new DefaultStepRunner(
-      { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: vi.fn() } as LLMProvider,
-      'n1-golden-session',
-      root,
-      {
-        featureDesc: SLUG,
-        planPath: join(root, '.docs', 'plans', `${SLUG}.md`),
-        projectRoot: root,
-        config: { coverage_binding: { judge: { enabled: false } }, stacked_prs: { enabled: true, max_slices: 2 } },
-      },
-    );
-    await coverageRunner.run('coverage_binding', { complexity_tier: 'M' });
-  }
   const pipeline = join(root, '.pipeline');
   await mkdir(pipeline, { recursive: true });
   const statePath = join(pipeline, 'conduct-state.json');

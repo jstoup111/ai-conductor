@@ -164,7 +164,7 @@ describe('loadSliceTopology', () => {
     const durableProbe = await fixture({ git: true });
     const unavailableGit: GitRunner = async () => ({ exitCode: 2, stdout: '', stderr: 'git unavailable' });
     await expect(loadSliceTopology(durableProbe, 'demo', { git: unavailableGit })).resolves.toEqual({
-      kind: 'unavailable', cause: 'git-error',
+      kind: 'unavailable', cause: 'git-error', planPath: '.docs/plans/demo.md',
     });
 
     const positionRead = await fixture({ git: true });
@@ -175,7 +175,7 @@ describe('loadSliceTopology', () => {
       return realGit(args, options);
     };
     await expect(loadSliceTopology(positionRead, 'demo', { git: failingPositionRead })).resolves.toEqual({
-      kind: 'unavailable', cause: 'git-error',
+      kind: 'unavailable', cause: 'git-error', planPath: '.docs/plans/demo.md', positionsRef: 'refs/conductor/demo/positions',
     });
   });
 });

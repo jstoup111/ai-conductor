@@ -19,9 +19,9 @@ const activeChild1: ActiveChildResolution = {
 const cursorRefusals: Array<[ActiveChildResolution, string]> = [
   [{ kind: 'divergent', child: child1, check: 'closed-child-rewritten' }, 'child 1 failed active-child check closed-child-rewritten'],
   [{ kind: 'divergent', child: child1, check: 'range-not-ancestor' }, 'child 1 failed active-child check range-not-ancestor'],
-  [{ kind: 'topology-unavailable', cause: 'plan-missing' }, 'slice topology is unavailable while child state exists (plan-missing)'],
-  [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child'],
-  [{ kind: 'git-error' }, 'git failed while resolving the active child cursor'],
+  [{ kind: 'topology-unavailable', cause: 'plan-missing' }, 'slice topology is unavailable while child state exists (plan-missing)\nRecovery:\nai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt'],
+  [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child\nRecovery:\ngit switch feat/daemon-demo'],
+  [{ kind: 'git-error' }, 'git failed while resolving the active child cursor\nRecovery:\nrm -f .pipeline/HALT .pipeline/HALT.class'],
 ];
 
 beforeEach(async () => {

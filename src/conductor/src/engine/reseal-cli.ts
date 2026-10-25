@@ -18,8 +18,7 @@ import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from '.
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
-import { verifySlicePositions } from './slice-topology.js';
-import { validatePlanSlices } from './plan-slices.js';
+import { slicePositionsFromPlan, verifySlicePositions } from './slice-topology.js';
 
 export interface ResealDispatch {
   kind: 'reseal';
@@ -206,9 +205,8 @@ async function positionChangeRefusal(
 
   const planText = await readFile(planPath, 'utf8').catch(() => undefined);
   if (planText === undefined) return undefined;
-  const parsed = validatePlanSlices(planText);
-  if (parsed.kind === 'invalid') return undefined;
-  const positions = parsed.kind === 'sliced' ? parsed.slices.map((slice) => slice.position) : [];
+  const positions = slicePositionsFromPlan(planText);
+  if (positions === undefined) return undefined;
   const topology = await verifySlicePositions(
     worktree,
     slug,
