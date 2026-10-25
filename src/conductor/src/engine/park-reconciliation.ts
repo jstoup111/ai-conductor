@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { isOperatorParked, listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
 import { isDaemonOwnedBranchName, parseFeatureBranch } from './feature-branch-identity.js';
@@ -178,6 +179,19 @@ export interface ReconcileParkedFeaturesOptions {
 }
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Read reconciliation's intake marker through the feature manifest when present. */
+export async function readParkedIntake(projectRoot: string, slug: string): Promise<string | null> {
+  const intakeArtifact = await resolveFeatureArtifact(
+    worktreeManifestSource(projectRoot),
+    slug,
+    'intake',
+    async () => [`.docs/intake/${slug}.md`],
+  );
+  const intakePath = intakeArtifact.paths[0];
+  if (intakePath === undefined || (intakeArtifact.origin === 'manifest' && intakeArtifact.missing.includes(intakePath))) return null;
+  return readFile(join(projectRoot, intakePath), 'utf-8').catch(() => null);
+}
 const sweepSummarySignatures = new WeakMap<Map<string, ParkClassification>, string>();
 
 /**
@@ -794,9 +808,7 @@ export async function reconcileParkedFeatures(
       } else if (isMerged(evidence)) {
       classification = 'merged';
       } else {
-      const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
-        .then((content) => content)
-        .catch(() => null);
+      const intake = await readParkedIntake(opts.projectRoot, slug);
       const sourceRef = parseIntakeSourceRef(intake);
       if (!sourceRef || !opts.getIssueState) {
         classification = 'unclassified';

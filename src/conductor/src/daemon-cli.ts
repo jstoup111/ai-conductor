@@ -164,6 +164,7 @@ import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
+import { gitRefManifestSource, resolveFeatureArtifact } from './engine/feature-manifest-source.js';
 import {
   formatDaemonStartupLog,
   formatDaemonConcurrencyWarning,
@@ -332,6 +333,43 @@ export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunne
       };
     }
   };
+}
+
+/** Resolve the two documents carried into a daemon work order at its pinned base. */
+export async function resolveDaemonWorkOrderDocumentRefs(
+  projectRoot: string,
+  baseSha: string,
+  slug: string,
+  legacy: { storiesPath?: string; planPath?: string } = {},
+): Promise<readonly string[]> {
+  const source = gitRefManifestSource(projectRoot, baseSha);
+  const [stories, plan] = await Promise.all([
+    resolveFeatureArtifact(source, slug, 'stories', async () => [
+      legacy.storiesPath ?? `.docs/stories/${slug}.md`,
+    ]),
+    resolveFeatureArtifact(source, slug, 'plan', async () => [
+      legacy.planPath ?? `.docs/plans/${slug}.md`,
+    ]),
+  ]);
+  return [...stories.paths, ...plan.paths];
+}
+
+/** Read the owner-gate merge time from the manifest-authoritative plan path. */
+export async function readDaemonMergeTime(
+  git: GitRunner,
+  projectRoot: string,
+  slug: string,
+  baseRef: string,
+): Promise<string | null> {
+  const plan = await resolveFeatureArtifact(
+    gitRefManifestSource(projectRoot, baseRef),
+    slug,
+    'plan',
+    async () => [`.docs/plans/${slug}.md`],
+  );
+  const path = plan.paths[0];
+  if (path === undefined || (plan.origin === 'manifest' && plan.missing.includes(path))) return null;
+  return firstAppearanceTime(git, baseRef, path);
 }
 
 /** The only transformation from the serializable executor contract to runner input. */
@@ -2304,10 +2342,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         enginePin,
         effectiveConcurrency: daemonConcurrency.concurrency,
         selfHost: isSelfHost,
-        documentRefs: [
-          item.storiesPath ?? `.docs/stories/${item.slug}.md`,
-          item.planPath ?? `.docs/plans/${item.slug}.md`,
-        ],
+        documentRefs: await resolveDaemonWorkOrderDocumentRefs(projectRoot, baseSha, item.slug, item),
         tier: item.tier,
         sourceRef: item.sourceRef,
         track: item.track,
@@ -2578,8 +2613,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug, baseRef) => readSpecOwnerStamp(ownerGit, baseRef, slug),
-      readMergeTime: (slug, baseRef) =>
-        firstAppearanceTime(ownerGit, baseRef, `.docs/plans/${slug}.md`),
+      readMergeTime: (slug, baseRef) => readDaemonMergeTime(ownerGit, projectRoot, slug, baseRef),
       cutover: config?.owner_gate_cutover ?? null,
       // The shared reader factory creates a fresh blocker resolver per pass,
       // so its per-pass memo never leaks stale verdicts across polls.

@@ -4,6 +4,7 @@ import { scanInheritedState } from '../daemon-dashboard.js';
 import { HALT_MARKER, readHaltSidecarClassification, type HaltDisposition } from '../halt-marker.js';
 import { isOperatorParked } from '../park-marker.js';
 import { createRegistryReader, type RegistryReader } from '../registry.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from '../feature-manifest-source.js';
 
 export interface ProjectHalt {
   project: string;
@@ -15,9 +16,17 @@ export interface ProjectHalt {
   sourceRef?: string;
 }
 
-async function readSourceRef(worktreePath: string, slug: string): Promise<string | undefined> {
+export async function readSourceRef(worktreePath: string, slug: string): Promise<string | undefined> {
   try {
-    const contents = await readFile(join(worktreePath, '.docs', 'intake', `${slug}.md`), 'utf-8');
+    const intake = await resolveFeatureArtifact(
+      worktreeManifestSource(worktreePath),
+      slug,
+      'intake',
+      async () => [`.docs/intake/${slug}.md`],
+    );
+    const path = intake.paths[0];
+    if (path === undefined || (intake.origin === 'manifest' && intake.missing.includes(path))) return undefined;
+    const contents = await readFile(join(worktreePath, path), 'utf-8');
     return /^\s*Source-Ref:\s*(\S+)/im.exec(contents)?.[1];
   } catch {
     return undefined;
