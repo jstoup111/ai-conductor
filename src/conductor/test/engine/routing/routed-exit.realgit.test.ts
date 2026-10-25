@@ -151,6 +151,28 @@ describe('routed exit (real local Git)', () => {
     })).resolves.toEqual({ kind: 'queue' });
   });
 
+  it('admits the next child host without carrying the settled host entry baseline', async () => {
+    const subject = await fixture(false);
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+    const settled = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+    if (settled.kind !== 'record') throw new Error('missing settled route');
+    expect(settled.record.entry?.host).toBe(host);
+    const twoHosts: typeof settled = {
+      ...settled,
+      record: { ...settled.record, hosts: { ...settled.record.hosts, [childTwo]: 'pending' } },
+    };
+
+    await expect(advanceRound(subject.repo, 'demo', twoHosts, { git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'admitted', host: childTwo });
+    const advanced = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+    if (advanced.kind !== 'record') throw new Error('missing advanced route');
+    expect(advanced.record.hosts[childTwo]).toBe('admitted');
+    expect(advanced.record.currentHostIndex).toBe(1);
+    expect(advanced.record.entry).toBeUndefined();
+    expect(await refExists(subject.gitRunner, repairMarkerRefFor('demo'))).toBe(true);
+  });
+
   it('marks a repaired host built, drains its outbox, and carries the fix through one routed restack', async () => {
     const subject = await fixture(true);
     const persisted: string[] = [];
