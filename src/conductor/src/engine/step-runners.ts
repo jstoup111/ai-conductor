@@ -4879,7 +4879,10 @@ export class DefaultStepRunner implements StepRunner {
           ...(cacheProvenance === undefined ? {} : {
             reuse: { sourceLapId: cacheProvenance.cachedLapId, sourceSnapshotDigest: cacheProvenance.cachedSnapshotDigest },
           }),
-          ...(reviewScope === undefined ? {} : { reviewScope }),
+          // A failed dispatch never judged this scope. Persisting the
+          // pre-dispatch decision here would let a later lap treat failed
+          // infrastructure as settled review evidence.
+          ...(reviewScope === undefined || durableMember.result.kind === 'infrastructure-failure' ? {} : { reviewScope }),
         }, {
           readFile: async (path) => readFile(path, 'utf-8'),
           mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,

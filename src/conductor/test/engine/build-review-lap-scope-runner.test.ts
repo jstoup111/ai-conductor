@@ -27,6 +27,11 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 
 vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
@@ -467,6 +472,80 @@ const provider: LLMProvider = {
   invoke: async () => ({ success: true, output: '', exitCode: 0 }),
 };
 
+const scopeConfig = resolveBuildReviewConfig({
+  llm_provider: 'claude',
+  build_review: {
+    enabled: true,
+    rubrics: {
+      testQuality: { enabled: false },
+      security: { enabled: false },
+      implementationQuality: { enabled: true },
+    },
+  },
+} as HarnessConfig);
+
+const scopeDiff = [
+  'diff --git a/src/scope.ts b/src/scope.ts',
+  '@@ -0,0 +1 @@',
+  '+export const scope = true;',
+].join('\n');
+
+function scopeInput(headSha: string, mergeBase = 'base') {
+  return {
+    sourceSnapshot: {
+      digest: `sha256:${headSha}`,
+      contentDigest: 'sha256:scope-content',
+      mergeBase,
+      headSha,
+      diff: scopeDiff,
+      sourceChanges: [],
+    },
+  };
+}
+
+function scopeRunner(dir: string, events?: ConductorEventEmitter) {
+  const runner = new DefaultStepRunner(provider, 'scope-runner', dir, {
+    events,
+    buildReviewEffectiveResolver: async (_root, aggregate, deps) => ({
+      ok: true as const,
+      feature: undefined,
+      effective: deriveEffectiveBuildReviewVerdict(
+        aggregate,
+        new Set(),
+        [],
+        {},
+        new Set(),
+        {},
+        deps.scopes as never,
+      )!,
+    }),
+  });
+  vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
+    engineStamp: 'scope-engine',
+    skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:scope-policy' } },
+  });
+  vi.spyOn(runner as never, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: unknown, projection: any) => ({
+    kind: 'judged',
+    rubric: 'implementationQuality',
+    lapId: projection.lapId,
+    snapshotDigest: projection.snapshotDigest,
+    contractVersion: 'v4',
+    findings: [],
+    verdict: 'PASS',
+  }));
+  return runner;
+}
+
+async function runScopeLap(runner: DefaultStepRunner, input: ReturnType<typeof scopeInput>) {
+  return (runner as unknown as {
+    runRubricBuildReview(inputs: unknown, config: unknown, tier: 'S'): Promise<unknown>;
+  }).runRubricBuildReview(input, scopeConfig, 'S');
+}
+
+function artifactPath(root: string, headSha: string) {
+  return join(root, '.pipeline', 'build-review', `lap-${headSha}`, 'implementationQuality.json');
+}
+
 describe('build-review lap scope runner', () => {
   beforeEach(async () => {
     // This suite drives the real coordinator; the module mock above belongs to
@@ -757,5 +836,160 @@ describe('build-review lap scope runner', () => {
 
     expect(isBuildReviewFindingOutOfDelta(finding('lap-2-random-id'), scope)).toBe(true);
     expect(isBuildReviewFindingOutOfDelta(finding('lap-3-other-random-id'), scope)).toBe(true);
+  });
+});
+
+// Covers: task:6
+describe('build_review runner scope decisions', () => {
+  beforeEach(async () => {
+    // These runner-level laps drive the real coordinator beneath the module mock.
+    const actual = await vi.importActual<typeof import('../../src/engine/build-review-coordinator.js')>('../../src/engine/build-review-coordinator.js');
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(actual.coordinateBuildReviewRubrics);
+  });
+
+  it('records and announces a full first lap followed by a delta lap', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-runner-scope-'));
+    const events = new ConductorEventEmitter();
+    const scopes: Array<Extract<ConductorEvent, { type: 'build_review_review_scope' }>> = [];
+    events.on('build_review_review_scope', (event) => { scopes.push(event); });
+    try {
+      const runner = scopeRunner(dir, events);
+      await expect(runScopeLap(runner, scopeInput('scope-l1'))).resolves.toMatchObject({ success: true });
+      await expect(runScopeLap(runner, scopeInput('scope-l2'))).resolves.toMatchObject({ success: true });
+
+      const first = JSON.parse(await readFile(artifactPath(dir, 'scope-l1'), 'utf8'));
+      const second = JSON.parse(await readFile(artifactPath(dir, 'scope-l2'), 'utf8'));
+      expect(first.reviewScope).toMatchObject({ mode: 'full', reason: 'first-lap', sequence: 1 });
+      expect(second).toMatchObject({
+        result: { kind: 'scope-empty', rubric: 'implementationQuality' },
+        reviewScope: { mode: 'delta', reason: 'delta', sequence: 2, predecessorLapId: 'lap-scope-l1' },
+      });
+      expect(scopes).toEqual([
+        expect.objectContaining({ rubric: 'implementationQuality', lapId: 'lap-scope-l1', mode: 'full', reason: 'first-lap' }),
+        expect.objectContaining({ rubric: 'implementationQuality', lapId: 'lap-scope-l2', mode: 'delta', reason: 'delta' }),
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a full scope when a restacked child has a new merge base', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-runner-restack-'));
+    try {
+      const runner = scopeRunner(dir);
+      await expect(runScopeLap(runner, scopeInput('restack-l1', 'parent-before'))).resolves.toMatchObject({ success: true });
+      await expect(runScopeLap(runner, scopeInput('restack-l2', 'parent-after'))).resolves.toMatchObject({ success: true });
+
+      expect(JSON.parse(await readFile(artifactPath(dir, 'restack-l2'), 'utf8')).reviewScope).toMatchObject({
+        mode: 'full', reason: 'merge-base-changed', predecessorLapId: 'lap-restack-l1', mergeBase: 'parent-after',
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('records an unreadable prior scope once without altering the corrupt artifact', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-runner-unreadable-'));
+    try {
+      const runner = scopeRunner(dir);
+      await expect(runScopeLap(runner, scopeInput('unreadable-l1'))).resolves.toMatchObject({ success: true });
+      const priorPath = artifactPath(dir, 'unreadable-l1');
+      const corrupt = JSON.parse(await readFile(priorPath, 'utf8'));
+      corrupt.reviewScope = { mode: 'not-a-scope' };
+      await writeFile(priorPath, JSON.stringify(corrupt), 'utf8');
+      const bytesBefore = await readFile(priorPath, 'utf8');
+
+      await expect(runScopeLap(runner, scopeInput('unreadable-l2'))).resolves.toMatchObject({ success: true });
+
+      expect(await readFile(priorPath, 'utf8')).toBe(bytesBefore);
+      expect(JSON.parse(await readFile(artifactPath(dir, 'unreadable-l2'), 'utf8')).reviewScope).toMatchObject({
+        mode: 'full', reason: 'record-unreadable', unreadableLapIds: ['lap-unreadable-l1'],
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses the current-lap scope unchanged for a disposition-only rejoin', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-runner-rejoin-'));
+    try {
+      const runner = scopeRunner(dir);
+      const input = scopeInput('rejoin');
+      await expect(runScopeLap(runner, input)).resolves.toMatchObject({ success: true });
+      const first = JSON.parse(await readFile(artifactPath(dir, 'rejoin'), 'utf8')).reviewScope;
+
+      await expect(runScopeLap(runner, input)).resolves.toMatchObject({ success: true });
+      const second = JSON.parse(await readFile(artifactPath(dir, 'rejoin'), 'utf8')).reviewScope;
+
+      expect(second.sequence).toBe(first.sequence);
+      expect(second.reviewedHunks).toEqual(first.reviewedHunks);
+      expect(second.deltaHunks).toEqual(first.deltaHunks);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not persist a scope or settle hunks when a custom dispatch ends in infrastructure failure', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-runner-infrastructure-'));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: async () => ({ success: false, output: 'missing structured result', exitCode: 0, structuredResultFailure: 'missing' }),
+    };
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: {
+        enabled: true, llm_provider: 'claude', model: 'opus', effort: 'high',
+        model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
+        max_projection_bytes: 1_000_000, min_confidence: 0, timeout_seconds: 60,
+      },
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const reviewScope = {
+      mode: 'full' as const, reason: 'first-lap' as const, sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'failed',
+      policyIdentity: 'sha256:policy', reviewedHunks: [{ path: 'src/scope.ts', contentHash: 'sha256:hunk' }], deltaHunks: [{ path: 'src/scope.ts', contentHash: 'sha256:hunk' }], outOfDeltaSourceIds: [],
+    };
+    const runner = new DefaultStepRunner(provider, 'scope-infrastructure', dir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY,
+        builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256:${'a'.repeat(64)}`,
+      }),
+    });
+    try {
+      const outcome = await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy(
+          entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string, tier?: unknown, lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>, pipelineDir?: string, executionContext?: unknown,
+          reviewScope?: unknown,
+        ): Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'failed', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-failed', undefined, undefined, async (provider) => ({ provider, platform: process.platform, status: 'available' as const }), undefined, undefined, reviewScope);
+
+      expect(outcome).toMatchObject({ member: { result: { kind: 'infrastructure-failure' } } });
+      const failedArtifact = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'lap-failed', 'custom-policy.json'), 'utf8'));
+      expect(failedArtifact).not.toHaveProperty('reviewScope');
+      expect(settledBuildReviewHunks({
+        changedFiles: [{ path: 'src/scope.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: 'sha256:hunk' }] }],
+        mergeBase: 'base', policyIdentity: 'sha256:policy', laps: [],
+      })).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
