@@ -914,6 +914,16 @@ export function routeFinishPublicationDisposition(
   }
 }
 
+/**
+ * Narrows a boundary value before its human-required metadata is forwarded
+ * onto the conductor event spine.
+ */
+export function isHumanRequiredPublicationDisposition(
+  disposition: unknown,
+): disposition is { kind: 'human_required'; reason: string; detail?: string } {
+  return isExactDisposition(disposition) && disposition.kind === 'human_required';
+}
+
 function isExactDisposition(
   disposition: unknown,
 ): disposition is PublicationDisposition {

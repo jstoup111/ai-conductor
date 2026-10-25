@@ -345,6 +345,7 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
+  isHumanRequiredPublicationDisposition,
   publicationProgressAllowance,
   nonRetryablePublicationReason,
   renderProseHumanRequiredDetail,
@@ -11774,7 +11775,7 @@ export class Conductor {
               await emitTracked({
                 type: 'finish_publication_disposition',
                 disposition: 'human_required',
-                ...(disposition.kind === 'human_required' ? {
+                ...(isHumanRequiredPublicationDisposition(disposition) ? {
                   reason: disposition.reason,
                   ...(disposition.detail === undefined ? {} : { detail: disposition.detail }),
                 } : {}),
