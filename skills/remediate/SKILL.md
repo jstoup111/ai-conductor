@@ -132,7 +132,8 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   `{ "caseId": "...", "reason": "..." }` entries declaring it distinct from resolved action
   owners of its sources. A reason must be non-empty. A re-raise over a resolved action case is
   a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
-  A malformed `distinctFrom` shape rejects the artifact. An entry not naming a resolved action owner of a row source is ignored.
+  A malformed `distinctFrom` shape rejects the artifact. An entry may name either a provenance
+  candidate of the row or a resolved act owner of a row source; other entries are ignored.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.

@@ -1,9 +1,11 @@
-// Covers: task:9, task:14
-import { readFile } from 'node:fs/promises';
+// Covers: task:9, task:14, task:22
+import { readdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 const remediateSkillPath = new URL('../../../../skills/remediate/SKILL.md', import.meta.url);
+const remediateSkillDirectory = fileURLToPath(new URL('../../../../skills/remediate/', import.meta.url));
 
 function section(skill: string, heading: string): string {
   return skill.match(new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`))?.[1] ?? '';
@@ -102,5 +104,18 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/`planContract\.index` lists every (?:active-)?plan task without (?:its )?body/i);
     expect(caseMode).toMatch(/`admittedTaskIds` must name supplied task bodies/i);
     expect(caseMode).toMatch(/index-only task.*at most one.*engine.*expansion round.*unsupplied admission.*halts/is);
+  });
+
+  it('allows distinctFrom to name provenance candidates through the shared skill only', async () => {
+    const [skill, files] = await Promise.all([
+      readFile(remediateSkillPath, 'utf8'),
+      readdir(remediateSkillDirectory, { recursive: true }),
+    ]);
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+
+    expect(caseMode.replace(/\s+/g, ' ')).toContain(
+      'An entry may name either a provenance candidate of the row or a resolved act owner of a row source; other entries are ignored.',
+    );
+    expect(files.filter((file) => file.endsWith('SKILL.md'))).toEqual(['SKILL.md']);
   });
 });
