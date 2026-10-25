@@ -4496,8 +4496,8 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    // Covers: task:8
-    it('Task 8: passes resolved applied acted sources into the runner frontier', async () => {
+    // Covers: task:8, task:9
+    it('passes resolved and live act sources into the runner frontier', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {
@@ -4519,9 +4519,10 @@ TIER: M`,
         evidenceLocations: ['src/example.ts:1'],
         anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/example.ts', contentHash: hunk.contentHash, display: 'value' } },
       };
-      const sourceId = canonicalizeBuildReviewFindingIdentity({
+      const findingId = canonicalizeBuildReviewFindingIdentity({
         rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding.concernKind, anchor: finding.anchor,
       })!.id;
+      const sourceId = `implementationQuality:${findingId}`;
       const engineIdentity = {
         engineStamp: 'engine-a',
         skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
@@ -4573,6 +4574,101 @@ TIER: M`,
       }, config, 'M', 'plan.md')).rejects.toThrow('expected frontier observation');
 
       expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
+
+      vi.spyOn(runner as any, 'liveBuildReviewActSourceIds').mockResolvedValue({
+        liveSourceIds: new Set([sourceId]), unappliedLiveSourceIds: new Set([sourceId]),
+      });
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.implementationQuality;
+        throw new Error('expected live frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', mergeBase: 'base', headSha: 'current', diff: [
+            'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
+            '-export const value = false;', '+export const value = true;',
+          ].join('\n'),
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected live frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }] });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.implementationQuality;
+        throw new Error('expected unmapped frontier observation');
+      });
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:unmapped', mergeBase: 'base', headSha: 'unmapped', diff: [
+            'diff --git a/src/other.ts b/src/other.ts', '@@ -1 +1 @@',
+            '-export const other = false;', '+export const other = true;',
+          ].join('\n'),
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected unmapped frontier observation');
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'open-source-unmapped' });
+    });
+
+    // Covers: task:9
+    it('passes testQuality unresolved markers to the frontier as unknown risk', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = config.catalog.find((candidate) => candidate.id === 'testQuality')!;
+      const hunk = deriveChangedFileReferences([
+        'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
+        '-export const value = false;', '+export const value = true;',
+      ].join('\n'))[0]!.hunks[0]!;
+      const engineIdentity = {
+        engineStamp: 'engine-a', skillDigests: { testQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
+      };
+      const descriptor = getBuildReviewRubricDescriptor('testQuality').contract;
+      const policyIdentity = buildReviewPolicyIdentity('testQuality', {
+        contractVersion: descriptor.output.version, projectionVersion: descriptor.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        effectiveBundleDigest: 'sha256:bundle-a',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'testQuality.json'), JSON.stringify({
+        version: 2, rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
+        result: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', contractVersion: 'v4', findings: [], verdict: 'PASS',
+          scopeResolutions: [{
+            candidateId: 'candidate-unreadable', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable',
+            sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: hunk.contentHash, display: 'covered test' },
+            obligationReferences: ['task:1'],
+          }],
+        },
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity,
+          reviewedHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      let observedScope: unknown;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.testQuality;
+        throw new Error('expected unknown frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', mergeBase: 'base', headSha: 'current',
+          diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
+          testQuality: { unresolvedMarkers: [{ selector: 'src/example.ts', reference: 'task:unbound' }] },
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected unknown frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }] });
     });
 
     // #3317: a branch that commits a root `node_modules` symlink must not make

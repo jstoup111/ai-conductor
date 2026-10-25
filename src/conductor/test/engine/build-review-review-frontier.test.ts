@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildReviewPolicyIdentity,
+  buildReviewLiveActSourceIds,
+  buildReviewTestScopeUnknownSources,
   decideBuildReviewReviewScope,
   mapBuildReviewFindingToHunks,
   settledBuildReviewHunks,
@@ -20,6 +22,7 @@ import {
   parseBuildReviewFindingAnchor,
 } from "../../src/engine/build-review-domain.js";
 import type { ChangedFileReference } from "../../src/engine/build-review-projections.js";
+import type { RemediationCaseRecord } from "../../src/engine/remediation-case-store.js";
 
 function inputs(
   overrides: Partial<BuildReviewPolicyIdentityInputs> = {},
@@ -259,6 +262,74 @@ describe("build-review review frontier", () => {
       changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap],
       resolvedAppliedActSourceIds: new Set(["implementationQuality:acted-source"]),
     })).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
+  });
+
+  // Covers: task:9
+  it("keeps every live act source unsettled, including an open applied action", () => {
+    const finding = {
+      concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:hunk-a", display: "line" } },
+    };
+    const sourceIds = ["open", "failed", "reserved", "open-applied"];
+    const records = sourceIds.map((sourceId, index) => ({
+      id: `case-${sourceId}`, domain: "build_review" as const, disposition: "act" as const,
+      priority: "high" as const, rationale: "must repair", confidence: "high" as const,
+      resolution: "open" as const,
+      sources: [{ sourceId, outcome: "acted" as const, recordedAt: `2026-10-25T00:00:0${index}Z` }],
+      effect: index === 1
+        ? { id: "effect-failed", kind: "action" as const, status: "failed" as const, diagnostic: "failed" }
+        : index === 2
+          ? { id: "effect-reserved", kind: "action" as const, status: "reserved" as const }
+          : index === 3
+            ? { id: "effect-applied", kind: "action" as const, status: "applied" as const, workOrderId: "order" }
+            : { kind: "none" as const },
+    })) satisfies readonly RemediationCaseRecord[];
+    const live = buildReviewLiveActSourceIds(records);
+    const lap = { reviewScope: scope(), findings: sourceIds.map((sourceId) => ({ sourceId, finding })) };
+
+    expect(live.liveSourceIds).toEqual(new Set(sourceIds));
+    expect(live.unappliedLiveSourceIds).toEqual(new Set(["open", "failed", "reserved"]));
+    expect(settledBuildReviewHunks({
+      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap],
+      liveSourceIds: live.liveSourceIds,
+    })).toEqual([]);
+  });
+
+  // Covers: task:9
+  it("keeps file-level unapplied sources in delta and makes an absent path a full lap", () => {
+    const missing = {
+      concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/gone.ts", contentHash: "sha256:gone", display: "line" } },
+    };
+    const fileLevel = { ...missing, anchor: { ...missing.anchor, locus: { ...missing.anchor.locus, path: "src/example.ts" } } };
+    const live = new Set(["file", "missing"]);
+    const lap = { reviewScope: scope(), findings: [{ sourceId: "file", finding: fileLevel }, { sourceId: "missing", finding: missing }] };
+
+    expect(settledBuildReviewHunks({
+      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], liveSourceIds: live,
+    })).toEqual([]);
+    expect(decide({
+      priorLaps: [{ lapId: lapId("lap-prior"), reviewScope: scope() }],
+      settledHunks: [], openSourceUnmapped: true,
+    })).toMatchObject({ mode: "full", reason: "open-source-unmapped" });
+  });
+
+  // Covers: task:9
+  it("keeps testQuality unresolved markers and indeterminate candidates unsettled", () => {
+    const unknown = buildReviewTestScopeUnknownSources({
+      unresolvedMarkers: [{ selector: "src/example.ts", reference: "task:missing" }],
+      indeterminateCandidates: [{
+        candidateId: "candidate-a", status: "indeterminate", missingEvidenceReason: "pinned bytes unavailable",
+        sourceRegion: { path: "src/example.ts", startLine: 1, endLine: 1, contentHash: "sha256:hunk-a", display: "test" },
+        obligationReferences: ["task:1"],
+      }],
+    });
+    const lap = { reviewScope: scope(), findings: [] };
+
+    expect(settledBuildReviewHunks({
+      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap],
+      unknownSourceIds: new Set(unknown.map((source) => source.sourceId)), unknownSources: unknown,
+    })).toEqual([]);
   });
 
   // Covers: task:7

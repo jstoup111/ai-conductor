@@ -11,7 +11,15 @@ import type {
   BuildReviewCustomFinding,
   BuildReviewFinding,
 } from "./build-review-domain.js";
+import type {
+  BuildReviewCandidateScopeResolutionIndeterminate,
+} from "./build-review-domain.js";
 import type { ChangedFileReference } from "./build-review-projections.js";
+import type { BuildReviewUnresolvedMarker } from "./build-review-inputs.js";
+import {
+  currentBuildReviewSourceLinks,
+  type RemediationCaseRecord,
+} from "./remediation-case-store.js";
 
 /** Test-quality analysis facts that determine whether a prior lap is reusable. */
 export interface BuildReviewTestScopePolicyIdentity {
@@ -250,6 +258,87 @@ export interface BuildReviewSettledHunkFinding {
   readonly finding: BuildReviewFinding | BuildReviewCustomFinding;
 }
 
+/** Current act cases that remain a frontier risk, split by applied effect. */
+export interface BuildReviewLiveActSourceIds {
+  readonly liveSourceIds: ReadonlySet<string>;
+  /** Only these sources may force the unmapped-source full-lap fallback. */
+  readonly unappliedLiveSourceIds: ReadonlySet<string>;
+}
+
+/**
+ * Open action work remains live even after an effect has been applied; a
+ * failed or reserved action is likewise still a live obligation.  Resolve
+ * source ownership first so superseded case links cannot revive old risk.
+ */
+export function buildReviewLiveActSourceIds(
+  cases: readonly RemediationCaseRecord[],
+): BuildReviewLiveActSourceIds {
+  const liveSourceIds = new Set<string>();
+  const unappliedLiveSourceIds = new Set<string>();
+  for (const [sourceId, { record }] of currentBuildReviewSourceLinks(cases)) {
+    if (record.disposition !== "act") continue;
+    const applied = record.effect.kind === "action" && record.effect.status === "applied";
+    const live = record.resolution === "open" ||
+      (record.effect.kind === "action" && (record.effect.status === "failed" || record.effect.status === "reserved"));
+    if (!live) continue;
+    liveSourceIds.add(sourceId);
+    if (!applied) unappliedLiveSourceIds.add(sourceId);
+  }
+  return { liveSourceIds, unappliedLiveSourceIds };
+}
+
+/**
+ * Unknown test-scope facts are modeled as synthetic sources so the frontier
+ * uses the same hunk/file mapping as ordinary findings.  They never enter
+ * adjudication; their identifiers exist solely to keep uncertainty in scope.
+ */
+export function buildReviewTestScopeUnknownSources(input: {
+  readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
+  readonly indeterminateCandidates: readonly BuildReviewCandidateScopeResolutionIndeterminate[];
+}): readonly BuildReviewSettledHunkFinding[] {
+  const markerSources = input.unresolvedMarkers.map((marker) => {
+    const sourceId = `testQuality:unknown-marker:${createHash("sha256").update(`${marker.selector}\u0000${marker.reference}`).digest("hex")}`;
+    return {
+      sourceId,
+      finding: {
+        concernKind: "test-scope-unresolved",
+        summary: `Unresolved test marker: ${marker.reference}`,
+        evidenceLocations: [],
+        anchor: { rubric: "testQuality" as const, locus: { path: marker.selector, contentHash: sourceId, display: marker.reference } },
+      },
+    } satisfies BuildReviewSettledHunkFinding;
+  });
+  const candidateSources = input.indeterminateCandidates.map((candidate) => {
+    const sourceId = `testQuality:unknown-candidate:${createHash("sha256").update(candidate.candidateId).digest("hex")}`;
+    return {
+      sourceId,
+      finding: {
+        concernKind: "test-scope-indeterminate",
+        summary: `Indeterminate test candidate: ${candidate.candidateId}`,
+        evidenceLocations: [],
+        anchor: { rubric: "testQuality" as const, locus: candidate.sourceRegion },
+      },
+    } satisfies BuildReviewSettledHunkFinding;
+  });
+  return [...markerSources, ...candidateSources];
+}
+
+/**
+ * Only an unapplied source can require a full review when its path vanished
+ * from the current diff.  An applied open source intentionally does not: its
+ * repair's changed hunks are already part of the ordinary unsettled delta.
+ */
+export function hasUnappliedLiveSourceWithoutCurrentHunk(input: {
+  readonly sources: readonly BuildReviewSettledHunkFinding[];
+  readonly unappliedLiveSourceIds: ReadonlySet<string>;
+  readonly changedFiles: readonly ChangedFileReference[];
+}): boolean {
+  return input.sources.some((source) => input.unappliedLiveSourceIds.has(source.sourceId) &&
+    mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
+      target.kind === "file" && !(input.changedFiles.find((file) => file.path === target.path)?.hunks.length),
+    ));
+}
+
 /** Evidence from one policy-compatible, successfully judged rubric lap. */
 export interface BuildReviewSettledHunkLap {
   readonly reviewScope: BuildReviewReviewScope;
@@ -274,6 +363,8 @@ export interface SettledBuildReviewHunksInput {
   readonly liveSourceIds?: ReadonlySet<string>;
   /** Test-quality unresolved candidates are unknown risk, not absence. */
   readonly unknownSourceIds?: ReadonlySet<string>;
+  /** Location-bearing unknown test scope facts, keyed by `unknownSourceIds`. */
+  readonly unknownSources?: readonly BuildReviewSettledHunkFinding[];
 }
 
 /**
@@ -290,10 +381,17 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
   const resolvedAppliedAct = input.resolvedAppliedActSourceIds ?? new Set<string>();
   const live = input.liveSourceIds ?? new Set<string>();
   const unknown = input.unknownSourceIds ?? new Set<string>();
+  const unknownSources = input.unknownSources ?? [];
   return current.filter((hunk) => {
     const key = hunkKey(hunk);
     const reviewed = eligible.some((lap) => lap.reviewScope.reviewedHunks.some((candidate) => hunkKey(candidate) === key));
     if (!reviewed) return false;
+    if (unknownSources.some((source) => unknown.has(source.sourceId) &&
+      mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
+        target.kind === "hunks"
+          ? target.hunks.some((candidate) => hunkKey(candidate) === key)
+          : target.path === hunk.path,
+      ))) return false;
     for (const lap of eligible) {
       for (const source of lap.findings) {
         const mapsHere = mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
