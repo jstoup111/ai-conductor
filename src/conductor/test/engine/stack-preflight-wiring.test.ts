@@ -13,7 +13,7 @@ describe('stack preflight entry-point wiring', () => {
   it('runs daemon preflight after the operator-park boundary and before the one-shot re-kick', async () => {
     const daemon = await source('../daemon-cli.ts');
     const parked = daemon.indexOf('const parked = await isOperatorParked');
-    const preflight = daemon.indexOf('const stackPreflight = await runStackPreflight');
+    const preflight = daemon.indexOf('const stackPreflight = await runDaemonRekickStackPreflight');
     const rebase = daemon.indexOf('const resume = await resumeRebaseFirst');
 
     expect(parked).toBeGreaterThanOrEqual(0);
@@ -30,7 +30,7 @@ describe('stack preflight entry-point wiring', () => {
   it('runs resume preflight before the cursor and rebase-operation classification', async () => {
     const conductor = await source('conductor.ts');
     const resume = conductor.indexOf("} else if (this.resume) {");
-    const preflight = conductor.indexOf('const preflight = await runStackPreflight', resume);
+    const preflight = conductor.indexOf('const preflight = await this.stackPreflight', resume);
     const cursor = conductor.indexOf('await this.activateChildRegionStateForResume(state)', resume);
     const classification = conductor.indexOf('let rebaseClassification = await classifyRebaseOperation', resume);
 
