@@ -337,6 +337,6 @@ describe('Conductor routed acceptance verify-green path', () => {
     // The leaf never closes, so it has no close-time RED ref for verify-green
     // to compare against; it proves itself through the ordinary step.
     expect(mocks.verifyGreenAcceptance).not.toHaveBeenCalled();
-    expect(runner.run.mock.calls.map(([step]) => step)).toContain('acceptance_specs');
+    expect(runner.run.mock.calls.map((call) => (call as unknown[])[0])).toContain('acceptance_specs');
   });
 });
