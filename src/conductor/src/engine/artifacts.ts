@@ -51,6 +51,10 @@ export { HALT_MARKER };
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
 import type { FeatureScopedKind } from './feature-manifest.js';
 import {
+  resolveFeatureArtifact,
+  worktreeManifestSource,
+} from './feature-manifest-source.js';
+import {
   FullSuiteVerifier,
   type FullSuiteInspectionResult,
 } from './full-suite-verifier.js';
@@ -686,7 +690,10 @@ export async function selectChangedArtifacts(
 export async function resolveArtifactFiles(
   dir: string,
   step: StepName,
-  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'>,
+  context: Pick<
+    ArtifactResolutionContext,
+    'planPath' | 'activePlanPath' | 'featureDesc' | 'featureIdentities' | 'changedPaths'
+  >,
   extraGlobs: string[] = [],
   includePatternResults = false,
 ): Promise<ArtifactResolutionResult> {
@@ -694,7 +701,13 @@ export async function resolveArtifactFiles(
   const patternResults: ArtifactPatternResolution[] = [];
   let featureCandidateCount = 0;
   let hasFeatureContract = false;
+  let hasManifestResolution = false;
   const activeIdentity = context.featureIdentities[0];
+  const manifestSlug = context.activePlanPath
+    ? planStem(context.activePlanPath)
+    : context.planPath
+      ? planStem(context.planPath)
+      : context.featureDesc;
   const identityLabel = activeIdentity
     ? `active feature "${activeIdentity}"`
     : 'the active feature (identity unavailable)';
@@ -759,12 +772,34 @@ export async function resolveArtifactFiles(
         )
       );
     });
-    if (associated.length > 0) {
-      associated.forEach((file) => files.add(file));
-      patternResults.push({ pattern: contract.pattern, files: associated });
-    } else if (candidates.length === 1) {
-      files.add(candidates[0]);
-      patternResults.push({ pattern: contract.pattern, files: [candidates[0]] });
+    const legacyFiles = associated.length > 0
+      ? associated
+      : candidates.length === 1
+        ? [candidates[0]]
+        : [];
+    const kind = contractPatternKind(step, contract.pattern);
+    if (kind !== null && manifestSlug) {
+      const manifestResolution = await resolveFeatureArtifact(
+        worktreeManifestSource(dir),
+        manifestSlug,
+        kind,
+        async () => legacyFiles.map((file) => relative(dir, file).replaceAll('\\', '/')),
+      );
+      if (manifestResolution.origin === 'manifest') {
+        hasManifestResolution = true;
+        const missing = new Set(manifestResolution.missing);
+        const manifestFiles = manifestResolution.paths
+          .filter((path) => !missing.has(path))
+          .map((path) => join(dir, path));
+        manifestFiles.forEach((file) => files.add(file));
+        patternResults.push({ pattern: contract.pattern, files: manifestFiles });
+        continue;
+      }
+    }
+
+    if (legacyFiles.length > 0) {
+      legacyFiles.forEach((file) => files.add(file));
+      patternResults.push({ pattern: contract.pattern, files: legacyFiles });
     } else {
       patternResults.push({
         pattern: contract.pattern,
@@ -782,7 +817,7 @@ export async function resolveArtifactFiles(
   const resolvedFiles = [...files];
   const withPatterns = (result: ArtifactResolutionResult): ArtifactResolutionResult =>
     includePatternResults ? { ...result, patternResults } : result;
-  if (resolvedFiles.length > 0 || !hasFeatureContract) {
+  if (resolvedFiles.length > 0 || !hasFeatureContract || hasManifestResolution) {
     return withPatterns({ files: resolvedFiles });
   }
 
@@ -1385,7 +1420,7 @@ export interface CompletionContext {
   /** Prepared once by callers that need feature-aware generic artifact resolution. */
   artifactResolution?: Pick<
     ArtifactResolutionContext,
-    'featureIdentities' | 'changedPaths'
+    'planPath' | 'activePlanPath' | 'featureDesc' | 'featureIdentities' | 'changedPaths'
   >;
   /**
    * Resolved project config. The acceptance_specs gate reads
@@ -5445,7 +5480,10 @@ export interface ArtifactPatternStatus {
 export async function getArtifactStatus(
   dir: string,
   step: StepName,
-  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'> = {
+  context: Pick<
+    ArtifactResolutionContext,
+    'planPath' | 'activePlanPath' | 'featureDesc' | 'featureIdentities' | 'changedPaths'
+  > = {
     featureIdentities: [],
     changedPaths: new Set(),
   },
