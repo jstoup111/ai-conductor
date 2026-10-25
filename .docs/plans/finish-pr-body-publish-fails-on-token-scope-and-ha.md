@@ -285,3 +285,31 @@ Task 4 ──┴──────────────▶ Task 6
 - [test] Every Task 5 Done-when check passes against the bus observer.
 - `finish-publication-production.ts` contains no read of `pipeline-events.jsonl` and no `readPassPublishFailure`.
 - [test] The conductor FINISH end-to-end tests (Task 6) still pass.
+
+### Task rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8: Revert renderHumanRequiredHaltReason in src/conductor/src/engine/finish-publication.ts to return `${message} Next action: ${nextAction}${detail}` with no reason-code suffix. In the same change, delete the `expect(result.halt).toContain('publication_operation_failed')` assertion in test/acceptance/finish-pr-body-publish-fails-on-token-scope-and-ha.acceptance.test.ts and keep its existing message, next-action and missing-scope error-text assertions as the Story 2 proof.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework of the refused behavior. src/conductor/src/engine/finish-publication.ts:857 now appends ' Reason: ${disposition.reason}.' to every human_required FINISH halt. The operator refused that and asked for the renderer to be reverted. Verified by grep: the only consumer is the acceptance assertion expect(result.halt).toContain('publication_operation_failed') at test/acceptance/finish-pr-body-publish-fails-on-token-scope-and-ha.acceptance.test.ts:223. The conductor test (conductor-finish-publication.test.ts:1645-1654) already asserts the message and error text, not the code. That same acceptance test already asserts the Story 2 message, next action and missing-scope error text, so Story 2 coverage survives the removal. The renderer revert and the assertion removal have to land together, because either change alone breaks the other side. Task 4 owns the renderer and its rendering test. No new behavior is introduced.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 889a2042-4532-4800-8e17-16a5b4fbadd8 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 889a2042-4532-4800-8e17-16a5b4fbadd8 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1.2-1: In src/conductor/src/engine/github-operations-cli.ts recordFailedOperation, drop the request.access allow-list so every result with kind 'failed' appends one github_operation_failed record, whatever the access class. Keep the bounded error, the redaction, and the best-effort try/catch unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified at src/conductor/src/engine/github-operations-cli.ts:289. recordFailedOperation returns early unless request.access is feature-write, shared-write or remote-ref-write, so a failure from a create-, intake-write- or read-access operation (for example pull-request.create or issue.create) writes no github_operation_failed record. That conflicts with Task 3's title ('records every failed result'), its Step 3 ('when result.kind === failed'), and ADR adr-2026-10-24's statement that every failed guarded operation reaches the spine. The fix is clear, conforming implementation and test drift that Task 3 already admits, so no architecture decision is needed. Confidence 95%.
+**Criterion:** S1.2
+**Parent task:** 3
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1.2-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1.2-2: In src/conductor/test/engine/github-operations-cli-failed-event.test.ts, add cases where failing create-access operations (pull-request.create and issue.create) and a failing intake-write or read operation each append exactly one github_operation_failed line with their operation and target to .pipeline/pipeline-events.jsonl. Assert that stdout still prints the failed result and the exit code is 1.
+**Gate:** prd-audit
+**Rationale:** Verified at src/conductor/src/engine/github-operations-cli.ts:289. recordFailedOperation returns early unless request.access is feature-write, shared-write or remote-ref-write, so a failure from a create-, intake-write- or read-access operation (for example pull-request.create or issue.create) writes no github_operation_failed record. That conflicts with Task 3's title ('records every failed result'), its Step 3 ('when result.kind === failed'), and ADR adr-2026-10-24's statement that every failed guarded operation reaches the spine. The fix is clear, conforming implementation and test drift that Task 3 already admits, so no architecture decision is needed. Confidence 95%.
+**Criterion:** S1.2
+**Parent task:** 3
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1.2-2 is committed and its targeted tests pass.
