@@ -253,6 +253,62 @@ describe('stack teardown', () => {
     expect(calls).toContainEqual(['update-ref', '-d', 'refs/heads/feat/c3/demo', 'head-103']);
   });
 
+  // Covers: #3401
+  it('drops the watch entry and logs the reap when a lagging child branch is kept', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-kept-'));
+    cleanup.push(root);
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    const lagging = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(root, 'head.txt'), 'head\n');
+    await runGit(root, ['add', 'head.txt']);
+    await runGit(root, ['commit', '-qm', 'merged head']);
+    const tip = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', tip]);
+    await runGit(root, ['branch', 'feat/c3/demo', lagging]);
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', tip]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    await writePublicationRecord(root, 'demo', undefined, record);
+    await enrollWatch(root, { prUrl: 'https://github.com/acme/demo/pull/500', slug: 'demo', repoCwd: root });
+
+    const gh = vi.fn(async (_args: string[]) => ({
+      stdout: JSON.stringify({ state: 'MERGED', headRefOid: tip, mergeCommit: { oid: tip } }),
+    }));
+    const log = vi.fn();
+    const sweep = () => sweepMergeableLabels({
+      projectRoot: root,
+      runGh: gh,
+      tracker: {
+        readPullRequestMergeState: async () => ({
+          state: 'MERGED' as const, mergeable: 'UNKNOWN' as const, hasFailingOrPendingChecks: false,
+          labels: [], checksOutcome: 'none' as const, isDraft: false,
+        }),
+      },
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: vi.fn(async () => undefined),
+      log,
+    });
+
+    await sweep();
+
+    expect(await readWatch(root)).toEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      '[mergeable-sweep] reaped demo — reason: shipped-record-on-main (stack members kept, record tornDown)',
+    );
+    expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).exitCode).toBe(1);
+    expect((await runGit(root, ['rev-parse', 'refs/heads/feat/c3/demo'])).stdout.trim()).toBe(lagging);
+    await expect(readPublicationRecord(root, 'demo')).resolves.toMatchObject({ kind: 'record', record: { tornDown: true } });
+
+    const readsAfterFirstSweep = gh.mock.calls.length;
+    await sweep();
+    expect(gh).toHaveBeenCalledTimes(readsAfterFirstSweep);
+  });
+
   it('keeps the watch entry after a partial delete and retries the remaining child from its plain tornDown receipt', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stack-teardown-retry-'));
     cleanup.push(root);
@@ -293,6 +349,7 @@ describe('stack teardown', () => {
       }),
     };
     const teardownWorktree = vi.fn(async () => undefined);
+    const log = vi.fn();
 
     await sweepMergeableLabels({
       projectRoot: root,
@@ -300,9 +357,11 @@ describe('stack teardown', () => {
       tracker,
       shippedRecordProbe: async () => 'present',
       teardownWorktree,
+      log,
     });
 
     expect(await readWatch(root)).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith('[mergeable-sweep] retained demo — reason: stack-teardown-failed');
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).exitCode).toBe(1);
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).exitCode).toBe(0);
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c7/demo'])).exitCode).toBe(0);
