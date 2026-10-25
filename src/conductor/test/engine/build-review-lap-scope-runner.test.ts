@@ -1,12 +1,16 @@
-// Covers: task:6
+// Covers: task:6, task:25
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
 import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
@@ -450,5 +454,111 @@ describe('build_review lap scope runner', () => {
     expect((await scopeFor(firstHead)).policyIdentity).not.toBe((await scopeFor(secondHead)).policyIdentity);
     expect(invoke).toHaveBeenCalledTimes(3);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([candidateModel, fallbackModel, candidateModel]);
+  });
+});
+
+const provider: LLMProvider = {
+  lifecycleCapability: { synchronousSpawnPermit: true },
+  invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+};
+
+describe('build-review lap scope runner', () => {
+  beforeEach(async () => {
+    // This suite drives the real coordinator; the module mock above belongs to
+    // the scope-decision suite, which installs its own dispatch per test.
+    const actual = await vi.importActual<typeof import('../../src/engine/build-review-coordinator.js')>('../../src/engine/build-review-coordinator.js');
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(actual.coordinateBuildReviewRubrics);
+  });
+
+  it('keeps an operator-settled hunk out of the next lap and records its re-raise as out of delta', async () => {
+    const main = await mkdtemp(join(tmpdir(), 'build-review-lap-scope-main-'));
+    const projectRoot = join(main, '.worktrees', 'feature');
+    try {
+      await execa('git', ['init', '--initial-branch=main'], { cwd: main });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: main });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: main });
+      await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: main });
+      await execa('git', ['worktree', 'add', '-b', 'feature', projectRoot], { cwd: main });
+
+      const config = resolveBuildReviewConfig({
+        llm_provider: 'claude',
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+        },
+      } as HarnessConfig);
+      const runner = new DefaultStepRunner(provider, 'lap-scope', projectRoot, {
+        buildReviewEffectiveResolver: async (_root, aggregate, deps) => ({
+          ok: true,
+          feature: { version: 'v1', repository: await realpath(main), feature: 'feature' },
+          effective: deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], {}, new Set(), {}, deps.scopes as never)!,
+        }),
+      });
+      vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
+        engineStamp: 'engine', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:skill' } },
+      });
+      const calls: unknown[] = [];
+      vi.spyOn(runner as never, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: any, projection: any) => {
+        calls.push(projection);
+        const hunk = projection.changedFiles.find((file: any) => file.path === 'src/feature.ts').hunks[0];
+        const repairHunk = projection.changedFiles.find((file: any) => file.path === 'src/repair.ts').hunks[0];
+        const l1 = projection.lapId === 'lap-head-l1';
+        return {
+          kind: 'judged', rubric: 'implementationQuality', lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v4', findings: l1 ? [{
+            concernKind: 'obscured-intent', severity: 'major',
+            summary: 'The unchanged implementation needs attention.', evidenceLocations: ['src/feature.ts:1'],
+            anchor: { rubric: 'implementationQuality', locus: { path: 'src/feature.ts', contentHash: hunk.contentHash, display: 'src/feature.ts:1' } },
+          }, {
+            concernKind: 'duplication', severity: 'major', summary: 'The repair still needs work.', evidenceLocations: ['src/repair.ts:1'],
+            anchor: { rubric: 'implementationQuality', locus: { path: 'src/repair.ts', contentHash: repairHunk.contentHash, display: 'src/repair.ts:1' } },
+          }] : projection.lapId === 'lap-head-l2' ? [{
+            concernKind: 'non-semantic-name', severity: 'major', summary: 'A reworded complaint about settled code.', evidenceLocations: ['src/feature.ts:1'],
+            anchor: { rubric: 'implementationQuality', locus: { path: 'src/feature.ts', contentHash: hunk.contentHash, display: 'src/feature.ts:1' } },
+          }] : [], verdict: l1 || projection.lapId === 'lap-head-l2' ? 'FAIL' : 'PASS',
+        };
+      });
+      const inputs = (headSha: string) => ({ sourceSnapshot: {
+        digest: `sha256:${headSha}`, contentDigest: 'sha256:content', mergeBase: 'base', headSha,
+        diff: [
+          'diff --git a/src/feature.ts b/src/feature.ts\n@@ -0,0 +1 @@\n+export const feature = true;',
+          'diff --git a/src/repair.ts b/src/repair.ts\n@@ -0,0 +1 @@\n+export const repair = true;',
+        ].join('\n'), sourceChanges: [],
+      } });
+      const run = (value: unknown) => (runner as unknown as {
+        runRubricBuildReview(inputs: unknown, config: unknown, tier: 'S', planPath?: string): Promise<unknown>;
+      }).runRubricBuildReview(value, config, 'S');
+
+      await run(inputs('head-l1'));
+      const first = calls[0] as any;
+      const finding = {
+        rubric: 'implementationQuality' as const,
+        contractVersion: 'v4' as const,
+        concernKind: 'obscured-intent',
+        anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/feature.ts', contentHash: first.changedFiles[0].hunks[0].contentHash, display: 'src/feature.ts:1' } },
+      };
+      const identity = canonicalizeBuildReviewFindingIdentity(finding)!;
+      await expect(new BuildReviewDispositionStore(projectRoot).append({
+        feature: { version: 'v1', repository: await realpath(main), feature: 'feature' }, finding: identity,
+        sourceLapId: 'lap-head-l1', summary: 'accepted', rationale: 'operator decision', operator: 'test',
+      })).resolves.toMatchObject({ ok: true });
+
+      await run(inputs('head-l2'));
+      await run(inputs('head-l3'));
+
+      expect(calls).toHaveLength(3);
+      expect((calls[1] as any).reviewScope).toMatchObject({
+        mode: 'delta', deltaHunks: [{ path: 'src/repair.ts' }],
+      });
+      expect((calls[2] as any).reviewScope).toMatchObject({
+        mode: 'delta', deltaHunks: [{ path: 'src/repair.ts' }],
+      });
+      const l2 = JSON.parse(await readFile(join(projectRoot, '.pipeline/build-review/lap-head-l2/implementationQuality.json'), 'utf8'));
+      expect(l2.reviewScope).toMatchObject({
+        mode: 'delta', deltaHunks: [{ path: 'src/repair.ts' }], outOfDeltaSourceIds: [expect.stringMatching(/^sha256:/)],
+      });
+    } finally {
+      await rm(main, { recursive: true, force: true });
+    }
   });
 });
