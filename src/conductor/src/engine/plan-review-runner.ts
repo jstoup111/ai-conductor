@@ -35,7 +35,12 @@ async function files(root: string, at = root): Promise<string[]> {
     ? (entry.name === '.git' || entry.name === 'node_modules' ? [] : files(root, join(at, entry.name)))
     : entry.isFile() ? [relative(root, join(at, entry.name)).replaceAll('\\', '/')] : []))).flat();
 }
-async function reviewInputs(worktreePath: string, planStem: string, canonicalPath?: string) {
+async function reviewInputs(
+  worktreePath: string,
+  planStem: string,
+  canonicalPath?: string,
+  readBaseTexts: typeof readMergeBaseTexts = readMergeBaseTexts,
+) {
   const planText = await readFile(join(worktreePath, '.docs', 'plans', `${planStem}.md`), 'utf8');
   const storiesText = await readFile(join(worktreePath, '.docs', 'stories', `${planStem}.md`), 'utf8').catch(() => '');
   const coherenceResult = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').then(
@@ -69,7 +74,7 @@ async function reviewInputs(worktreePath: string, planStem: string, canonicalPat
     .map((stem) => `.docs/decisions/${stem}.md`)
     .filter((path) => changedPaths.has(path));
   const baseByPath = canonicalPath
-    ? await readMergeBaseTexts(worktreePath, canonicalPath, changedAdrPaths)
+    ? await readBaseTexts(worktreePath, canonicalPath, changedAdrPaths)
     : undefined;
   const baseAdrTexts = baseByPath === undefined ? undefined : Object.fromEntries(
     changedAdrPaths.map((path) => [path.slice('.docs/decisions/'.length, -'.md'.length), baseByPath[path]!]),
@@ -133,13 +138,15 @@ export interface RunPlanReviewInput {
   onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   /** Prompt budget; defaults to {@link PLAN_REVIEW_MAX_PROMPT_CHARS}. */
   maxPromptChars?: number;
+  /** Injectable merge-base reader for runner-boundary tests. */
+  readMergeBaseTexts?: typeof readMergeBaseTexts;
 }
 export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanReviewArtifact> {
   const previousPath = join(input.worktreePath, '.docs', 'plan-review', `${input.planStem}.md`);
   const previousText = await readFile(previousPath, 'utf8').catch(() => '');
   const previous = previousText ? parsePlanReviewArtifact(previousText) : undefined;
   if (previous && !('kind' in previous) && previous.round >= 2) throw new Error(`plan review bound reached: ${previous.findings.filter((f) => f.severity === 'blocking').map((f) => `${f.id} ${f.summary}`).join('; ')}`);
-  const source = await reviewInputs(input.worktreePath, input.planStem, input.canonicalPath);
+  const source = await reviewInputs(input.worktreePath, input.planStem, input.canonicalPath, input.readMergeBaseTexts);
   const host = resolveAuthoringHost(input.env);
   const candidates = orderReviewerCandidates({ config: input.config, host, configuredProviders: input.configuredProviders });
   if (!candidates.length) throw new Error('plan review has no configured reviewer provider');

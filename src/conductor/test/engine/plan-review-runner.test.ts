@@ -183,6 +183,125 @@ D2. Second new decision.
     expect(calls[0].options.prompt).toContain('D2. Second new decision.');
   });
 
+  it('keeps every cited decision inline when no canonical path supplies a change set', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-extra.md'), '## Decision\n\nD1. Extra cited decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-review and adr-extra.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. The flag is allowed.');
+    expect(prompt).toContain('D1. Extra cited decision.');
+    expect(prompt).not.toContain('- adr-review#');
+    expect(prompt).not.toContain('- adr-extra#');
+  });
+
+  it('rejects before review dispatch when its canonical path cannot resolve a merge base', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    const canonical = await mkdtemp(join(tmpdir(), 'plan-review-unrelated-')); roots.push(canonical);
+    await execFile('git', ['init', '-b', 'missing-base'], { cwd: canonical });
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: canonical });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: canonical });
+    await writeFile(join(canonical, 'README.md'), 'unrelated\n', 'utf8');
+    await execFile('git', ['add', '.'], { cwd: canonical });
+    await execFile('git', ['commit', '-m', 'unrelated base'], { cwd: canonical });
+
+    await expect(runPlanReview({
+      worktreePath: root, canonicalPath: canonical, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    })).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps every decision inline when merge-base text is unavailable after resolving the change set', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-extra.md'), '## Decision\n\nD1. Extra changed decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-review and adr-extra.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      readMergeBaseTexts: async () => undefined,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. The flag is allowed.');
+    expect(prompt).toContain('D1. Extra changed decision.');
+    expect(prompt).not.toContain('- adr-review#');
+    expect(prompt).not.toContain('- adr-extra#');
+  });
+
+  it('inlines every decision from an unreadable changed ADR while indexing stable decisions from another changed ADR', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-unreadable.md'), '## Decision\n\nD1. Original unreadable decision.\n\nD2. Another unreadable decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-split.md'), '## Decision\n\nD1. Stable split decision.\n\nD2. Original split decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-unreadable and adr-split.\n', 'utf8');
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'add fallback ADRs'], { cwd: root });
+    await writeFile(join(root, '.docs', 'decisions', 'adr-unreadable.md'), '## Decision\n\nD1. Changed unreadable decision.\n\nD2. Another unreadable decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-split.md'), '## Decision\n\nD1. Stable split decision.\n\nD2. Changed split decision.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      readMergeBaseTexts: async () => ({
+        '.docs/decisions/adr-unreadable.md': null,
+        '.docs/decisions/adr-split.md': '## Decision\n\nD1. Stable split decision.\n\nD2. Original split decision.\n',
+      }),
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. Changed unreadable decision.');
+    expect(prompt).toContain('D2. Another unreadable decision.');
+    expect(prompt).toContain('D2. Changed split decision.');
+    expect(prompt).toContain('- adr-split#D1 | D1. Stable split decision. | .docs/decisions/adr-split.md');
+  });
+
+  it('omits ADRs without decisions and coherence when no coherence artifact exists', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-empty.md'), '# ADR empty\n\nNo decision heading here.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-review and adr-empty.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.prompt).not.toContain('adr-empty#');
+    expect(calls[0].options.prompt).not.toContain('- coherence |');
+  });
+
+  it('treats trailing whitespace as changed but normalized CRLF line endings as stable', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-whitespace.md'), '## Decision\n\nD1. Whitespace-sensitive decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-line-endings.md'), '## Decision\n\nD1. Line ending-stable decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-whitespace and adr-line-endings.\n', 'utf8');
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'add formatting ADRs'], { cwd: root });
+    await writeFile(join(root, '.docs', 'decisions', 'adr-whitespace.md'), '## Decision\n\nD1. Whitespace-sensitive decision.  \n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-line-endings.md'), '## Decision\r\n\r\nD1. Line ending-stable decision.\r\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. Whitespace-sensitive decision.  ');
+    expect(prompt).toContain('- adr-line-endings#D1 | D1. Line ending-stable decision. | .docs/decisions/adr-line-endings.md');
+  });
+
   it('dispatches the reviewer for a generated #2945-shaped fixture with a prompt under 400,000 characters', async () => {
     const root = await fixture();
     const plan = `# Plan\n\n${'p'.repeat(125_627)}\n`;
