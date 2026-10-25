@@ -61,6 +61,10 @@ describe('N=1 golden renderings', () => {
   });
 
   // Covers: task:17, task:rem-operator-17-r3
+  // This is a coordinator test: it launches the three complete fixture files
+  // in a child Vitest process.  The child suite itself completes in ~15s; the
+  // extra allowance covers the parent worker and process startup, while still
+  // bounding a wedged child run.
   it('runs the complete N=1 golden suite against regenerated goldens', async () => {
     // The child includes this file, but skips this coordinator, so this test
     // directly proves all three Task 17 members pass without recursing.
@@ -78,7 +82,7 @@ describe('N=1 golden renderings', () => {
       env: { ...process.env, [N1_GOLDEN_SUITE_CHILD]: '1' },
     });
     expect(result.stderr).toBe('');
-  });
+  }, 30_000);
 
   // Covers: task:17, task:rem-operator-17-r3
   it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes and one durable-child-state probe pair', async () => {
