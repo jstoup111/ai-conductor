@@ -1,6 +1,6 @@
 // Covers: S2.1, S2.2, S2.3, S2.7, S2.9, S3.1, task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appendFile, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
@@ -117,19 +117,19 @@ describe('FINISH publish-failure diagnosis', () => {
       body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.',
       isDraft: true,
     };
+    const events = new ConductorEventEmitter();
+    const queuedPublishFailures: ConductorEvent[] = [];
     const runner: StepRunner = {
       run: vi.fn(async () => {
         if (recordPublishFailure) {
-          const ledger = join(projectRoot, '.pipeline', 'pipeline-events.jsonl');
-          await appendFile(ledger, '{malformed\n');
           for (const error of ['first publish failure', 'GraphQL: missing required scope read:org']) {
-            await appendFile(ledger, `${JSON.stringify({
+            queuedPublishFailures.push({
               type: 'github_operation_failed',
               operation: 'pull-request.edit',
               target: { kind: 'pull-request', repository: 'acme/repo', number: 17 },
               error,
               ts: new Date().toISOString(),
-            })}\n`);
+            });
           }
         }
         return { success: true };
@@ -153,6 +153,10 @@ describe('FINISH publish-failure diagnosis', () => {
       observeReleaseReadiness: async () => 'present',
       acquireInteractiveIntent: async () => 'pr',
       recordFinish: async () => 0,
+      events,
+      flushSessionEvents: async () => {
+        for (const event of queuedPublishFailures) await events.emit(event);
+      },
     });
     return coordinator.advance({
       state,
