@@ -23,7 +23,8 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","398fe72a-30b6-4c2b-a6bb-2a386bcabe32","lifecycle-step","finish"]
+active_ms: 63212945
+reason: provider-evidence-incomplete
 
 ## Build Review
 laps_to_pass: 1
