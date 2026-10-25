@@ -228,10 +228,17 @@ describe('build-review adjudication context', () => {
           provenance: { kind: 'fresh' },
         }, filesystem);
       }
+      const recordedAts = [
+        'September 30, 2026 12:00:00 UTC',
+        '2026-10-21T12:00:00.000Z',
+        '2026-10-22T12:00:00.000Z',
+        '2026-10-23T12:00:00.000Z',
+        '2026-10-24T12:00:00.000Z',
+      ];
       const sources = historical.map(({ number, source }) => ({
         sourceId: buildReviewAdjudicationSourceId(source!),
         outcome: 'acted' as const,
-        recordedAt: `2026-10-2${number - 1}T12:00:00.000Z`,
+        recordedAt: recordedAts[number - 1]!,
       }));
       const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
       const result = assembleBuildReviewAdjudicationContext({

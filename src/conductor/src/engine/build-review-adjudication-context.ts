@@ -501,15 +501,18 @@ function priorDigestKey(caseId: string, sourceId: string): string {
   return `${caseId}\u0000${sourceId}`;
 }
 
+function comparePriorSources(left: RemediationCaseSourceLink, right: RemediationCaseSourceLink): number {
+  return Date.parse(left.recordedAt) - Date.parse(right.recordedAt) ||
+    left.sourceId.localeCompare(right.sourceId);
+}
+
 function freezePriorCase(
   caseRecord: RemediationCaseRecord,
   carryInput: RemediationCaseCarryInput | undefined,
   includedDigestKeys: ReadonlySet<string>,
   priorFindingDigests: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest> | undefined,
 ): BuildReviewAdjudicationPriorCase {
-  const sources = [...caseRecord.sources].sort((left, right) =>
-    `${left.recordedAt}\u0000${left.sourceId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}`),
-  ).map((source) => {
+  const sources = [...caseRecord.sources].sort(comparePriorSources).map((source) => {
     const digest = includedDigestKeys.has(priorDigestKey(caseRecord.id, source.sourceId))
       ? freezePriorFindingDigest(priorFindingDigests?.get(source.sourceId))
       : undefined;
@@ -683,12 +686,13 @@ export function assembleBuildReviewAdjudicationContext(
     return { ok: false, stop: { code: 'serialized-byte-overflow', limit: LIMITS.maxSerializedBytes, actual: baseBytes } };
   }
   const digestCandidates = input.priorCases.flatMap((caseRecord) => [...caseRecord.sources]
-    .sort((left, right) => `${left.recordedAt}\u0000${left.sourceId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}`))
+    .sort(comparePriorSources)
     .slice(-MAX_PRIOR_SOURCE_DIGESTS_PER_CASE)
     .flatMap((source) => freezePriorFindingDigest(input.priorFindingDigests?.get(source.sourceId)) === undefined
       ? []
       : [{ key: priorDigestKey(caseRecord.id, source.sourceId), recordedAt: source.recordedAt, sourceId: source.sourceId, caseId: caseRecord.id }]))
-    .sort((left, right) => `${left.recordedAt}\u0000${left.sourceId}\u0000${left.caseId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}\u0000${right.caseId}`));
+    .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) ||
+      left.sourceId.localeCompare(right.sourceId) || left.caseId.localeCompare(right.caseId));
   const digestBudget = Math.min(MAX_PRIOR_SOURCE_DIGEST_BYTES, LIMITS.maxSerializedBytes - baseBytes);
   const includedDigestKeys = new Set(digestCandidates.map((candidate) => candidate.key));
   let priorDigestsOmitted = 0;
