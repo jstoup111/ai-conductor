@@ -69,16 +69,21 @@ Forces:
    `events.jsonl` and every bus consumer sees it. This amends adr-2026-10-12 D3's enumerated
    admitted set. The existing direct writes of `github_operation_refused` and
    `github_write_credential_fallback` are unchanged and out of scope.
-3. **The authoring effect observes failures for its own pass on the bus.** Before dispatching the
-   authoring provider, the production `authorProse` effect subscribes to the feature's
-   `ConductorEventEmitter` for `github_operation_failed`. After the dispatch returns successfully,
-   it flushes the feature's session event tail once, so every sibling-ledger record the provider
-   appended is re-emitted onto the bus, and then unsubscribes. It never reads
+3. **The authoring effect observes failures for its own pass on the bus.** Before subscribing, the
+   production `authorProse` effect flushes the feature's session event tail once, so every
+   sibling-ledger record already appended before the pass is re-emitted while nothing is listening
+   for it. It then subscribes to the feature's `ConductorEventEmitter` for
+   `github_operation_failed` and dispatches the authoring provider. After the dispatch returns
+   successfully, it flushes the tail once more, so every record the provider appended is re-emitted
+   onto the bus, and then unsubscribes. Each flush performs a fresh read of the ledger that
+   completes after the flush is requested; joining a read already in flight does not satisfy it. It never reads
    `.pipeline/pipeline-events.jsonl` itself; the tail stays that ledger's only reader. It selects
    the delivered events whose operation is `pull-request.edit` and whose target is this pass's pull
    request, in the same repository and with the same number. If any exist, it throws a typed
    publication-operation failure carrying the last such event's operation and error. With no
-   subscribable emitter or no tail flush available, no failure is attributed.
+   subscribable emitter or no tail flush available, it does not subscribe and no failure is
+   attributed. (Pre-subscribe drain and fresh-read flush: operator decision 2026-10-25 resolving the
+   as-built review's pass-boundary finding.)
 4. **The coordinator halts with the real cause, after re-observation.** On that typed failure, the
    `author_pr_prose` branch re-observes the PR. If the prose moved off the placeholder, it advances
    as today, because re-observation stays authoritative. Otherwise it returns `human_required` with

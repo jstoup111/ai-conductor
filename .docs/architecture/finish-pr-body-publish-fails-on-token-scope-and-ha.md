@@ -59,6 +59,7 @@ sequenceDiagram
     participant S as pipeline-events.jsonl
     participant T as Session tail / bus
     C->>A: author_pr_prose (placeholder observed)
+    A->>T: flush tail (drain pre-pass records)
     A->>T: subscribe github_operation_failed
     A->>P: dispatch FINISH author pass
     P->>G: pull-request.edit «pr»
@@ -78,7 +79,9 @@ sequenceDiagram
 
 - **NEW** marks behavior this change adds; unmarked nodes exist today.
 - `«pr»` is the feature's pull-request target (repository + number).
-- The pass window is the bus subscription from before dispatch until the post-dispatch tail flush;
+- The pass window is the bus subscription from before dispatch until the post-dispatch tail flush.
+  A flush before subscribing drains records appended before the pass, and every flush is a fresh
+  ledger read, so pre-pass records are never delivered inside the window;
   only `pull-request.edit` failures for the feature's own PR target delivered in it count. The
   session tail stays the sibling ledger's only reader (operator decision 2026-10-25).
 - The CLI never writes the engine-owned `events.jsonl` for this event (adr-2026-08-08 D2); the
@@ -94,3 +97,4 @@ sequenceDiagram
 | 2026-10-24 | Route the event through the sibling ledger and tail | Architecture review: one writer per ledger |
 | 2026-10-24 | Plan update: no structural change; the diagram matches plan Tasks 1–6 | /plan step 8b |
 | 2026-10-25 | authorProse observes failures on the feature bus after a tail flush, not by reading the sibling ledger | Operator decision resolving build_review eventSpine stop 64898260 |
+| 2026-10-25 | Drain the tail before subscribing; flushes are fresh reads | Operator decision resolving as-built review pass-boundary finding (77725c2c:4) |

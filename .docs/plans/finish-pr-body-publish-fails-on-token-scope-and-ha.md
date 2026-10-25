@@ -286,6 +286,16 @@ Task 4 ──┴──────────────▶ Task 6
 - `finish-publication-production.ts` contains no read of `pipeline-events.jsonl` and no `readPassPublishFailure`.
 - [test] The conductor FINISH end-to-end tests (Task 6) still pass.
 
+### Task rem-operator-5-r2: Bound authorProse's pass window with a pre-subscribe drain and fresh-read flushes
+**Gate:** operator
+**Rationale:** Operator decision 2026-10-25 resolving as-built review 77725c2c findings 2-4 (ADR adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3). The session tail starts at offset zero and polls periodically (`closeout-tail.ts:37`, `:183`), so a pre-pass record can be delivered inside the subscription window and be attributed to this pass. `flush()` joins an in-flight poll (`closeout-tail.ts:121`), so a provider's final append can be missed before unsubscribe. `authorProse` subscribes and attributes even when `flushSessionEvents` is absent (`finish-publication-production.ts:1771`, `:1782`). Decision 3 is amended: drain the tail before subscribing, make every flush a fresh read, and attribute nothing without a flush dependency.
+**Parent task:** 5
+**Done when:**
+- [test] A production test asserts that a matching `pull-request.edit` failure appended to the sibling ledger before `authorProse` is called, and not yet re-emitted, is not attributed: `authorProse` resolves.
+- [test] An event-persister test asserts that `flush()` called while a poll is in flight still emits a record appended after that poll read the ledger, before `flush()` resolves.
+- [test] A production test asserts that with no `flushSessionEvents` dependency, `authorProse` resolves even when a matching failure is emitted on the bus during the dispatch.
+- [test] Every Task 5 Done-when check still passes.
+
 ### Task rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8: Revert renderHumanRequiredHaltReason in src/conductor/src/engine/finish-publication.ts to return `${message} Next action: ${nextAction}${detail}` with no reason-code suffix. In the same change, delete the `expect(result.halt).toContain('publication_operation_failed')` assertion in test/acceptance/finish-pr-body-publish-fails-on-token-scope-and-ha.acceptance.test.ts and keep its existing message, next-action and missing-scope error-text assertions as the Story 2 proof.
 **Gate:** prd-audit
 **Rationale:** Removal-only rework of the refused behavior. src/conductor/src/engine/finish-publication.ts:857 now appends ' Reason: ${disposition.reason}.' to every human_required FINISH halt. The operator refused that and asked for the renderer to be reverted. Verified by grep: the only consumer is the acceptance assertion expect(result.halt).toContain('publication_operation_failed') at test/acceptance/finish-pr-body-publish-fails-on-token-scope-and-ha.acceptance.test.ts:223. The conductor test (conductor-finish-publication.test.ts:1645-1654) already asserts the message and error text, not the code. That same acceptance test already asserts the Story 2 message, next action and missing-scope error text, so Story 2 coverage survives the removal. The renderer revert and the assertion removal have to land together, because either change alone breaks the other side. Task 4 owns the renderer and its rendering test. No new behavior is introduced.

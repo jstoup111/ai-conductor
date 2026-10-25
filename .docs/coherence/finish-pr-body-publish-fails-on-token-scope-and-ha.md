@@ -40,7 +40,7 @@ Gap outcome-1: outside the operator-confirmed scope boundary; waived in `.docs/c
 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 |---|---|---|---|---|
-| adr | adr-2026-10-24-finish-surfaces-guarded-publish-failures | story-1, story-2, story-3 | covered | D1-D5 all map to tasks: D1 (bounded event) Tasks 1-3, D2 (sibling ledger, never the engine ledger) Tasks 1 and 3, D3 (pass-window reader) Task 5, D4 (re-observe, then halt with the error) Tasks 4 and 6, D5 (unchanged halt kept) Tasks 4 and 6. Each cited Done-when asserts the decision's observable behavior. |
+| adr | adr-2026-10-24-finish-surfaces-guarded-publish-failures | story-1, story-2, story-3 | covered | D1-D5 all map to tasks: D1 (bounded event) Tasks 1-3, D2 (sibling ledger, never the engine ledger) Tasks 1 and 3, D3 (pass-window reader with pre-subscribe drain and fresh-read flush) Tasks 5 and rem-operator-5-r2, D4 (re-observe, then halt with the error) Tasks 4 and 6, D5 (unchanged halt kept) Tasks 4 and 6. Each cited Done-when asserts the decision's observable behavior. |
 | adr | adr-2026-10-12-retire-pipeline-closeout-obligation-telemetry | story-1 | covered | Amended D3 (admitted set gains `github_operation_failed`) maps to Task 1, whose Done-when asserts tail re-emission with no `unadmitted-type` diagnostic. D1, D2, D4 and D5 are genuine no-change: no `pipeline_closeout*` kind exists in `src/conductor/src/types/events.ts`, the ledger, tail and `readMergedFeatureEvents` keep their role, no build-window logic changes, and the `closeout-event` subcommand is already gone from `src/conductor/src`. |
 
 ## Criteria
