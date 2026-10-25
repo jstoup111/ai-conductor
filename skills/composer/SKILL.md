@@ -170,7 +170,10 @@ impact — stop, tell the operator, and either run the full DECIDE in the same w
    `git commit`.
 5. Publish. `land` rejects a hotfix (no plan) and `handoff` refuses one (no `land` provenance
    marker), so push the branch and open the PR from the worktree with `gh pr create --base main`,
-   using `/pr` for the title and body. The body carries `Closes <owner/repo#N>` for an intake idea
+   using `/pr` for the title and body. When the user config (`~/.ai-conductor/config.yml`) sets
+   `github_bot.token_file`, open the PR as the bot, as `handoff` does:
+   `GH_TOKEN="$(cat <token_file>)" gh pr create --base main …`, expanding a leading `~`. If the
+   file is missing or empty, open it under the operator's account and say so in the report. The body carries `Closes <owner/repo#N>` for an intake idea
    (this PR is the implementation), the target repo's release-disposition metadata when it requires
    one, and the eligibility evidence. Never merge and do not nudge the daemon.
 6. For an intake idea, record delivery with
