@@ -251,6 +251,15 @@ const ONE_STORY = `# Stories: n1-golden
 - Given a golden cell, when it runs, then it remains stable.
 `;
 
+const TWO_STORIES = `${ONE_STORY}
+
+## Story 2: Golden coverage follow-up
+
+### Acceptance Criteria
+
+- Given a golden cell, when it runs, then it remains stable.
+`;
+
 /** The #3019 golden cell run up to its park boundary, as n1-golden-state runs it. */
 async function runGoldenCell(cell: Cell, root: string, events: ConductorEventEmitter) {
   await mkdir(join(root, '.ai-conductor'), { recursive: true });
@@ -258,21 +267,31 @@ async function runGoldenCell(cell: Cell, root: string, events: ConductorEventEmi
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await writeFile(join(root, '.docs', 'plans', `${SLUG}.md`), cell.planMd);
   const writeTopologyInputs = async () => {
+    if (!cell.fixtureSeed) return;
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
     await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
     await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
-    await writeFile(join(root, '.docs', 'stories', `${SLUG}.md`), ONE_STORY);
-    await writeFile(join(root, '.docs', 'complexity', `${SLUG}.md`), 'Tier: M\nStacked-Delivery: approved\n');
+    await writeFile(join(root, '.docs', 'stories', `${SLUG}.md`), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
+    await writeFile(join(root, '.docs', 'complexity', `${SLUG}.md`), cell.complexityMd ?? '');
     await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
   };
-  if (cell.name === 'flag-on-single-slice') await writeTopologyInputs();
+  if (cell.fixtureSeed === 'initial-commit') await writeTopologyInputs();
   await git(root, 'init', '-q', '-b', 'main');
   await git(root, 'config', 'user.email', 'test@example.com');
   await git(root, 'config', 'user.name', 'Test User');
   await writeFile(join(root, 'README.md'), '# n1-golden\n');
   await writeFile(join(root, '.gitignore'), '.pipeline/\n');
-  await git(root, 'add', '.');
+  await git(root, 'add',
+    'README.md',
+    '.gitignore',
+    '.ai-conductor/config.yml',
+    `.docs/plans/${SLUG}.md`,
+    ...(cell.fixtureSeed === 'initial-commit'
+      ? [`.docs/stories/${SLUG}.md`, `.docs/complexity/${SLUG}.md`, 'skills/tdd/SKILL.md']
+      : []),
+  );
   await git(root, 'commit', '-qm', 'init');
+  if (cell.fixtureSeed === 'workspace') await writeTopologyInputs();
   const pipeline = join(root, '.pipeline');
   await mkdir(pipeline, { recursive: true });
   const statePath = join(pipeline, 'conduct-state.json');
