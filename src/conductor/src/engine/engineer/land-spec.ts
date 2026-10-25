@@ -32,7 +32,7 @@
 //   6. On failure: leave the worktree in place (keep-on-failure, FR-6) and re-throw. The
 //      branch is the worktree's branch — never deleted here.
 
-import { access, readdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -97,6 +97,13 @@ import {
 import type { LandDependencyDecision, LandDependencyProposalResult } from './land-dependency-gate.js';
 import { parseSourceRef } from './issue-ref.js';
 import { evaluateAdrAssumptionLedgers } from '../adr-assumption-ledger-scope.js';
+import {
+  buildFeatureManifest,
+  featureManifestPath,
+  parseFeatureManifest,
+  renderFeatureManifest,
+  type FeatureManifestEntry,
+} from '../feature-manifest.js';
 
 const execFile = promisify(execFileCb);
 
@@ -135,6 +142,8 @@ export interface LandSpecResult {
   slug: string;
   branch: string;
   repoPath: string;
+  /** Entries newly registered by this land relative to the prior valid manifest. */
+  added: readonly FeatureManifestEntry[];
   /** Present only for an intake-originated land that passed the proposal gate. */
   dependency?: LandDependencyContext;
 }
@@ -874,7 +883,38 @@ export async function landSpec(
   } catch {
     // No staged outcomes (e.g. chat/CLI-originated idea) — marker carries none.
   }
-  await writeIntakeMarker(worktreePath, markerSlug, sourceRef, specOwner, guard, stagedOutcomesContent);
+  const intakeMarker = await writeIntakeMarker(
+    worktreePath,
+    markerSlug,
+    sourceRef,
+    specOwner,
+    guard,
+    stagedOutcomesContent,
+  );
+
+  // Land is the manifest's only writer. Rebuild from the current change set,
+  // rather than treating a prior manifest as input: it may be stale, malformed,
+  // or name another feature, and a re-land after a deletion must remove the
+  // vanished entry. ADRs are repository-scoped, so retain only changed ADRs
+  // that still exist in this worktree.
+  const manifestSlug = markerSlug;
+  const manifestRepoPath = featureManifestPath(manifestSlug);
+  const manifestFile = join(worktreePath, manifestRepoPath);
+  const priorEntries = await readPriorManifestEntries(manifestFile, manifestRepoPath, manifestSlug);
+  const presentFeatureFiles = await existingDocsPaths(worktreePath, featureFiles);
+  if (intakeMarker !== null) {
+    presentFeatureFiles.add(relative(worktreePath, intakeMarker).replaceAll('\\', '/'));
+  }
+  const presentChangedAdrPaths = await existingDocsPaths(worktreePath, changedAdrPaths);
+  const rebuiltManifest = buildFeatureManifest(manifestSlug, presentFeatureFiles, presentChangedAdrPaths);
+  const renderedManifest = renderFeatureManifest(rebuiltManifest);
+  const manifestDir = join(worktreePath, '.docs', manifestSlug);
+  guard.assertWriteAllowed(manifestDir);
+  guard.assertWriteAllowed(manifestFile);
+  await mkdir(manifestDir, { recursive: true });
+  await writeFile(manifestFile, renderedManifest, 'utf8');
+  const previousEntryKeys = new Set(priorEntries.map(({ kind, path }) => `${kind}\u0000${path}`));
+  const added = rebuiltManifest.artifacts.filter(({ kind, path }) => !previousEntryKeys.has(`${kind}\u0000${path}`));
 
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
   // this idea's artifacts, so the commit is idea-scoped and no foreign untracked file
@@ -900,8 +940,45 @@ export async function landSpec(
     slug,
     branch,
     repoPath: worktreePath,
+    added,
     ...(dependencySourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
   };
+}
+
+/** Keep only change-set paths that are currently present. `resolveIdeaFiles` includes
+ * deletions so the gates can validate the full diff, whereas a rebuilt manifest must
+ * describe only durable files that can be read after this land. */
+async function existingDocsPaths(worktreePath: string, paths: Iterable<string>): Promise<Set<string>> {
+  const present = new Set<string>();
+  for (const rawPath of paths) {
+    const path = rawPath.replaceAll('\\', '/');
+    if (!path.startsWith('.docs/')) continue;
+    try {
+      await access(join(worktreePath, path));
+      present.add(path);
+    } catch {
+      // A deleted path is deliberately absent from the rebuilt manifest.
+    }
+  }
+  return present;
+}
+
+/** A malformed or mismatched manifest is not a land gate: it is overwritten by
+ * the deterministic rebuild. Only a valid prior manifest contributes to the
+ * registration delta reported to the caller. */
+async function readPriorManifestEntries(
+  manifestFile: string,
+  manifestRepoPath: string,
+  slug: string,
+): Promise<readonly FeatureManifestEntry[]> {
+  let raw: string;
+  try {
+    raw = await readFile(manifestFile, 'utf8');
+  } catch {
+    return [];
+  }
+  const parsed = parseFeatureManifest(raw, manifestRepoPath, slug);
+  return parsed.kind === 'parsed' ? parsed.manifest.artifacts : [];
 }
 
 /** Existing paths retain their owning feature during DECIDE amendments. New paths,
