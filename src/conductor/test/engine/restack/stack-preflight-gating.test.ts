@@ -1,6 +1,6 @@
-// Covers: task:31.1
+// Covers: task:9, task:31.1
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
@@ -34,24 +35,20 @@ async function fixture() {
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const closed = await commit('closed one', 'one.txt', 'one\n');
   await git(['update-ref', 'refs/conductor/demo/closed/c1', closed]);
-  await git(['checkout', '-qb', 'feat/c2/demo']);
-  const closedTwo = await commit('closed two', 'two.txt', 'two\n');
-  await git(['update-ref', 'refs/conductor/demo/closed/c2', closedTwo]);
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
   await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
   await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
-  await writeFile(join(repo, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n\n## Story 3: Three\n');
+  await writeFile(join(repo, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n');
   await writeFile(join(repo, '.docs', 'plans', 'demo.md'), [
     '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
-    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Two | 2 |', '| 3 | Leaf | 3 |', '',
+    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Leaf | 2 |', '',
     '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
     '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
-    '### Task 3: Three', '**Story:** Story 3', '**Dependencies:** none', '',
   ].join('\n'));
-  await writeFile(join(repo, 'positions.json'), '[1,2,3]');
+  await writeFile(join(repo, 'positions.json'), '[1,2]');
   const positionsBlob = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
   await git(['update-ref', 'refs/conductor/demo/positions', positionsBlob]);
   return { repo, git, commit, closed };
@@ -105,19 +102,55 @@ describe('stack preflight live-HALT gate', () => {
     const changed = await fixture();
     const planPath = join(changed.repo, '.docs', 'plans', 'demo.md');
     const plan = await readFile(planPath, 'utf8');
-    await writeFile(planPath, plan.replace('| 2 | Two | 2 |', '| 4 | Two | 2 |'));
+    await writeFile(planPath, plan.replace('| 2 | Leaf | 2 |', '| 3 | Leaf | 2 |'));
 
     await expect(runStackPreflight({ worktree: changed.repo, slug: 'demo', git: makeGitRunner(changed.repo) }))
       .resolves.toEqual({ kind: 'halted' });
-    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('recorded positions [1,2,3]; plan positions [1,3,4]');
+    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('recorded positions [1,2]; plan positions [1,3]');
+    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'ai-conductor reseal --slug demo --path .docs/plans/demo.md --reason',
+    );
 
     const unreadable = await fixture();
     await unreadable.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
     await expect(runStackPreflight({ worktree: unreadable.repo, slug: 'demo', git: makeGitRunner(unreadable.repo) }))
       .resolves.toEqual({ kind: 'halted' });
     await expect(readFile(join(unreadable.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      `git update-ref refs/conductor/demo/positions "$(printf '%s' '[1,2,3]' | git hash-object -w --stdin)"`,
+      `git update-ref refs/conductor/demo/positions "$(printf '%s' '[1,2]' | git hash-object -w --stdin)"`,
     );
+  });
+
+  it.each([
+    ['plan-missing', async (subject: Awaited<ReturnType<typeof fixture>>) => unlink(join(subject.repo, '.docs', 'plans', 'demo.md')), '.docs/plans/demo.md'],
+    ['plan-invalid', async (subject: Awaited<ReturnType<typeof fixture>>) => writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), '# broken\n\n## Slices\n\nnot a table\n'), 'plan-invalid'],
+  ] as const)('halts and emits loop_halt for %s instead of returning unavailable', async (_cause, arrange, expectedText) => {
+    const subject = await fixture();
+    await arrange(subject);
+    const events: string[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('loop_halt', () => events.push('loop_halt'));
+
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo), events: emitter }))
+      .resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('needs-human');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(expectedText);
+    expect(events).toContain('loop_halt');
+  });
+
+  it('runs the printed positions-ref recovery and clears preflight to child 2', async () => {
+    const subject = await fixture();
+    await subject.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+      .resolves.toEqual({ kind: 'halted' });
+    // Hash the exact durable positions that the recovery command renders.
+    await writeFile(join(subject.repo, 'positions-recovered.json'), '[1,2]');
+    const recoveredBlob = (await subject.git(['hash-object', '-w', 'positions-recovered.json'])).stdout.trim();
+    await subject.git(['update-ref', 'refs/conductor/demo/positions', recoveredBlob]);
+    await unlink(join(subject.repo, '.pipeline', 'HALT'));
+    await unlink(join(subject.repo, '.pipeline', 'HALT.class'));
+
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+      .resolves.toEqual({ kind: 'clear' });
   });
 
   it('prioritizes detached-head recovery over reseal discovery', async () => {
