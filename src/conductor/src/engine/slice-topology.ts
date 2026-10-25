@@ -145,26 +145,27 @@ function parseRecordedPositions(value: string): number[] | undefined {
   }
 }
 
-async function verifyPositions(
+export async function verifySlicePositions(
   worktree: string,
   slug: string,
   positions: readonly number[],
   git: GitRunner,
+  planPath?: string,
 ): Promise<Extract<SliceTopology, { kind: 'unavailable' }> | undefined> {
   const durable = await hasDurableChildState(worktree, slug, { git });
-  if (durable === 'git-error') return unavailable('git-error');
+  if (durable === 'git-error') return unavailable('git-error', { planPath });
   if (!durable) return undefined;
 
   const positionsRef = `refs/conductor/${slug}/positions`;
+  const planPositions = [...positions].sort((left, right) => left - right);
   const recorded = await runGit(git, ['cat-file', '-p', positionsRef]);
-  if (!recorded) return unavailable('git-error');
+  if (!recorded) return unavailable('git-error', { planPath, positionsRef });
   const recordedPositions = recorded.exitCode === 0 ? parseRecordedPositions(recorded.stdout) : undefined;
   if (recorded.exitCode !== 0 || recordedPositions === undefined) {
-    return unavailable('positions-ref-unreadable', { positionsRef });
+    return unavailable('positions-ref-unreadable', { positionsRef, planPath, planPositions });
   }
-  const planPositions = [...positions].sort((left, right) => left - right);
   if (recordedPositions.length !== planPositions.length || recordedPositions.some((position, index) => position !== planPositions[index])) {
-    return unavailable('positions-changed', { recordedPositions, planPositions });
+    return unavailable('positions-changed', { recordedPositions, planPositions, planPath });
   }
   return undefined;
 }
@@ -191,7 +192,10 @@ export async function loadSliceTopology(
   if (validation.kind === 'invalid') return unavailable('plan-invalid', { planPath: planRepoPath, violations: validation.violations });
 
   if (validation.kind === 'unsliced') {
-    return (await verifyPositions(worktree, slug, [], git)) ?? { kind: 'unsliced' };
+    // An unsliced plan cannot start a stack. Avoid durable-ref discovery for
+    // ordinary flat consumers; a reseal of an existing stack performs the
+    // independent proposed-position guard before it can make this change.
+    return { kind: 'unsliced' };
   }
 
   const membership: SliceTopologyMembership = {
@@ -203,6 +207,14 @@ export async function loadSliceTopology(
     titles: validation.slices.map((slice) => slice.title),
   };
   const positions = validation.slices.map((slice) => slice.position);
+
+  // The sealed stack positions are an invariant independent of story
+  // ownership. Check them before a malformed ownership declaration can mask
+  // a topology-changing proposed plan during an operator reseal.
+  if (positions.length >= 2) {
+    const positionFailure = await verifySlicePositions(worktree, slug, positions, git, planRepoPath);
+    if (positionFailure) return positionFailure;
+  }
 
   const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
   if (storiesPath === null) {
@@ -235,9 +247,6 @@ export async function loadSliceTopology(
     violations: ownership.violations,
     sliceMembership: membership,
   });
-  const positionFailure = await verifyPositions(worktree, slug, positions, git);
-  if (positionFailure) return positionFailure;
-
   const configResult = await loadConfig(dependencies.projectRoot ?? await resolveMainRepoRoot(worktree));
   const config = configResult.ok ? configResult.config : undefined;
   const complexityPath = join(worktree, '.docs', 'complexity', `${basename(planPath, '.md')}.md`);

@@ -489,6 +489,27 @@ describe('dispatchResealCommand', () => {
     }
   });
 
+  it('refuses a position change before an unrelated unknown Story ID can mask it', async () => {
+    const fixture = await stackFixture({ 1: [1], 3: [3] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.'));
+    if (!command) throw new Error('expected valid reseal command');
+    try {
+      const plan = await readFile(join(fixture.worktree, fixture.planPath), 'utf8');
+      await writeFile(join(fixture.worktree, fixture.planPath), plan.replace('**Story:** Story 3', '**Story:** Story 999'));
+      const err = vi.fn();
+      const reseal = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith('reseal: cannot change sealed stack positions: recorded [1,2] and proposed [1,3].');
+      expect(reseal).not.toHaveBeenCalled();
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it('reseals a plan that moves a task between its existing positions', async () => {
     const fixture = await stackFixture({ 1: [1, 2, 4], 2: [3] }, [1, 2]);
     const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Move task four.'));

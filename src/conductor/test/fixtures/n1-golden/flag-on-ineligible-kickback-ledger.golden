@@ -1,0 +1,15 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+{
+  "version": 1,
+  "gates": {
+    "build_review": {
+      "count": 1,
+      "cumulative": 1,
+      "treeHash": "0123456789abcdef0123456789abcdef01234567",
+      "lastReason": "fixture bump",
+      "priorVerdict": true,
+      "resolvedBefore": 1,
+      "adjustmentsKnown": true
+    }
+  }
+}

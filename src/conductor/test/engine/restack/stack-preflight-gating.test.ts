@@ -1,6 +1,6 @@
 // Covers: task:31.1
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -99,5 +99,32 @@ describe('stack preflight live-HALT gate', () => {
       prepareResume: async () => { prepared = true; liveHalt = false; },
     })).resolves.toMatchObject({ kind: 'halted' });
     expect(prepared).toBe(true);
+  });
+
+  it('writes actionable topology details for changed and unreadable sealed positions', async () => {
+    const changed = await fixture();
+    const planPath = join(changed.repo, '.docs', 'plans', 'demo.md');
+    const plan = await readFile(planPath, 'utf8');
+    await writeFile(planPath, plan.replace('| 2 | Two | 2 |', '| 4 | Two | 2 |'));
+
+    await expect(runStackPreflight({ worktree: changed.repo, slug: 'demo', git: makeGitRunner(changed.repo) }))
+      .resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(changed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('recorded positions [1,2,3]; plan positions [1,3,4]');
+
+    const unreadable = await fixture();
+    await unreadable.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+    await expect(runStackPreflight({ worktree: unreadable.repo, slug: 'demo', git: makeGitRunner(unreadable.repo) }))
+      .resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(unreadable.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      `git update-ref refs/conductor/demo/positions "$(printf '%s' '[1,2,3]' | git hash-object -w --stdin)"`,
+    );
+  });
+
+  it('prioritizes detached-head recovery over reseal discovery', async () => {
+    const subject = await fixture();
+    await subject.git(['checkout', '-q', '--detach']);
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+      .resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('git switch feat/daemon-demo');
   });
 });

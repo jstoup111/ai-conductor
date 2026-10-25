@@ -1,0 +1,22 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+<!-- conductor:pr-body-floor -->
+
+## Why
+
+n1-golden
+
+_Not yet authored — `/finish` replaces this placeholder with the real body._
+
+## What Changed
+
+_Not yet authored — `/finish` replaces this placeholder with the real body._
+
+## Testing
+
+_Not yet authored — `/finish` replaces this placeholder with the real body._
+
+<!-- Closes <owner/repo#N> — added automatically when this feature came from an intake issue. -->
+
+---
+
+Draft opened automatically at the start of the SHIP phase so the PR number exists for the remaining ship steps. The `/finish` step authors the real title and body and marks this PR ready for review.

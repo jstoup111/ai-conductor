@@ -872,18 +872,31 @@ export class Conductor {
     return assertNever(hostEntry);
   }
 
-  private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
+  private async renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): Promise<string> {
     switch (cursor.kind) {
       case 'divergent':
         return `child ${cursor.child} failed active-child check ${cursor.check}`;
       case 'repair-pending':
         return `child stack repair is pending for closed child ${cursor.repairChildren.join(', ')}`;
-      case 'topology-unavailable':
-        return `slice topology is unavailable while child state exists (${cursor.cause})`;
+      case 'topology-unavailable': {
+        const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
+        const topologyDetails = [
+          cursor.planPath ? `plan path ${cursor.planPath}` : undefined,
+          cursor.positionsRef ? `positions ref ${cursor.positionsRef}` : undefined,
+          cursor.recordedPositions ? `recorded positions [${cursor.recordedPositions.join(',')}]` : undefined,
+          cursor.planPositions ? `plan positions [${cursor.planPositions.join(',')}]` : undefined,
+        ].filter((value): value is string => value !== undefined);
+        const recovery = cursor.cause === 'positions-ref-unreadable'
+            ? `git update-ref refs/conductor/${slug}/positions "$(printf '%s' '${JSON.stringify(cursor.planPositions ?? cursor.recordedPositions ?? [])}' | git hash-object -w --stdin)"`
+            : cursor.cause === 'positions-changed'
+              ? await describeResealRecovery(this.projectRoot, cursor.planPath ?? `.docs/plans/${slug}.md`) ?? `rm -f .pipeline/HALT .pipeline/HALT.class`
+              : `rm -f .pipeline/HALT .pipeline/HALT.class`;
+        return `slice topology is unavailable while child state exists (${cursor.cause})${topologyDetails.length ? `; ${topologyDetails.join('; ')}` : ''}\nRecovery:\n${recovery}`;
+      }
       case 'detached-head':
-        return 'worktree is in detached HEAD while resolving the active child';
+        return `worktree is in detached HEAD while resolving the active child\nRecovery:\ngit switch ${leafBranchFor(this.featureSlug ?? this.featureDesc ?? 'feature')}`;
       case 'git-error':
-        return 'git failed while resolving the active child cursor';
+        return 'git failed while resolving the active child cursor\nRecovery:\nrm -f .pipeline/HALT .pipeline/HALT.class';
     }
   }
 
@@ -2786,7 +2799,7 @@ export class Conductor {
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
     if (isUnroutedRepairPending(cursor)) {
-      await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+      await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
       return false;
     }
     const execution = resolveExecutionChild(cursor, slug);
@@ -2796,7 +2809,7 @@ export class Conductor {
     }
     if (cursor.kind === 'no-child') return true;
 
-    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
     return false;
   }
 
@@ -6814,14 +6827,14 @@ export class Conductor {
         if (slug) {
           const cursor = await this.resolveActiveChild(this.projectRoot, slug);
           if (isUnroutedRepairPending(cursor)) {
-            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
             return;
           }
           const execution = resolveExecutionChild(cursor, slug);
           if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
             await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
           } else if (cursor.kind !== 'no-child') {
-            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+            await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
             return;
           }
         }
@@ -7652,7 +7665,7 @@ export class Conductor {
             if (childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
             if (isUnroutedRepairPending(cursor)) {
-              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
               return;
             }
             const execution = resolveExecutionChild(cursor, slug);
@@ -7678,7 +7691,7 @@ export class Conductor {
               activeChildRequiresClosure = execution.source === 'routed-host'
                 || (execution.source === 'cursor' && !target.isLeaf);
             } else if (cursor.kind !== 'no-child') {
-              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+              await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
             }
             }
@@ -15426,7 +15439,7 @@ export class Conductor {
             if (next.kind !== 'active') {
               const reason = next.kind === 'no-child'
                 ? `cannot resolve next child after closing ${activeChild.child}: cursor returned no-child`
-                : this.renderChildCursorRefusal(next);
+                : await this.renderChildCursorRefusal(next);
               await this.haltChildRegionRefusal(reason);
               return;
             }

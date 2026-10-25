@@ -18,7 +18,8 @@ import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from '.
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
-import { loadSliceTopology } from './slice-topology.js';
+import { verifySlicePositions } from './slice-topology.js';
+import { validatePlanSlices } from './plan-slices.js';
 
 export interface ResealDispatch {
   kind: 'reseal';
@@ -203,8 +204,19 @@ async function positionChangeRefusal(
   const planPath = await resolveFeaturePlanPath(worktree, slug);
   if (!planPath || !paths.includes(repositoryRelativePath(worktree, planPath))) return undefined;
 
-  const topology = await loadSliceTopology(worktree, slug);
-  if (topology.kind !== 'unavailable' || topology.cause !== 'positions-changed') return undefined;
+  const planText = await readFile(planPath, 'utf8').catch(() => undefined);
+  if (planText === undefined) return undefined;
+  const parsed = validatePlanSlices(planText);
+  if (parsed.kind === 'invalid') return undefined;
+  const positions = parsed.kind === 'sliced' ? parsed.slices.map((slice) => slice.position) : [];
+  const topology = await verifySlicePositions(
+    worktree,
+    slug,
+    positions,
+    makeGitRunner(worktree),
+    repositoryRelativePath(worktree, planPath),
+  );
+  if (topology?.cause !== 'positions-changed') return undefined;
   return `cannot change sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}] and proposed [${topology.planPositions?.join(',') ?? ''}]`;
 }
 

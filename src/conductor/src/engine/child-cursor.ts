@@ -36,7 +36,7 @@ export type RepairPendingChildResolution = ActiveChildTarget & {
 
 export type ActiveChildResolution =
   | { kind: 'no-child' }
-  | { kind: 'topology-unavailable'; cause: Extract<SliceTopology, { kind: 'unavailable' }>['cause'] }
+  | ({ kind: 'topology-unavailable' } & Omit<Extract<SliceTopology, { kind: 'unavailable' }>, 'kind'>)
   | { kind: 'detached-head' }
   | { kind: 'git-error' }
   | { kind: 'divergent'; child: ChildId; check: 'closed-child-rewritten' | 'range-not-ancestor' }
@@ -250,7 +250,8 @@ export async function resolveActiveChild(
 
   const topology = await loadSliceTopology(worktree, slug, { git });
   if (topology.kind === 'unavailable') {
-    return artifacts ? { kind: 'topology-unavailable', cause: topology.cause } : { kind: 'no-child' };
+    const { kind: _kind, ...details } = topology;
+    return artifacts ? { kind: 'topology-unavailable', ...details } : { kind: 'no-child' };
   }
   const positions = positionsFromTopology(topology);
   if (positions.length === 0) return { kind: 'no-child' };

@@ -24,6 +24,7 @@ import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { describeResealRecovery } from '../reseal-cli.js';
+import type { SliceTopology } from '../slice-topology.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
@@ -70,15 +71,23 @@ async function haltUnresolvableCursor(
   options: RunStackPreflightOptions,
   cause: string,
   detail: string,
+  topology: Omit<Extract<SliceTopology, { kind: 'unavailable' }>, 'kind' | 'cause'> = {},
 ): Promise<Extract<StackPreflightResult, { kind: 'halted' }>> {
-  const recovery = await describeResealRecovery(options.worktree, `.docs/plans/${options.slug}.md`);
-  const command = recovery ??
-    (cause === 'detached-head'
-      ? `git switch ${leafBranchFor(options.slug)}`
-      : cause === 'positions-ref-unreadable'
-        ? `git update-ref refs/conductor/${options.slug}/positions <positions-blob>`
-        : `rm -f .pipeline/HALT .pipeline/HALT.class`);
-  const body = `cannot resolve stack cursor: ${cause}: ${detail}\nRecovery:\n${command}\n`;
+  const planPath = topology.planPath ?? `.docs/plans/${options.slug}.md`;
+  const command = cause === 'detached-head'
+    ? `git switch ${leafBranchFor(options.slug)}`
+    : cause === 'positions-ref-unreadable'
+      ? `git update-ref refs/conductor/${options.slug}/positions "$(printf '%s' '${JSON.stringify(topology.planPositions ?? topology.recordedPositions ?? [])}' | git hash-object -w --stdin)"`
+      : cause === 'positions-changed'
+        ? await describeResealRecovery(options.worktree, planPath) ?? `rm -f .pipeline/HALT .pipeline/HALT.class`
+        : `rm -f .pipeline/HALT .pipeline/HALT.class`;
+  const topologyDetails = [
+    topology.planPath ? `plan path ${topology.planPath}` : undefined,
+    topology.positionsRef ? `positions ref ${topology.positionsRef}` : undefined,
+    topology.recordedPositions ? `recorded positions [${topology.recordedPositions.join(',')}]` : undefined,
+    topology.planPositions ? `plan positions [${topology.planPositions.join(',')}]` : undefined,
+  ].filter((value): value is string => value !== undefined);
+  const body = `cannot resolve stack cursor: ${cause}: ${detail}${topologyDetails.length ? `; ${topologyDetails.join('; ')}` : ''}\nRecovery:\n${command}\n`;
   await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
   await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
   return { kind: 'halted' };
@@ -203,7 +212,8 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   }
   if (cursor.kind !== 'repair-pending') {
     if (cursor.kind === 'topology-unavailable') {
-      return haltUnresolvableCursor(options, cursor.cause, `slice topology is unavailable (${cursor.cause})`);
+      const { kind: _kind, cause, ...topology } = cursor;
+      return haltUnresolvableCursor(options, cause, `slice topology is unavailable (${cause})`, topology);
     }
     if (cursor.kind === 'git-error' || cursor.kind === 'detached-head') {
       return haltUnresolvableCursor(options, cursor.kind, `cannot resolve stack cursor: ${cursor.kind}`);

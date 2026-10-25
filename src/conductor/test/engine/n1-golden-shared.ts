@@ -115,6 +115,8 @@ export const CELLS: Cell[] = [
   { name: 'flag-off-unsliced', configYaml: 'stacked_prs:\n  enabled: false\n', planMd: UNSLICED_PLAN },
   { name: 'flag-on-unsliced', configYaml: 'stacked_prs:\n  enabled: true\n', planMd: UNSLICED_PLAN },
   { name: 'flag-off-sliced', configYaml: 'stacked_prs:\n  enabled: false\n', planMd: SLICED_PLAN },
+  { name: 'flag-on-single-slice', configYaml: 'stacked_prs:\n  enabled: true\n  max_slices: 2\n', planMd: SINGLE_SLICE_PLAN },
+  { name: 'flag-on-ineligible', configYaml: 'stacked_prs:\n  enabled: true\n  max_slices: 2\n', planMd: INELIGIBLE_TWO_SLICE_PLAN },
 ];
 
 /**

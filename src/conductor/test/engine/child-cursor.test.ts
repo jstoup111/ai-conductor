@@ -137,6 +137,7 @@ describe('resolveActiveChild', () => {
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'topology-unavailable', cause: 'positions-changed',
+      planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: [1, 3],
     });
   });
 
@@ -155,7 +156,7 @@ describe('resolveActiveChild', () => {
     await git(['update-ref', 'refs/conductor/demo/publication', tip]);
 
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing', planPath: '.docs/plans/demo.md' });
   });
 
   it('marks an envelope voided by a DECIDE change, but not a torn or absent one', async () => {
@@ -202,7 +203,7 @@ describe('resolveActiveChild', () => {
     await git(['update-ref', ref, tip]);
 
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause, planPath: '.docs/plans/demo.md' });
   });
 
   it('selects the leaf after every non-leaf closure, independent of the checked-out branch', async () => {
@@ -338,7 +339,7 @@ describe('resolveActiveChild', () => {
 
   it('detects ref-only child state without disposable metadata, then fails closed for sealed child state errors', async () => {
     await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing', planPath: '.docs/plans/demo.md' });
 
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);
