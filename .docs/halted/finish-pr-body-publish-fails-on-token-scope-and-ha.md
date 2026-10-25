@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-25T12:13:15.698Z
+Status: halted
 Slug: finish-pr-body-publish-fails-on-token-scope-and-ha
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-finish-pr-body-publish-fails-on-token-scope-and-ha
-Head SHA: 3e46aa1138647edb9004445f30dda7f600e10e07
-Halted at: 2026-10-25T11:26:56.621Z
+Head SHA: 5f7c135caceee12bb1378881c4b706a89d62213f
+Halted at: 2026-10-25T12:24:38.843Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review clean-PASS durable settlement halted: case reconciliation decision-stop-pending
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — Blocking findings: as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:1 (REMEDIABLE; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 1): Verified, 99% confidence: github-operations-cli.ts:289 excludes failed read, intake-write, and create operations from recording, although D1 requires recording failed results for any operation. These classes can produce failed results through github-operations.ts:726.; as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:2 (REMEDIABLE; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3): Verified, 99% confidence: finish-publication-production.ts:1771 subscribes without requiring flushSessionEvents; :1782 skips an absent flush and :1783 still attributes events received during dispatch. D3 explicitly requires no attribution when the flush dependency is unavailable.; as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:3 (REMEDIABLE; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3): Verified source ordering, 98% confidence: event-persister.ts:454 implements flush with tail.poll(), which returns an existing in-flight poll at closeout-tail.ts:121. If that poll already read the ledger before the provider's final append, finish-publication-production.ts:1782–1788 unsubscribes without delivering that failure. D3 requires delivery of every completed-dispatch record before unsubscribe.; as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:4 (DESIGN; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3): Plan gap, 99% confidence from source: D3 and the approved diagram at .docs/architecture/finish-pr-body-publish-fails-on-token-scope-and-ha.md:81 define correlation by event delivery during subscription. The implementation follows that design at finish-publication-production.ts:1762–1783, but an unread pre-pass record can arrive during this window because closeout-tail.ts:37 starts at offset zero and :183 polls periodically. This cannot guarantee the sealed exclusion of pre-pass records; resolving the boundary requires a design decision.
+
+Blocking findings:
+as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:1 (REMEDIABLE; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 1): Verified, 99% confidence: github-operations-cli.ts:289 excludes failed read, intake-write, and create operations from recording, although D1 requires recording failed results for any operation. These classes can produce failed results through github-operations.ts:726.; as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:2 (REMEDIABLE; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3): Verified, 99% confidence: finish-publication-production.ts:1771 subscribes without requiring flushSessionEvents; :1782 skips an absent flush and :1783 still attributes events received during dispatch. D3 explicitly requires no attribution when the flush dependency is unavailable.; as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:3 (REMEDIABLE; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3): Verified source ordering, 98% confidence: event-persister.ts:454 implements flush with tail.poll(), which returns an existing in-flight poll at closeout-tail.ts:121. If that poll already read the ledger before the provider's final append, finish-publication-production.ts:1782–1788 unsubscribes without delivering that failure. D3 requires delivery of every completed-dispatch record before unsubscribe.; as-built:77725c2c-334b-4378-a053-f5e477f5ac8a:4 (DESIGN; adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3): Plan gap, 99% confidence from source: D3 and the approved diagram at .docs/architecture/finish-pr-body-publish-fails-on-token-scope-and-ha.md:81 define correlation by event delivery during subscription. The implementation follows that design at finish-publication-production.ts:1762–1783, but an unread pre-pass record can arrive during this window because closeout-tail.ts:37 starts at offset zero and :183 polls periodically. This cannot guarantee the sealed exclusion of pre-pass records; resolving the boundary requires a design decision.
 ```
