@@ -7,6 +7,10 @@ import { execa } from 'execa';
 import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 
 const roots: string[] = [];
+const initialCommitEnv = {
+  GIT_AUTHOR_DATE: '2026-10-24T00:00:00Z',
+  GIT_COMMITTER_DATE: '2026-10-24T00:00:00Z',
+};
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -19,7 +23,7 @@ async function fixture(): Promise<{ registryPath: string; worktree: string }> {
   await execa('git', ['init', '--initial-branch=main', worktree]);
   await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: worktree });
   await execa('git', ['config', 'user.name', 'Test User'], { cwd: worktree });
-  await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: worktree });
+  await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: worktree, extendEnv: true, env: initialCommitEnv });
   await execa('git', ['checkout', '-b', 'spec/demo-idea'], { cwd: worktree });
   const registryPath = join(root, 'registry.json');
   await writeFile(registryPath, '[]\n');
@@ -33,7 +37,7 @@ async function worktreeFixture(): Promise<{ registryPath: string; repository: st
   await execa('git', ['init', '--initial-branch=main', repository]);
   await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: repository });
   await execa('git', ['config', 'user.name', 'Test User'], { cwd: repository });
-  await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: repository });
+  await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: repository, extendEnv: true, env: initialCommitEnv });
   const registryPath = join(root, 'registry.json');
   await writeFile(registryPath, JSON.stringify([{
     schemaVersion: 1,
@@ -46,7 +50,7 @@ async function worktreeFixture(): Promise<{ registryPath: string; repository: st
 }
 
 const argv = (...args: string[]) => ['node', 'conduct', 'compose', ...args];
-const ghCapability = { probeGhVersion: async () => ({ kind: 'ok' as const }) };
+const ghCapability = { probeGhVersion: async () => ({ kind: 'ok' as const, version: { major: 2, minor: 73, patch: 0 } }) };
 const herdrEnvironment = { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' };
 
 function primitiveCommand(kind: 'plan-review' | 'land' | 'handoff', worktree: string) {
