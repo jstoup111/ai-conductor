@@ -107,7 +107,9 @@ As each DECIDE step starts, run `ai-conductor compose phase --worktree <worktree
    every ADR is **APPROVED** (no `Status: DRAFT`) before landing. Runs **before** stories.
 6. `/stories` with **Status: Accepted**.
 7. `/conflict-check` for Medium/Large only.
-8. `/plan` in `.docs/plans/`.
+8. `/plan` in `.docs/plans/`. Before the plan declares a `## Slices` section, ask the operator to
+   choose stacked or single-PR delivery, and record an acceptance as `Stacked-Delivery: approved`
+   in `.docs/complexity/<plan-stem>.md`. `land` refuses a sliced plan without it.
 9. `/coherence-check` for Medium/Large only in `.docs/coherence/`.
 10. For Medium/Large, run `ai-conductor compose plan-review --project <name> --worktree <worktreePath> [--source-ref <ref>]`; resolve blocking findings, or after the bounded second round use `--accept <finding-id> --reason <reason>` and `--acknowledge --reason <reason>` for post-bound edits.
 
