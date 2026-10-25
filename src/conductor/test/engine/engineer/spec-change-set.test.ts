@@ -1,3 +1,4 @@
+// Covers: task:3
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
