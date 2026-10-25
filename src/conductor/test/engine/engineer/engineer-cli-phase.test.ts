@@ -29,7 +29,9 @@ async function specWorktree(): Promise<string> {
 }
 
 const argv = (...args: string[]) => ['node', 'conduct', 'compose', 'phase', ...args];
-const ghCapability = { probeGhVersion: async () => ({ kind: 'ok' as const }) };
+const ghCapability = {
+  probeGhVersion: async () => ({ kind: 'ok' as const, version: { major: 2, minor: 73, patch: 0 } }),
+};
 const phaseSlug = { resolvePlanReviewFeatureSlug: async () => 'demo-idea' };
 
 describe('compose phase', () => {
