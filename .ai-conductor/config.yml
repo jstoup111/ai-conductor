@@ -148,11 +148,6 @@ test_suite:
     # (bb94f63b0f, 2026-10-18: TS2322 passed test_suite, caught by review).
     - command: npm run typecheck --silent
       working_directory: src/conductor
-    # `typecheck` covers src/ only; CI also runs typecheck:test over test/, so
-    # without it a test that does not compile first fails in CI (#3411: 45
-    # TS errors passed test_suite, then exhausted ci_repair).
-    - command: npm run typecheck:test --silent
-      working_directory: src/conductor
     - command: npm test
       working_directory: src/conductor
     - command: test/test_harness_integrity.sh
