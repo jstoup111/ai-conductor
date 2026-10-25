@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:24, task:rem-as-built-rem-as-built-r17-5, rem-operator-5-r2
+// Covers: task:1, task:2, task:3, task:4, task:5, task:24, task:rem-as-built-rem-as-built-r17-5, task:rem-operator-5-r2
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';

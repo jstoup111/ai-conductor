@@ -1,4 +1,4 @@
-// Covers: S2.1, S2.2, S2.3, S2.7, S2.9, S3.1, task:6, rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8
+// Covers: S2.1, S2.2, S2.3, S2.7, S2.9, S3.1, task:6, task:rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
