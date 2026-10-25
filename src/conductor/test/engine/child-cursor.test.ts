@@ -172,7 +172,7 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing', planPath: '.docs/plans/demo.md' });
   });
 
-  // Covers: #3408
+  // Covers: S1.1
   it('keeps the active child after a positions-preserving DECIDE amendment, with no rebinding step to wait on', async () => {
     await writeTopology(repository, [1, 2], true);
     const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
