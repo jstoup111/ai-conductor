@@ -437,6 +437,10 @@ describe('N=1 golden renderings', () => {
     const normalGit = partitionConductorRefProbes(normal.gitArgv, 'n1-golden');
     await expectFinishGolden('git-argv', JSON.stringify(normalGit.parity, null, 2));
     await expectFinishGolden('git-probe-argv', `${JSON.stringify(normalGit.probes, null, 2)}\n`);
+    expect(normalGit.probes).toEqual([
+      ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
+      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
+    ]);
     await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
     await expectFinishGolden('shipped-record', normalizeRecord(normal.record));
     expect(normal.record).toMatch(/^## Cost\n[\s\S]*^## Time\n(?:state|active_ms):/m);

@@ -45,6 +45,8 @@ export type ActiveChildResolution =
 
 export interface ActiveChildDependencies {
   readonly git?: GitRunner;
+  /** Reuse the cursor's durable-state probe in its immediate topology read. */
+  readonly reuseDurableChildState?: boolean;
 }
 
 /**
@@ -248,7 +250,10 @@ export async function resolveActiveChild(
   const artifacts = await hasDurableChildState(worktree, slug, { git });
   if (artifacts === 'git-error') return { kind: 'git-error' };
 
-  const topology = await loadSliceTopology(worktree, slug, { git });
+  const topology = await loadSliceTopology(worktree, slug, {
+    git,
+    ...(dependencies.reuseDurableChildState ? { durableChildState: artifacts } : {}),
+  });
   if (topology.kind === 'unavailable') {
     const { kind: _kind, ...details } = topology;
     return artifacts ? { kind: 'topology-unavailable', ...details } : { kind: 'no-child' };

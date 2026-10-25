@@ -1345,6 +1345,12 @@ export function createProductionFinishPublicationCoordinator(
   const acceptedProseRevisionByPr = new Map<string, string>();
   const authoredPlaceholderProsePendingByPr = new Set<string>();
   const authoringOriginByPr = new Map<string, 'placeholder' | 'revision_required'>();
+  // Once a retained PR exists, its finish pass observes one immutable sealed
+  // topology. Reuse that cursor across its coordinator lifetime to avoid
+  // repeating durable-child-state probes while retaining the loader's
+  // all-cardinality position check for the observation.
+  const retainedPrObservationChildByFeature = new Map<string, Promise<Awaited<ReturnType<typeof resolveActiveChild>>>>();
+  let retainedPrFinish = false;
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -1451,6 +1457,7 @@ export function createProductionFinishPublicationCoordinator(
   return {
     requiresArtifactValidation: true,
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
+      retainedPrFinish ||= state.pr_url !== undefined;
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended
         ? await (attendedRequestedOutcome ??= Promise.resolve().then(
@@ -1536,10 +1543,18 @@ export function createProductionFinishPublicationCoordinator(
 
       let activeChildForObservation: Awaited<ReturnType<typeof resolveActiveChild>> | undefined;
       const resolveObservationChild = async () => {
-        if (activeChildForObservation !== undefined) return activeChildForObservation;
-        activeChildForObservation = state.feature_desc === undefined
-          ? { kind: 'no-child' as const }
-          : await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        if (state.feature_desc === undefined) return { kind: 'no-child' as const };
+        if (retainedPrFinish) {
+          let cursor = retainedPrObservationChildByFeature.get(state.feature_desc);
+          if (cursor === undefined) {
+            cursor = resolveActiveChild(deps.projectRoot, state.feature_desc, { reuseDurableChildState: true });
+            retainedPrObservationChildByFeature.set(state.feature_desc, cursor);
+          }
+          return cursor;
+        }
+        if (activeChildForObservation === undefined) {
+          activeChildForObservation = await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        }
         return activeChildForObservation;
       };
       const observeStackReadiness = async (prUrl: string, leafReady: boolean): Promise<boolean> => {
@@ -1749,8 +1764,9 @@ export function createProductionFinishPublicationCoordinator(
         observe: async () => {
           // The snapshot ports are evaluated in a fixed order. Reuse the
           // cursor within one observation so adding the stack dimension does
-          // not add duplicate N=1 Git discovery; discard it before every
-          // re-observation after an effect.
+          // not add duplicate N=1 Git discovery. A retained PR keeps its
+          // sealed cursor for the whole coordinator pass; a new PR rechecks
+          // after each effect because branch publication can change state.
           activeChildForObservation = undefined;
           return observePublicationSnapshot(
             observationInput as Parameters<typeof observePublicationSnapshot>[0],

@@ -61,6 +61,8 @@ export interface LoadSliceTopologyDependencies extends DurableChildStateDependen
   readonly projectRoot?: string;
   /** An explicit feature-plan path for compatibility callers with an injected plan. */
   readonly planPath?: string;
+  /** A caller's already-observed durable state for this same read pass. */
+  readonly durableChildState?: boolean | 'git-error';
 }
 
 /**
@@ -161,8 +163,9 @@ export async function verifySlicePositions(
   positions: readonly number[],
   git: GitRunner,
   planPath?: string,
+  durableChildState?: boolean | 'git-error',
 ): Promise<Extract<SliceTopology, { kind: 'unavailable' }> | undefined> {
-  const durable = await hasDurableChildState(worktree, slug, { git });
+  const durable = durableChildState ?? await hasDurableChildState(worktree, slug, { git });
   if (durable === 'git-error') return unavailable('git-error', { planPath });
   if (!durable) return undefined;
 
@@ -208,7 +211,14 @@ export async function loadSliceTopology(
   // does exist, however, every proposed cardinality must match the sealed
   // positions ref. Otherwise an operator could flatten or shrink a stack and
   // make its child cursor appear to be an ordinary N=1 feature.
-  const positionFailure = await verifySlicePositions(worktree, slug, positions, git, planRepoPath);
+  const positionFailure = await verifySlicePositions(
+    worktree,
+    slug,
+    positions,
+    git,
+    planRepoPath,
+    dependencies.durableChildState,
+  );
   if (positionFailure) return positionFailure;
 
   if (validation.kind === 'unsliced') return { kind: 'unsliced' };
