@@ -90,6 +90,22 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
   });
 
+  it('marks an envelope voided by a DECIDE change, but not a torn or absent one', async () => {
+    await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
+    await writeCoverageBindingEnvelope(repository, {
+      version: 1, slug: 'demo', runId: 'run-1', status: 'invalidated', entries: [],
+      sliceMembership: { taskSlices: { 1: 1, 2: 2 }, titles: ['Child 1', 'Child 2'] },
+      predecessor: { status: 'done', recordedDigests: false },
+    }, envelopeFilesystem);
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing', voided: true });
+
+    await writeCoverageBindingEnvelope(repository, {
+      version: 1, slug: 'demo', runId: 'run-1', status: 'invalidated', entries: [],
+      sliceMembership: { taskSlices: { 1: 1, 2: 2 }, titles: ['Child 1', 'Child 2'] },
+    }, envelopeFilesystem);
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+  });
+
   // Covers: task:rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push
   it('keeps an ordinary N=1 feature flat after its leaf pushed-tip receipt is recorded', async () => {
     const tip = (await git(['rev-parse', 'HEAD'])).trim();

@@ -40,7 +40,8 @@ export type RepairPendingChildResolution = ActiveChildTarget & {
 
 export type ActiveChildResolution =
   | { kind: 'no-child' }
-  | { kind: 'envelope-missing' }
+  /** `voided`: an operator-sanctioned DECIDE change invalidated a completed envelope; coverage_binding re-runs before BUILD. */
+  | { kind: 'envelope-missing'; voided?: true }
   | { kind: 'detached-head' }
   | { kind: 'git-error' }
   | { kind: 'divergent'; child: ChildId; check: 'closed-child-rewritten' | 'range-not-ancestor' }
@@ -335,7 +336,14 @@ export async function resolveActiveChild(
     return artifacts ? { kind: 'envelope-missing' } : { kind: 'no-child' };
   }
   const positions = positionsFromEnvelope(envelope);
-  if (positions.length === 0) return artifacts ? { kind: 'envelope-missing' } : { kind: 'no-child' };
+  if (positions.length === 0) {
+    if (!artifacts) return { kind: 'no-child' };
+    // Only voidCoverageBindingForDecideChange writes an invalidated envelope
+    // with a predecessor; a torn or absent envelope stays a plain refusal.
+    return envelope?.status === 'invalidated' && envelope.predecessor !== undefined
+      ? { kind: 'envelope-missing', voided: true }
+      : { kind: 'envelope-missing' };
+  }
 
   // A missing optional project config is today's ordinary N=1 default, not a
   // cursor failure. A malformed config is handled by configuration validation
