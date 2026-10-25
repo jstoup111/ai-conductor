@@ -109,7 +109,7 @@ import {
   renderedSessionOccurrenceTypes,
 } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
-import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from './engine/github-operations.js';
 import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
 import { installDaemonProcessServices } from './engine/daemon-process-bootstrap.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
@@ -3670,6 +3670,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'github_operation_failed':
+      log(`${dot} ${chalk.red('✗')} ${chalk.red(`GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`)}`);
       break;
     case 'session_command_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);

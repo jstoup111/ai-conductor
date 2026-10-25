@@ -92,6 +92,13 @@ export interface GithubOperationRefusedEvent {
   reason: GithubOperationRefusalReason;
   remedy: GithubOperationRefusalRemedy;
 }
+/** A guarded GitHub operation executed but GitHub rejected or failed it. */
+export interface GithubOperationFailedEvent {
+  type: 'github_operation_failed';
+  target: GithubOperationTarget;
+  operation: GithubOperationName;
+  error: string;
+}
 /** A bot credential was unavailable for an authorized write; the operation retried once as the operator. */
 export interface GithubWriteCredentialFallbackEvent {
   type: 'github_write_credential_fallback';
@@ -506,6 +513,7 @@ type ConductorEventBody =
       pullRequestUrl?: string;
     }
   | BotCoAuthorSkippedEvent
+  | GithubOperationFailedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
   | GithubBypassResultEvent

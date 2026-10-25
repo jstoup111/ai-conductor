@@ -16,7 +16,7 @@ import { formatProgressDelta, formatRetryCounter, displayBuildPosition } from '.
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { formatSessionOccurrence, renderedEventTypes } from '../engine/event-sinks.js';
 import { resolveExecutionIdentity } from '../engine/execution-identity.js';
-import { formatGithubCredentialFallback, formatGithubOperationRefusal } from '../engine/github-operations.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from '../engine/github-operations.js';
 import { formatProviderStartLine } from './provider-start-line.js';
 
 export interface TerminalRendererOptions {
@@ -195,6 +195,10 @@ export class TerminalRenderer implements UIRenderer {
 
       case 'github_operation_refused':
         this.region.log(chalk.yellow(`  ✋ ${formatGithubOperationRefusal(event)}`));
+        break;
+
+      case 'github_operation_failed':
+        this.region.log(chalk.red(`  ✗ GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`));
         break;
 
       case 'session_command_refused':
@@ -417,5 +421,5 @@ export class TerminalRenderer implements UIRenderer {
 }
 
 const DEDICATED_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'github_operation_refused', 'github_write_credential_fallback', 'session_command_refused', 'github_bypass_attempt', 'github_bypass_result', 'github_possible_bypass', 'session_event_delivery_diagnostic', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'provider_attempt_started', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'github_operation_refused', 'github_operation_failed', 'github_write_credential_fallback', 'session_command_refused', 'github_bypass_attempt', 'github_bypass_result', 'github_possible_bypass', 'session_event_delivery_diagnostic', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'provider_attempt_started', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
 ]);
