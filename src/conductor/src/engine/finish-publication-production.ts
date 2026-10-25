@@ -1775,9 +1775,15 @@ export function createProductionFinishPublicationCoordinator(
                   const canObserveFailures = pullRequest !== undefined
                     && deps.events !== undefined
                     && deps.flushSessionEvents !== undefined;
+                  let observingFailures = false;
                   if (canObserveFailures) {
-                    await deps.flushSessionEvents!().catch(() => undefined);
-                    deps.events!.on('github_operation_failed', observeFailure);
+                    // A failed drain leaves the sibling-ledger cursor at an
+                    // unknown boundary. Do not subscribe in that case: a
+                    // later successful flush could replay a failure from an
+                    // earlier authoring pass and misattribute it here.
+                    observingFailures = await deps.flushSessionEvents!()
+                      .then(() => true, () => false);
+                    if (observingFailures) deps.events!.on('github_operation_failed', observeFailure);
                   }
                   try {
                     const dispatched = await dispatchAuthoring(request);
@@ -1789,13 +1795,15 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
-                    if (canObserveFailures) await deps.flushSessionEvents!().catch(() => undefined);
-                    if (lastFailure) throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
+                    if (observingFailures) {
+                      await deps.flushSessionEvents!().catch(() => undefined);
+                      if (lastFailure) throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
+                    }
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
                   }
                   } finally {
-                    if (canObserveFailures) deps.events!.off('github_operation_failed', observeFailure);
+                    if (observingFailures) deps.events!.off('github_operation_failed', observeFailure);
                   }
                 },
               }

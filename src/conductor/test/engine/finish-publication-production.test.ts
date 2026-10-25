@@ -171,14 +171,24 @@ describe('authorProse pass-window publish failures', () => {
     });
   });
 
-  it('treats a rejected pre-pass flush as no attributed failure', async () => {
+  it('does not attribute an older matching failure flushed after a rejected pre-pass drain', async () => {
     await withRoot(async (root) => {
+      let flushes = 0;
+      const flush = async () => {
+        if (++flushes === 1) throw new Error('tail unavailable');
+        await events.emit(githubOperationFailedEvent({ error: 'failure from an earlier pass' }));
+      };
       await expect(runAuthorProsePass(
         root,
-        async () => ({ success: true }),
-        async () => { throw new Error('tail unavailable'); },
+        async () => {
+          // The next successful flush replays a record that predates this
+          // pass. A failed pre-pass drain must have left no observer active.
+          await flush();
+          return { success: true };
+        },
+        flush,
       )).resolves.toBeUndefined();
-      await events.emit(githubOperationFailedEvent({ error: 'after success' }));
+      expect(flushes).toBe(2);
     });
   });
 
