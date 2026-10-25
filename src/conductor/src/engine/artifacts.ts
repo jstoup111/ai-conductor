@@ -983,7 +983,10 @@ export async function resolveFeaturePlanPath(
     ? [relative(projectRoot, selection.path).replaceAll('\\', '/')]
     : [];
   const slug = featureDesc ? slugify(featureDesc) : selection.kind === 'resolved' ? planStem(selection.path) : undefined;
-  if (!slug) return (await legacy())[0];
+  if (!slug) {
+    const path = (await legacy())[0];
+    return path === undefined ? undefined : join(projectRoot, path);
+  }
   const resolution = await resolveFeatureArtifact(
     worktreeManifestSource(projectRoot),
     slug,
@@ -1044,7 +1047,10 @@ export async function resolveFeatureStoriesPath(
   };
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const slug = featureDesc ? slugify(featureDesc) : planPath ? planStem(planPath) : undefined;
-  if (!slug) return (await legacy())[0];
+  if (!slug) {
+    const path = (await legacy())[0];
+    return path === undefined ? undefined : join(projectRoot, path);
+  }
   const resolution = await resolveFeatureArtifact(
     worktreeManifestSource(projectRoot),
     slug,

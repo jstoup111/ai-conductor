@@ -476,8 +476,17 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
 }
 
-async function activeStoriesPath(sourceRoot: string, sourceRef: string, planRepoPath: string, planBody: string): Promise<string | undefined> {
-  const storiesRepoPath = await resolveFeatureStoriesRef(gitRefManifestSource(sourceRoot, sourceRef), planRepoPath, planBody);
+async function activeStoriesPath(
+  sourceRoot: string,
+  sourceRef: string,
+  planRepoPath: string,
+  planBody: string,
+): Promise<string | undefined> {
+  const storiesRepoPath = await resolveFeatureStoriesRef(
+    gitRefManifestSource(sourceRoot, sourceRef),
+    planRepoPath,
+    planBody,
+  );
   return storiesRepoPath === null ? undefined : storiesRepoPath;
 }
 

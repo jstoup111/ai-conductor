@@ -131,8 +131,16 @@ export async function resolveFeatureRemoteMutation(input: {
           const artifact = await resolveFeatureArtifact(source, input.slug, 'intake', async () => [`.docs/intake/${input.slug}.md`]);
           const path = artifact.paths[0];
           if (path === undefined || (artifact.origin === 'manifest' && artifact.missing.includes(path))) return [];
-          const content = await source.readFile(path);
-          return content === null ? [] : [{ path, content }];
+          if (artifact.origin === 'manifest') {
+            const content = await source.readFile(path);
+            return content === null ? [] : [{ path, content }];
+          }
+          try {
+            const { stdout: content } = await input.git(['show', `${ref}:${path}`]);
+            return [{ path, content }];
+          } catch {
+            return [];
+          }
         },
       },
     },

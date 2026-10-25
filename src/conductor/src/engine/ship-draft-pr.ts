@@ -321,8 +321,16 @@ export async function createShipDraftPublicationDependencies(input: {
           const artifact = await resolveFeatureArtifact(source, input.featureDesc!, 'intake', async () => [`.docs/intake/${input.featureDesc}.md`]);
           const path = artifact.paths[0];
           if (path === undefined || (artifact.origin === 'manifest' && artifact.missing.includes(path))) return [];
-          const content = await source.readFile(path);
-          return content === null ? [] : [{ path, content }];
+          if (artifact.origin === 'manifest') {
+            const content = await source.readFile(path);
+            return content === null ? [] : [{ path, content }];
+          }
+          try {
+            const { stdout: content } = await input.git(['show', `${ref}:${path}`], { cwd: input.cwd });
+            return [{ path, content }];
+          } catch {
+            return [];
+          }
         },
       },
     },

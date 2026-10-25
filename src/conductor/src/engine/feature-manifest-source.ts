@@ -22,11 +22,22 @@ export function worktreeManifestSource(root: string): ManifestSource {
   return filesystemManifestSource((path) => join(root, path));
 }
 
-export function gitRefManifestSource(root: string, ref: string): ManifestSource {
+export function gitRefManifestSource(
+  root: string,
+  ref: string,
+): ManifestSource {
   const object = (path: string) => `${ref}:${path}`;
   return {
     async readFile(path) {
-      return (await execFile('git', ['show', object(path)], { cwd: root })).stdout;
+      try {
+        return (await execFile('git', ['show', object(path)], { cwd: root })).stdout;
+      } catch (error) {
+        if (isMissingGitPathError(error)) return null;
+        // A ref source is advisory only while selecting the manifest rung.
+        // The caller's established legacy read still owns errors for the
+        // selected artifact; an unavailable probe therefore means no manifest.
+        return null;
+      }
     },
     async exists(path) {
       try {
@@ -35,7 +46,7 @@ export function gitRefManifestSource(root: string, ref: string): ManifestSource 
         return true;
       } catch (error) {
         if (isMissingGitPathError(error)) return false;
-        throw error;
+        return false;
       }
     },
   };
