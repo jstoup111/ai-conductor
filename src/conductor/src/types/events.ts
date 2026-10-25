@@ -101,7 +101,7 @@ export interface GithubWriteCredentialFallbackEvent {
 }
 export interface BotCoAuthorSkippedEvent {
   type: 'bot_co_author_skipped';
-  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed';
+  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed' | 'resolver-absent';
 }
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */

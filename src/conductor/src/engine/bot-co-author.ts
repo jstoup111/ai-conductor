@@ -25,6 +25,7 @@ export function formatBotCoAuthorSkipped(event: Extract<ConductorEvent, { type: 
     case 'token-unavailable': return 'bot co-author skipped: token unavailable';
     case 'identity-read-failed': return 'bot co-author skipped: identity read failed';
     case 'worktree-write-failed': return 'bot co-author skipped: worktree setup failed';
+    case 'resolver-absent': return 'bot co-author skipped: resolver not installed for daemon dispatch';
   }
 }
 
@@ -73,7 +74,11 @@ export function installDaemonBotCoAuthor(resolver: BotCoAuthorResolver | undefin
 export function daemonBotCoAuthorResolver(): BotCoAuthorResolver | undefined { return installedResolver; }
 
 /** Refresh the hook input without allowing an attribution failure to stop setup. */
-export async function refreshWorktreeCoAuthor(worktreePath: string, events?: ConductorEventEmitter): Promise<void> {
+export async function refreshWorktreeCoAuthor(
+  worktreePath: string,
+  events?: ConductorEventEmitter,
+  opts?: { dispatch?: boolean },
+): Promise<void> {
   const resolver = daemonBotCoAuthorResolver();
   const emitter = events ?? resolver?.eventEmitter?.();
   const target = join(worktreePath, '.pipeline', 'co-author');
@@ -88,8 +93,14 @@ export async function refreshWorktreeCoAuthor(worktreePath: string, events?: Con
   } catch (error) {
     throw new Error(`unable to remove stale co-author file at ${target}`, { cause: error });
   }
+  if (!resolver) {
+    if (opts?.dispatch) {
+      await emitter?.emit({ type: 'bot_co_author_skipped', reason: 'resolver-absent' }).catch(() => undefined);
+    }
+    return;
+  }
   try {
-    const result = resolver ? await resolver.prepare(emitter) : undefined;
+    const result = await resolver.prepare(emitter);
     if (result?.kind === 'resolved') {
       const temporaryTarget = `${target}.tmp`;
       await writeFile(temporaryTarget, `${result.trailer}\n`, 'utf8');

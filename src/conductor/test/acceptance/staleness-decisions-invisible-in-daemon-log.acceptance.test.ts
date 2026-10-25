@@ -677,16 +677,16 @@ describe('Stories 1 & 2: the daemon log distinguishes the two staleness classes'
    * run — the Story 1 observable ("`.daemon/daemon.log` contains a line") would
    * still be unmet with every other spec in this file green.
    *
-   * Asserted at the source level because the list is a function-local const
-   * with no runtime seam. The `EVENT_SINKS` registry is the subscription
-   * authority, so `attachFeatureEventRenderer` must derive this list from
+   * Asserted at the source level because the subscription list is function-
+   * local. The `EVENT_SINKS` registry is the subscription authority, so
+   * `attachFeatureEventRenderer` must derive this list from
    * `renderedEventTypes()`.
    */
   it('the daemon subscribes verdict_freshness for per-feature rendering', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, '../../src/daemon-cli.ts'), 'utf8');
-    const rendererStart = source.indexOf('const attachFeatureEventRenderer =');
-    const rendererEnd = source.indexOf('\n  const beginFeatureRun =', rendererStart);
+    const rendererStart = source.indexOf('export function attachFeatureEventRenderer(');
+    const rendererEnd = source.indexOf('\nexport async function runDaemonMode', rendererStart);
     const rendererSource = source.slice(rendererStart, rendererEnd);
 
     expect(rendererSource).toMatch(
