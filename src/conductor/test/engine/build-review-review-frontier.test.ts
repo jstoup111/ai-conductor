@@ -225,7 +225,7 @@ describe("build-review review frontier", () => {
   });
 
   // Covers: task:7
-  it("intersects custom and parsed test-quality regions with new-side hunks", () => {
+  it("intersects custom and test-quality source regions with new-side hunks", () => {
     const files: readonly ChangedFileReference[] = [{
       path: "test/widget.test.ts", changeKind: "modified",
       hunks: [
