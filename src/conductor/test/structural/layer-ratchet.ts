@@ -63,9 +63,8 @@ export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetRes
 
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     for (const statement of sourceFile.statements) {
-      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-
-      const specifier = statement.moduleSpecifier.text;
+      const specifier = valueSpecifier(statement);
+      if (specifier === undefined) continue;
       if (!specifier.startsWith('.')) continue;
 
       const imported = resolveSpecifier(file, specifier, files);
@@ -93,6 +92,39 @@ export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetRes
   }
 
   return { scannedFileCount: files.size, edges, violations };
+}
+
+function valueSpecifier(statement: ts.Statement): string | undefined {
+  if (ts.isImportDeclaration(statement)) {
+    if (!isValueImport(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) return undefined;
+    return statement.moduleSpecifier.text;
+  }
+  if (ts.isExportDeclaration(statement)) {
+    if (
+      !isValueExport(statement)
+      || statement.moduleSpecifier === undefined
+      || !ts.isStringLiteral(statement.moduleSpecifier)
+    ) return undefined;
+    return statement.moduleSpecifier.text;
+  }
+  return undefined;
+}
+
+function isValueImport(statement: ts.ImportDeclaration): boolean {
+  const clause = statement.importClause;
+  if (clause === undefined) return true;
+  if (clause.isTypeOnly || clause.name !== undefined) return !clause.isTypeOnly;
+  if (clause.namedBindings === undefined || ts.isNamespaceImport(clause.namedBindings)) return true;
+  const bindings = clause.namedBindings.elements;
+  return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
+}
+
+function isValueExport(statement: ts.ExportDeclaration): boolean {
+  if (statement.isTypeOnly || statement.exportClause === undefined || ts.isNamespaceExport(statement.exportClause)) {
+    return !statement.isTypeOnly;
+  }
+  const bindings = statement.exportClause.elements;
+  return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
 }
 
 function layerFor(file: string): Layer | undefined {

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, expect, it } from 'vitest';
 
 import { checkLayerRatchet } from './layer-ratchet.js';
@@ -174,5 +174,123 @@ describe('structural: layer ratchet', () => {
         edge: 'tools -> execution',
       },
     ]);
+  });
+
+  it('ignores type-only imports, re-exports, and inline import types', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['types/a.ts', [
+          "import type { A } from '../engine/x.js';",
+          "import { type A, type B } from '../engine/x.js';",
+          "export type { A } from '../engine/x.js';",
+          "export { type A } from '../engine/x.js';",
+          "type X = import('../engine/x.js').X;",
+        ].join('\n')],
+        ['engine/x.ts', 'export type A = string; export type B = string; export type X = string;'],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result).toEqual({ scannedFileCount: 2, edges: [], violations: [] });
+  });
+
+  it('ignores an engine file that reaches ui only through a dynamic import', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/a.ts', "await import('../ui/x.js');"],
+        ['ui/x.ts', 'export {};'],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result).toEqual({ scannedFileCount: 2, edges: [], violations: [] });
+  });
+
+  it('reports an execution value re-export from engine as upward', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['execution/a.ts', "export { name } from '../engine/x.js';"],
+        ['engine/x.ts', 'export const name = 1;'],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result.violations).toEqual([{
+      kind: 'upward',
+      file: 'execution/a.ts',
+      line: 1,
+      imported: 'engine/x.ts',
+      edge: 'execution -> engine',
+    }]);
+  });
+
+  it.each([
+    ['side-effect import', "import '../ui/x.js';"],
+    ['mixed named import', "import { type A, b } from '../ui/x.js';"],
+  ])('reports an engine %s from ui as upward', (_description, source) => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/a.ts', source],
+        ['ui/x.ts', 'export type A = string; export const b = 1;'],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result.violations).toEqual([{
+      kind: 'upward',
+      file: 'engine/a.ts',
+      line: 1,
+      imported: 'ui/x.ts',
+      edge: 'engine -> ui',
+    }]);
+  });
+
+  it('treats default and namespace imports as value edges', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/default.ts', "import value from '../ui/default.js';"],
+        ['ui/default.ts', 'export default 1;'],
+        ['engine/namespace.ts', "import * as values from '../ui/namespace.js';"],
+        ['ui/namespace.ts', 'export const value = 1;'],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result.violations).toEqual([
+      {
+        kind: 'upward',
+        file: 'engine/default.ts',
+        line: 1,
+        imported: 'ui/default.ts',
+        edge: 'engine -> ui',
+      },
+      {
+        kind: 'upward',
+        file: 'engine/namespace.ts',
+        line: 1,
+        imported: 'ui/namespace.ts',
+        edge: 'engine -> ui',
+      },
+    ]);
+  });
+
+  it('records conductor value re-exports as same-layer edges', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/conductor.ts', "export { a } from './a.js';\nexport { b } from './b.js';"],
+        ['engine/a.ts', 'export const a = 1;'],
+        ['engine/b.ts', 'export const b = 1;'],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result).toEqual({
+      scannedFileCount: 3,
+      edges: [
+        { file: 'engine/conductor.ts', imported: 'engine/a.ts', line: 1 },
+        { file: 'engine/conductor.ts', imported: 'engine/b.ts', line: 2 },
+      ],
+      violations: [],
+    });
   });
 });
