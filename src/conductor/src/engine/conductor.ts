@@ -2798,6 +2798,9 @@ export class Conductor {
       return true;
     }
     if (cursor.kind === 'no-child') return true;
+    // A DECIDE change voided coverage binding. Resume re-runs coverage_binding
+    // first; BUILD-region entry resolves the child once the envelope is rebound.
+    if (cursor.kind === 'envelope-missing' && cursor.voided && getStepStatus(state, 'coverage_binding') !== 'done') return true;
 
     await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
     return false;

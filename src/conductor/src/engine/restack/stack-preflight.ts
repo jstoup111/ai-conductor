@@ -178,6 +178,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
 
   const cursor = receiptCursor ?? await resolveActiveChild(options.worktree, options.slug, { git: options.git });
   if (cursor.kind === 'no-child') return { kind: 'no-stack' };
+  // A voided envelope has no repair to perform; coverage_binding re-runs and
+  // rebinds the stack before any child region is entered.
+  if (cursor.kind === 'envelope-missing' && cursor.voided) return { kind: 'clear' };
   if (cursor.kind === 'divergent') {
     await haltRestack(options.worktree, cursor.check, options.events, { child: cursor.child });
     return { kind: 'halted' };
