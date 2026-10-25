@@ -1,5 +1,5 @@
 // Covers: task:22, task:rem-prd-audit-W5
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -56,16 +56,12 @@ async function threeChildStack() {
   await mustSucceed(realGit, ['update-ref', closureRefFor('demo', child(2)), 'HEAD']);
 
   await mustSucceed(realGit, ['checkout', '-qb', leafBranchFor('demo')]);
-  const envelope = { taskSlices: { T1: 1 } };
-  await mkdir(join(repo, '.pipeline'), { recursive: true });
-  await writeFile(join(repo, '.pipeline', 'coverage-binding-envelope.json'), JSON.stringify(envelope));
-
   const calls: string[][] = [];
   const git: GitRunner = async (args, options) => {
     calls.push([...args]);
     return realGit(args, options);
   };
-  return { repo, git, calls, envelope };
+  return { repo, git, calls };
 }
 
 describe('cannot-host (real local Git)', () => {
@@ -84,16 +80,12 @@ describe('cannot-host (real local Git)', () => {
 
     expect({
       selected,
-      envelope: JSON.parse(await readFile(join(stack.repo, '.pipeline', 'coverage-binding-envelope.json'), 'utf8')),
       closure: closureRefFor('demo', child(2)),
       writes: stack.calls.filter(([command]) => ['add', 'branch', 'checkout', 'commit', 'reset', 'update-ref'].includes(command)),
-      coverageReads: stack.calls.filter((args) => args.includes('.pipeline/coverage-binding-envelope.json')),
     }).toEqual({
       selected: { host: child(2), reason: 'prerequisite-paths' },
-      envelope: stack.envelope,
       closure: 'refs/conductor/demo/closed/c2',
       writes: [],
-      coverageReads: [],
     });
   });
 

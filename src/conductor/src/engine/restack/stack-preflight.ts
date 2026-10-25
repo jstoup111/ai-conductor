@@ -3,7 +3,7 @@ import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { hasDurableChildState, resolveActiveChild, resolveSealedFirst } from '../child-cursor.js';
-import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
+import { childBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import { ConductorEventEmitter } from '../../ui/events.js';
@@ -23,8 +23,7 @@ import { requestRoutedExit } from '../routing/routed-exit.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { describeResealRecovery } from '../reseal-cli.js';
-import type { SliceTopology } from '../slice-topology.js';
+import { formatStackCursorRefusal, type StackCursorFailureCause } from '../stack-cursor-recovery.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
@@ -69,25 +68,18 @@ export interface RunStackPreflightOptions {
 
 async function haltUnresolvableCursor(
   options: RunStackPreflightOptions,
-  cause: string,
+  cause: StackCursorFailureCause,
   detail: string,
-  topology: Omit<Extract<SliceTopology, { kind: 'unavailable' }>, 'kind' | 'cause'> = {},
+  topology: {
+    readonly planPath?: string;
+    readonly positionsRef?: string;
+    readonly recordedPositions?: readonly number[];
+    readonly planPositions?: readonly number[];
+  } = {},
 ): Promise<Extract<StackPreflightResult, { kind: 'halted' }>> {
-  const planPath = topology.planPath ?? `.docs/plans/${options.slug}.md`;
-  const command = cause === 'detached-head'
-    ? `git switch ${leafBranchFor(options.slug)}`
-    : cause === 'positions-ref-unreadable'
-      ? `git update-ref refs/conductor/${options.slug}/positions "$(printf '%s' '${JSON.stringify(topology.planPositions ?? topology.recordedPositions ?? [])}' | git hash-object -w --stdin)"`
-      : cause === 'positions-changed'
-        ? await describeResealRecovery(options.worktree, planPath) ?? `rm -f .pipeline/HALT .pipeline/HALT.class`
-        : `rm -f .pipeline/HALT .pipeline/HALT.class`;
-  const topologyDetails = [
-    topology.planPath ? `plan path ${topology.planPath}` : undefined,
-    topology.positionsRef ? `positions ref ${topology.positionsRef}` : undefined,
-    topology.recordedPositions ? `recorded positions [${topology.recordedPositions.join(',')}]` : undefined,
-    topology.planPositions ? `plan positions [${topology.planPositions.join(',')}]` : undefined,
-  ].filter((value): value is string => value !== undefined);
-  const body = `cannot resolve stack cursor: ${cause}: ${detail}${topologyDetails.length ? `; ${topologyDetails.join('; ')}` : ''}\nRecovery:\n${command}\n`;
+  const body = `cannot resolve stack cursor: ${cause}: ${await formatStackCursorRefusal(
+    options.worktree, options.slug, cause, detail, topology,
+  )}\n`;
   await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
   await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
   return { kind: 'halted' };

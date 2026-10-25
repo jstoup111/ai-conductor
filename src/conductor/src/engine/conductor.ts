@@ -205,6 +205,7 @@ import {
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
+import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
@@ -880,23 +881,15 @@ export class Conductor {
         return `child stack repair is pending for closed child ${cursor.repairChildren.join(', ')}`;
       case 'topology-unavailable': {
         const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
-        const topologyDetails = [
-          cursor.planPath ? `plan path ${cursor.planPath}` : undefined,
-          cursor.positionsRef ? `positions ref ${cursor.positionsRef}` : undefined,
-          cursor.recordedPositions ? `recorded positions [${cursor.recordedPositions.join(',')}]` : undefined,
-          cursor.planPositions ? `plan positions [${cursor.planPositions.join(',')}]` : undefined,
-        ].filter((value): value is string => value !== undefined);
-        const recovery = cursor.cause === 'positions-ref-unreadable'
-            ? `git update-ref refs/conductor/${slug}/positions "$(printf '%s' '${JSON.stringify(cursor.planPositions ?? cursor.recordedPositions ?? [])}' | git hash-object -w --stdin)"`
-            : cursor.cause === 'positions-changed'
-              ? await describeResealRecovery(this.projectRoot, cursor.planPath ?? `.docs/plans/${slug}.md`) ?? `rm -f .pipeline/HALT .pipeline/HALT.class`
-              : `rm -f .pipeline/HALT .pipeline/HALT.class`;
-        return `slice topology is unavailable while child state exists (${cursor.cause})${topologyDetails.length ? `; ${topologyDetails.join('; ')}` : ''}\nRecovery:\n${recovery}`;
+        return formatStackCursorRefusal(
+          this.projectRoot, slug, cursor.cause,
+          `slice topology is unavailable while child state exists (${cursor.cause})`, cursor,
+        );
       }
       case 'detached-head':
-        return `worktree is in detached HEAD while resolving the active child\nRecovery:\ngit switch ${leafBranchFor(this.featureSlug ?? this.featureDesc ?? 'feature')}`;
+        return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'detached-head', 'worktree is in detached HEAD while resolving the active child');
       case 'git-error':
-        return 'git failed while resolving the active child cursor\nRecovery:\nrm -f .pipeline/HALT .pipeline/HALT.class';
+        return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'git-error', 'git failed while resolving the active child cursor');
     }
   }
 

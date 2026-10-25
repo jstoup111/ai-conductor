@@ -151,7 +151,6 @@ describe('resolveActiveChild', () => {
 
   it('retains stacked protection from conductor refs after disposable child metadata is gone', async () => {
     await rm(join(repository, '.pipeline', 'children'), { recursive: true, force: true });
-    await rm(join(repository, '.pipeline', 'coverage-binding-envelope.json'), { force: true });
     const tip = (await git(['rev-parse', 'HEAD'])).trim();
     await git(['update-ref', 'refs/conductor/demo/publication', tip]);
 

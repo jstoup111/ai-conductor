@@ -77,8 +77,6 @@ describe('N=1 golden state', () => {
       // Each cell has its own initial tree and deterministic UUID sequence.
       // The raw fixture checks stay byte-exact; this cross-cell comparison
       // projects those fixture-local identities away. The single-slice
-      // coverage envelope is deliberately not compared here: its
-      // sliceMembership and storyOwnership are the permitted distinctions.
       const comparable = (value: string) => value
         .replaceAll(/00000000-0000-4000-8000-\d{12}/g, '<EXECUTION_ID>')
         .replaceAll(/"tree(?:Before|After)":"[a-f0-9]+"/g, '"tree":"<TREE>"')
@@ -255,5 +253,6 @@ describe('N=1 golden state', () => {
     expect(conductorRefs.stdout.trim()).toBe('');
     expect(childBranches.stdout.trim()).toBe('');
     expect(eventsContent).not.toContain('"child"');
+    expect(eventsContent).not.toContain('"slice"');
   });
 });
