@@ -699,3 +699,35 @@ Tasks 2–8, 11–13 ──> Task 16 ──┬─> Task 17
 - [x] Every task has a `Done when:` block of 2–5 falsifiable checks
 - [x] Dependencies are explicit and acyclic
 - [x] No terminal catch-all validation task
+
+### Task rem-as-built-R1: Carry loader details (recorded/plan positions, planPath) through child-cursor.ts topology-unavailable variant into restack/stack-preflight.ts haltUnresolvableCursor
+**Gate:** as-built
+**Rationale:** Verified at 99%: the code drifts from ADR D5, and the approved architecture still stands, so this is BUILD work. Keep the topology details in child-cursor.ts's topology-unavailable variant. Make haltUnresolvableCursor choose the recovery by cause. Give conductor.ts's topology refusal paths the same cause-specific recovery text. This falls inside Task 9's scope.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 5
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: Make stack-preflight.ts recovery cause-specific: reseal only for positions-changed, runnable git update-ref for positions-ref-unreadable, git switch for detached-head, halt-clear for git-error
+**Gate:** as-built
+**Rationale:** Verified at 99%: the code drifts from ADR D5, and the approved architecture still stands, so this is BUILD work. Keep the topology details in child-cursor.ts's topology-unavailable variant. Make haltUnresolvableCursor choose the recovery by cause. Give conductor.ts's topology refusal paths the same cause-specific recovery text. This falls inside Task 9's scope.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 5
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: Supply the same cause-specific recovery command at conductor.ts topology refusal paths and activateChildRegionStateForResume
+**Gate:** as-built
+**Rationale:** Verified at 99%: the code drifts from ADR D5, and the approved architecture still stands, so this is BUILD work. Keep the topology details in child-cursor.ts's topology-unavailable variant. Make haltUnresolvableCursor choose the recovery by cause. Give conductor.ts's topology refusal paths the same cause-specific recovery text. This falls inside Task 9's scope.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 5
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: In reseal-cli.ts compare proposed plan positions with refs/conductor/<slug>/positions independently of other loader errors and refuse before rebaselining; add reseal-cli.test.ts case for a positions change plus an unknown Story ID
+**Gate:** as-built
+**Rationale:** Verified at 98%: ADR D3 drift. slice-topology.ts returns ownership or story errors before it calls verifyPositions. reseal-cli.ts then treats any non-positions-changed failure as passable, so a plan that changes positions slips through. Task 8 step 3 requires comparing the proposed plan's positions with the recorded ref before any write. This is conforming BUILD work under Task 8.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 3
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.
