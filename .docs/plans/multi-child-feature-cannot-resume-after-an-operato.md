@@ -731,3 +731,53 @@ Tasks 2–8, 11–13 ──> Task 16 ──┬─> Task 17
 **Done when:**
 - adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
 - The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-17-r1: Restore the complexityMd and storiesFixture inputs for the flag-on-single-slice and flag-on-ineligible cells in src/conductor/test/engine/n1-golden-shared.ts and n1-golden-state.test.ts, so each cell seeds the same stories and complexity it did before the change
+**Gate:** prd-audit
+**Rationale:** Verified against plan Task 17 (95%). Its Done-when allows retained goldens to differ only by removed coverage_binding step lines. The diffs to flag-on-ineligible conduct-state/events/gate-paths and flag-on-single-slice events/task-status come from test setup: the n1-golden-shared.ts / n1-golden-state.test.ts cells dropped their complexityMd and storiesFixture inputs. This is conforming test drift with no architectural or product decision involved, so it routes to BUILD under Task 17.
+**Criterion:** S6.2
+**Parent task:** 17
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-17-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-17-r2: Regenerate src/conductor/test/fixtures/n1-golden/ and confirm every retained golden's diff against merge-base is only removed coverage_binding step lines. flag-on-ineligible-events/conduct-state must keep the build seal refusal; gate-paths must not add manual_test.json; flag-on-single-slice events/task-status must keep their startHead and fixture identities
+**Gate:** prd-audit
+**Rationale:** Verified against plan Task 17 (95%). Its Done-when allows retained goldens to differ only by removed coverage_binding step lines. The diffs to flag-on-ineligible conduct-state/events/gate-paths and flag-on-single-slice events/task-status come from test setup: the n1-golden-shared.ts / n1-golden-state.test.ts cells dropped their complexityMd and storiesFixture inputs. This is conforming test drift with no architectural or product decision involved, so it routes to BUILD under Task 17.
+**Criterion:** S6.2
+**Parent task:** 17
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-17-r2 is committed and its targeted tests pass.
+
+### Task rem-as-built-1-r1: In src/conductor/src/engine/slice-topology.ts, run the durable-position comparison (verifySlicePositions) for every cardinality, including unsliced (empty positions) and singleton plans, whenever child state exists. Keep the cheap path only when no child state exists
+**Gate:** as-built
+**Rationale:** Verified by reading slice-topology.ts (99%). The unsliced early return at about :204 and the `positions.length >= 2` guard at about :224 skip verifySlicePositions. ADR D3 is explicit: when child state exists, compare against refs/conductor/<slug>/positions. The fix conforms to the approved ADR and fits within Task 1's loader and Task 8's reseal guard, so it goes to BUILD.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 3
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
+- The repair for task rem-as-built-1-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-1-r2: Add slice-topology and reseal-cli tests on a two-child stack: a plan rewritten unsliced, or down to one slice, returns positions-changed (or the reseal is refused naming recorded and proposed positions). It must not resolve to no-child/no-stack in child-cursor.ts or restack/stack-preflight.ts
+**Gate:** as-built
+**Rationale:** Verified by reading slice-topology.ts (99%). The unsliced early return at about :204 and the `positions.length >= 2` guard at about :224 skip verifySlicePositions. ADR D3 is explicit: when child state exists, compare against refs/conductor/<slug>/positions. The fix conforms to the approved ADR and fits within Task 1's loader and Task 8's reseal guard, so it goes to BUILD.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 3
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
+- The repair for task rem-as-built-1-r2 is committed and its targeted tests pass.
+
+### Task rem-as-built-8-r1: In src/conductor/src/engine/reseal-cli.ts (with slicePositionsFromPlan in slice-topology.ts), refuse before any write when the feature has durable child state and the proposed plan's positions cannot be established: invalid dependency/membership/slice validation, or an undefined result. Name the recorded positions and the cause
+**Gate:** as-built
+**Rationale:** Verified (99%). slicePositionsFromPlan in slice-topology.ts returns undefined for any invalid plan, and reseal-cli.ts treats that as no refusal and proceeds to rebaseline. ADR D3 requires reseal to refuse any position change before rebaselining. If an invalid plan makes position invariance impossible to establish on a feature with durable child state, that must also be refused. This is conforming implementation work under Task 8.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 3
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
+- The repair for task rem-as-built-8-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-8-r2: Add reseal-cli.test.ts cases on a two-child stack where a changed-position plan also carries an invalid dependency or membership error: the reseal exits non-zero, the seal file stays byte-identical, and the existing HALT is kept
+**Gate:** as-built
+**Rationale:** Verified (99%). slicePositionsFromPlan in slice-topology.ts returns undefined for any invalid plan, and reseal-cli.ts treats that as no refusal and proceeds to rebaseline. ADR D3 requires reseal to refuse any position change before rebaselining. If an invalid plan makes position invariance impossible to establish on a feature with durable child state, that must also be refused. This is conforming implementation work under Task 8.
+**Governing clause:** adr-2026-10-23-slice-topology-from-sealed-plan decision 3
+**Done when:**
+- adr-2026-10-23-slice-topology-from-sealed-plan decision 3 is satisfied by this task.
+- The repair for task rem-as-built-8-r2 is committed and its targeted tests pass.
