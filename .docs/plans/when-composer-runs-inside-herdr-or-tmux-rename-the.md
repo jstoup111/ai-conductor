@@ -263,3 +263,12 @@ Task 1 ─▶ Task 2 ─▶ Task 3 ─┬─▶ Task 4
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-2: Collapse the pane-label skip reason to one line in src/conductor/src/engine/engineer/pane-label.ts, and add a multi-line execa-style rejection test to src/conductor/test/engine/engineer/pane-label.test.ts asserting exactly one newline-free warning
+**Gate:** prd-audit
+**Rationale:** Verified (95%): pane-label.ts:36-37 puts the raw `error.message` into the warning. execa 9 builds that message with '\n' and '\n\n' separators, so a real ENOENT or tmux failure prints several lines, not one. Plan Task 2 Step 3 already requires a 'single warning line' in `labelComposerPane`, so this is conforming implementation and test drift inside an approved task. No architecture or product decision is needed. Repair: collapse the reason to one line (join on whitespace, trim), and add a RED test whose rejecting runner throws a multi-line, execa-shaped message such as 'Command failed with ENOENT: herdr pane rename x\nspawn herdr ENOENT' or '...exit code 1...\n\ncan't find pane: %3'. The test asserts exactly one warn call, the warning starts with 'compose: pane label skipped (herdr)', and it contains no '\n'. The existing reject and 2000 ms timeout tests stay as they are.
+**Criterion:** S1.9
+**Parent task:** 2
+**Done when:**
+- [test] S1.9 is satisfied by this task.
+- The repair for task rem-prd-audit-2 is committed and its targeted tests pass.
