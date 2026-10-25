@@ -263,6 +263,13 @@ export interface SettledBuildReviewHunksInput {
   readonly laps: readonly BuildReviewSettledHunkLap[];
   /** Exact sources made non-blocking by dispositions, cases or thresholds. */
   readonly nonBlockingSourceIds?: ReadonlySet<string>;
+  /**
+   * A resolved `act` case whose action effect was applied settles every source
+   * it owns for frontier purposes.  This is intentionally distinct from
+   * `finalizedBuildReviewSourceIds`, which retains its merged-link-only
+   * completion semantics.
+   */
+  readonly resolvedAppliedActSourceIds?: ReadonlySet<string>;
   /** Sources with live/remediation risk always keep their target in delta. */
   readonly liveSourceIds?: ReadonlySet<string>;
   /** Test-quality unresolved candidates are unknown risk, not absence. */
@@ -280,6 +287,7 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
     lap.reviewScope.mergeBase === input.mergeBase && lap.reviewScope.policyIdentity === input.policyIdentity,
   );
   const nonBlocking = input.nonBlockingSourceIds ?? new Set<string>();
+  const resolvedAppliedAct = input.resolvedAppliedActSourceIds ?? new Set<string>();
   const live = input.liveSourceIds ?? new Set<string>();
   const unknown = input.unknownSourceIds ?? new Set<string>();
   return current.filter((hunk) => {
@@ -295,7 +303,7 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
         );
         if (!mapsHere) continue;
         if (live.has(source.sourceId) || unknown.has(source.sourceId)) return false;
-        if (!nonBlocking.has(source.sourceId) && !lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId)) return false;
+        if (!nonBlocking.has(source.sourceId) && !resolvedAppliedAct.has(source.sourceId) && !lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId)) return false;
       }
     }
     return true;

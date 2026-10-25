@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:7
+// Covers: task:2, task:4, task:7, task:8
 import { describe, expect, it } from "vitest";
 
 import {
@@ -245,6 +245,20 @@ describe("build-review review frontier", () => {
     const lap = { reviewScope: scope(), findings: [{ sourceId: "source-a", finding }] };
     expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]) })).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
     expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]), liveSourceIds: new Set(["source-a"]) })).toEqual([]);
+  });
+
+  // Covers: task:8
+  it("Task 8: settles an acted source owned by a resolved applied action", () => {
+    const finding = {
+      concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:hunk-a", display: "line" } },
+    };
+    const lap = { reviewScope: scope(), findings: [{ sourceId: "implementationQuality:acted-source", finding }] };
+
+    expect(settledBuildReviewHunks({
+      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap],
+      resolvedAppliedActSourceIds: new Set(["implementationQuality:acted-source"]),
+    })).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
   });
 
   // Covers: task:7

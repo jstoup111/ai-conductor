@@ -36,6 +36,10 @@ import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { deriveEffectiveBuildReviewVerdict, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { buildReviewPolicyIdentity } from '../../src/engine/build-review-review-frontier.js';
+import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
+import { getBuildReviewRubricDescriptor } from '../../src/engine/build-review-registry.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
@@ -49,6 +53,11 @@ vi.mock('../../src/engine/prd-audit-projection.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/prd-audit-projection.js')>(),
   buildPrdAuditProjection,
 }));
+
+vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>();
+  return { ...actual, coordinateBuildReviewRubrics: vi.fn(actual.coordinateBuildReviewRubrics) };
+});
 
 function prdAuditProjectionFixture() {
   return {
@@ -4485,6 +4494,85 @@ TIER: M`,
         '"reason": "build_review_no_rubrics"',
       );
       expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
+    // Covers: task:8
+    it('Task 8: passes resolved applied acted sources into the runner frontier', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = config.catalog.find((candidate) => candidate.id === 'implementationQuality')!;
+      const hunk = deriveChangedFileReferences([
+        'diff --git a/src/example.ts b/src/example.ts',
+        '@@ -1 +1 @@',
+        '-export const value = false;',
+        '+export const value = true;',
+      ].join('\n'))[0]!.hunks[0]!;
+      const finding = {
+        concernKind: 'duplication' as const,
+        severity: 'major' as const,
+        summary: 'The revised branch duplicates the existing implementation.',
+        evidenceLocations: ['src/example.ts:1'],
+        anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/example.ts', contentHash: hunk.contentHash, display: 'value' } },
+      };
+      const sourceId = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding.concernKind, anchor: finding.anchor,
+      })!.id;
+      const engineIdentity = {
+        engineStamp: 'engine-a',
+        skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
+      };
+      const descriptor = getBuildReviewRubricDescriptor('implementationQuality').contract;
+      const policyIdentity = buildReviewPolicyIdentity('implementationQuality', {
+        contractVersion: descriptor.output.version,
+        projectionVersion: descriptor.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        effectiveBundleDigest: 'sha256:bundle-a',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'implementationQuality.json'), JSON.stringify({
+        version: 2,
+        rubric: 'implementationQuality',
+        lapId: 'lap-prior',
+        snapshotDigest: 'sha256:prior',
+        provenance: { kind: 'fresh' },
+        result: {
+          kind: 'judged', rubric: 'implementationQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior',
+          contractVersion: 'v4', findings: [finding], verdict: 'FAIL',
+        },
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior',
+          policyIdentity, reviewedHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set([sourceId]));
+      let observedScope: unknown;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.implementationQuality;
+        throw new Error('expected frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', mergeBase: 'base', headSha: 'current', diff: [
+            'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
+            '-export const value = false;', '+export const value = true;',
+          ].join('\n'),
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
     });
 
     // #3317: a branch that commits a root `node_modules` symlink must not make

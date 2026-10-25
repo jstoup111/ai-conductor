@@ -192,9 +192,11 @@ import {
   buildReviewConfidenceFloors,
   buildReviewSeverityThresholds,
   buildReviewThresholds,
+  resolveBuildReviewFeatureIdentity,
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
+import { RemediationCaseStore } from './remediation-case-store.js';
 import { persistBuildReviewSuppressions, projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   bumpMechanicalFaultsInLedger,
@@ -3170,6 +3172,28 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /**
+   * D2's frontier-only settlement exception.  The effective verdict continues
+   * to use `finalizedBuildReviewSourceIds`, whose resolved-action path is
+   * intentionally limited to merged links.
+   */
+  private async resolvedAppliedBuildReviewActSourceIds(
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+    child?: import('./child-context.js').ChildId,
+  ): Promise<ReadonlySet<string>> {
+    if (!config.adjudication.enabled) return new Set();
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectDir);
+    if (feature === undefined) return new Set();
+    const cases = await new RemediationCaseStore(this.projectDir, feature, child === undefined ? {} : { child }).read();
+    if (!cases.ok) return new Set();
+    return new Set(cases.state.cases.flatMap((record) =>
+      record.resolution === 'resolved' && record.disposition === 'act' &&
+      record.effect.kind === 'action' && record.effect.status === 'applied'
+        ? record.sources.map((source) => source.sourceId)
+        : [],
+    ));
+  }
+
+  /**
    * Dispatch the build_review grader: a fresh, isolated one-shot session
    * (never resumes the main conductor session), fed strictly the diff since
    * the default branch plus the plan body (assembleBuildReviewInputs — no
@@ -3242,6 +3266,7 @@ export class DefaultStepRunner implements StepRunner {
       }));
       return artifacts.filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== undefined);
     };
+    const resolvedAppliedActSourceIds = await this.resolvedAppliedBuildReviewActSourceIds(config, child);
     const reviewScopes: Partial<Record<BuildReviewRubricResult['rubric'], import('./build-review-artifacts.js').BuildReviewReviewScope>> = {};
     for (const entry of config.catalog.filter((candidate): candidate is import('./resolved-config.js').ResolvedBuildReviewBuiltinCatalogEntry => candidate.kind === 'builtin')) {
       const descriptor = getBuildReviewRubricDescriptor(entry.id).contract;
@@ -3259,6 +3284,7 @@ export class DefaultStepRunner implements StepRunner {
       const artifacts = await priorArtifactsFor(entry.id);
       const settled = settledBuildReviewHunks({
         changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
+        resolvedAppliedActSourceIds,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged' && 'contractVersion' in artifact.result
           ? [{ reviewScope: artifact.reviewScope, findings: (artifact.result as import('./build-review-domain.js').BuildReviewJudgedResult).findings.map((finding) => {
             const typedFinding = finding as import('./build-review-domain.js').BuildReviewFinding;
