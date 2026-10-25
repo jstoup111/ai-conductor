@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 import { describe, expect, it } from 'vitest';
 
 import { checkLayerRatchet } from './layer-ratchet.js';
@@ -292,5 +292,121 @@ describe('structural: layer ratchet', () => {
       ],
       violations: [],
     });
+  });
+
+  it.each([
+    ['an acyclic chain', new Map([
+      ['engine/a.ts', "import './b.js';"],
+      ['engine/b.ts', "import './c.js';"],
+      ['engine/c.ts', 'export {};'],
+    ])],
+    ['a type-only back edge', new Map([
+      ['engine/a.ts', "import './b.js';"],
+      ['engine/b.ts', "import type { A } from './a.js';"],
+    ])],
+    ['a dynamic-import back edge', new Map([
+      ['engine/a.ts', "import './b.js';"],
+      ['engine/b.ts', "await import('./a.js');"],
+    ])],
+  ])('reports no violations for %s', (_description, files) => {
+    const result = checkLayerRatchet({ files, allowlist: [] });
+
+    expect(result.violations).toEqual([]);
+  });
+
+  it('reports both edges in a two-file value-import cycle', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/a.ts', "import './b.js';"],
+        ['engine/b.ts', "import './a.js';"],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result.violations).toEqual([
+      {
+        kind: 'cycle',
+        file: 'engine/a.ts',
+        line: 1,
+        imported: 'engine/b.ts',
+        cycle: ['engine/a.ts', 'engine/b.ts'],
+      },
+      {
+        kind: 'cycle',
+        file: 'engine/b.ts',
+        line: 1,
+        imported: 'engine/a.ts',
+        cycle: ['engine/a.ts', 'engine/b.ts'],
+      },
+    ]);
+  });
+
+  it('reports every edge in a cycle closed by a value re-export', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/a.ts', "import './b.js';"],
+        ['engine/b.ts', "import './c.js';"],
+        ['engine/c.ts', "export { x } from './a.js';"],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result.violations).toEqual([
+      {
+        kind: 'cycle',
+        file: 'engine/a.ts',
+        line: 1,
+        imported: 'engine/b.ts',
+        cycle: ['engine/a.ts', 'engine/b.ts', 'engine/c.ts'],
+      },
+      {
+        kind: 'cycle',
+        file: 'engine/b.ts',
+        line: 1,
+        imported: 'engine/c.ts',
+        cycle: ['engine/a.ts', 'engine/b.ts', 'engine/c.ts'],
+      },
+      {
+        kind: 'cycle',
+        file: 'engine/c.ts',
+        line: 1,
+        imported: 'engine/a.ts',
+        cycle: ['engine/a.ts', 'engine/b.ts', 'engine/c.ts'],
+      },
+    ]);
+  });
+
+  it('reports upward and cycle violations for a cross-layer cycle', () => {
+    const result = checkLayerRatchet({
+      files: new Map([
+        ['engine/x.ts', "import '../ui/y.js';"],
+        ['ui/y.ts', "import '../engine/x.js';"],
+      ]),
+      allowlist: [],
+    });
+
+    expect(result.violations).toEqual([
+      {
+        kind: 'upward',
+        file: 'engine/x.ts',
+        line: 1,
+        imported: 'ui/y.ts',
+        edge: 'engine -> ui',
+      },
+      {
+        kind: 'cycle',
+        file: 'engine/x.ts',
+        line: 1,
+        imported: 'ui/y.ts',
+        cycle: ['engine/x.ts', 'ui/y.ts'],
+      },
+      {
+        kind: 'cycle',
+        file: 'ui/y.ts',
+        line: 1,
+        imported: 'engine/x.ts',
+        cycle: ['engine/x.ts', 'ui/y.ts'],
+      },
+    ]);
   });
 });

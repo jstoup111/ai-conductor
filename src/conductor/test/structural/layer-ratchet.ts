@@ -10,7 +10,8 @@ export interface LayerRatchetEdge {
 export type LayerRatchetViolation =
   | UnclassifiableFileViolation
   | UnresolvedSpecifierViolation
-  | UpwardViolation;
+  | UpwardViolation
+  | CycleViolation;
 
 interface UnclassifiableFileViolation {
   kind: 'unclassifiable-file';
@@ -30,6 +31,14 @@ interface UpwardViolation {
   line: number;
   imported: string;
   edge: string;
+}
+
+interface CycleViolation {
+  kind: 'cycle';
+  file: string;
+  line: number;
+  imported: string;
+  cycle: readonly string[];
 }
 
 export interface LayerRatchetResult {
@@ -91,7 +100,93 @@ export function checkLayerRatchet({ files }: LayerRatchetInput): LayerRatchetRes
     }
   }
 
+  const cycles = cycleMembership(edges);
+  for (const edge of edges) {
+    const cycle = cycles.get(edge.file);
+    if (cycle !== undefined && cycles.get(edge.imported) === cycle) {
+      violations.push({
+        kind: 'cycle',
+        file: edge.file,
+        line: edge.line,
+        imported: edge.imported,
+        cycle,
+      });
+    }
+  }
+
   return { scannedFileCount: files.size, edges, violations };
+}
+
+interface TarjanFrame {
+  file: string;
+  neighbors: readonly string[];
+  nextNeighbor: number;
+}
+
+function cycleMembership(edges: readonly LayerRatchetEdge[]): ReadonlyMap<string, readonly string[]> {
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    const neighbors = outgoing.get(edge.file) ?? [];
+    neighbors.push(edge.imported);
+    outgoing.set(edge.file, neighbors);
+    if (!outgoing.has(edge.imported)) outgoing.set(edge.imported, []);
+  }
+
+  const indices = new Map<string, number>();
+  const lowlinks = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const membership = new Map<string, readonly string[]>();
+  let index = 0;
+
+  for (const root of outgoing.keys()) {
+    if (indices.has(root)) continue;
+
+    indices.set(root, index);
+    lowlinks.set(root, index++);
+    stack.push(root);
+    onStack.add(root);
+    const frames: TarjanFrame[] = [{ file: root, neighbors: outgoing.get(root) ?? [], nextNeighbor: 0 }];
+
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1];
+      if (frame.nextNeighbor < frame.neighbors.length) {
+        const neighbor = frame.neighbors[frame.nextNeighbor++];
+        if (!indices.has(neighbor)) {
+          indices.set(neighbor, index);
+          lowlinks.set(neighbor, index++);
+          stack.push(neighbor);
+          onStack.add(neighbor);
+          frames.push({ file: neighbor, neighbors: outgoing.get(neighbor) ?? [], nextNeighbor: 0 });
+        } else if (onStack.has(neighbor)) {
+          lowlinks.set(frame.file, Math.min(lowlinks.get(frame.file)!, indices.get(neighbor)!));
+        }
+        continue;
+      }
+
+      frames.pop();
+      if (lowlinks.get(frame.file) === indices.get(frame.file)) {
+        const component: string[] = [];
+        let member: string;
+        do {
+          member = stack.pop()!;
+          onStack.delete(member);
+          component.push(member);
+        } while (member !== frame.file);
+        if (component.length > 1) {
+          const cycle = component.sort();
+          for (const member of cycle) membership.set(member, cycle);
+        }
+      }
+
+      const parent = frames.at(-1);
+      if (parent !== undefined) {
+        lowlinks.set(parent.file, Math.min(lowlinks.get(parent.file)!, lowlinks.get(frame.file)!));
+      }
+    }
+  }
+
+  return membership;
 }
 
 function valueSpecifier(statement: ts.Statement): string | undefined {
