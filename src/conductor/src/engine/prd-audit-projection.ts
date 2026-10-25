@@ -19,7 +19,8 @@ import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js'
 import { parseCoherenceWaiverDeclaration } from './engineer/coherence-waiver.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
 import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 import type { PrdAuditRequirementAssociation } from './prd-audit-contract.js';
@@ -468,7 +469,7 @@ export async function buildPrdAuditProjection(
     return { ok: false, fault: { dimension: 'plan', detail: 'active plan is unreadable' } };
   }
   const intent = planIntent(plan);
-  const storiesRepoPath = resolvePlanStoriesPath(repoPath(projectRoot, planPath), plan);
+  const storiesRepoPath = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), repoPath(projectRoot, planPath), plan);
   if (!intent || !storiesRepoPath) return { ok: false, fault: { dimension: 'plan', detail: 'active plan has incomplete audit context' } };
 
   let stories: string;

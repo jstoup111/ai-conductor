@@ -7,7 +7,8 @@ import { loadConfig } from './config.js';
 import { parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveMainRepoRoot } from './park-marker.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { MalformedFeatureManifestError, worktreeManifestSource } from './feature-manifest-source.js';
 import {
   customStepsInPerChildRegion,
   deriveStoryOwnership,
@@ -231,7 +232,17 @@ export async function loadSliceTopology(
     )),
     titles: validation.slices.map((slice) => slice.title),
   };
-  const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
+  let storiesPath: string | null;
+  try {
+    storiesPath = await resolveFeatureStoriesRef(worktreeManifestSource(worktree), planRepoPath, planText);
+  } catch (error) {
+    if (!(error instanceof MalformedFeatureManifestError)) throw error;
+    return unavailable('plan-invalid', {
+      planPath: planRepoPath,
+      violations: [{ code: 'stories-path', message: `the feature manifest is malformed: ${error.message}` }],
+      sliceMembership: membership,
+    });
+  }
   if (storiesPath === null) {
     return unavailable('plan-invalid', {
       planPath: planRepoPath,

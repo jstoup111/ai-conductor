@@ -25,7 +25,8 @@ import {
 } from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import { readGitBlobs } from './git-blob-batch.js';
 import {
   parseDoneWhenCloseSource,
@@ -589,7 +590,7 @@ export async function completeTaskDoneWhen(
     const planRepoPath = relative(repositoryRoot, isAbsolute(activePlanPath)
       ? activePlanPath
       : join(projectRoot, activePlanPath)).replaceAll('\\', '/');
-    const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
+    const storiesPath = await resolveFeatureStoriesRef(worktreeManifestSource(repositoryRoot), planRepoPath, planText);
     const storiesText = storiesPath
       ? await readFile(join(repositoryRoot, storiesPath), 'utf8').catch(() => '')
       : '';

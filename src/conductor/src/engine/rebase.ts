@@ -32,7 +32,8 @@ import {
   resolveFeaturePlanPath,
   resolveFeaturePrdPaths,
 } from './artifacts.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
 import {
@@ -1332,7 +1333,7 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
     const plan = repoPath(activePlan);
     inputs.push(plan, `.docs/coherence/${basename(plan, '.md')}.md`);
     const body = await readFile(join(projectRoot, plan), 'utf8').catch(() => '');
-    const stories = resolvePlanStoriesPath(plan, body);
+    const stories = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), plan, body);
     if (stories) inputs.push(stories);
   }
   // Same-stem paths also cover removed documents that no longer appear in a glob.
