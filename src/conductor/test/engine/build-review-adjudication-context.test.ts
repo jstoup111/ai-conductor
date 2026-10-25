@@ -344,16 +344,42 @@ describe('build-review adjudication context', () => {
     });
   });
 
-  it('keeps a prior source without a readable artifact digest and does not count it as budget-omitted', () => {
-    const prior = priorCase('case-missing-artifact');
-    const result = assembleBuildReviewAdjudicationContext({
-      aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests: new Map(),
-    });
+  it('keeps a prior source whose lap artifact is unreadable without a digest and does not count it as budget-omitted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-unreadable-prior-artifact-'));
+    try {
+      const sourceLapId = parseBuildReviewLapId('lap-prior-unreadable')!;
+      const sourceAggregate = joinBuildReviewRubricOutcomes({
+        lapId: sourceLapId, snapshotDigest: 'sha256:prior-unreadable',
+        results: {
+          security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+          testQuality: {
+            kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: 'sha256:prior-unreadable',
+            contractVersion: 'v4', findings: [finding('prior-unreadable')], verdict: 'FAIL',
+          },
+        },
+      });
+      const [source] = projectBuildReviewAggregateSources(sourceAggregate)!;
+      const prior = {
+        ...priorCase('case-missing-artifact'),
+        sources: [{ sourceId: buildReviewAdjudicationSourceId(source!), outcome: 'acted' as const, recordedAt: '2026-10-24T12:00:00.000Z' }],
+      };
+      await mkdir(join(root, '.pipeline', 'build-review', sourceLapId), { recursive: true });
+      await writeFile(join(root, '.pipeline', 'build-review', sourceLapId, 'testQuality.json'), '{ unreadable');
 
-    expect(result).toMatchObject({ ok: true, context: {
-      priorDigestsOmitted: 0,
-      priorCases: [expect.objectContaining({ sources: [prior.sources[0]] })],
-    } });
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
+      expect(facts.priorFindingDigests.has(prior.sources[0]!.sourceId)).toBe(false);
+      const result = assembleBuildReviewAdjudicationContext({
+        aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests: facts.priorFindingDigests,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(result.context.priorDigestsOmitted).toBe(0);
+      expect(result.context.priorCases[0]!.sources[0]).toEqual(prior.sources[0]);
+      expect(result.context.priorCases[0]!.sources[0]).not.toHaveProperty('finding');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('admits a prior advisory case with no effect as non-blocking history', () => {
