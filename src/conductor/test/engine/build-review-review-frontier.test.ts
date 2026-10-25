@@ -131,18 +131,27 @@ describe("build-review review frontier", () => {
     };
 
     expect(buildReviewProvenanceCandidates(candidateInput).map((record) => record.id)).toEqual(["open", "resolved"]);
+
+    // A predecessor artifact is the authority for this query; a case source
+    // from an earlier lap cannot stand in for it.
+    expect(buildReviewProvenanceCandidates({
+      ...candidateInput,
+      cases: [applied("earlier-only", "resolved", "security:earlier-only")],
+    })).toEqual([]);
+
+    // Binding and authoritative ownership are both terminal exclusions, and
+    // the row's own disposition must be `act` before provenance is relevant.
     expect(buildReviewProvenanceCandidates({ ...candidateInput, caseRow: { ...actionRow, existingCaseId: "open" } })).toEqual([]);
     expect(buildReviewProvenanceCandidates({ ...candidateInput, caseRow: { ...actionRow, disposition: "reject" } })).toEqual([]);
     expect(buildReviewProvenanceCandidates({ ...candidateInput, cases: [...candidateInput.cases, applied("exact-owner", "resolved", currentSource)] })).toEqual([]);
-    expect(buildReviewProvenanceCandidates({
-      ...candidateInput,
-      predecessorArtifacts: [],
-      intervalCommits: [{ message: "unrelated work\n\nTask: 999" }],
-    } as typeof candidateInput)).toEqual([]);
-    expect(buildReviewProvenanceCandidates({
+
+    // Commit trailers are intentionally not an input.  The same durable
+    // artifacts and case store produce the same candidates.
+    const withForeignTaskTrailer = buildReviewProvenanceCandidates({
       ...candidateInput,
       intervalCommits: [{ message: "unrelated work\n\nTask: 999" }],
-    } as typeof candidateInput).map((record) => record.id)).toEqual(["open", "resolved"]);
+    } as typeof candidateInput);
+    expect(withForeignTaskTrailer.map((record) => record.id)).toEqual(["open", "resolved"]);
   });
 
   it("includes every per-rubric policy component except engine identity", () => {

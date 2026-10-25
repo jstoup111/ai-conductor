@@ -1,6 +1,6 @@
 // Covers: task:6, task:25, task:26
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -10,14 +10,14 @@ import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
-import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
-import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
+import { deriveEffectiveBuildReviewVerdict, isBuildReviewFindingOutOfDelta } from '../../src/engine/build-review-aggregate.js';
 import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { readBuildReviewAdjudicationArtifactFacts } from '../../src/engine/conductor.js';
 import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { decideBuildReviewReviewScope, settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -531,7 +531,7 @@ describe('build-review lap scope runner', () => {
     }
   });
 
-  it('keeps an operator-settled hunk out of the next lap and records its re-raise as out of delta', async () => {
+  it('keeps an exactly operator-accepted hunk out of later laps, records a differently worded re-raise as out of delta, and does not charge remediation', async () => {
     const main = await mkdtemp(join(tmpdir(), 'build-review-lap-scope-main-'));
     const projectRoot = join(main, '.worktrees', 'feature');
     try {
@@ -590,7 +590,7 @@ describe('build-review lap scope runner', () => {
         runRubricBuildReview(inputs: unknown, config: unknown, tier: 'S', planPath?: string): Promise<unknown>;
       }).runRubricBuildReview(value, config, 'S');
 
-      await run(inputs('head-l1'));
+      await expect(run(inputs('head-l1'))).resolves.toMatchObject({ success: true });
       const first = calls[0] as any;
       const finding = {
         rubric: 'implementationQuality' as const,
@@ -604,8 +604,8 @@ describe('build-review lap scope runner', () => {
         sourceLapId: 'lap-head-l1', summary: 'accepted', rationale: 'operator decision', operator: 'test',
       })).resolves.toMatchObject({ ok: true });
 
-      await run(inputs('head-l2'));
-      await run(inputs('head-l3'));
+      await expect(run(inputs('head-l2'))).resolves.toMatchObject({ success: true });
+      await expect(run(inputs('head-l3'))).resolves.toMatchObject({ success: true });
 
       expect(calls).toHaveLength(3);
       expect((calls[1] as any).reviewScope).toMatchObject({
@@ -615,11 +615,147 @@ describe('build-review lap scope runner', () => {
         mode: 'delta', deltaHunks: [{ path: 'src/repair.ts' }],
       });
       const l2 = JSON.parse(await readFile(join(projectRoot, '.pipeline/build-review/lap-head-l2/implementationQuality.json'), 'utf8'));
+      expect(l2.result.findings).toMatchObject([{ concernKind: 'non-semantic-name', summary: 'A reworded complaint about settled code.' }]);
       expect(l2.reviewScope).toMatchObject({
         mode: 'delta', deltaHunks: [{ path: 'src/repair.ts' }], outOfDeltaSourceIds: [expect.stringMatching(/^sha256:/)],
       });
+      await expect(new BuildReviewDispositionStore(projectRoot).list({
+        version: 'v1', repository: await realpath(main), feature: 'feature',
+      })).resolves.toMatchObject({ ok: true, records: [expect.any(Object)] });
+      await expect(access(join(projectRoot, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(join(projectRoot, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(main, { recursive: true, force: true });
     }
+  });
+
+  it('uses a finalized reject case to keep an unchanged hunk out of the next delta lap', () => {
+    const h1 = `sha256:${'1'.repeat(64)}`;
+    const h2 = `sha256:${'2'.repeat(64)}`;
+    const first = {
+      concernKind: 'obscured-intent', severity: 'major' as const, summary: 'First wording.', evidenceLocations: ['src/feature.ts:1'],
+      anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/feature.ts', contentHash: h1, display: 'src/feature.ts:1' } },
+    };
+    const sourceId = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v4', concernKind: first.concernKind, anchor: first.anchor })!.id;
+    const changedFiles = [{ path: 'src/feature.ts', changeKind: 'modified' as const, hunks: [
+      { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: h1 },
+      { oldStart: 2, oldCount: 1, newStart: 2, newCount: 1, contentHash: h2 },
+    ] }];
+    const priorScope = {
+      mode: 'full' as const, reason: 'first-lap' as const, sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'head-l1', policyIdentity: 'policy',
+      reviewedHunks: [{ path: 'src/feature.ts', contentHash: h1 }],
+      deltaHunks: [{ path: 'src/feature.ts', contentHash: h1 }], outOfDeltaSourceIds: [],
+    };
+    const settled = settledBuildReviewHunks({
+      changedFiles, mergeBase: 'base', policyIdentity: 'policy',
+      laps: [{ reviewScope: priorScope, findings: [{ sourceId, finding: first }] }],
+      // This is the runner's projection of a judge-finalized `reject` case.
+      nonBlockingSourceIds: new Set([sourceId]),
+    });
+    const l2Scope = decideBuildReviewReviewScope({
+      lapId: parseBuildReviewLapId('lap-head-l2')!, changedFiles, mergeBase: 'base', headSha: 'head-l2', policyIdentity: 'policy',
+      priorLaps: [{ lapId: parseBuildReviewLapId('lap-head-l1')!, reviewScope: priorScope }], settledHunks: settled, openSourceUnmapped: false,
+    })!;
+    const reRaise = { ...first, concernKind: 'non-semantic-name', summary: 'Different concern and wording.' };
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: parseBuildReviewLapId('lap-head-l2')!, snapshotDigest: 'sha256:l2',
+      results: {
+        implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId: parseBuildReviewLapId('lap-head-l2')!, snapshotDigest: 'sha256:l2', contractVersion: 'v4', findings: [reRaise], verdict: 'FAIL' },
+        testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+      },
+    });
+
+    expect(l2Scope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/feature.ts', contentHash: h2 }] });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], {}, new Set(), {}, {
+      implementationQuality: { reviewScope: l2Scope, changedFiles },
+    })!).toMatchObject({ verdict: 'PASS', outOfDeltaFindingIds: [expect.stringMatching(/^sha256:/)] });
+  });
+
+  it('keeps a judge-rejected hunk out of L2 and L3 without a halt or kickback charge', async () => {
+    const main = await mkdtemp(join(tmpdir(), 'build-review-rejected-scope-'));
+    const projectRoot = join(main, '.worktrees', 'feature');
+    try {
+      await execa('git', ['init', '--initial-branch=main'], { cwd: main });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: main });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: main });
+      await execa('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: main });
+      await execa('git', ['worktree', 'add', '-b', 'feature', projectRoot], { cwd: main });
+      const config = resolveBuildReviewConfig({ llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } } } } as HarnessConfig);
+      const runner = new DefaultStepRunner(provider, 'rejected-scope', projectRoot, {
+        buildReviewEffectiveResolver: async (_root, aggregate, deps) => ({ ok: true, feature: { version: 'v1', repository: await realpath(main), feature: 'feature' }, effective: deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], {}, new Set(), {}, deps.scopes as never)! }),
+      });
+      vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'engine', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:skill' } } });
+      const calls: any[] = [];
+      vi.spyOn(runner as never, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: any, projection: any) => {
+        calls.push(projection);
+        const h1 = projection.changedFiles.find((file: any) => file.path === 'src/feature.ts').hunks[0];
+        const h2 = projection.changedFiles.find((file: any) => file.path === 'src/repair.ts').hunks[0];
+        const l1 = projection.lapId === 'lap-reject-l1';
+        return { kind: 'judged', rubric: 'implementationQuality', lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v4', verdict: l1 ? 'FAIL' : 'FAIL', findings: l1 ? [
+          { concernKind: 'obscured-intent', severity: 'major', summary: 'Original hunk.', evidenceLocations: ['src/feature.ts:1'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/feature.ts', contentHash: h1.contentHash, display: 'src/feature.ts:1' } } },
+          { concernKind: 'duplication', severity: 'major', summary: 'Repair hunk.', evidenceLocations: ['src/repair.ts:1'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/repair.ts', contentHash: h2.contentHash, display: 'src/repair.ts:1' } } },
+        ] : [{ concernKind: 'non-semantic-name', severity: 'major', summary: 'Different wording after rejection.', evidenceLocations: ['src/feature.ts:1'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/feature.ts', contentHash: h1.contentHash, display: 'src/feature.ts:1' } } }] };
+      });
+      const input = (headSha: string) => ({ sourceSnapshot: { digest: `sha256:${headSha}`, contentDigest: 'sha256:content', mergeBase: 'base', headSha, diff: [
+        'diff --git a/src/feature.ts b/src/feature.ts\n@@ -0,0 +1 @@\n+export const feature = true;',
+        'diff --git a/src/repair.ts b/src/repair.ts\n@@ -0,0 +1 @@\n+export const repair = true;',
+      ].join('\n'), sourceChanges: [] } });
+      const run = (value: unknown) => (runner as unknown as { runRubricBuildReview(inputs: unknown, config: unknown, tier: 'S'): Promise<unknown> }).runRubricBuildReview(value, config, 'S');
+
+      await expect(run(input('reject-l1'))).resolves.toMatchObject({ success: true });
+      const first = calls[0];
+      const id = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v4', concernKind: 'obscured-intent', anchor: { rubric: 'implementationQuality', locus: { path: 'src/feature.ts', contentHash: first.changedFiles[0].hunks[0].contentHash, display: 'src/feature.ts:1' } } })!.id;
+      await writeFile(join(projectRoot, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+        version: 'v3', feature: { version: 'v1', repository: await realpath(main), feature: 'feature' },
+        cases: [{ id: 'case-reject', domain: 'build_review', disposition: 'reject', priority: 'high', rationale: 'Judge rejected the finding.', confidence: 'high', resolution: 'resolved', sources: [{ sourceId: `implementationQuality:${id}`, outcome: 'rejected', recordedAt: '2026-10-25T00:00:00.000Z' }], effect: { kind: 'none' } }], prdWideningCases: [], suppressions: [], outbox: [],
+      }), 'utf8');
+      await expect(run(input('reject-l2'))).resolves.toMatchObject({ success: true });
+      await expect(run(input('reject-l3'))).resolves.toMatchObject({ success: true });
+      expect(calls.slice(1).map((call) => call.reviewScope.deltaHunks)).toEqual([
+        [expect.objectContaining({ path: 'src/repair.ts' })], [expect.objectContaining({ path: 'src/repair.ts' })],
+      ]);
+      const l2 = JSON.parse(await readFile(join(projectRoot, '.pipeline/build-review/lap-reject-l2/implementationQuality.json'), 'utf8'));
+      expect(l2.reviewScope.outOfDeltaSourceIds).toHaveLength(1);
+      await expect(access(join(projectRoot, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(join(projectRoot, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await rm(main, { recursive: true, force: true }); }
+  });
+
+  it('runs a full lap after a base refresh, while an unchanged exact finding remains settleable by its existing id', () => {
+    const h1 = `sha256:${'1'.repeat(64)}`;
+    const finding = {
+      concernKind: 'obscured-intent', severity: 'major' as const, summary: 'Same finding.', evidenceLocations: ['src/feature.ts:1'],
+      anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/feature.ts', contentHash: h1, display: 'src/feature.ts:1' } },
+    };
+    const changedFiles = [{ path: 'src/feature.ts', changeKind: 'modified' as const, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: h1 }] }];
+    const l1Scope = { mode: 'full' as const, reason: 'first-lap' as const, sequence: 1, unreadableLapIds: [], mergeBase: 'base-l1', headSha: 'head-l1', policyIdentity: 'policy', reviewedHunks: [{ path: 'src/feature.ts', contentHash: h1 }], deltaHunks: [{ path: 'src/feature.ts', contentHash: h1 }], outOfDeltaSourceIds: [] };
+    const l2Scope = decideBuildReviewReviewScope({ lapId: parseBuildReviewLapId('lap-head-l2')!, changedFiles, mergeBase: 'base-l2', headSha: 'head-l2', policyIdentity: 'policy', priorLaps: [{ lapId: parseBuildReviewLapId('lap-head-l1')!, reviewScope: l1Scope }], openSourceUnmapped: false })!;
+    const id = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding.concernKind, anchor: finding.anchor })!.id;
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId: parseBuildReviewLapId('lap-head-l2')!, snapshotDigest: 'sha256:l2', results: {
+      implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId: parseBuildReviewLapId('lap-head-l2')!, snapshotDigest: 'sha256:l2', contractVersion: 'v4', findings: [finding], verdict: 'FAIL' },
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+    } });
+
+    expect(l2Scope).toMatchObject({ mode: 'full', reason: 'merge-base-changed', deltaHunks: [{ path: 'src/feature.ts', contentHash: h1 }] });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set([id]))).toMatchObject({ verdict: 'PASS', acceptedFindingIds: [id] });
+  });
+
+  it('does not let a custom rubric\'s changing finding ids re-block a settled hunk outside another file\'s delta', () => {
+    const h1 = `sha256:${'1'.repeat(64)}`;
+    const h2 = `sha256:${'2'.repeat(64)}`;
+    const finding = (concernId: string) => ({
+      concernId, summary: `Lap-specific ${concernId}.`, severity: 'major' as const, evidenceLocations: ['src/settled.ts:1'],
+      sourceRegions: [{ path: 'src/settled.ts', startLine: 1, endLine: 1, contentHash: h1, display: 'src/settled.ts:1' }],
+    });
+    const scope = {
+      reviewScope: { mode: 'delta' as const, deltaHunks: [{ path: 'src/changed.ts', contentHash: h2 }] },
+      changedFiles: [
+        { path: 'src/settled.ts', changeKind: 'modified' as const, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: h1 }] },
+        { path: 'src/changed.ts', changeKind: 'modified' as const, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: h2 }] },
+      ],
+    };
+
+    expect(isBuildReviewFindingOutOfDelta(finding('lap-2-random-id'), scope)).toBe(true);
+    expect(isBuildReviewFindingOutOfDelta(finding('lap-3-other-random-id'), scope)).toBe(true);
   });
 });
