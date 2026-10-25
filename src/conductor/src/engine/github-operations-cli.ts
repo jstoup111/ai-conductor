@@ -81,6 +81,21 @@ export interface GithubOperationCliInput {
   readonly write?: (line: string) => void;
 }
 
+/** Remove request prose from a transport failure before it can enter a persisted event. */
+export function boundGithubOperationFailureText(error: string, request: GithubOperationRequest): string {
+  let text = error;
+  for (const value of Object.values(request.payload ?? {})) {
+    if (typeof value === 'string' && value.length > 0) {
+      text = text.split(value).join('«payload»');
+    }
+  }
+  if (text.startsWith('Command failed:')) {
+    const firstNewline = text.indexOf('\n');
+    text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+  }
+  return text.trim().slice(0, 1000);
+}
+
 async function featureMutationForRequest(
   request: GithubOperationRequest,
   input: GithubOperationCliInput,
