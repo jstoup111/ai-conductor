@@ -44,8 +44,8 @@ All daemon-level evidence lives at the main repo root: `.daemon/`.
 
 **Symptom:** A merged plan never dispatches, and `ai-conductor daemon status` lists it in `BLOCKED`
 with a reason and remedy. This is a discovery refusal, not a feature HALT: no feature worktree or
-`.pipeline/HALT` exists yet. The startup dashboard does not render this state
-([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)); use `daemon status`.
+`.pipeline/HALT` exists yet. The startup dashboard also lists it under `BLOCKED (<n>)` and counts it
+on the `NEEDS YOU:` line; `daemon status` reads the latest snapshot without a restart.
 
 **Diagnosis:** Read the `BLOCKED` line. Common reasons are `unresolvable-stories-ref`,
 `stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`, and
