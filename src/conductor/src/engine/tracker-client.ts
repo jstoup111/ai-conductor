@@ -11,7 +11,6 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { assertRealExecAllowed } from '../execution/real-exec-guard.js';
 import type { PrMergeState } from './pr-labels.js';
 import type {
   GithubOperationName,
@@ -440,7 +439,22 @@ function unsupportedJsonField(cause: unknown): string | undefined {
   return /^Unknown JSON field:\s*"([^"]+)"/m.exec(failure.stderr)?.[1];
 }
 
-export { assertRealExecAllowed };
+/**
+ * Test kill-switch. When `AI_CONDUCTOR_NO_REAL_EXEC` is set (the vitest global setup
+ * sets it — see `test/setup.ts`), the production `gh`/`git` runners refuse to
+ * shell out. This is a belt-and-suspenders guard: every test is supposed to inject
+ * a fake runner, but if one ever reaches a real runner (e.g. a daemon-mode test
+ * that forgets to stub escalation), this prevents it from mutating real GitHub —
+ * the exact failure mode that once labeled + commented on a live PR.
+ */
+export function assertRealExecAllowed(bin: string): void {
+  if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
+    throw new Error(
+      `tracker-client: real '${bin}' exec blocked under AI_CONDUCTOR_NO_REAL_EXEC (test env). ` +
+        `Inject a fake runner instead of using makeProduction${bin === 'gh' ? 'Gh' : 'Git'}().`,
+    );
+  }
+}
 
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(dependencies: {

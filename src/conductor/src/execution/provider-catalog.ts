@@ -19,7 +19,7 @@ import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
-} from '../engine/provider-model-policy-defaults.js';
+} from './provider-model-policy-defaults.js';
 
 /** Provider-specific behavior that must be declared rather than inferred. */
 export type ProviderCapability =
