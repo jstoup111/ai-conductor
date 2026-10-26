@@ -151,20 +151,26 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
       violations.push({ kind: 'stale-entry', entry, reason: 'not-a-violation' });
     }
   }
-  const uncovered = violations.flatMap((violation) => {
-    if (violation.kind !== 'upward' && violation.kind !== 'cycle') return [violation];
+  const uncovered: LayerRatchetViolation[] = [];
+  for (const violation of violations) {
+    if (violation.kind !== 'upward' && violation.kind !== 'cycle') {
+      uncovered.push(violation);
+      continue;
+    }
     const allowlistName = encodeAllowlistName(violation.file, violation.imported);
-    if (allowedPairs.has(`${violation.file}\u0000${violation.imported}`)) return [];
-    const named = { ...violation };
+    if (allowedPairs.has(`${violation.file}\u0000${violation.imported}`)) continue;
+    const named: UpwardViolation | CycleViolation = { ...violation };
     Object.defineProperty(named, 'allowlistName', { value: allowlistName, enumerable: false });
-    return [named];
-  });
+    uncovered.push(named);
+  }
   return { scannedFileCount: files.size, edges, violations: uncovered };
 }
 
 export function formatRatchetViolations(violations: readonly LayerRatchetViolation[]): string {
   return violations.map((violation) => {
-    const location = 'line' in violation ? `${violation.file}:${violation.line}` : violation.file;
+    const location = violation.kind === 'malformed-entry' || violation.kind === 'stale-entry'
+      ? violation.entry
+      : 'line' in violation ? `${violation.file}:${violation.line}` : violation.file;
     const detail = violation.kind === 'upward' ? violation.edge
       : violation.kind === 'cycle' ? violation.cycle.join(' -> ') : violation.kind;
     const name = 'allowlistName' in violation && violation.allowlistName !== undefined

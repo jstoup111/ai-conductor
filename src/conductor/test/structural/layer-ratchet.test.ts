@@ -471,6 +471,13 @@ describe('structural: layer ratchet', () => {
     expect(formatRatchetViolations(result.violations)).toContain(encodeAllowlistName('engine/a.ts', 'ui/b.ts'));
   });
 
+  it('formats a stale entry with its allowlist filename', () => {
+    const entry = encodeAllowlistName('engine/a.ts', 'ui/b.ts');
+    const result = checkLayerRatchet({ files: new Map([['engine/a.ts', ''], ['ui/b.ts', '']]), allowlist: [entry] });
+
+    expect(formatRatchetViolations(result.violations)).toContain(entry);
+  });
+
   it.each([
     ["import type { B } from '../ui/b.js';", 'type-only import'],
     ['', 'no import'],
