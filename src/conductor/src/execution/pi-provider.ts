@@ -1,5 +1,5 @@
-import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
 import type {
@@ -77,6 +77,15 @@ async function isDirectory(path: string, environment: PiEnvironment): Promise<bo
   } catch {
     return false;
   }
+}
+
+/** Write one invocation's system prompt to a private temp file Pi appends at startup. */
+async function writePiSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
+  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const dir = await mkdtemp(join(tempRoot, 'ai-conductor-pi-system-prompt-'));
+  const path = join(dir, 'system-prompt.md');
+  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }
 
 /**
@@ -463,6 +472,7 @@ export class PiProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
 
   constructor(
     private readonly executable = 'pi',
@@ -540,6 +550,10 @@ export class PiProvider implements LLMProvider {
     // ADR D18: -na keeps project-local Pi files untrusted unless the operator
     // opts in; a read-only review (D17) always keeps -na.
     const args = ['-p', ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    if (typeof options.systemPrompt === 'string' && options.systemPrompt.length > 0) {
+      const systemPromptFile = await writePiSystemPromptFile(options.systemPrompt);
+      args.push('--append-system-prompt', systemPromptFile.path);
+    }
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);

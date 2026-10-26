@@ -1,8 +1,8 @@
-// Covers: task:2, task:3, task:4, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:13, task:15, task:16, task:17, task:18
 // Covers: task:4
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
@@ -17,6 +17,8 @@ import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { STEP_SKILL_INVOCATIONS, renderSkillInvocation } from '../../src/engine/skill-invocation.js';
+import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { createProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 
 type PiSubprocessFactory = (
   file: string,
@@ -254,6 +256,88 @@ describe('PiProvider', () => {
       }),
     );
     expect(spawn.mock.calls[0]?.[1]).not.toContain('claude-opus-4-5:xhigh');
+  });
+
+  // Covers: task:8
+  it('appends the engine system prompt after HARNESS.md and delivers it through its file', async () => {
+    const systemPrompt = 'RETRY: fix the lint error\n[Conduct step 7/20]';
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, systemPrompt });
+
+    const args = spawn.mock.calls[0]![1];
+    const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+    expect({
+      harnessFirst: flags[0]! < flags[1]!,
+      harness: args[flags[0]! + 1],
+      delivered,
+    }).toEqual({ harnessFirst: true, harness: harnessPath, delivered: systemPrompt });
+  });
+
+  // Covers: task:8
+  it('keeps a remediate prompt unchanged while delivering adjudication context through the appended file', async () => {
+    const systemPrompt = 'RETRY: Adjudicate findings\n{"currentFindings":["A"]}';
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, prompt: '/remediate', systemPrompt });
+
+    expect({ input: spawn.mock.calls[0]![2].input, delivered }).toEqual({ input: '/remediate', delivered: systemPrompt });
+  });
+
+  // Covers: task:8
+  it('keeps a skill-shaped system prompt out of Pi argv and stdin', async () => {
+    const systemPrompt = '/skill:remediate\nDo not turn this into the dispatch prompt.';
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, systemPrompt });
+
+    const [, args, options] = spawn.mock.calls[0]!;
+    expect({
+      input: options.input,
+      delivered,
+      inArgv: args.some((value) => value.includes(systemPrompt)),
+      inStdin: String(options.input).includes(systemPrompt),
+    }).toEqual({ input: invokeOptions.prompt, delivered: systemPrompt, inArgv: false, inStdin: false });
+  });
+
+  // Covers: task:8
+  it('delivers a system prompt through the guarded Pi runtime', async () => {
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'pi', provider);
+    registry.markInitialized();
+
+    await createProviderRuntimeSet(registry).get('pi').provider.invoke({ prompt: '/x', systemPrompt: 'S' });
+
+    expect({ spawned: spawn.mock.calls.length, delivered }).toEqual({ spawned: 1, delivered: 'S' });
   });
 
   it.each([
