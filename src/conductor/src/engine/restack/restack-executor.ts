@@ -509,6 +509,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const seal = await verifyProtectedArtifactSeal({
       projectRoot: options.worktree,
       baselineCommit: 'HEAD',
+      toleratesEngineAppendedRemediation: true,
     });
     if (!seal.ok) {
       await writeSealHalt(options.worktree, seal.reason, options.events);
