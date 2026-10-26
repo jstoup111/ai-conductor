@@ -94,6 +94,17 @@ async function liveHaltExists(worktree: string): Promise<boolean> {
   return access(join(worktree, HALT_MARKER)).then(() => true).catch(() => false);
 }
 
+function unlandedClosedChildCommitsHalt(slug: string, children: readonly number[]): string {
+  const [host, ...carried] = children;
+  const subject = children.length === 1 ? `child ${host}` : `children ${children.join(', ')}`;
+  const carry = carried.map((child) => ` --carry ${child}`).join('');
+  return [
+    `unlanded-closed-child-commits: ${subject}`,
+    `ai-conductor stack land --slug ${slug} --child ${host}${carry} --reason "<why>"`,
+    '',
+  ].join('\n');
+}
+
 /**
  * Make the durable stack coherent before an entry point judges the active
  * child.  The journal is always probed first, even for a flat feature: an
@@ -262,6 +273,18 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   const publishedChild = cursor.repairChildren[0];
   if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
     await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
+    return { kind: 'halted' };
+  }
+
+  // A raw closed-child commit needs an operator landing to declare it done;
+  // routing must never silently replay it into a routed feature repair.
+  if (marker.kind === 'absent' && config.ok && routingEligible(cursor, config.config)) {
+    await writeHaltMarker(
+      options.worktree,
+      unlandedClosedChildCommitsHalt(options.slug, cursor.repairChildren),
+      'needs-human',
+      options.events,
+    );
     return { kind: 'halted' };
   }
 
