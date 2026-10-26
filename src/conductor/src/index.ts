@@ -128,7 +128,7 @@ import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
-import { registerCliBuiltins } from './engine/cli-builtins.js';
+import { registerCliBuiltins } from './cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import {
   EventPersister,
@@ -148,7 +148,6 @@ import {
 } from './engine/version-report.js';
 import { detectUpdateCommand, dispatchUpdateCommand } from './engine/update-cli.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
-import type { UIRenderer } from "./ui/types.js";
 import type {
   VisualizerFactory,
   VisualizerFactoryContext,
@@ -1895,10 +1894,6 @@ async function dispatchCliCommand(): Promise<void> {
           },
         })),
   };
-
-  // Select UI subscriber based on config (default: 'terminal')
-  const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
-  subscriber.start([renderer]);
 
   await emitDeprecatedConfigKeyEvents(mergedResult, events);
   // Every foreground mode can reach build_review.  The daemon performs this

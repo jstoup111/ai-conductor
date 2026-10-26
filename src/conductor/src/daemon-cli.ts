@@ -50,6 +50,7 @@ import { buildAuthRemediationMessage } from './engine/self-host/build-auth-messa
 import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
+import { registerTerminalBuiltins } from './terminal-builtins.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { formatProviderStartLine } from './ui/provider-start-line.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
@@ -1708,14 +1709,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     projectRoot,
   };
   const globalSubscriberLog = createOwnershipAwareDaemonLogger(log);
-  const subscriber = registerBuiltins(
+  const daemonLogRenderer: UIRenderer = {
+    name: 'daemon-log',
+    async handle(event) {
+      // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
+      // are already rendered, tagged, by that feature's own listeners
+      // (beginFeatureRun below). Rendering them here would double-print them,
+      // once tagged and once untagged.
+      if (isForwardedFromFeature(event)) return;
+      renderDaemonEvent(event, globalSubscriberLog);
+    },
+    async stop() {},
+  };
+  registerBuiltins(
     registry,
-    events,
-    rendererOpts,
     config?.codex_doctor_timeout_seconds,
-    undefined,
     new Set(providerDiscovery.installed),
   );
+  const subscriber = registerTerminalBuiltins(registry, events, rendererOpts, [daemonLogRenderer]);
   registry.markInitialized();
   validateProviderInstallation({
     config: config ?? {},
@@ -1730,19 +1741,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     config: config ?? {},
     registeredProviders: registry.list('llm_provider'),
   });
-  const daemonLogRenderer: UIRenderer = {
-    name: 'daemon-log',
-    async handle(event) {
-      // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
-      // are already rendered, tagged, by that feature's own listeners
-      // (beginFeatureRun below). Rendering them here would double-print them,
-      // once tagged and once untagged.
-      if (isForwardedFromFeature(event)) return;
-      renderDaemonEvent(event, globalSubscriberLog);
-    },
-    async stop() {},
-  };
-  subscriber.start([daemonLogRenderer]);
   const readOnlyReviewCapabilityProbe =
     opts.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
   const readOnlyReviewCapabilities = Object.freeze(Object.fromEntries(await Promise.all(

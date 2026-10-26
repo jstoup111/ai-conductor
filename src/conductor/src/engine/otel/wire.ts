@@ -87,9 +87,9 @@ export interface OtelVisualizerStartContext extends VisualizerStartContext {
   env?: NodeJS.ProcessEnv;
 }
 
-export function createOtelVisualizerRegistry(events: ConductorEventEmitter): PluginRegistry {
+export function createOtelVisualizerRegistry(_events: ConductorEventEmitter): PluginRegistry {
   const registry = new PluginRegistry();
-  registerBuiltins(registry, events, () => {}, undefined, 10, new Set());
+  registerBuiltins(registry, 10, new Set());
   registry.markInitialized();
   return registry;
 }

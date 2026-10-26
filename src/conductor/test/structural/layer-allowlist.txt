@@ -93,8 +93,6 @@ engine/plan-slices.ts -> engine/plan-dependencies.ts
 engine/plan-slices.ts -> engine/plan-task-parse.ts
 engine/plan-slices.ts -> engine/remediation-append.ts
 engine/plan-task-parse.ts -> engine/protected-artifact-seal.ts
-engine/plugin-loader.ts -> ui/subscriber.ts
-engine/plugin-loader.ts -> ui/terminal-renderer.ts
 engine/pr-body-regions.ts -> engine/build-review-accepted-risk.ts
 engine/prd-audit-contract.ts -> engine/plan-task-parse.ts
 engine/prd-audit-verdict-store.ts -> engine/prd-audit-contract.ts

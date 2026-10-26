@@ -203,7 +203,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     registry,
   );
   const discovery = await discoverInstalledProviders({ events });
-  registerBuiltins(registry, events, undefined, config?.codex_doctor_timeout_seconds, undefined, new Set(discovery.installed));
+  registerBuiltins(registry, config?.codex_doctor_timeout_seconds, new Set(discovery.installed));
   registry.markInitialized();
   validateProviderInstallation({ config: config ?? {}, discovery });
   await validateConfiguredProviderModels({ config: config ?? {}, discovery });

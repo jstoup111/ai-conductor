@@ -1,4 +1,4 @@
-// Covers: task:13, task:14, task:21
+// Covers: task:2, task:13, task:14, task:21
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -27,8 +27,8 @@ vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/engine/cli-builtins.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/cli-builtins.js')>();
+vi.mock('../../src/cli-builtins.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/cli-builtins.js')>();
   return {
     ...actual,
     registerCliBuiltins: (...args: Parameters<typeof actual.registerCliBuiltins>) => {
