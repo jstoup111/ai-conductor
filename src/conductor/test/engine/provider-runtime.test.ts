@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:7
+// Covers: task:2, task:3, task:5, task:7
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -88,6 +88,53 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it('passes a declared provider its system-prompt options unchanged', async () => {
+    const result = { success: true, output: 'declared result', exitCode: 0 };
+    const options: InvokeOptions = { prompt: '/x', systemPrompt: 'S' };
+    const invoke = vi.fn(async (received: InvokeOptions) => {
+      expect(received).toBe(options);
+      return result;
+    });
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'declared', {
+      invoke,
+      systemPromptCapability: { deliversSystemPrompt: true },
+    });
+    registry.markInitialized();
+
+    const runtime = (await loadRuntimeSetFactory())!(registry).get('declared');
+
+    await expect(runtime.provider.invoke(options)).resolves.toBe(result);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: 'without a system prompt',
+      options: { prompt: '/x' },
+      output: 'no-system-prompt result',
+    },
+    {
+      name: 'with an empty system prompt',
+      options: { prompt: '/x', systemPrompt: '' },
+      output: 'empty-system-prompt result',
+    },
+  ] satisfies Array<{ name: string; options: InvokeOptions; output: string }>)('passes an undeclared provider through $name', async ({ options, output }) => {
+    const result = { success: true, output, exitCode: 0 };
+    const invoke = vi.fn(async (received: InvokeOptions) => {
+      expect(received).toBe(options);
+      return result;
+    });
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'undeclared', { invoke });
+    registry.markInitialized();
+
+    const runtime = (await loadRuntimeSetFactory())!(registry).get('undeclared');
+
+    await expect(runtime.provider.invoke(options)).resolves.toBe(result);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { name: 'missing declaration' },
     {
