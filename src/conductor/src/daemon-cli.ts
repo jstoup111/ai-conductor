@@ -170,6 +170,8 @@ import {
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
+import { hasDurableChildState } from './engine/child-cursor.js';
+import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
@@ -2687,6 +2689,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       isOperatorParked(projectRoot, slug, (err) =>
         log(`anomaly checking if ${slug} is parked: ${err.message}`),
       ),
+    hasDurableChildState: (slug) => hasDurableChildState(join(worktreeBase, slug), slug),
+    acquireFeatureDispatchLease: (slug) => acquireFeatureDispatchLease(projectRoot, slug, 'daemon re-kick'),
   };
 
   // Task 4: Create the real restart requester with injected lock + process
