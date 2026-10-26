@@ -137,7 +137,7 @@ function findProviderLiterals(
       || ts.isTemplateTail(node)) {
       if (adapter) {
         if (forbiddenIds.has(node.text)
-          || foreignProviders.some(({ displayName }) => hasDisplayName(node.text, displayName))) {
+          || BUILT_IN_PROVIDERS.some(({ displayName }) => hasDisplayName(node.text, displayName))) {
           report(node, node.text);
         }
       } else if (forbiddenLiterals.has(node.text)
@@ -339,10 +339,12 @@ describe('structural: built-in provider literals', () => {
     ]);
   });
 
-  it('keeps a declared adapter display name embedded in user-facing text', () => {
+  it('reports a declared adapter display name embedded in user-facing text', () => {
     const source = ts.createSourceFile('fixtures/pi-adapter.ts', "const output = 'Pi invocation aborted.';", ts.ScriptTarget.Latest, true);
 
-    expect(findProviderLiterals('execution/pi-provider.ts', source)).toEqual([]);
+    expect(findProviderLiterals('execution/pi-provider.ts', source)).toEqual([
+      { file: 'execution/pi-provider.ts', line: 1, value: 'Pi invocation aborted.' },
+    ]);
   });
 
   it('reports foreign provider ids and display names inside a declared adapter', () => {
@@ -360,7 +362,7 @@ describe('structural: built-in provider literals', () => {
     ]);
   });
 
-  it('keeps an adapter’s own provider id and display name exempt', () => {
+  it('keeps an adapter’s own provider id exempt but reports its display name', () => {
     const source = ts.createSourceFile(
       'fixtures/codex-adapter.ts',
       "const provider = 'codex';\nconst displayName = 'Codex';",
@@ -368,7 +370,9 @@ describe('structural: built-in provider literals', () => {
       true,
     );
 
-    expect(findProviderLiterals('execution/codex-provider.ts', source)).toEqual([]);
+    expect(findProviderLiterals('execution/codex-provider.ts', source)).toEqual([
+      { file: 'execution/codex-provider.ts', line: 2, value: 'Codex' },
+    ]);
   });
 
   it('has no built-in provider ids or display names outside declared provider-owned modules', async () => {
