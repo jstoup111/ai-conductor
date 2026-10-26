@@ -869,7 +869,7 @@ describe('build-review lap scope runner', () => {
     expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set([id]))).toMatchObject({ verdict: 'PASS', acceptedFindingIds: [id] });
   });
 
-  it('does not let a custom rubric\'s changing finding ids re-block a settled hunk outside another file\'s delta', () => {
+  it("does not let a custom rubric's changing finding ids re-block a settled hunk outside another file's delta", () => {
     const h1 = `sha256:${'1'.repeat(64)}`;
     const h2 = `sha256:${'2'.repeat(64)}`;
     const finding = (concernId: string) => ({
