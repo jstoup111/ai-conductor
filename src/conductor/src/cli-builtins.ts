@@ -13,7 +13,8 @@ export function registerCliBuiltins(
   config: HarnessConfig | undefined,
   rendererOpts?: TerminalRendererOptions,
   installed?: ReadonlySet<BuiltInProviderId>,
+  startSubscriber = true,
 ) {
   registerBuiltins(registry, config?.codex_doctor_timeout_seconds, installed);
-  return registerTerminalBuiltins(registry, events, rendererOpts);
+  return registerTerminalBuiltins(registry, events, rendererOpts, [], startSubscriber);
 }

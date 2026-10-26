@@ -230,15 +230,11 @@ engine/task-seed.ts -> engine/task-digests.ts
 engine/task-seed.ts -> engine/task-progress.ts
 engine/tracker-client.ts -> engine/github-operation-approval.ts
 engine/tracker-client.ts -> engine/owner-gate/mutation-policy.ts
-execution/claude-provider.ts -> execution/provider-catalog.ts
 execution/claude-provider.ts -> execution/provider-diagnostics.ts
-execution/codex-provider.ts -> execution/provider-catalog.ts
 execution/codex-provider.ts -> execution/provider-diagnostics.ts
 execution/pi-provider.ts -> execution/pi-self-host-auth.ts
-execution/pi-provider.ts -> execution/provider-catalog.ts
 execution/pi-provider.ts -> execution/provider-diagnostics.ts
 execution/pi-self-host-auth.ts -> execution/pi-provider.ts
-execution/pi-self-host-auth.ts -> execution/provider-catalog.ts
 execution/provider-catalog.ts -> engine/self-host/transcript-format.ts
 execution/provider-catalog.ts -> execution/claude-provider.ts
 execution/provider-catalog.ts -> execution/codex-provider.ts

@@ -1,8 +1,20 @@
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { CLAUDE_PROVIDER, CODEX_PROVIDER, PI_PROVIDER, providerDescriptor, resolveProviderExecutable } from './provider-catalog.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
+
+const CLAUDE_PROVIDER = 'claude';
+const CODEX_PROVIDER = 'codex';
+const PI_PROVIDER = 'pi';
+
+function providerExecutable(provider: string): string {
+  const overrides: Record<string, string | undefined> = {
+    claude: process.env.CLAUDE_EXECUTABLE,
+    codex: process.env.CODEX_EXECUTABLE,
+    pi: process.env.PI_EXECUTABLE,
+  };
+  return overrides[provider] ?? provider;
+}
 
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
@@ -149,7 +161,7 @@ async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promis
   }
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
-    result = await options.runProcess(resolveProviderExecutable(CODEX_PROVIDER), [
+    result = await options.runProcess(providerExecutable(CODEX_PROVIDER), [
       'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(undefined), '--', '/bin/sh', '-c', CODEX_READ_ONLY_PROBE,
       'read-only-review-probe', `${options.scratchDir}/write-probe`, options.scratchDir,
     ]);
@@ -177,7 +189,7 @@ async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promis
 async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
-    result = await options.runProcess(resolveProviderExecutable(CLAUDE_PROVIDER), ['--help']);
+    result = await options.runProcess(providerExecutable(CLAUDE_PROVIDER), ['--help']);
   } catch (error) {
     return unavailable(options, processFailureReason(error, CLAUDE_PROVIDER));
   }
@@ -185,7 +197,7 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
 
   const missing = CLAUDE_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
   if (missing !== undefined) {
-    return unavailable(options, `${providerDescriptor(CLAUDE_PROVIDER).displayName} help does not list ${missing}`);
+    return unavailable(options, `Claude help does not list ${missing}`);
   }
   // Dispatch admits a Claude review without an observation-destination proof
   // only when its launch policy reaches no observed command (#3022); status
@@ -205,18 +217,18 @@ function piHelpListsFlag(help: string, flag: string): boolean {
 
 async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
-  const executable = resolveProviderExecutable(PI_PROVIDER);
+  const executable = providerExecutable(PI_PROVIDER);
   try { result = await options.runProcess(executable, ['--help']); }
   catch (error) {
     // Pi has no sandbox helper: a missing binary is the provider executable itself.
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-      return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} executable ${executable} is unavailable`);
+      return unavailable(options, `Pi executable ${executable} is unavailable`);
     }
     return unavailable(options, processFailureReason(error, PI_PROVIDER));
   }
   if (result.exitCode !== 0) return unavailable(options, exitedReason(PI_PROVIDER, result.exitCode, result.stderr));
   const missing = PI_READ_ONLY_FLAGS.find((flag) => !piHelpListsFlag(result.stdout, flag));
-  if (missing) return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} help does not list ${missing}`);
+  if (missing) return unavailable(options, `Pi help does not list ${missing}`);
   try { await (options.materializePiExtension ?? materializePiHarnessExtension)(); }
   catch (error) { return unavailable(options, error instanceof Error ? error.message : String(error)); }
   return { provider: options.provider, platform: options.platform, status: 'available' };
@@ -252,7 +264,7 @@ export async function probeManagedObservationDestination(
     // Do not turn unprovisioned pipeline directories into false policy
     // failures; only existing protected surfaces can demonstrate refusal.
     const protectedPaths = options.protectedPaths.filter(existsSync);
-    result = await options.runProcess(options.executable ?? resolveProviderExecutable(CODEX_PROVIDER), [
+    result = await options.runProcess(options.executable ?? providerExecutable(CODEX_PROVIDER), [
       ...(options.executableArgs ?? []), 'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot), '--',
       '/bin/bash', '-c', OBSERVATION_DESTINATION_PROBE, 'managed-observation-policy',
       options.producerRoot, ...protectedPaths,

@@ -15,7 +15,6 @@ import type {
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { piSubagentsArgs, piSubagentsPackageDir, seedPiSubagentsHome } from './pi-subagents.js';
@@ -110,9 +109,8 @@ export async function resolvePiSkill(
   name: string,
   environment: PiEnvironment = defaultPiEnvironment,
 ): Promise<PiSkillResolution> {
-  const descriptor = providerDescriptor('pi');
-  const piAgentDirectory = environment.env[descriptor.homeVariable]
-    ?? join(environment.homeDir(), descriptor.defaultHome);
+  const piAgentDirectory = environment.env.PI_CODING_AGENT_DIR
+    ?? join(environment.homeDir(), '.pi', 'agent');
   const searchedRoots = [
     join(environment.homeDir(), '.agents', 'skills'),
     join(piAgentDirectory, 'skills'),
@@ -216,7 +214,7 @@ type PiJsonEvent = {
 
 /** Resolve lazily because the catalog constructs this adapter. */
 function piDisplayName(): string {
-  return providerDescriptor('pi').displayName;
+  return 'Pi';
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -542,7 +540,7 @@ export class PiProvider implements LLMProvider {
     // Trimming here would turn ordinary prompt text on a later or indented line
     // into an executable skill command.
     const promptCommand = options.prompt.split('\n', 1)[0]?.split(/\s+/, 1)[0];
-    const prefix = providerDescriptor('pi').invocationPrefix;
+    const prefix = '/skill:';
     const cwd = options.cwd ?? this.environment.cwd();
     if (promptCommand?.startsWith(prefix)) {
       const name = promptCommand.slice(prefix.length);
@@ -611,9 +609,8 @@ export class PiProvider implements LLMProvider {
     // schema-constrained answer never needs a child session.
     let subagentsTempRoot: string | undefined;
     if (options.subagents === true && !options.readOnlyReview && options.nativeSchema === undefined) {
-      const descriptor = providerDescriptor('pi');
-      const operatorAgentDir = this.environment.env[descriptor.homeVariable]
-        ?? join(this.environment.homeDir(), descriptor.defaultHome);
+      const operatorAgentDir = this.environment.env.PI_CODING_AGENT_DIR
+        ?? join(this.environment.homeDir(), '.pi', 'agent');
       const packageDir = piSubagentsPackageDir(operatorAgentDir);
       if (!await isFile(join(packageDir, 'package.json'), this.environment)) {
         const reason = `${piDisplayName()} subagents are enabled (llm_providers.pi.subagents) but ${packageDir} is not installed. Run \`pi install npm:pi-subagents\`.`;
@@ -627,7 +624,7 @@ export class PiProvider implements LLMProvider {
         };
       }
       args.push(...piSubagentsArgs(packageDir));
-      const isolatedAgentDir = options.selfHost?.env[descriptor.homeVariable];
+      const isolatedAgentDir = options.selfHost?.env.PI_CODING_AGENT_DIR;
       if (isolatedAgentDir !== undefined) {
         subagentsTempRoot = (await seedPiSubagentsHome(isolatedAgentDir, options.effort)).tempRoot;
       }

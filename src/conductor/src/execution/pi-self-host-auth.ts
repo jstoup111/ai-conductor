@@ -2,7 +2,6 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { parsePiModelId } from './pi-provider.js';
-import { PI_PROVIDER, providerDescriptor } from './provider-catalog.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { assertRealExecAllowed } from './real-exec-guard.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
@@ -47,7 +46,7 @@ const realPiSelfHostAuthRunner: PiSelfHostAuthRunner = async (executable, argv, 
  * provider. Read lazily: the catalog and Pi adapter import each other.
  */
 function piDisplayName(): string {
-  return providerDescriptor(PI_PROVIDER).displayName;
+  return 'Pi';
 }
 
 const UNKNOWN_PROVIDER_RE = /\bunknown provider\b/i;
@@ -62,7 +61,7 @@ function resolverOutputNamesUnknownProvider(result: { stdout?: unknown; stderr?:
 
 function setupUnavailable(providerSegment: string, reason: string): ProviderSetupUnavailableError {
   return new ProviderSetupUnavailableError({
-    provider: PI_PROVIDER,
+    provider: 'pi',
     capability: 'self-host-isolation',
     reason,
     recoveryAction: `Configure an API key for ${piDisplayName()} provider ${providerSegment} in the operator ${piDisplayName()} home, then retry.`,

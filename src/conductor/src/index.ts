@@ -562,6 +562,7 @@ export async function bootDispatchingCliProviders(options: {
     options.config,
     options.rendererOpts,
     new Set(discovery.installed),
+    false,
   );
   options.registry.markInitialized();
   validateProviderInstallation({ config: options.config ?? {}, discovery });
@@ -1868,6 +1869,7 @@ async function dispatchCliCommand(): Promise<void> {
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],
   );
+  subscriber.start();
   const preludeProvider = providerExecution.configuredProviders[0];
   if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
   const preludeProducerRoot = join(pipelineDir, 'session-events', preludeDispatchId);

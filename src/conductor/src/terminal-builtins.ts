@@ -10,6 +10,7 @@ export function registerTerminalBuiltins(
   events: ConductorEventEmitter,
   rendererOpts?: TerminalRendererOptions,
   additionalRenderers: readonly UIRenderer[] = [],
+  startSubscriber = true,
 ): TerminalSubscriber {
   const renderers: UIRenderer[] = [...additionalRenderers];
   if (rendererOpts) {
@@ -17,7 +18,7 @@ export function registerTerminalBuiltins(
     registry.register('ui_renderer', 'terminal', renderer);
     renderers.unshift(renderer);
   }
-  const subscriber = new TerminalSubscriber(events);
-  subscriber.start(renderers);
+  const subscriber = new TerminalSubscriber(events, renderers);
+  if (startSubscriber) subscriber.start(renderers);
   return subscriber;
 }

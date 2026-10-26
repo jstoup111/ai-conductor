@@ -39,11 +39,10 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
 
 function claudeDisplayName(): string {
-  return providerDescriptor('claude').displayName;
+  return 'Claude';
 }
 
 function abortedInvocationResult(): InvokeResult {

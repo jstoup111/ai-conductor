@@ -39,11 +39,10 @@ import { validateSpawnPermit } from './spawn-permit.js';
 import { writeScratchSchema } from './scratch-schema.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
-import { providerDescriptor } from './provider-catalog.js';
 import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
 
 function codexDisplayName(): string {
-  return providerDescriptor('codex').displayName;
+  return 'Codex';
 }
 
 function abortedInvocationResult(): InvokeResult {
