@@ -22,7 +22,7 @@ import {
 } from './child-context.js';
 import { basename, join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { makeGitRunner } from './rebase.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
@@ -419,7 +419,8 @@ export async function dispatchRewindCommand(
   cwd = process.cwd(),
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
-  const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
+  const git = makeGitRunner(cwd);
+  const head = await git(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
   const slug = head?.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
   let requestedChild = command.child;
   if (requestedChild === undefined) {
@@ -438,7 +439,23 @@ export async function dispatchRewindCommand(
       console.error(`rewind: invalid child id "${requestedChild}" (expected 1-9)`);
       return 1;
     }
-    const closed = slug === undefined ? false : (await makeGitRunner(cwd)(['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/closed/c${child}`])).exitCode === 0;
+    if (command.child !== undefined) {
+      // Direct unit fixtures use child-local state without a Git feature
+      // branch. A real feature branch, however, must prove durable stack
+      // ownership before an explicit child can bypass cursor resolution.
+      if (slug !== undefined) {
+        const durableChildState = await hasDurableChildState(cwd, slug, { git });
+        if (durableChildState === 'git-error') {
+          console.error('rewind: active child resolution refused (git-error)');
+          return 1;
+        }
+        if (!durableChildState) {
+          console.error('rewind: --child is available only for a stacked feature.');
+          return 1;
+        }
+      }
+    }
+    const closed = slug === undefined ? false : (await git(['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/closed/c${child}`])).exitCode === 0;
     if (command.child !== undefined && closed) {
       if (slug === undefined) {
         console.error('rewind: cannot identify the feature for a closed child rewind.');
