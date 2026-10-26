@@ -1241,7 +1241,7 @@ export function renderDashboard(
     for (const entry of compact ? retainedAction : retained) { const text = `reason: ${retainedReason(entry)}${prSuffix(entry.prUrl)}; remedy: ${retainedRemedy(entry)}`; if (compact) slugDetail(entry.slug, '', text); else lines.push(`  • ${entry.slug} — ${text}`); }
   }
   if (neverStarted.length > 0) { pushChrome(`NEVER-STARTED (${neverStarted.length})`); if (!compact) for (const slug of neverStarted) lines.push(`  • ${slug} — reason: no pipeline state was ever written; remedy: no operator action applies; feature remains dispatchable`); }
-  if (compact || opts?.includeCompleted) { pushChrome(`PROCESSED (${processed.length})`); if (!compact) for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`); }
+  if (opts?.includeCompleted ?? compact) { pushChrome(`PROCESSED (${processed.length})`); if (!compact) for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`); }
   pushRule();
   return lines.join('\n');
 }
