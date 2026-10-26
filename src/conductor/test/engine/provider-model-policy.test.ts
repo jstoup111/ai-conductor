@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:6
 import { expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDER_MODEL_POLICIES,

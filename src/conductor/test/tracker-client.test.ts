@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, it, expect, vi } from 'vitest';
 import type { execFile as ExecFile } from 'node:child_process';
 import {

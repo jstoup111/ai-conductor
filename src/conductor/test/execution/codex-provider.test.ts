@@ -1,5 +1,6 @@
 // Covers: task:4
 // Covers: task:5
+// Covers: task:8
 // Covers: task:3
 // Covers: task:9
 import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';

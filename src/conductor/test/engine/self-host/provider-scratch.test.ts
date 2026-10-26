@@ -1,4 +1,4 @@
-// Covers: task:7, task:rem-prd-audit-R1, task:rem-as-built-R7, task:rem-as-built-rem-vg-ab2
+// Covers: task:7, task:8, task:rem-prd-audit-R1, task:rem-as-built-R7, task:rem-as-built-rem-vg-ab2
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
