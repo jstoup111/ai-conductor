@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:rem-prd-audit-11
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { resolveReviewInputs } from '../../src/engine/rebase.js';
 import { resolveRemediationTaskChild } from '../../src/engine/routing/owner-derivation.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 
 const roots: string[] = [];
 
@@ -118,13 +119,30 @@ describe('manifest routing — conduct and BUILD readers', () => {
     await expect(resolveTrack(conductor(root), { feature_desc: 'f' })).resolves.toBe('product');
   });
 
-  it('fails closed on malformed manifests instead of reading the legacy track', async () => {
+  it('fails closed on malformed manifests instead of reading legacy track or remediation-plan inputs', async () => {
     const root = await tree({
+      '.pipeline/engine-state.json': JSON.stringify({ activePlanPath: '.docs/plans/g.md' }),
       '.docs/f/manifest.json': '{not json',
       '.docs/plans/f.md': plan,
+      '.docs/plans/g.md': plan,
+      '.docs/stories/g.md': `${stories}\n### Negative paths\n- Given x, when y fails, then z is rejected.\n`,
       '.docs/track/f.md': 'Track: technical\n',
+      'test/cover.ts': 'covered\n',
+      '.pipeline/acceptance-specs-red.json': JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [{
+          criterion: 'Story 1 happy: Given x, when y, then z.',
+          disposition: 'existing-sufficient-test',
+          citation: 'test/cover.ts:1',
+        }],
+      }),
     });
     await expect(resolveTrack(conductor(root), { feature_desc: 'f' }))
       .rejects.toThrow('.docs/f/manifest.json');
+    await expect(resolveRemediationTaskChild(root, 'rem-build_review-1', undefined, 'f'))
+      .rejects.toThrow('.docs/f/manifest.json');
+    await expect(checkStepCompletion(root, 'acceptance_specs', {
+      planPath: join(root, '.docs/plans/f.md'),
+    })).rejects.toThrow('.docs/f/manifest.json');
   });
 });

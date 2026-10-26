@@ -51,6 +51,7 @@ export { HALT_MARKER };
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
 import type { FeatureScopedKind } from './feature-manifest.js';
 import {
+  MalformedFeatureManifestError,
   resolveFeatureArtifact,
   worktreeManifestSource,
 } from './feature-manifest-source.js';
@@ -2104,7 +2105,8 @@ async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionCon
     const coherencePath = join(dir, coherenceRepoPath);
     const text = await readFile(coherencePath, 'utf-8');
     return text.split(/\r?\n/).some((line) => /^\s*\|\s*criterion\s*\|/i.test(line));
-  } catch {
+  } catch (error) {
+    if (error instanceof MalformedFeatureManifestError) throw error;
     return false;
   }
 }
