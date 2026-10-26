@@ -23,6 +23,10 @@ import {
 } from '../../../src/engine/self-host/provider-scratch.js';
 
 const execFile = promisify(execFileCb);
+// Above Linux's PID_MAX_LIMIT (2^22), so `kill(pid, 0)` always reports ESRCH.
+// A small fixed PID such as 1001 can be a live process on a CI runner, which
+// makes an "interrupted" owner look live and retains the capture instead.
+const DEAD_OWNER_PID = 4_194_305;
 
 describe('provider scratch homes', () => {
   it('retains interrupted sweep captures in the feature ledger and exposes them to transcripts', async () => {
@@ -39,7 +43,7 @@ describe('provider scratch homes', () => {
       attempt: 1,
       step: 'build',
       provider: 'codex',
-      ownerPid: 1001,
+      ownerPid: DEAD_OWNER_PID,
     });
     const scopedEmitters: ConductorEventEmitter[] = [];
     try {
@@ -98,7 +102,7 @@ describe('provider scratch homes', () => {
       attempt: 1,
       step: 'build',
       provider: 'codex',
-      ownerPid: 1001,
+      ownerPid: DEAD_OWNER_PID,
     });
     try {
       await mkdir(join(worktreeRoot, liveCapture), { recursive: true });
