@@ -23,6 +23,7 @@ import { grantRoutedRepairCredit } from './round-receipt.js';
 import { createRouteRecord, readRepairMarker, readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor, redRefFor, rejectedPinRefFor } from './routing-refs.js';
 import { parseRoundId, routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId, type RouteRecord } from './route-types.js';
+import { operatorRoundEvent, withOutboxEvent } from './routing-events.js';
 import type { ConductState, StateMutation } from '../../types/state.js';
 
 export interface CheckOperatorTipsInput {
@@ -143,8 +144,11 @@ export async function checkDeclareOperatorRound(
 ): Promise<CheckDeclareOperatorRoundResult> {
   const git = input.git ?? makeGitRunner(input.worktree);
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land') {
+  if (stored.kind !== 'record' || stored.record.kind !== 'operator') {
     return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable for declaration` };
+  }
+  if (stored.record.operator?.origin !== 'land') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} has origin ${stored.record.operator?.origin}; --done only declares land rounds` };
   }
   if (stored.record.operator.declaration !== undefined) {
     return { kind: 'refused', detail: `operator round ${input.roundId} is already declared` };
@@ -200,11 +204,11 @@ export async function declareOperatorRound(input: DeclareOperatorRoundInput): Pr
   const allocation = input.checked.stored.record.allocation[input.host];
   const operator = input.checked.stored.record.operator;
   if (allocation === undefined || operator === undefined) return { kind: 'refused', detail: `operator round ${input.roundId} has no host allocation` };
-  const record: RouteRecord = {
+  const record: RouteRecord = withOutboxEvent({
     ...input.checked.stored.record,
     allocation: { ...input.checked.stored.record.allocation, [input.host]: { ...allocation, retryHint: operator.reason } },
     operator: { ...operator, declaration: { tip: input.checked.tip, at: input.at ?? new Date().toISOString() } },
-  };
+  }, operatorRoundEvent(input.checked.stored.record.roundId, operator, input.host, 'declared'));
   const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
     { kind: 'update-record', previous: input.checked.stored, record },
   ], { git: input.git });
@@ -817,8 +821,12 @@ export async function abandonOperatorRound(
   }
   const abandoned = transitionHost(stored, input.host, 'abandoned', { credit: false });
   if (abandoned.kind !== 'updated') return { kind: 'refused', detail: `operator host ${input.host} cannot enter abandoned` };
+  const record = withOutboxEvent(
+    abandoned.record,
+    operatorRoundEvent(abandoned.record.roundId, abandoned.record.operator!, input.host, 'abandoned'),
+  );
   const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
-    { kind: 'update-record', previous: stored, record: abandoned.record },
+    { kind: 'update-record', previous: stored, record },
     { kind: 'delete-marker', old: marker.blob },
   ], { git });
   return wrote.kind === 'updated'

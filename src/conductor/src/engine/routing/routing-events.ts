@@ -28,6 +28,19 @@ export function routedRepairPhaseEvent(
   return { type: 'routed_repair_phase', ...occurrence(), roundId, host, phase, credit, child: host };
 }
 
+/** Creates the durable operator-landing occurrence paired with its route mutation. */
+export function operatorRoundEvent(
+  roundId: RoundId,
+  operator: NonNullable<RouteRecord['operator']>,
+  host: ChildId,
+  phase: 'opened' | 'declared' | 'abandoned',
+): Extract<ConductorEvent, { type: 'operator_round' }> {
+  return {
+    type: 'operator_round', ...occurrence(), roundId, child: host,
+    origin: operator.origin, reason: operator.reason, phase,
+  };
+}
+
 /** Creates the one durable occurrence for a completed queued revalidation. */
 export function childRevalidatedEvent(
   child: ChildId,

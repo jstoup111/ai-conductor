@@ -1,6 +1,6 @@
 import type { ChildId } from '../child-context.js';
 import { makeGitRunner } from '../rebase.js';
-import { remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
+import { operatorRoundEvent, remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
 import {
   drainOutbox,
   readRepairMarker,
@@ -49,6 +49,9 @@ export async function admitRound(
     return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };
   }
   let next: RouteRecord = { ...hostTransition.record, phase: 'open' };
+  if (next.kind === 'operator' && next.operator !== undefined) {
+    next = withOutboxEvent(next, operatorRoundEvent(next.roundId, next.operator, firstHost, 'opened'));
+  }
   next = withOutboxEvent(next, remediationRoutedEvent(next));
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record: next },

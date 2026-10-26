@@ -2306,6 +2306,17 @@ type ConductorEventBody =
       credit: boolean;
       child: ChildId;
     }
+  /** Lifecycle of an operator-owned landing, delivered from the route outbox. */
+  | {
+      type: 'operator_round';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      origin: 'land' | 'rewind';
+      reason: string;
+      phase: 'opened' | 'declared' | 'abandoned';
+    }
   | {
       type: 'child_revalidated';
       eventId: string;
