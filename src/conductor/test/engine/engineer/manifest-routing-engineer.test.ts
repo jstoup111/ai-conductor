@@ -62,6 +62,9 @@ function publicationProvenance(root: string) {
     async () => ({ stdout: '' }),
     gitRunner,
   );
+  if (publication.remote.mutation === undefined) {
+    throw new Error('expected initial spec publication to provide an ownership mutation');
+  }
   return publication.remote.mutation;
 }
 

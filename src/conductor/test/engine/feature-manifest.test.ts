@@ -6,6 +6,32 @@ import {
   parseFeatureManifest,
   renderFeatureManifest,
 } from '../../src/engine/feature-manifest.js';
+import type {
+  ArtifactKind,
+  DocsPath,
+  FeatureManifest,
+  FeatureSlug,
+} from '../../src/engine/feature-manifest.js';
+
+function asFeatureManifest(manifest: {
+  readonly schemaVersion: 1;
+  readonly slug: string;
+  readonly artifacts: readonly { readonly kind: ArtifactKind; readonly path: string }[];
+}): FeatureManifest {
+  return {
+    schemaVersion: manifest.schemaVersion,
+    slug: manifest.slug as FeatureSlug,
+    artifacts: manifest.artifacts.map(({ kind, path }) => ({ kind, path: path as DocsPath })),
+  };
+}
+
+function malformedReason(result: ReturnType<typeof parseFeatureManifest>): string {
+  expect(result).toMatchObject({ kind: 'malformed' });
+  if (result.kind !== 'malformed') {
+    throw new Error('expected malformed feature manifest');
+  }
+  return result.reason;
+}
 
 const allKindsManifest = {
   schemaVersion: 1,
@@ -64,8 +90,9 @@ describe('feature manifest', () => {
   it('renders differently ordered entries as byte-identical kind-then-path JSON', () => {
     const entries = [
       { kind: 'stories', path: '.docs/stories/f.md' },
-      { kind: 'plan', path: '.docs/plans/z-f.md' },
-      { kind: 'plan', path: '.docs/plans/a-f.md' },
+      { kind: 'decision', path: '.docs/decisions/adr-z-f.md' },
+      { kind: 'plan', path: '.docs/plans/f.md' },
+      { kind: 'decision', path: '.docs/decisions/adr-a-f.md' },
     ] as const;
     const manifest = { schemaVersion: 1, slug: 'f', artifacts: entries } as const;
     const reversedManifest = {
@@ -73,17 +100,18 @@ describe('feature manifest', () => {
       artifacts: [...entries].reverse(),
     } as const;
 
-    const rendered = renderFeatureManifest(manifest);
+    const rendered = renderFeatureManifest(asFeatureManifest(manifest));
 
-    expect(renderFeatureManifest(reversedManifest)).toBe(rendered);
+    expect(renderFeatureManifest(asFeatureManifest(reversedManifest))).toBe(rendered);
     expect(rendered).toBe(
       `${JSON.stringify(
         {
           schemaVersion: 1,
           slug: 'f',
           artifacts: [
-            { kind: 'plan', path: '.docs/plans/a-f.md' },
-            { kind: 'plan', path: '.docs/plans/z-f.md' },
+            { kind: 'decision', path: '.docs/decisions/adr-a-f.md' },
+            { kind: 'decision', path: '.docs/decisions/adr-z-f.md' },
+            { kind: 'plan', path: '.docs/plans/f.md' },
             { kind: 'stories', path: '.docs/stories/f.md' },
           ],
         },
@@ -102,7 +130,7 @@ describe('feature manifest', () => {
         { kind: 'plan', path: '.docs/plans/f.md' },
       ],
     } as const;
-    const rendered = renderFeatureManifest(manifest);
+    const rendered = renderFeatureManifest(asFeatureManifest(manifest));
 
     expect(Object.keys(JSON.parse(rendered))).toEqual(['schemaVersion', 'slug', 'artifacts']);
     expect(parseFeatureManifest(rendered, '.docs/f/manifest.json', 'f')).toEqual({
@@ -133,10 +161,8 @@ describe('feature manifest', () => {
       'f',
     );
 
-    expect(unsupportedSchema).toMatchObject({ kind: 'malformed' });
-    expect(unsupportedSchema.reason).toContain('2');
-    expect(unknownKind).toMatchObject({ kind: 'malformed' });
-    expect(unknownKind.reason).toContain('notes');
+    expect(malformedReason(unsupportedSchema)).toContain('2');
+    expect(malformedReason(unknownKind)).toContain('notes');
   });
 
   it('rejects unknown top-level and entry fields by name', () => {
@@ -155,10 +181,8 @@ describe('feature manifest', () => {
       'f',
     );
 
-    expect(unknownTopLevelField).toMatchObject({ kind: 'malformed' });
-    expect(unknownTopLevelField.reason).toContain('updatedAt');
-    expect(unknownEntryField).toMatchObject({ kind: 'malformed' });
-    expect(unknownEntryField.reason).toContain('title');
+    expect(malformedReason(unknownTopLevelField)).toContain('updatedAt');
+    expect(malformedReason(unknownEntryField)).toContain('title');
   });
 
   it('rejects paths outside .docs and decision paths outside .docs/decisions/', () => {
@@ -193,12 +217,9 @@ describe('feature manifest', () => {
       'f',
     );
 
-    expect(outsideDocs).toMatchObject({ kind: 'malformed' });
-    expect(outsideDocs.reason).toMatch(/outside .docs/);
-    expect(escapingDocs).toMatchObject({ kind: 'malformed' });
-    expect(escapingDocs.reason).toMatch(/outside .docs/);
-    expect(decisionOutsideAdrFolder).toMatchObject({ kind: 'malformed' });
-    expect(decisionOutsideAdrFolder.reason).toMatch(/outside .docs\/decisions/);
+    expect(malformedReason(outsideDocs)).toMatch(/outside .docs/);
+    expect(malformedReason(escapingDocs)).toMatch(/outside .docs/);
+    expect(malformedReason(decisionOutsideAdrFolder)).toMatch(/outside .docs\/decisions/);
   });
 
   it('rejects folder-slug mismatch and plan entry counts other than one', () => {
@@ -229,19 +250,15 @@ describe('feature manifest', () => {
       'f',
     );
 
-    expect(mismatchedSlug).toMatchObject({ kind: 'malformed' });
-    expect(mismatchedSlug.reason).toContain('f');
-    expect(mismatchedSlug.reason).toContain('g');
-    expect(noPlanEntry).toMatchObject({ kind: 'malformed' });
-    expect(noPlanEntry.reason).toContain('0');
-    expect(twoPlanEntries).toMatchObject({ kind: 'malformed' });
-    expect(twoPlanEntries.reason).toContain('2');
+    expect(malformedReason(mismatchedSlug)).toContain('f');
+    expect(malformedReason(mismatchedSlug)).toContain('g');
+    expect(malformedReason(noPlanEntry)).toContain('0');
+    expect(malformedReason(twoPlanEntries)).toContain('2');
   });
 
   it('names the manifest path when JSON is invalid', () => {
     const result = parseFeatureManifest('{ not valid JSON', '.docs/f/manifest.json', 'f');
 
-    expect(result).toMatchObject({ kind: 'malformed' });
-    expect(result.reason).toContain('.docs/f/manifest.json');
+    expect(malformedReason(result)).toContain('.docs/f/manifest.json');
   });
 });
