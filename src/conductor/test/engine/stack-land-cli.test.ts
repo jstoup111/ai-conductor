@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { detectStackLandCommand, type StackLandDispatch } from '../../src/cli.js';
 import { dispatchStackLandCommand } from '../../src/engine/stack-land-cli.js';
+import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
+import { dispatchCliEntry } from '../../src/index.js';
 
 const command: StackLandDispatch = {
   kind: 'stack-land', slug: 'demo', child: '1', carry: [], reason: 'reviewer requested rename',
@@ -37,6 +39,21 @@ function dependencies(overrides: Record<string, unknown> = {}) {
 }
 
 describe('stack land CLI open path', () => {
+  // Covers: task:10
+  it('refuses stack land from a daemon session before the handler can mutate anything', async () => {
+    const dispatch = vi.fn(async () => 0);
+
+    await expect(dispatchCliEntry({
+      argv: ['node', 'ai-conductor', 'stack', 'land', '--slug', 'demo', '--child', '1', '--reason', 'reviewer request'],
+      environment: { [DAEMON_SESSION_MARKER]: '1' },
+      dispatch,
+      emitRefusal: vi.fn(),
+      diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('parses only the complete open grammar, including repeated --carry', () => {
     expect(detectStackLandCommand([
       'node', 'ai-conductor', 'stack', 'land', '--slug', 'demo', '--child', '1',
