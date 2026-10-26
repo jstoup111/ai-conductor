@@ -1,4 +1,4 @@
-// Covers: task:9, task:207
+// Covers: task:7, task:9, task:207
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   drainRoutingOutboxes: vi.fn(async () => ({ kind: 'drained' as const })),
   reconcileRounds: undefined as undefined | (() => Promise<unknown>),
   consumeLowestQueued: undefined as undefined | (() => Promise<unknown>),
+  operatorRevalidation: false,
 }));
 
 vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
@@ -25,6 +26,25 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
   return {
     ...actual,
     drainRoutingOutboxes: () => mocks.drainRoutingOutboxes(),
+    readRepairMarker: (...args: Parameters<typeof actual.readRepairMarker>) =>
+      mocks.operatorRevalidation
+        ? Promise.resolve({ kind: 'marker', slug: 'demo', blob: 'a'.repeat(40), marker: { host: 1, roundId: undefined } } as never)
+        : actual.readRepairMarker(...args),
+    readRouteRecord: (...args: Parameters<typeof actual.readRouteRecord>) =>
+      mocks.operatorRevalidation
+        ? Promise.resolve({
+            kind: 'record', slug: 'demo', blob: 'a'.repeat(40), record: {
+              roundId: 'r1', kind: 'operator', phase: 'open', items: [],
+              allocation: { 1: { remTaskIds: [], blockBodies: [] } }, hosts: { 1: 'repairing' }, currentHostIndex: 0,
+              receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} }, outbox: [],
+              operator: {
+                origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+                carried: [], otherTips: { 'feat/c1/demo': 'a'.repeat(40) },
+                priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+              },
+            },
+          } as never)
+        : actual.readRouteRecord(...args),
   };
 });
 vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
@@ -61,6 +81,7 @@ afterEach(async () => {
   mocks.drainRoutingOutboxes.mockClear();
   mocks.reconcileRounds = undefined;
   mocks.consumeLowestQueued = undefined;
+  mocks.operatorRevalidation = false;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -106,6 +127,32 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
 }
 
 describe('Conductor routed acceptance verify-green path', () => {
+  it('does not treat an operator host as a revalidating source', async () => {
+    const { root } = await routedFixture();
+    mocks.operatorRevalidation = true;
+    const enterHostRegion = vi.fn(async () => ({ kind: 'entered', pinnedBase: 'a'.repeat(40) }) as never);
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(async () => ({ success: true })) }, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+          branch: 'feat/daemon-demo', repairChildren: [child], revalidating: { child, generation: 1 },
+        }),
+        enterHostRegion,
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+      },
+    });
+
+    await conductor.run();
+
+    expect(enterHostRegion).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('no open revalidate round');
+  });
+
   it('uses the routed exit exactly once instead of advancing or closing the host child region', async () => {
     const { root } = await routedFixture();
     await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({

@@ -1,4 +1,4 @@
-// Covers: task:29
+// Covers: task:7, task:29
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -91,6 +91,46 @@ async function seedClosedRound(
 }
 
 describe('revalidation queue generations', () => {
+  it('acknowledges an operator host with the audit close rule, not the revalidate close rule', async () => {
+    const subject = await durableQueueFixture();
+    const roundId = parseRoundId('r1')!;
+    try {
+      const queueRecord = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
+      if (queueRecord.kind !== 'queue') throw new Error('missing queue');
+      const closure = parseCommitSha((await subject.git(['rev-parse', closureRefFor('demo', child(2))])).stdout.trim());
+      const tree = parseCommitSha((await subject.git(['rev-parse', `${closureRefFor('demo', child(2))}^{tree}`])).stdout.trim());
+      if (!closure || !tree) throw new Error('invalid operator route pin');
+      const operator: RouteRecord = {
+        roundId, sealedAuthored: 0, kind: 'operator', phase: 'open', items: [],
+        allocation: { [child(2)]: { remTaskIds: [], blockBodies: [] } },
+        hosts: { [child(2)]: 'repairing' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [],
+        entry: {
+          host: child(2), pinnedBase: closure, tree,
+          revalidation: { queueBlob: queueRecord.blob, generation: queueRecord.queue.generation, closureSha: closure },
+        },
+        operator: {
+          origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+          carried: [], otherTips: { 'feat/daemon-demo': closure },
+          priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+        },
+      };
+      const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(operator) })).stdout.trim();
+      await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+      const markerBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: child(2), roundId }) })).stdout.trim();
+      await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git });
+      if (stored.kind !== 'record') throw new Error('missing operator route');
+
+      await expect(acknowledgeQueueEntry(subject.repo, 'demo', stored, child(2), { git: subject.git }))
+        .resolves.toEqual({ kind: 'acknowledged', leavesRoundOpen: false });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({
+        kind: 'record', record: { phase: 'open', hosts: { 2: 'done' } },
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
   // Covers: task:29
   it('keeps the newer child closure and replay tuple while unioning its gates', () => {
     const earlier = entry(2, 'a', ['test_suite'], 'b', 'c');

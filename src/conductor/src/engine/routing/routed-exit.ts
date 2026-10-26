@@ -57,6 +57,8 @@ function pendingHost(state: HostState): boolean {
     case 'restacked':
     case 'done':
     case 'rerouted':
+    case 'abandoning':
+    case 'abandoned':
       return false;
   }
   return assertNever(state);
