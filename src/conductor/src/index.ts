@@ -108,7 +108,12 @@ import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
-import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
+import { WorktreeManager, checkPrMerged, slugify } from './engine/worktree.js';
+import { hasDurableChildState } from './engine/slice-topology.js';
+import {
+  acquireFeatureDispatchLease,
+  type FeatureDispatchLeaseAcquireResult,
+} from './engine/feature-dispatch-lease.js';
 import { detectAutoResume } from './engine/auto-resume.js';
 import {
   verifyCompleteState,
@@ -838,6 +843,85 @@ export async function dispatchCliEntry(input: {
     return { exitCode: 1, refused: true };
   }
   return { exitCode: await input.dispatch(), refused: false };
+}
+
+export interface InteractiveConductorRunLeaseDependencies {
+  readonly slugify?: typeof slugify;
+  readonly hasDurableChildState?: typeof hasDurableChildState;
+  readonly resolveMainRepoRoot?: typeof resolveMainRepoRoot;
+  readonly acquire?: typeof acquireFeatureDispatchLease;
+}
+
+export type InteractiveConductorRunLeaseResult =
+  | { readonly kind: 'ran' }
+  | { readonly kind: 'refused'; readonly message: string };
+
+function interactiveLeaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResult, { kind: 'acquired' }>): string {
+  switch (result.kind) {
+    case 'live-owner':
+      return `interactive conductor run refused: feature dispatch lease is held by ${result.owner.purpose} (pid ${result.owner.pid})`;
+    case 'unreadable-owner':
+      return `interactive conductor run refused: feature dispatch lease owner is unreadable at ${result.leasePath}`;
+    case 'recovery-in-progress':
+      return `interactive conductor run refused: feature dispatch lease recovery is in progress at ${result.leasePath}`;
+    case 'unavailable':
+      return `interactive conductor run refused: ${result.message}`;
+  }
+}
+
+/**
+ * The foreground entry owns the durable lease for an already-stacked feature.
+ * It deliberately has no park dependency: boundary parking is daemon-only.
+ */
+export async function runInteractiveConductorWithLease(input: {
+  readonly projectRoot: string;
+  readonly featureDesc: string | undefined;
+  readonly run: () => Promise<void>;
+  readonly dependencies?: InteractiveConductorRunLeaseDependencies;
+}): Promise<InteractiveConductorRunLeaseResult> {
+  const dependencies = input.dependencies ?? {};
+  const toSlug = dependencies.slugify ?? slugify;
+  const featureSlug = input.featureDesc ? toSlug(input.featureDesc) : '';
+  if (!featureSlug) {
+    await input.run();
+    return { kind: 'ran' };
+  }
+
+  const durableChildState = await (dependencies.hasDurableChildState ?? hasDurableChildState)(
+    input.projectRoot,
+    featureSlug,
+  );
+  if (durableChildState === 'git-error') {
+    return {
+      kind: 'refused',
+      message: 'interactive conductor run refused: cannot inspect durable stacked feature state',
+    };
+  }
+  if (!durableChildState) {
+    await input.run();
+    return { kind: 'ran' };
+  }
+
+  const repository = await (dependencies.resolveMainRepoRoot ?? resolveMainRepoRoot)(input.projectRoot);
+  if ('error' in repository) {
+    return { kind: 'refused', message: `interactive conductor run refused: ${repository.error}` };
+  }
+  const acquired = await (dependencies.acquire ?? acquireFeatureDispatchLease)(
+    repository.root,
+    featureSlug,
+    'interactive conductor run',
+  );
+  if (acquired.kind !== 'acquired') {
+    return { kind: 'refused', message: interactiveLeaseRefusal(acquired) };
+  }
+
+  try {
+    await input.run();
+    return { kind: 'ran' };
+  } finally {
+    const released = await acquired.lease.release();
+    if (!released.ok) throw new Error(released.message);
+  }
 }
 
 // --- Main ---
@@ -1997,7 +2081,15 @@ async function dispatchCliCommand(): Promise<void> {
     onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
   });
 
-    await conductor.run();
+    const interactiveRun = await runInteractiveConductorWithLease({
+      projectRoot,
+      featureDesc: opts.featureDesc,
+      run: async () => conductor.run(),
+    });
+    if (interactiveRun.kind === 'refused') {
+      console.error(interactiveRun.message);
+      process.exitCode = 1;
+    }
   } finally {
     await sessionTail.drain();
     persister.stop();
