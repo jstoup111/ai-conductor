@@ -26,7 +26,7 @@ import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { makeGitRunner } from './rebase.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
-import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
 import { resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { checkOpenOperatorRound, openOperatorRound, type CheckOpenOperatorRoundResult } from './routing/operator-round.js';
@@ -115,17 +115,23 @@ const markerFilesystem: RewindMarkerFilesystem = {
   writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
 };
 
-function leaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResult, { readonly kind: 'acquired' }>): string {
-  switch (result.kind) {
-    case 'live-owner':
-      return `feature dispatch lease is held by ${result.owner.purpose} (pid ${result.owner.pid})`;
-    case 'unreadable-owner':
-      return `feature dispatch lease owner is unreadable at ${result.leasePath}`;
-    case 'recovery-in-progress':
-      return `feature dispatch lease recovery is in progress at ${result.leasePath}`;
-    case 'unavailable':
-      return result.message;
+async function emitOperatorRewind(
+  cwd: string,
+  result: RewindStateResult & { readonly child?: ChildId },
+  emit: RewindCommandDependencies['emit'],
+): Promise<void> {
+  if (emit) {
+    await emit(result);
+    return;
   }
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
+  new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
+  persister.start();
+  await events.emitOrThrow({
+    type: 'operator_rewind', operator: process.env.USER ?? 'operator', ...result,
+  });
+  persister.stop();
 }
 
 export function detectRewindCommand(argv: string[]): RewindDispatch | null {
@@ -478,7 +484,7 @@ export async function dispatchRewindCommand(
       }
       const acquired = await (dependencies.acquireLease ?? acquireFeatureDispatchLease)(root, slug, 'rewind --child');
       if (acquired.kind !== 'acquired') {
-        console.error(`rewind: ${leaseRefusal(acquired)}`);
+        console.error(`rewind: ${formatFeatureDispatchLeaseRefusal(acquired)}`);
         return 1;
       }
       try {
@@ -508,18 +514,7 @@ export async function dispatchRewindCommand(
           .slice(CHILD_REGION_STEPS.indexOf(entryStep))
           .map((step) => ({ child, step }));
         const demoted = demotions.map(({ child: demotedChild, step }) => `children/${demotedChild}/${step}`);
-        if (dependencies.emit) {
-          await dependencies.emit({ target: command.target, demoted, child });
-        } else {
-          const events = new ConductorEventEmitter();
-          const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
-          new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
-          persister.start();
-          await events.emitOrThrow({
-            type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: command.target, demoted, child,
-          });
-          persister.stop();
-        }
+        await emitOperatorRewind(cwd, { target: command.target, demoted, child }, dependencies.emit);
         await clear(cwd, demotions);
         console.log(`Rewound child ${child} to ${command.target}.`);
         return 0;
@@ -581,18 +576,7 @@ export async function dispatchRewindCommand(
     const demoted = result.demotions.map(({ child: demotedChild, step }) =>
       demotedChild === undefined ? step : `children/${demotedChild}/${step}`,
     );
-    if (dependencies.emit) {
-      await dependencies.emit({ target: result.target, demoted, child: result.child });
-    } else {
-      const events = new ConductorEventEmitter();
-      const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
-      new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
-      persister.start();
-      await events.emitOrThrow({
-        type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted, child: result.child,
-      });
-      persister.stop();
-    }
+    await emitOperatorRewind(cwd, { target: result.target, demoted, child: result.child }, dependencies.emit);
     console.log(`Rewound child ${result.child} to ${result.target}.`);
     return 0;
   }
@@ -640,16 +624,7 @@ export async function dispatchRewindCommand(
     return 1;
   }
   if (!result) return 1;
-  if (dependencies.emit) {
-    await dependencies.emit(result);
-  } else {
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
-    new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
-    persister.start();
-    await events.emitOrThrow({ type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted: result.demoted });
-    persister.stop();
-  }
+  await emitOperatorRewind(cwd, result, dependencies.emit);
   console.log(`Rewound to ${result.target}.`);
   return 0;
 }

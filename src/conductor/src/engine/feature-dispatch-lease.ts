@@ -25,6 +25,22 @@ export type FeatureDispatchLeaseAcquireResult =
   | { kind: 'recovery-in-progress'; leasePath: string }
   | { kind: 'unavailable'; message: string };
 
+/** Render an actionable refusal shared by all operator entry points. */
+export function formatFeatureDispatchLeaseRefusal(
+  result: Exclude<FeatureDispatchLeaseAcquireResult, { readonly kind: 'acquired' }>,
+): string {
+  switch (result.kind) {
+    case 'live-owner':
+      return `feature dispatch lease is held by ${result.owner.purpose} (pid ${result.owner.pid})`;
+    case 'unreadable-owner':
+      return `feature dispatch lease owner is unreadable at ${result.leasePath}`;
+    case 'recovery-in-progress':
+      return `feature dispatch lease recovery is in progress at ${result.leasePath}`;
+    case 'unavailable':
+      return result.message;
+  }
+}
+
 export interface FeatureDispatchLeaseOptions {
   /** Test seams keep liveness and ownership deterministic without another process. */
   readonly hostname?: () => string;

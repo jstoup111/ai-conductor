@@ -6,7 +6,7 @@ import { parseChildId, type ChildId } from './child-context.js';
 import { noOpChildLifecycleEvents, type ChildLifecycleEventEmitter } from './child-lifecycle.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { loadConfig } from './config.js';
-import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
+import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
 import { HALT_MARKER } from './halt-marker.js';
 import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult, type ParkToken } from './park-marker.js';
 import { clearHaltAtomically } from './rewind.js';
@@ -76,19 +76,6 @@ async function checkStackLandEligibility(worktree: string, slug: string, deps: S
     return { kind: 'refused', detail: `Feature ${slug} is not a stacked feature; stack land is unavailable.` };
   }
   return { kind: 'eligible' };
-}
-
-function leaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResult, { readonly kind: 'acquired' }>): string {
-  switch (result.kind) {
-    case 'live-owner':
-      return `feature dispatch lease is held by ${result.owner.purpose} (pid ${result.owner.pid})`;
-    case 'unreadable-owner':
-      return `feature dispatch lease owner is unreadable at ${result.leasePath}`;
-    case 'recovery-in-progress':
-      return `feature dispatch lease recovery is in progress at ${result.leasePath}`;
-    case 'unavailable':
-      return result.message;
-  }
 }
 
 async function clearUnlandedClosedChildCommitsHalt(
@@ -208,7 +195,7 @@ async function dispatchStackLandDoneCommand(command: StackLandDoneDispatch, deps
   const marker = await readRoundFromMarker(worktree, command.slug);
   if (marker === undefined) return refused(print, 'no open operator landing is available to declare.');
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land --done');
-  if (acquired.kind !== 'acquired') return refused(print, leaseRefusal(acquired));
+  if (acquired.kind !== 'acquired') return refused(print, formatFeatureDispatchLeaseRefusal(acquired));
   try {
     const checked: CheckDeclareOperatorRoundResult = await (deps.checkDeclare ?? checkDeclareOperatorRound)({
       worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
@@ -246,7 +233,7 @@ async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch
   const marker = await readRoundFromMarker(worktree, command.slug);
   if (marker === undefined) return refused(print, 'no open operator landing is available to abandon.');
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land --abandon');
-  if (acquired.kind !== 'acquired') return refused(print, leaseRefusal(acquired));
+  if (acquired.kind !== 'acquired') return refused(print, formatFeatureDispatchLeaseRefusal(acquired));
   try {
     const checked: CheckAbandonOperatorRoundResult = await (deps.checkAbandon ?? checkAbandonOperatorRound)({
       worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
@@ -332,7 +319,7 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
   if (!operator?.trim()) return refused(print, 'no approved operator identity is available.');
 
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land');
-  if (acquired.kind !== 'acquired') return refused(print, leaseRefusal(acquired));
+  if (acquired.kind !== 'acquired') return refused(print, formatFeatureDispatchLeaseRefusal(acquired));
 
   try {
     const roundId = admission.roundId ?? await (deps.nextRound ?? nextRoundId)(worktree, command.slug);
