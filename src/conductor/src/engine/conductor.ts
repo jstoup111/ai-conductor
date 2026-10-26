@@ -4271,8 +4271,12 @@ export class Conductor {
       asBuiltEvidenceFile !== undefined &&
       (hintSource.source === 'architecture-review-as-built' || hintSource.source === 'validation-group');
     const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
-    const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config, MAX_KICKBACKS_PER_GATE, undefined);
-    const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config, MAX_KICKBACKS_PER_GATE, undefined);
+    const prdAuditLapCap = remediationLapCapForGate(
+      'prd_audit', this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+    );
+    const asBuiltLapCap = remediationLapCapForGate(
+      'architecture_review_as_built', this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+    );
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: string; evidence: string }>();
     // Both appended and existing-task repairs retain the criteria that
     // authorized them. The pending receipt is the only durable context at a
@@ -10220,7 +10224,7 @@ export class Conductor {
               this.projectRoot,
               this.config,
               settlementLedger,
-              undefined,
+              state.complexity_tier,
             );
             growthCap = budgets[0]?.growthCap;
             settlementGrowth = budgets[0]?.growth;
@@ -10292,7 +10296,9 @@ export class Conductor {
                       : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
                 ).join('; ')}`
               : '';
-            const fallbackLapCap = remediationLapCapForGate(gate, this.config, MAX_KICKBACKS_PER_GATE, undefined);
+            const fallbackLapCap = remediationLapCapForGate(
+              gate, this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+            );
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
               : withPendingGrowth({

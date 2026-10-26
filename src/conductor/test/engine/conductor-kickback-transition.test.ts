@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
+// Covers: task:1, task:3, task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,6 +74,11 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       authoredTasks?: number;
       buildResult?: { success: true; model?: string; effort?: 'low' | 'medium' | 'high' };
       activeRegionChild?: number;
+      complexityTier?: 'S' | 'M' | 'L';
+      remediationCaps?: {
+        prdAudit?: number | Partial<Record<'S' | 'M' | 'L', number>>;
+        asBuilt?: number | Partial<Record<'S' | 'M' | 'L', number>>;
+      };
     } = {},
   ): Promise<{
     build: ReturnType<typeof vi.fn>;
@@ -84,6 +89,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       session_started_at: Date.now() - 1_000,
       run_started_at: Date.now() - 1_000,
       feature_desc: 'transition',
+      ...(options.complexityTier === undefined ? {} : { complexity_tier: options.complexityTier }),
     });
     await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
       tasks: [{ id: 'rem-1', status: 'pending' }],
@@ -119,8 +125,24 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
       config: {
         defaults: { model: 'test-model', effort: options.effort ?? 'medium', max_retries: 1, escalate: false },
-        prd_audit: { max_remediation_laps: 1, max_appended_tasks: options.growthCap ?? 5, max_appended_ratio: 1 },
-        architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
+        prd_audit: {
+          ...(options.remediationCaps === undefined
+            ? { max_remediation_laps: 1 }
+            : options.remediationCaps.prdAudit === undefined
+              ? {}
+              : { max_remediation_laps: options.remediationCaps.prdAudit }),
+          max_appended_tasks: options.growthCap ?? 5,
+          max_appended_ratio: 1,
+        },
+        architecture_review_as_built: {
+          ...(options.remediationCaps === undefined
+            ? { max_remediation_laps: 1 }
+            : options.remediationCaps.asBuilt === undefined
+              ? {}
+              : { max_remediation_laps: options.remediationCaps.asBuilt }),
+          max_appended_tasks: 5,
+          max_appended_ratio: 1,
+        },
       },
     } as never);
     if (options.activeRegionChild !== undefined) {
@@ -144,6 +166,91 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { prd_audit: { laps: 1 }, architecture_review_as_built: { laps: 1 } },
       growth: { added: 2, byGate: { prd_audit: 1, architecture_review_as_built: 1 } },
+    });
+  });
+
+  it('charges an unconfigured tier-L as-built fourth lap and halts the fifth at BUILD dispatch', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'tier-l-as-built', taskIds: ['rem-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    };
+    const { build: fourth } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: entry(3) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'L', remediationCaps: {} });
+
+    expect(fourth).toHaveBeenCalledOnce();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { architecture_review_as_built: { laps: 4 } },
+    });
+
+    const { build: fifth } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: entry(4) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'L', remediationCaps: {} });
+
+    expect(fifth).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'BUILD dispatch halted: architecture_review_as_built laps allowance exhausted',
+    );
+  });
+
+  it('halts an unconfigured tier-S prd-audit third lap without charging it at BUILD dispatch', async () => {
+    const { build } = await runBuild({
+      receiptId: 'tier-s-prd', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(2) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'S', remediationCaps: {} });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({ gates: { prd_audit: { laps: 2 } } });
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('kickback-cap');
+  });
+
+  it('uses the current tier when a feature changes from L to S between prd-audit laps', async () => {
+    const { build } = await runBuild({
+      receiptId: 'tier-changed-prd', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(3) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'S', remediationCaps: {} });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'BUILD dispatch halted: prd_audit laps allowance exhausted',
+    );
+  });
+
+  it('honors raised effective lap caps over tier defaults and configured caps at BUILD dispatch', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'raised-tier-cap', taskIds: ['rem-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    };
+    const { build: raisedDefault } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 5 } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'M', remediationCaps: {} });
+    expect(raisedDefault).toHaveBeenCalledOnce();
+
+    const { build: raisedConfigured } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: { ...entry(4), effectiveLapCap: 5 } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, {
+      complexityTier: 'L',
+      remediationCaps: { asBuilt: { L: 2 } },
+    });
+    expect(raisedConfigured).toHaveBeenCalledOnce();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { architecture_review_as_built: { laps: 5, effectiveLapCap: 5 } },
     });
   });
 
