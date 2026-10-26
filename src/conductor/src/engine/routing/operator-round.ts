@@ -58,6 +58,18 @@ export type DeclareOperatorRoundResult =
   | { readonly kind: 'declared' }
   | { readonly kind: 'refused'; readonly detail: string };
 
+export interface CheckAbandonOperatorRoundInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly git?: GitRunner;
+}
+
+export type CheckAbandonOperatorRoundResult =
+  | { readonly kind: 'accepted'; readonly stored: import('./route-record-store.js').StoredRouteRecord }
+  | { readonly kind: 'refused'; readonly detail: string };
+
 /** The single durable reason-line contract for every operator-owned HALT. */
 export function formatOperatorHaltReason(reason: string, roundId: RoundId): string {
   return `Operator-Halt: ${reason} ${roundId}`;
@@ -199,6 +211,63 @@ export async function declareOperatorRound(input: DeclareOperatorRoundInput): Pr
   return wrote.kind === 'updated'
     ? { kind: 'declared' }
     : { kind: 'refused', detail: `cannot declare operator round: ${wrote.kind}` };
+}
+
+/**
+ * Proves only the abandoned round's own authority.  Unlike declaration, this
+ * deliberately does not inspect siblings, carried children, or their tips:
+ * abandoning is the safe escape route when another stack surface is broken.
+ */
+export async function checkAbandonOperatorRound(
+  input: CheckAbandonOperatorRoundInput,
+): Promise<CheckAbandonOperatorRoundResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land' || stored.record.phase !== 'open') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable for abandon` };
+  }
+  const state = stored.record.hosts[input.host];
+  if (state === 'built' || state === 'restacked' || state === 'done') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} host ${input.host} has begun its exit restack` };
+  }
+  if (state !== 'admitted' && state !== 'repairing' && state !== 'abandoning') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} host ${input.host} is not abandonable` };
+  }
+  const marker = await readRepairMarker(input.worktree, input.slug, { git });
+  if (marker.kind !== 'marker' || marker.marker.roundId !== input.roundId || marker.marker.host !== input.host) {
+    return { kind: 'refused', detail: `operator round ${input.roundId} repair marker is unavailable for abandon` };
+  }
+  const branch = childBranchFor(input.slug, input.host);
+  if (!branch.ok) return { kind: 'refused', detail: branch.reason };
+  try {
+    const current = await git(['symbolic-ref', '--short', 'HEAD']);
+    if (current.exitCode !== 0 || current.stdout.trim() !== branch.branch) {
+      return { kind: 'refused', detail: `abandon must run on ${branch.branch}` };
+    }
+    const untracked = await git(['ls-files', '--others', '--exclude-standard']);
+    if (untracked.exitCode !== 0 || untracked.stdout.trim() !== '') {
+      return { kind: 'refused', detail: 'the dirty worktree must be committed or stashed before abandoning the landing' };
+    }
+    if (state !== 'abandoning') {
+      if (await worktreeDirty(git)) return { kind: 'refused', detail: 'the dirty worktree must be committed or stashed before abandoning the landing' };
+    } else {
+      const abandon = stored.record.operator.abandon;
+      if (abandon === undefined) return { kind: 'refused', detail: `operator round ${input.roundId} has no abandon recovery state` };
+      const cleanAt = async (tip: CommitSha) => {
+        const [unstaged, staged] = await Promise.all([
+          git(['diff', '--quiet', tip]),
+          git(['diff', '--cached', '--quiet', tip]),
+        ]);
+        return unstaged.exitCode === 0 && staged.exitCode === 0;
+      };
+      if (!await cleanAt(abandon.rejectedTip) && !await cleanAt(abandon.resetTip)) {
+        return { kind: 'refused', detail: 'the dirty worktree must match the recorded abandon tips before recovery' };
+      }
+    }
+  } catch {
+    return { kind: 'refused', detail: `cannot inspect ${branch.branch} before abandon` };
+  }
+  return { kind: 'accepted', stored };
 }
 
 export interface CheckOpenOperatorRoundInput {

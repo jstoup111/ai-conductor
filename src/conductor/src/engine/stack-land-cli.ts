@@ -1,7 +1,7 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../cli.js';
+import type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../cli.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
@@ -11,13 +11,16 @@ import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkC
 import { clearHaltAtomically } from './rewind.js';
 import {
   checkDeclareOperatorRound,
+  checkAbandonOperatorRound,
   checkOpenOperatorRound,
+  abandonOperatorRound,
   declareOperatorRound,
   openOperatorRound,
   parseOperatorHaltReason,
   checkOperatorTips,
   type CheckOpenOperatorRoundResult,
   type CheckDeclareOperatorRoundResult,
+  type CheckAbandonOperatorRoundResult,
   type DeclareOperatorRoundResult,
   type OpenOperatorRoundResult,
 } from './routing/operator-round.js';
@@ -40,6 +43,9 @@ export interface StackLandCliDeps {
   readonly clearHalt?: (worktree: string) => Promise<void>;
   readonly checkDeclare?: typeof checkDeclareOperatorRound;
   readonly declareRound?: typeof declareOperatorRound;
+  readonly checkAbandon?: typeof checkAbandonOperatorRound;
+  readonly abandonRound?: typeof abandonOperatorRound;
+  readonly reconcileRounds?: typeof import('./routing/round-admission.js').reconcileRounds;
   readonly releasePark?: typeof releaseOwnedPark;
   readonly clearMatchingHalt?: (worktree: string, roundId: RoundId) => Promise<'cleared' | 'absent' | 'unrelated'>;
   readonly emitter?: ConductorEventEmitter;
@@ -126,8 +132,7 @@ async function clearMatchingOperatorHalt(worktree: string, roundId: RoundId): Pr
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
     throw error;
   }
-  const match = body.split(/\r?\n/).map(parseOperatorHaltReason).find((reason) => reason?.roundId === roundId &&
-    (reason.reason === 'operator-round-undeclared' || reason.reason === 'operator-round-branch-moved'));
+  const match = body.split(/\r?\n/).map(parseOperatorHaltReason).find((reason) => reason?.roundId === roundId);
   if (match === undefined) return 'unrelated';
   await clearHaltAtomically(worktree);
   return 'cleared';
@@ -189,12 +194,49 @@ async function dispatchStackLandDoneCommand(command: StackLandDoneDispatch, deps
   }
 }
 
+async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch, deps: StackLandCliDeps): Promise<number> {
+  const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const cwd = deps.cwd ?? process.cwd();
+  const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
+  const worktree = await (deps.resolveWorktree ?? ((slug) => resolveCliFeatureWorktree(slug, { cwd, resolveMainRoot: deps.resolveMainRoot })))(command.slug);
+  if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
+  const marker = await readRoundFromMarker(worktree, command.slug);
+  if (marker === undefined) return refused(print, 'no open operator landing is available to abandon.');
+  const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land --abandon');
+  if (acquired.kind !== 'acquired') return refused(print, leaseRefusal(acquired));
+  try {
+    const checked: CheckAbandonOperatorRoundResult = await (deps.checkAbandon ?? checkAbandonOperatorRound)({
+      worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
+    });
+    if (checked.kind === 'refused') return refused(print, checked.detail);
+    const abandoned = await (deps.abandonRound ?? abandonOperatorRound)({
+      worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
+    });
+    if (abandoned.kind === 'refused') return refused(print, abandoned.detail);
+    const reconciled = await (deps.reconcileRounds ?? (await import('./routing/round-admission.js')).reconcileRounds)(worktree, command.slug);
+    if (reconciled.kind === 'unavailable') return refused(print, reconciled.detail);
+    const cleared = await (deps.clearMatchingHalt ?? clearMatchingOperatorHalt)(worktree, marker.roundId);
+    if (cleared === 'unrelated') print('stack land: abandon succeeded, but an unrelated needs-human HALT remains.');
+    if (checked.stored.record.operator?.park !== undefined) {
+      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token);
+    }
+    print(`stack land: abandoned ${marker.roundId} on child ${marker.host}.`);
+    return 0;
+  } catch (error) {
+    return refused(print, error instanceof Error ? error.message : String(error));
+  } finally {
+    const released = await acquired.lease.release();
+    if (!released.ok) print(`stack land: refused — ${released.message}`);
+  }
+}
+
 /**
  * Open an operator-owned landing. The read-only admission predicate runs
  * before a lease or park exists so ordinary refusals leave no operator state.
  */
 export async function dispatchStackLandCommand(command: StackLandDispatch, deps: StackLandCliDeps = {}): Promise<number> {
   if (command.kind === 'stack-land-done') return dispatchStackLandDoneCommand(command, deps);
+  if (command.kind === 'stack-land-abandon') return dispatchStackLandAbandonCommand(command, deps);
   const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
   const parsed = parsedChildren(command);
   if (parsed === undefined) return refused(print, 'invalid child or --carry value.');

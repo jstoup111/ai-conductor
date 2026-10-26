@@ -459,14 +459,24 @@ export interface StackLandDoneDispatch {
   slug: string;
 }
 
-export type StackLandDispatch = StackLandOpenDispatch | StackLandDoneDispatch;
+/** Parsed abandonment of an already-open operator stack landing. */
+export interface StackLandAbandonDispatch {
+  kind: 'stack-land-abandon';
+  slug: string;
+}
 
-/** Parse the open and declaration grammars; --abandon remains a later owner. */
+export type StackLandDispatch = StackLandOpenDispatch | StackLandDoneDispatch | StackLandAbandonDispatch;
+
+/** Parse the open, declaration, and abandon grammars. */
 export function detectStackLandCommand(argv: readonly string[]): StackLandDispatch | null {
   if (argv[2] !== 'stack' || argv[3] !== 'land') return null;
   if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--done') {
     const slug = argv[5];
     return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-done', slug };
+  }
+  if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--abandon') {
+    const slug = argv[5];
+    return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-abandon', slug };
   }
   const values = new Map<string, string>();
   const carry: string[] = [];
