@@ -1,6 +1,6 @@
-// Covers: task:29
+// Covers: task:29, task:31
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -149,6 +149,22 @@ describe('stack owners CLI with real local Git', () => {
       print: (line) => output.push(line),
     })).resolves.toBe(1);
     expect(output.join('\n')).toContain('plan-invalid');
+    expect(await snapshot(repo, git)).toEqual(before);
+  });
+
+  it('refuses a routing-off stack without changing refs or local state', async () => {
+    const { repo, slug, git } = await fixture();
+    const output: string[] = [];
+    await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: false\n');
+    const before = await snapshot(repo, git);
+
+    await expect(dispatchStackOwnersCommand(command('--slug', slug, '--path', 'src-flag.tmp'), {
+      resolveWorktree: async () => repo,
+      print: (line) => output.push(line),
+    })).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain('stacked_prs.route_whole_feature_fixes');
     expect(await snapshot(repo, git)).toEqual(before);
   });
 

@@ -10,7 +10,7 @@ import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } f
 import { HALT_MARKER } from './halt-marker.js';
 import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult, type ParkToken } from './park-marker.js';
 import { clearHaltAtomically } from './rewind.js';
-import { hasDurableChildState } from './slice-topology.js';
+import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
 import {
   checkDeclareOperatorRound,
   checkAbandonOperatorRound,
@@ -36,6 +36,7 @@ export interface StackLandCliDeps {
   readonly resolveWorktree?: (slug: string) => Promise<string | undefined>;
   readonly loadConfig?: typeof loadConfig;
   readonly hasDurableChildState?: typeof hasDurableChildState;
+  readonly loadTopology?: (worktree: string, slug: string) => Promise<SliceTopology>;
   readonly checkOpen?: typeof checkOpenOperatorRound;
   readonly acquireLease?: typeof acquireFeatureDispatchLease;
   readonly createPark?: typeof createOwnedPark;
@@ -299,6 +300,9 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
 
   const eligibility = await checkStackLandEligibility(worktree, command.slug, deps);
   if (eligibility.kind === 'refused') return refused(print, eligibility.detail);
+  const topology = await (deps.loadTopology ?? loadSliceTopology)(worktree, command.slug);
+  if (topology.kind === 'unavailable') return refused(print, `sealed-plan topology is unavailable (${topology.cause}).`);
+  if (topology.kind !== 'sliced' || topology.positions.length < 2) return refused(print, `feature '${command.slug}' is not stacked.`);
 
   const check = deps.checkOpen ?? checkOpenOperatorRound;
   const checked: CheckOpenOperatorRoundResult = await check({

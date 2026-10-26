@@ -1,4 +1,4 @@
-// Covers: task:27
+// Covers: task:27, task:31
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,7 +88,44 @@ async function closedChildFixture(options: { missingChildState?: boolean; openCh
   return { root, repo, c1Closure };
 }
 
+async function flatFeatureFixture(): Promise<{ root: string; repo: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'rewind-flat-feature-'));
+  roots.push(root);
+  const repo = join(root, 'worktree');
+  await mkdir(repo);
+  const git = makeGitRunner(repo);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'rewind-flat@example.invalid']);
+  await git(['config', 'user.name', 'Rewind flat feature']);
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'plans', 'demo.md'), '# Implementation Plan: demo\n\n### Task 1: Flat task\n');
+  await git(['add', '.']);
+  await git(['commit', '-qm', 'flat feature']);
+  await git(['checkout', '-qb', 'feat/daemon-demo']);
+  return { root, repo };
+}
+
 describe('rewind --child on a closed child (real local Git)', () => {
+  it('refuses --child on a flat feature before changing refs or state', async () => {
+    const subject = await flatFeatureFixture();
+    const git = makeGitRunner(subject.repo);
+    const before = {
+      refs: (await git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout,
+      pipeline: await readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8').catch(() => '<absent>'),
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', child: '1', target: 'test_suite' }, subject.repo)).resolves.toBe(1);
+      expect(error.mock.calls.flat().join('\n')).toContain('stacked feature');
+      await expect(Promise.all([
+        git(['for-each-ref', '--format=%(refname) %(objectname)']).then((result) => result.stdout),
+        readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8').catch(() => '<absent>'),
+      ])).resolves.toEqual([before.refs, before.pipeline]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('opens a halted closed child rewind', async () => {
     const subject = await closedChildFixture();
     const childTwoPath = join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json');
@@ -286,33 +323,58 @@ describe('rewind --child on a closed child (real local Git)', () => {
     const lease = await acquireFeatureDispatchLease(leased.root, 'demo', 'other command');
     if (lease.kind !== 'acquired') throw new Error('could not create a live lease fixture');
     const open = await closedChildFixture({ openChildTwo: true });
+    const routingOff = await closedChildFixture();
+    await writeFile(join(routingOff.repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: false\n');
+    const routingOffGit = makeGitRunner(routingOff.repo);
+    const routingOffBefore = {
+      refs: (await routingOffGit(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout,
+      halt: await readFile(join(routingOff.repo, '.pipeline', 'HALT'), 'utf8'),
+      haltClass: await readFile(join(routingOff.repo, '.pipeline', 'HALT.class'), 'utf8'),
+      child: await readFile(join(routingOff.repo, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'),
+      state: await readFile(join(routingOff.repo, '.pipeline', 'conduct-state.json'), 'utf8'),
+    };
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const invoke = (repo: string, root: string, reason = 'valid reason') => dispatchRewindCommand(
         { kind: 'rewind', child: '1', target: 'test_suite', reason }, repo,
         { resolveMainRoot: async () => root, resolveOperator: async () => 'operator@example.test' },
       );
-      const [noHalt, noReason, isPublished, hasLease] = await Promise.all([
+      const [noHalt, noReason, isPublished, hasLease, routeDisabled] = await Promise.all([
         invoke(missingHalt.repo, missingHalt.root),
         invoke(missingReason.repo, missingReason.root, ''),
         invoke(published.repo, published.root),
         invoke(leased.repo, leased.root),
+        invoke(routingOff.repo, routingOff.root),
       ]);
       const legacy = await dispatchRewindCommand({ kind: 'rewind', child: '2', target: 'build' }, open.repo);
       const openState = JSON.parse(await readFile(join(open.repo, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8'));
       const route = await readRouteRecord(open.repo, 'demo', rewindRound);
 
-      expect({ exits: [noHalt, noReason, isPublished, hasLease, legacy], messages: errors.mock.calls.map(([message]) => String(message)), legacyState: { acceptance_specs: openState.acceptance_specs, build: openState.build, test_suite: openState.test_suite, build_review: openState.build_review }, route }).toStrictEqual({
-        exits: [1, 1, 1, 1, 0],
+      expect({ exits: [noHalt, noReason, isPublished, hasLease, routeDisabled, legacy], messages: errors.mock.calls.map(([message]) => String(message)), legacyState: { acceptance_specs: openState.acceptance_specs, build: openState.build, test_suite: openState.test_suite, build_review: openState.build_review }, route }).toStrictEqual({
+        exits: [1, 1, 1, 1, 1, 0],
         messages: expect.arrayContaining([
           expect.stringContaining('.pipeline/HALT'),
           expect.stringContaining('non-empty reason'),
           expect.stringContaining('#3268'),
           expect.stringContaining('other command'),
+          expect.stringContaining('stacked_prs.route_whole_feature_fixes'),
         ]),
         legacyState: { acceptance_specs: 'done', build: 'stale', test_suite: 'stale', build_review: 'stale' },
         route: { kind: 'absent' },
       });
+      await expect(Promise.all([
+        routingOffGit(['for-each-ref', '--format=%(refname) %(objectname)']).then((result) => result.stdout),
+        readFile(join(routingOff.repo, '.pipeline', 'HALT'), 'utf8'),
+        readFile(join(routingOff.repo, '.pipeline', 'HALT.class'), 'utf8'),
+        readFile(join(routingOff.repo, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'),
+        readFile(join(routingOff.repo, '.pipeline', 'conduct-state.json'), 'utf8'),
+      ])).resolves.toEqual([
+        routingOffBefore.refs,
+        routingOffBefore.halt,
+        routingOffBefore.haltClass,
+        routingOffBefore.child,
+        routingOffBefore.state,
+      ]);
     } finally {
       await lease.lease.release();
       errors.mockRestore();

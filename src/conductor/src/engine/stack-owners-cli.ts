@@ -7,12 +7,15 @@ import { planRestackRanges } from './restack/restack-plan.js';
 import { parseRefName } from './restack/restack-types.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { loadSliceTopology, type SliceTopology } from './slice-topology.js';
+import { loadConfig } from './config.js';
+import { routingSettingOn } from './routing/route-types.js';
 
 export interface StackOwnersCliDependencies {
   readonly cwd?: string;
   readonly print?: (line: string) => void;
   readonly resolveWorktree?: (slug: string) => Promise<string | undefined>;
   readonly loadTopology?: (worktree: string, slug: string) => Promise<SliceTopology>;
+  readonly loadConfig?: typeof loadConfig;
   readonly git?: GitRunner;
 }
 
@@ -53,6 +56,10 @@ export async function dispatchStackOwnersCommand(
   const topology = await (dependencies.loadTopology ?? loadSliceTopology)(worktree, command.slug);
   if (topology.kind === 'unavailable') return refused(print, `sealed-plan topology is unavailable (${topology.cause}).`);
   if (topology.kind !== 'sliced' || topology.positions.length < 2) return refused(print, `feature '${command.slug}' is not stacked.`);
+  const config = await (dependencies.loadConfig ?? loadConfig)(worktree);
+  if (!routingSettingOn(config.ok ? config.config : undefined)) {
+    return refused(print, 'routing is disabled by stacked_prs.route_whole_feature_fixes.');
+  }
 
   const leaf = parseChildId(topology.positions.at(-1)!);
   const leafRef = leaf === undefined ? undefined : parseRefName(`refs/heads/${leafBranchFor(command.slug)}`);

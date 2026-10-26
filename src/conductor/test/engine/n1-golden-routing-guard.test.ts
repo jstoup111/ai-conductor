@@ -1,7 +1,7 @@
-// Covers: task:3, task:17, task:18
+// Covers: task:3, task:17, task:18, task:31
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -188,6 +188,7 @@ async function runFixableLap(cell: typeof UNSLICED_CELLS[number]) {
       });
     });
     return {
+      root,
       branch: (await execFile('git', ['branch', '--show-current'], { cwd: root })).stdout.trim(),
       plan: normalizeGolden(await readFile(planPath, 'utf8'), root),
       ledger,
@@ -210,6 +211,7 @@ describe('N=1 golden remediation routing guard', () => {
     await expectGolden(`${cell.name}-fixable-lap-conduct-state`, lap.state);
     await expectGolden(`${cell.name}-fixable-lap-events`, lap.events);
     assertNoRoutingRefArgv(lap.gitArgv);
+    await expect(access(join(lap.root, '.daemon', 'leases'))).rejects.toMatchObject({ code: 'ENOENT' });
     const eventTypes = lap.events.split('\n').filter(Boolean).map((line) => JSON.parse(line).type as string);
     expect(eventTypes.filter((type) => ROUTED_EVENT_TYPES.has(type))).toEqual([]);
   });

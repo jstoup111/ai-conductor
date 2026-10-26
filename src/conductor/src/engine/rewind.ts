@@ -412,6 +412,10 @@ export async function dispatchRewindCommand(
     console.error(`rewind: active child resolution refused (${detail})`);
     return 1;
   }
+  if (command.child !== undefined && cursor.kind === 'no-child') {
+    console.error('rewind: --child is available only for a stacked feature.');
+    return 1;
+  }
   const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
   const slug = head?.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
   const execution = resolveExecutionChild(cursor, slug ?? 'rewind');

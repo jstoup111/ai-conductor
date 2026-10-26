@@ -1,4 +1,4 @@
-// Covers: task:16
+// Covers: task:16, task:31
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -21,7 +21,7 @@ const IMPORTERS = [
   'artifacts.ts', 'child-cursor.ts', 'child-lifecycle.ts', 'conductor.ts',
   'daemon-dashboard.ts', 'daemon-observe-cli.ts', 'finish-publication-production.ts',
   'reseal-cli.ts', 'routing/operator-round.ts', 'routing/owner-derivation.ts', 'routing/round-router.ts',
-  'stack-commit-guard-cli.ts', 'stack-land-cli.ts', 'step-runners.ts', 'task-cli.ts', 'task-membership-check-cli.ts', 'task-progress.ts',
+  'stack-commit-guard-cli.ts', 'stack-land-cli.ts', 'stack-owners-cli.ts', 'step-runners.ts', 'task-cli.ts', 'task-membership-check-cli.ts', 'task-progress.ts',
 ];
 
 /*
