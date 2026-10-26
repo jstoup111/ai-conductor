@@ -1,4 +1,4 @@
-// Covers: task:24
+// Covers: task:24, task:rem-as-built-rem-as-built-r11
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -8,7 +8,7 @@ import { detectStackLandCommand } from '../../src/cli.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { acquireFeatureDispatchLease } from '../../src/engine/feature-dispatch-lease.js';
 import { leafBranchFor } from '../../src/engine/feature-branch-identity.js';
-import { createOwnedPark } from '../../src/engine/park-marker.js';
+import { createOwnedPark, releaseOwnedPark } from '../../src/engine/park-marker.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { abandonOperatorRound, formatOperatorHaltReason, openOperatorRound } from '../../src/engine/routing/operator-round.js';
 import { reconcileRounds } from '../../src/engine/routing/round-admission.js';
@@ -61,7 +61,7 @@ async function fixture() {
     worktree: repo, slug: 'demo', roundId, host, reason: 'discard reviewer edit', operator: 'operator@example.test', carried: [], park: { token: park.token }, emitter: new ConductorEventEmitter(), git,
   });
   if (opened.kind !== 'opened') throw new Error(opened.detail);
-  return { repo, git, closure, landing, commit };
+  return { repo, git, closure, landing, commit, park };
 }
 
 async function abandon(subject: Awaited<ReturnType<typeof fixture>>, deps: Record<string, unknown> = {}, output: string[] = []) {
@@ -92,6 +92,7 @@ describe('stack land --abandon', () => {
     await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), `${formatOperatorHaltReason('operator-round-undeclared', roundId)}\n`);
     await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), 'needs-human\n');
+    await releaseOwnedPark(subject.repo, 'demo', subject.park.token);
 
     expect(detectStackLandCommand(['node', 'ai-conductor', 'stack', 'land', '--slug', 'demo', '--abandon']))
       .toEqual({ kind: 'stack-land-abandon', slug: 'demo' });
@@ -165,5 +166,17 @@ describe('stack land --abandon', () => {
     expect(syncedOn).toEqual(['feat/c1/demo']);
     await expect(readFile(join(subject.repo, '.pipeline', 'children', '1', 'kickback-ledger.json'), 'utf8')).resolves.toBe(ledger);
     expect((await record(subject)).record).toMatchObject({ phase: 'closed', hosts: { 1: 'abandoned' } });
+  });
+
+  it('keeps an owned park across a mid-abandon crash after the landing park was released', async () => {
+    const subject = await fixture();
+    await releaseOwnedPark(subject.repo, 'demo', subject.park.token);
+    const crashing: GitRunner = async (args, options) => args[0] === 'read-tree'
+      ? { exitCode: 1, stdout: '', stderr: 'simulated crash' }
+      : subject.git(args, options);
+
+    await abandon(subject, { abandonRound: (input: Parameters<typeof abandonOperatorRound>[0]) => abandonOperatorRound({ ...input, git: crashing }) });
+
+    await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8')).resolves.toContain('owned-park-token:');
   });
 });

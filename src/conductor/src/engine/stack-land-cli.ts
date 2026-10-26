@@ -221,6 +221,7 @@ async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch
       worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
     });
     if (checked.kind === 'refused') return refused(print, checked.detail);
+    const park: OwnedParkCreationResult = await (deps.createPark ?? createOwnedPark)(root, command.slug);
     const abandoned = await (deps.abandonRound ?? abandonOperatorRound)({
       worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
     });
@@ -229,11 +230,7 @@ async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch
     if (reconciled.kind === 'unavailable') return refused(print, reconciled.detail);
     const cleared = await (deps.clearMatchingHalt ?? clearMatchingOperatorHalt)(worktree, marker.roundId);
     if (cleared === 'unrelated') print('stack land: abandon succeeded, but an unrelated needs-human HALT remains.');
-    if (checked.stored.record.operator?.park !== undefined) {
-      // Route records are serialized, so their token crosses back into the
-      // opaque in-memory capability type only at this persistence boundary.
-      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token as ParkToken);
-    }
+    if (park.created) await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, park.token);
     print(`stack land: abandoned ${marker.roundId} on child ${marker.host}.`);
     return 0;
   } catch (error) {
