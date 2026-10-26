@@ -521,7 +521,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### pipeline
 
-> Use when executing an implementation plan with multiple tasks. Factory orchestration with three autonomy levels, quality gates, rework budgets, and audit trails.
+> Use when executing an implementation plan with multiple tasks. Factory orchestration with ready-frontier parallelism, quality gates, rework budgets, and audit trails.
 
 - **Frontmatter** — `enforcement: structural`, `phase: build`, `standalone: false`,
   `requires: [".docs/plans/ with implementation plan"]`, no model pin.
