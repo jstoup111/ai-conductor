@@ -1138,8 +1138,12 @@ export function renderDashboard(
   const lines: string[] = [];
   const chrome = (line: string) => compact ? clipToBudget(line, budget) : line;
   const pushChrome = (line: string) => lines.push(chrome(line));
-  const pushRule = () => lines.push(compact ? '─'.repeat(budget) : '── inherited state ──────────────────────────────────────────');
-  const detail = (text: string) => `      ${clipToBudget(text, budget)}`;
+  const pushOpeningRule = () => lines.push(compact ? '─'.repeat(budget) : '── inherited state ──────────────────────────────────────────');
+  const pushClosingRule = () => lines.push('─'.repeat(compact ? budget : 61));
+  const detail = (text: string) => {
+    const indent = '      ';
+    return `${indent.slice(0, budget)}${clipToBudget(text, Math.max(0, budget - indent.length))}`;
+  };
   const slugDetail = (slug: string, heading: string, text: string) => {
     lines.push(`  • ${slug}${heading}`);
     lines.push(detail(text));
@@ -1156,7 +1160,7 @@ export function renderDashboard(
   const haltedSet = new Set(halted.map((h) => h.slug));
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   const inProgressSet = new Set(inProgress.map((p) => p.slug));
-  const retained = (state.retainedWorktrees ?? []).filter((entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug));
+  const retained = (state.retainedWorktrees ?? []).filter((entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug) && !inProgressSet.has(entry.slug));
   const retainedSet = new Set(retained.map((entry) => entry.slug));
   const processedSet = new Set(state.processed.map((p) => p.slug));
   const blocked = (state.blocked ?? []).filter((entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug) && !inProgressSet.has(entry.slug) && !retainedSet.has(entry.slug) && !processedSet.has(entry.slug));
@@ -1167,9 +1171,9 @@ export function renderDashboard(
   const waitingSet = new Set(waiting.map((w) => w.slug));
   const eligible = state.eligible.filter((e) => !parkedSet.has(e.slug) && !haltedSet.has(e.slug) && !inProgressSet.has(e.slug) && !retainedSet.has(e.slug) && !processedSet.has(e.slug) && !blockedSet.has(e.slug) && !gatedSet.has(e.slug) && !waitingSet.has(e.slug));
   const neverStarted = (state.neverStarted ?? []).filter((slug) => !parkedSet.has(slug) && !haltedSet.has(slug) && !retainedSet.has(slug));
-  const processed = state.processed.filter((p) => !parkedSet.has(p.slug) && !retainedSet.has(p.slug));
+  const processed = state.processed.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug) && !inProgressSet.has(p.slug) && !retainedSet.has(p.slug));
 
-  pushRule();
+  pushOpeningRule();
   const attention = [
     halted.length ? `${halted.length} halted` : undefined,
     blocked.length ? `${blocked.length} blocked` : undefined,
@@ -1242,7 +1246,7 @@ export function renderDashboard(
   }
   if (neverStarted.length > 0) { pushChrome(`NEVER-STARTED (${neverStarted.length})`); if (!compact) for (const slug of neverStarted) lines.push(`  • ${slug} — reason: no pipeline state was ever written; remedy: no operator action applies; feature remains dispatchable`); }
   if (opts?.includeCompleted ?? compact) { pushChrome(`PROCESSED (${processed.length})`); if (!compact) for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`); }
-  pushRule();
+  pushClosingRule();
   return lines.join('\n');
 }
 

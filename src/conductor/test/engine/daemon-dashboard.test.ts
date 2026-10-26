@@ -111,14 +111,111 @@ describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
     expect(output).toContain('PROCESSED (1)');
   });
 
-  it('clips compact details but never a slug, and resolves a safe row budget', () => {
+  it('clips compact details to the budget but never a slug, and resolves a safe row budget', () => {
     const longSlug = 's'.repeat(50); const reason = 'x'.repeat(280);
-    const output = renderDashboard({ ...base(), halted: [{ slug: longSlug, reason, tier: 'M', step: 'build' }] }, { mode: 'compact', rowBudget: 40 });
+    const output = renderDashboard({ ...base(), halted: [{ slug: longSlug, reason, tier: 'M', step: 'build' }] }, { mode: 'compact', rowBudget: 80 });
     expect(output).toContain(`  • ${longSlug} [M] @build`);
-    expect(output.split('\n').find((line) => line.startsWith('      '))?.endsWith('…')).toBe(true);
+    const detail = output.split('\n').find((line) => line.startsWith('      '));
+    expect(detail).toHaveLength(80);
+    expect(detail).toMatch(/^      reason: x+/);
+    expect(detail?.endsWith('…')).toBe(true);
     expect(resolveRowBudget({ isTTY: false, columns: 200 })).toBe(80);
     expect(resolveRowBudget({ isTTY: true, columns: 20 })).toBe(40);
     expect(resolveRowBudget({ isTTY: true, columns: 120 })).toBe(120);
+  });
+
+  it.each([40, 80, 120])('keeps every compact detail row within a %i-character budget', (rowBudget) => {
+    const output = renderDashboard({
+      ...base(),
+      halted: [{ slug: 'halted', reason: 'halted reason '.repeat(20) }],
+      blocked: [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'blocked remedy '.repeat(20) }],
+      gated: [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'owner', remedy: 'gated remedy '.repeat(20) }],
+      parked: [{ slug: 'parked-action', annotation: 'orphan', reason: 'parked reason '.repeat(20) }],
+      retainedWorktrees: [{ slug: 'retained-action', reason: 'pr-closed-unmerged' }],
+    }, { mode: 'compact', rowBudget });
+    const lines = output.split('\n');
+    const memberLines = lines.filter((line) => line.startsWith('      '));
+    expect(memberLines).toHaveLength(5);
+    for (const line of memberLines) expect(line.length).toBeLessThanOrEqual(rowBudget);
+    if (rowBudget === 120) for (const line of lines) expect(line.length).toBeLessThanOrEqual(120);
+  });
+
+  it('puts the reason before the remedy on each compact inert action row', () => {
+    const output = renderDashboard({
+      ...base(),
+      blocked: [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'blocked remedy' }],
+      gated: [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'owner', remedy: 'gated remedy' }],
+      parked: [{ slug: 'parked-action', annotation: 'orphan', reason: 'parked reason' }],
+      retainedWorktrees: [{ slug: 'retained-action', reason: 'pr-closed-unmerged' }],
+    }, { mode: 'compact', rowBudget: 80 });
+    const lines = output.split('\n');
+    for (const [slug, reason] of [['blocked', 'stories-not-approved'], ['gated', 'other-owner'], ['parked-action', 'parked reason'], ['retained-action', 'retained after ship']] as const) {
+      const index = lines.findIndex((line) => line === `  • ${slug}`);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(lines[index + 1]).toMatch(/^      /);
+      expect(lines[index + 1].length).toBeLessThanOrEqual(80);
+      expect(lines[index + 1].indexOf('remedy')).toBeGreaterThan(lines[index + 1].indexOf(reason));
+    }
+  });
+
+  it('assigns each overlapping slug to its highest-ranked group in full and compact renders', () => {
+    const slugs = Array.from({ length: 50 }, (_, index) => `generated-${index}`);
+    const names = ['parked', 'halted', 'inProgress', 'retained', 'processed', 'blocked', 'gated', 'waiting', 'eligible'] as const;
+    type Partition = typeof names[number];
+    let seed = 0x5eed1234;
+    const next = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed; };
+    const assigned = new Map<string, Set<Partition>>();
+    for (const [index, slug] of slugs.entries()) {
+      if (index === 0) assigned.set(slug, new Set(['blocked', 'eligible']));
+      else if (index === 1) assigned.set(slug, new Set(['blocked', 'gated']));
+      else if (index === 2) assigned.set(slug, new Set(['blocked', 'halted']));
+      else if (index === 3) assigned.set(slug, new Set(['halted', 'processed']));
+      else if (index === 4) assigned.set(slug, new Set(['inProgress', 'retained']));
+      else {
+        const pool = [...names];
+        for (let position = pool.length - 1; position > 0; position--) {
+          const swap = next() % (position + 1);
+          [pool[position], pool[swap]] = [pool[swap], pool[position]];
+        }
+        assigned.set(slug, new Set(pool.slice(0, 2 + (next() % 3))));
+      }
+    }
+    const has = (slug: string, partition: Partition) => assigned.get(slug)?.has(partition) ?? false;
+    const state: InheritedState = {
+      ...base(),
+      parked: slugs.filter((slug) => has(slug, 'parked')).map((slug) => ({ slug })),
+      halted: slugs.filter((slug) => has(slug, 'halted')).map((slug) => ({ slug, reason: 'halted' })),
+      inProgress: slugs.filter((slug) => has(slug, 'inProgress')).map((slug) => ({ slug, step: 'build' })),
+      retainedWorktrees: slugs.filter((slug) => has(slug, 'retained')).map((slug) => ({ slug, reason: 'pr-open-awaiting-main' })),
+      processed: slugs.filter((slug) => has(slug, 'processed')).map((slug) => ({ slug })),
+      processedCount: slugs.filter((slug) => has(slug, 'processed')).length,
+      blocked: slugs.filter((slug) => has(slug, 'blocked')).map((slug) => ({ slug, reason: 'stories-not-approved' as const, remedy: 'blocked remedy' })),
+      gated: slugs.filter((slug) => has(slug, 'gated')).map((slug) => ({ kind: 'spec' as const, slug, reason: 'other-owner' as const, otherOwner: 'owner', remedy: 'gated remedy' })),
+      waiting: slugs.filter((slug) => has(slug, 'waiting')).map((slug) => ({ slug, verdict: { kind: 'blocked' as const, blockers: [{ repo: 'owner/repo', number: '1' }] } })),
+      eligible: slugs.filter((slug) => has(slug, 'eligible')).map((slug) => ({ slug })),
+    };
+    const expected = (slug: string) => state.parked?.some((entry) => (typeof entry === 'string' ? entry : entry.slug) === slug) ? 'PARKED'
+      : state.halted.some((entry) => entry.slug === slug) ? 'HALTED'
+        : state.inProgress.some((entry) => entry.slug === slug) ? 'IN-PROGRESS'
+          : state.retainedWorktrees?.some((entry) => entry.slug === slug) ? 'RETAINED WORKTREES'
+            : state.processed.some((entry) => entry.slug === slug) ? 'PROCESSED'
+              : state.blocked?.some((entry) => entry.slug === slug) ? 'BLOCKED'
+                : state.gated?.some((entry) => entry.kind === 'spec' && entry.slug === slug) ? 'GATED'
+                  : state.waiting?.some((entry) => entry.slug === slug) ? 'WAITING' : 'ELIGIBLE';
+    const full = renderDashboard(state, { mode: 'full', includeCompleted: true });
+    const compact = renderDashboard(state, { mode: 'compact', rowBudget: 120 });
+    for (const slug of slugs) {
+      expect(full.match(new RegExp(`\\b${slug}\\b`, 'g'))).toHaveLength(1);
+      const winner = expected(slug);
+      const groupStart = full.indexOf(`${winner} (`);
+      const nextGroup = full.slice(groupStart + 1).search(/\n(?:HALTED|BLOCKED|GATED|IN-PROGRESS|WAITING|ELIGIBLE|PARKED|RETAINED WORKTREES|NEVER-STARTED|PROCESSED) \(/);
+      expect(full.slice(groupStart, nextGroup < 0 ? undefined : groupStart + 1 + nextGroup)).toContain(slug);
+      expect(compact.match(new RegExp(`\\b${slug}\\b`, 'g'))?.length ?? 0).toBeLessThanOrEqual(1);
+      if (!['PARKED', 'RETAINED WORKTREES', 'PROCESSED'].includes(winner)) expect(compact).toContain(slug);
+    }
+    for (const group of ['PARKED', 'RETAINED WORKTREES', 'PROCESSED']) {
+      expect(compact).toContain(`${group} (${slugs.filter((slug) => expected(slug) === group).length})`);
+    }
   });
 });
 
@@ -1215,8 +1312,9 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
       'PARKED (0)',
-      '── inherited state ──────────────────────────────────────────',
+      '─'.repeat(61),
     ].join('\n'));
+    expect(out.split('\n').at(-1)).toBe('─'.repeat(61));
   });
 
   it('renders a parked halted slug only in PARKED without increasing HALTED', () => {
@@ -1237,7 +1335,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       'ELIGIBLE (0)',
       'PARKED (1)',
       '  • held-by-halt — operator-parked; remedy: run conduct daemon unpark for this row',
-      '── inherited state ──────────────────────────────────────────',
+      '─'.repeat(61),
     ].join('\n'));
   });
 
@@ -1303,7 +1401,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
       'PARKED (0)',
-      '── inherited state ──────────────────────────────────────────',
+      '─'.repeat(61),
     ].join('\n'));
   });
 

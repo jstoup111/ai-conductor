@@ -1169,7 +1169,7 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         renderDashboard(dashboardState, { mode: 'full' }),
         options.showCompleted
           ? renderDashboard(dashboardState, { mode: 'full', includeCompleted: true })
-          : renderDashboard(dashboardState, { mode: 'compact', includeCompleted: false, rowBudget: resolveRowBudget(options.consoleStream ?? process.stdout) }),
+          : renderDashboard(dashboardState, { mode: 'compact', rowBudget: resolveRowBudget(options.consoleStream ?? process.stdout) }),
       );
     },
   };
