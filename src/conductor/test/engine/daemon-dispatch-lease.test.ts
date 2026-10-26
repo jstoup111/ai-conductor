@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:rem-as-built-rem-as-built-r5
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
@@ -31,7 +31,12 @@ beforeEach(() => {
 
 function runnerDeps(trace: string[]): FeatureRunnerDeps {
   return {
-    createWorktree: async () => ({ path: '/repo/.worktrees/stacked', branch: 'feat/stacked' }),
+    // The daemon runner reaches the production `git worktree add` mutation
+    // through this seam. Keep it real while observing the ordering boundary.
+    createWorktree: async () => {
+      trace.push('create');
+      return { path: '/repo/.worktrees/stacked', branch: 'feat/stacked' };
+    },
     prepareWorktree: async () => { trace.push('prepare'); },
     runConductor: async () => { trace.push('conductor'); },
     readOutcome: async () => ({ done: false, halted: false }),
@@ -51,7 +56,7 @@ function acquired(trace: string[]) {
 }
 
 describe('engine/daemon dispatch lease', () => {
-  it('leases a stacked daemon dispatch before preparation and releases at the unit boundary', async () => {
+  it('leases a stacked daemon dispatch before creating or preparing its worktree and releases at the unit boundary', async () => {
     const trace: string[] = [];
     seams.durable.mockResolvedValue(true);
     seams.parked.mockResolvedValue(false);
@@ -59,7 +64,7 @@ describe('engine/daemon dispatch lease', () => {
 
     await expect(makeRunFeature(runnerDeps(trace))(ITEM)).resolves.toMatchObject({ status: 'error' });
 
-    expect(trace).toEqual(['acquire', 'prepare', 'conductor', 'teardown', 'release']);
+    expect(trace).toEqual(['acquire', 'create', 'prepare', 'conductor', 'teardown', 'release']);
   });
 
   it('rechecks parking after acquisition, releases, and skips without preparation', async () => {

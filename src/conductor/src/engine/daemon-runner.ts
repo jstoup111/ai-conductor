@@ -417,13 +417,10 @@ export function makeRunFeature(
     let dispatchEnded = false;
     let haltingStep: string | undefined;
     try {
-      // The worktree is cut from the fast-forwarded default branch, so the vetted
-      // stories+plan are already committed in it — no materialization/copy needed.
-      worktree = await deps.createWorktree(item.slug);
-      // A durable child stack has shared mutable state outside this disposable
-      // worktree. Serialize every daemon dispatch before preparation can touch
-      // that state. Flat features retain their existing lock-free path.
-      if (deps.daemon && deps.projectRoot && await hasDurableChildState(worktree.path, item.slug) === true) {
+      // A durable child stack has shared mutable state outside its disposable
+      // worktree. Inspect that state from the root and acquire before the
+      // first worktree mutation; flat features retain their lock-free path.
+      if (deps.daemon && deps.projectRoot && await hasDurableChildState(deps.projectRoot, item.slug) === true) {
         const leaseResult = await acquireFeatureDispatchLease(deps.projectRoot, item.slug, 'daemon dispatch');
         if (leaseResult.kind !== 'acquired') {
           if (leaseResult.kind === 'live-owner') {
@@ -442,6 +439,9 @@ export function makeRunFeature(
           return { slug: item.slug, status: 'parked', reason: 'parked-after-lease' };
         }
       }
+      // The worktree is cut from the fast-forwarded default branch, so the vetted
+      // stories+plan are already committed in it — no materialization/copy needed.
+      worktree = await deps.createWorktree(item.slug);
       featureRun = await deps.beginFeatureRun?.(worktree, item);
       featureRun?.events.on('loop_halt', (event) => { if (event.type === 'loop_halt') haltingStep = event.step; });
       featureLog = featureRun?.log ?? log;
