@@ -79,7 +79,7 @@ describe('kickback budget view', () => {
   // Covers: task:6
   it('reports raised remediation allowances from their resolved allowance', () => {
     const allowance = { tier: 'S' as const, limit: 2, source: 'default' as const };
-    const entry = { ...baseEntry, laps: 2, effectiveLapCap: 4, adjustmentsKnown: true };
+    const entry = { ...baseEntry, laps: 2, effectiveLapCap: 4, adjustmentsKnown: true as const };
 
     expect(renderKickbackBudgetView(entry, 'prd_audit', allowance.limit, undefined, undefined, undefined, 0, allowance)).toContain(
       'Kickback budget (prd_audit): 2/4 consumed; 2 remaining — tier S allowance 4 (raised from 2)',

@@ -808,6 +808,8 @@ async function runRefusalReworkRun(input: {
   priorLaps?: number;
   /** Start unrecorded and have the interactive complexity step record tier L. */
   recordTierLAtComplexity?: boolean;
+  /** Seed the feature's recorded complexity tier before the SHIP-tail run. */
+  complexityTier?: 'S' | 'M' | 'L';
   mode?: 'auto' | 'default';
   manualTestFail?: boolean;
   asBuilt?: 'approved' | 'blocked-remediable';
