@@ -219,20 +219,24 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     );
   });
 
-  it('uses the current tier when a feature changes from L to S between prd-audit laps', async () => {
+  it('halts an unconfigured feature with no recorded tier at the default M prd-audit allowance', async () => {
     const { build } = await runBuild({
-      receiptId: 'tier-changed-prd', taskIds: ['rem-1'],
+      receiptId: 'unrecorded-tier-prd', taskIds: ['rem-1'],
       charges: { prd_audit: { laps: 1, growth: 0 } },
     }, {
       version: 1,
       gates: { prd_audit: entry(3) },
       growth: { authored: 4, added: 0, byGate: {} },
-    }, { complexityTier: 'S', remediationCaps: {} });
+    }, { remediationCaps: {} });
 
     expect(build).not.toHaveBeenCalled();
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(
       'BUILD dispatch halted: prd_audit laps allowance exhausted',
     );
+    expect(halt).toContain('Kickback budget (prd_audit): 3/3 consumed; 0 remaining — tier unrecorded, treated as M; allowance 3 (default)');
+    expect(halt).not.toContain('tier L');
+    expect(halt).not.toContain('allowance 4');
   });
 
   it('honors raised effective lap caps over tier defaults and configured caps at BUILD dispatch', async () => {
