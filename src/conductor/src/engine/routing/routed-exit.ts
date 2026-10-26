@@ -4,6 +4,7 @@ import type { GitRunner } from '../rebase.js';
 import { ConductorEventEmitter } from '../../ui/events.js';
 import { EventPersister } from '../event-persister.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
+import type { RestackResolver } from '../restack/restack-resolver.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
 import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
@@ -262,6 +263,9 @@ export interface RequestRoutedExitInput {
   readonly skipBuiltCompareAndSwap?: boolean;
   readonly persist?: PersistOutboxEvent;
   readonly git?: GitRunner;
+  /** Provider-backed resolver for replay conflicts in the exit restack, and its attempt budget. */
+  readonly resolver?: RestackResolver;
+  readonly resolverCap?: number;
 }
 
 /** Reads the durable entry baseline before a routed host selects its exit. */
@@ -404,6 +408,8 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     originatingChildren: origins,
     routed: { roundId: input.roundId, host: input.host, routeOld: built.blob, markerOld: marker.blob },
     ...(input.events === undefined ? {} : { events: input.events }),
+    ...(input.resolver === undefined ? {} : { resolver: input.resolver }),
+    ...(input.resolverCap === undefined ? {} : { resolverCap: input.resolverCap }),
     git,
   });
   if (restack.kind !== 'applied') return halted(`routed exit host ${input.host}: ${restackDetail(restack)}`);

@@ -200,6 +200,52 @@ describe('Conductor routed acceptance verify-green path', () => {
     expect(await readFile(join(root, '.pipeline', 'HALT'), 'utf8')).toBe(restackHalt);
   });
 
+  it('hands the step runner conflict resolver to the routed exit restack', async () => {
+    const { root } = await routedFixture();
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    const restackHalt = 'restack refused (cascade-cap) child 1\noriginating child 1 reached 3/3 cascades\n';
+    const requestRoutedExit = vi.fn(async () => {
+      await writeFile(join(root, '.pipeline', 'HALT'), restackHalt);
+      return { kind: 'halted' as const, detail: 'routed exit host 1: halted' };
+    });
+    const active = { kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo' } as const;
+    const resolveActiveChild = vi.fn()
+      .mockResolvedValueOnce(active)
+      .mockResolvedValueOnce(active)
+      .mockResolvedValueOnce({
+        kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo',
+        repairChildren: [child], routedRepair: { child, roundId },
+      });
+    const resolveRebaseConflict = vi.fn(async () => ({ resolved: false as const, reason: 'unused' }));
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}), resolveRebaseConflict };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'build_review',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(),
+      stepRunner: runner,
+      acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: {
+        resolveActiveChild,
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        advanceChildRegion: vi.fn(),
+        requestRoutedExit,
+      },
+    });
+
+    await conductor.run();
+
+    const [exitInput] = vi.mocked(requestRoutedExit).mock.calls[0] as unknown as [{ resolver?: (ctx: never) => unknown; resolverCap?: number }];
+    expect(exitInput.resolverCap).toEqual(expect.any(Number));
+    await exitInput.resolver?.({} as never);
+    expect(resolveRebaseConflict).toHaveBeenCalledOnce();
+  });
+
   // Covers: task:rem-prd-audit-rem-vg5-s6-1
   it('enters r2 after r1 closes deferred, without dispatching whole-feature audit or completing', async () => {
     const { root } = await routedFixture();

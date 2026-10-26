@@ -175,6 +175,8 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
         skipBuiltCompareAndSwap: true,
         ...(options.git === undefined ? {} : { git: options.git }),
         ...(options.events === undefined ? {} : { events: options.events }),
+        ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
+        ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
       });
       return exited.kind === 'restacked' || exited.kind === 'no-commit-done'
         ? { kind: 'repaired' }

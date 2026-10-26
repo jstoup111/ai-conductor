@@ -300,6 +300,21 @@ describe('routed exit (real local Git)', () => {
     expect(requestRoutedExit).not.toHaveBeenCalled();
   });
 
+  it.each(['exit', 'preflight resume'] as const)('hands a routed replay conflict to the supplied resolver (%s)', async (entry) => {
+    const subject = await fixture(true);
+    // The routed fix creates the file child 2 adds, so replaying child 2 conflicts.
+    await subject.commit('routed fix touching child 2', 'two.txt', 'routed\n');
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'test resolver declined' }));
+    if (entry === 'exit') {
+      await requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner, resolver, resolverCap: 1 });
+    } else {
+      await replaceRoute(subject, (record) => ({ ...record, hosts: { ...record.hosts, [host]: 'built' } }));
+      await runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner, resolver, resolverCap: 1 });
+    }
+
+    expect(resolver).toHaveBeenCalled();
+  });
+
   it('takes the one-transaction no-commit exit only at the exact closure tip', async () => {
     const subject = await fixture(false);
     const recorded = recordingRunner(subject.gitRunner);
