@@ -134,6 +134,7 @@ const operatorRecord = {
 };
 
 describe('routed repair durable record parsers', () => {
+  // Covers: `route-types.test.ts` asserts `parseRouteRecord` accepts an `operator` record with origin, reason, operator, entryStep, park, carried, otherTips, priorRegion, declaration and abandon fields, and rejects an `operator` record without the section and an `audit` record with one.
   it('parses the complete operator section only on an operator route', () => {
     expect(parseRouteRecord(JSON.stringify(operatorRecord))).toEqual(operatorRecord);
     expect(JSON.stringify(parseRouteRecord(JSON.stringify(operatorRecord)))).toBe(JSON.stringify(operatorRecord));
@@ -143,6 +144,7 @@ describe('routed repair durable record parsers', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, operator: operatorRecord.operator }))).toBeUndefined();
   });
 
+  // Covers: `route-types.test.ts` asserts `isLegalHostTransition` allows `admitted→abandoning`, `repairing→abandoning` and `abandoning→abandoned` and refuses `built→abandoning`, and `hasConsistentRouteLifecycle` accepts a closed round with an `abandoned` host.
   it('allows only the operator abandon transitions and a closed abandoned host', () => {
     expect(isLegalHostTransition('admitted', 'abandoning')).toBe(true);
     expect(isLegalHostTransition('repairing', 'abandoning')).toBe(true);
