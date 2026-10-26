@@ -10,7 +10,7 @@ import type {
   CiRepairDiagnosticStage,
   ConductorEvent,
 } from '../types/index.js';
-import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+import { ConductorEventEmitter, type EventHandler } from './conductor-event-emitter.js';
 import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { persistedEventTypes } from './event-sinks.js';
 import { CloseoutEventTail } from './closeout-tail.js';

@@ -9,7 +9,7 @@ import type {
   ProviderDiscoveryEvent,
   ProviderDiscoveryFailureReason,
 } from '../types/events.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { assertRealExecAllowed } from './tracker-client.js';
 
 const execFile = promisify(execFileCallback);

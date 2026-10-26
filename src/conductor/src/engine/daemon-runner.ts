@@ -20,7 +20,7 @@ import {
 import type { FinishChoice } from './artifacts.js';
 import type { TriageOutcome } from './setup-triage.js';
 import { SetupFailureError } from './worktree-prepare.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import {
   evaluateShipmentEvidence,
   resolveImplementationPrBinding,

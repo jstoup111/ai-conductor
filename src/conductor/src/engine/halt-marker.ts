@@ -20,7 +20,7 @@ import {
 import { resolveActiveChild } from './child-cursor.js';
 import { readRestackJournal, isJournalOwnerAlive } from './restack/restack-journal.js';
 import { recoverRestackJournal } from './restack/restack-recovery.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
 export const HALT_MARKER = '.pipeline/HALT';

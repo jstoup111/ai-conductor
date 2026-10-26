@@ -6,7 +6,7 @@ import type { SelfHostProviderId } from './provider-home.js';
 import { BUILT_IN_PROVIDERS, isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
 import { isStepName } from '../execution-identity.js';
 import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwnerStep } from '../../types/events.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   emitTranscriptHarvest as emitTranscriptHarvestEvent,
   harvestProviderHome,

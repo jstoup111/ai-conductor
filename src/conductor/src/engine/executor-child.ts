@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
 import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage } from './executor-protocol.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';

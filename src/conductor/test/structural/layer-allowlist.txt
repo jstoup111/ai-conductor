@@ -49,18 +49,9 @@ engine/child-cursor.ts -> engine/slice-topology.ts
 engine/child-lifecycle.ts -> engine/child-cursor.ts
 engine/child-lifecycle.ts -> engine/rebase.ts
 engine/child-lifecycle.ts -> engine/slice-topology.ts
-engine/conductor.ts -> ui/events.ts
 engine/config.ts -> engine/pr-body-regions.ts
 engine/daemon-command.ts -> cli-defaults.ts
-engine/daemon-memory.ts -> ui/events.ts
-engine/done-when-accept-cli.ts -> ui/events.ts
 engine/done-when-test-reference.ts -> engine/plan-task-parse.ts
-engine/engineer-cli.ts -> ui/events.ts
-engine/event-persister.ts -> ui/events.ts
-engine/execution-lifecycle.ts -> ui/events.ts
-engine/executor-broker.ts -> ui/events.ts
-engine/executor-child-runtime.ts -> ui/events.ts
-engine/executor-child.ts -> ui/events.ts
 engine/filesystem-conduct-state-store.ts -> engine/state.ts
 engine/full-suite-commands.ts -> engine/full-suite-executor.ts
 engine/full-suite-executor.ts -> engine/full-suite-commands.ts
@@ -78,7 +69,6 @@ engine/gate-verdicts.ts -> engine/artifacts.ts
 engine/github-operation-approval.ts -> engine/owner-gate/identity.ts
 engine/guarded-engine-commit.ts -> engine/child-cursor.ts
 engine/guarded-engine-commit.ts -> engine/restack/restack-journal.ts
-engine/halt-clear-cli.ts -> ui/events.ts
 engine/halt-marker.ts -> engine/child-cursor.ts
 engine/halt-marker.ts -> engine/halt-record.ts
 engine/halt-marker.ts -> engine/restack/restack-journal.ts
@@ -86,7 +76,6 @@ engine/halt-marker.ts -> engine/restack/restack-recovery.ts
 engine/halt-record.ts -> engine/guarded-engine-commit.ts
 engine/halt-record.ts -> engine/remote-git-operations.ts
 engine/kickback-budget-cli.ts -> cli.ts
-engine/kickback-budget-cli.ts -> ui/events.ts
 engine/kickback-budget-view.ts -> engine/kickback-ledger.ts
 engine/kickback-ledger.ts -> engine/artifacts.ts
 engine/kickback-ledger.ts -> engine/as-built-contract.ts
@@ -106,7 +95,6 @@ engine/plan-slices.ts -> engine/remediation-append.ts
 engine/plan-task-parse.ts -> engine/protected-artifact-seal.ts
 engine/plugin-loader.ts -> ui/subscriber.ts
 engine/plugin-loader.ts -> ui/terminal-renderer.ts
-engine/post-finish-shipped-record.ts -> ui/events.ts
 engine/pr-body-regions.ts -> engine/build-review-accepted-risk.ts
 engine/prd-audit-contract.ts -> engine/plan-task-parse.ts
 engine/prd-audit-verdict-store.ts -> engine/prd-audit-contract.ts
@@ -137,7 +125,6 @@ engine/remote-git-operations.ts -> engine/stack-tip-guard.ts
 engine/repair-obligations.ts -> engine/autoheal.ts
 engine/repair-plan-binding.ts -> engine/artifacts.ts
 engine/repair-plan-binding.ts -> engine/repair-obligations.ts
-engine/reseal-cli.ts -> ui/events.ts
 engine/restack/cascade-cap.ts -> engine/rebase.ts
 engine/restack/restack-executor.ts -> engine/child-cursor.ts
 engine/restack/restack-executor.ts -> engine/kickback-budget-view.ts
@@ -186,8 +173,6 @@ engine/restack/restack-transition.ts -> engine/rebase-transition.ts
 engine/restack/restack-transition.ts -> engine/rebase-translate.ts
 engine/restack/restack-transition.ts -> engine/rebase.ts
 engine/restack/restack-transition.ts -> engine/routing/rem-block-merge.ts
-engine/restack/stack-preflight.ts -> ui/events.ts
-engine/rewind.ts -> ui/events.ts
 engine/routing/owner-derivation.ts -> engine/plan-task-parse.ts
 engine/routing/owner-derivation.ts -> engine/remediation-append.ts
 engine/routing/prerequisite-claim.ts -> engine/child-cursor.ts
@@ -217,13 +202,11 @@ engine/routing/routed-exit.ts -> engine/restack/restack-move.ts
 engine/routing/routed-exit.ts -> engine/routing/revalidation-queue.ts
 engine/routing/routed-exit.ts -> engine/routing/route-record-store.ts
 engine/routing/routed-exit.ts -> engine/stack-publication.ts
-engine/routing/routed-exit.ts -> ui/events.ts
 engine/self-host/provider-scratch.ts -> engine/self-host/transcript-harvest.ts
 engine/self-host/provider-scratch.ts -> engine/self-host/transcript-retention.ts
 engine/self-host/provider-scratch.ts -> execution/provider-catalog.ts
 engine/self-host/transcript-harvest.ts -> engine/self-host/transcript-retention.ts
 engine/self-host/transcript-retention.ts -> execution/provider-catalog.ts
-engine/self-host/transcript-retention.ts -> ui/events.ts
 engine/slice-topology.ts -> engine/artifacts.ts
 engine/slice-topology.ts -> engine/plan-slices.ts
 engine/slice-topology.ts -> engine/rebase.ts

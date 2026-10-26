@@ -38,7 +38,7 @@ import type { ConductState } from '../types/index.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { ExecutorChildDispatchAdmission, ExecutorChildRunInput } from './executor-child.js';
 import type { WorkOrder } from './work-order.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { startSessionEventTail } from './event-persister.js';
 
 export interface ExecutorChildFeatureRunnerInput {

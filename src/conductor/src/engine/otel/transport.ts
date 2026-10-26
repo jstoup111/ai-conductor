@@ -9,7 +9,7 @@ import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import type { AggregationTemporality, InstrumentType, PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { JsonTraceSerializer, JsonMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import type { ResolvedOtelConfig } from './otel-config.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { SpoolStore } from './spool-store.js';
 import { SpoolingMetricExporter, SpoolingSpanExporter } from './spooling-exporter.js';
 import { otlpExportRefusal } from './export-refusal.js';

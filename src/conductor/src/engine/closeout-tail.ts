@@ -6,7 +6,7 @@ import {
   ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES,
   type ExternalPipelineEvent,
 } from './closeout-events.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { SessionEventReader } from './session-event-reader.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';

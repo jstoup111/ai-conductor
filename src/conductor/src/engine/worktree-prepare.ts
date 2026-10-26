@@ -59,7 +59,7 @@ import {
 } from './session-hook-assets.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ConductorEvent } from '../types/events.js';
 import { refreshWorktreeCoAuthor } from './bot-co-author.js';
 import { resolveSkillName } from './skill-names.js';

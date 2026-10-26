@@ -1,5 +1,5 @@
 import { classifyNetworkError, classifyResponse, type DeliveryClassification } from './delivery-classifier.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { type SpoolSignal, SpoolStore } from './spool-store.js';
 
 export interface SpoolDrainerOptions {

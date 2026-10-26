@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { childBranchFor, isChildRefOf, leafBranchFor } from '../feature-branch-identity.js';
 import type { ChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   isJournalOwnerAlive,
   journalRefFor,

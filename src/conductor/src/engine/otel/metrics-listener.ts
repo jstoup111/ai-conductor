@@ -1,5 +1,5 @@
 import type { ConductorEvent } from '../../types/events.js';
-import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
+import type { ConductorEventEmitter, EventHandler } from '../conductor-event-emitter.js';
 import { otelEventTypes, type OtelEventType } from '../event-sinks.js';
 import { DispatchMeteringTracker } from '../dispatch-metering.js';
 import { forwardedFeatureOf } from '../event-persister.js';

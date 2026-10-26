@@ -157,7 +157,7 @@ import {
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import { StepInFlightTicker } from './step-in-flight-ticker.js';

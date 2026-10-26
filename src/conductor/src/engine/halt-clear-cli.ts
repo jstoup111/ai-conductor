@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { HaltClearDispatch } from '../cli.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { StepName } from '../types/index.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { readConductStateOverlay } from './conduct-state-store.js';
 import { pipelinePathFor } from './child-context.js';

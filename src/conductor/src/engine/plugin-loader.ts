@@ -17,7 +17,7 @@ import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-r
 import { LocalMemoryProvider } from './local-memory-provider.js';
 import { resolveOtelConfig } from './otel/otel-config.js';
 import { createOtelVisualizer } from './otel/create-otel-visualizer.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { UIEventHandler } from '../ui/types.js';
 
 /**

@@ -6,7 +6,7 @@ import type {
   VisualizerPlugin,
   VisualizerStartContext,
 } from '../../types/plugin.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { resolveOtelConfig } from './otel-config.js';
 import { resolveWorkerName } from './otel-config.js';
 import {

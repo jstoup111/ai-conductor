@@ -1,5 +1,5 @@
 import type { HarnessConfig } from '../types/index.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { registerBuiltins } from './plugin-loader.js';
 import type { PluginRegistry } from './plugin-registry.js';

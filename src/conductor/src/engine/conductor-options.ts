@@ -1,5 +1,5 @@
 import type { ConductState, FinishPublicationEvent, StepName, StepStatus, Phase, RunMode, RecoveryContext, RecoveryOption, ComplexityTier } from '../types/index.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { StepRunner, StepRunResult } from './step-runner-types.js';

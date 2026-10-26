@@ -5,7 +5,7 @@ import type { ChildId } from '../child-context.js';
 import { parseChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseRevalidationQueueRecord, parseRoundId, type RevalidationQueueEntry, type RoundId } from '../routing/route-types.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalChildStatusTransition,

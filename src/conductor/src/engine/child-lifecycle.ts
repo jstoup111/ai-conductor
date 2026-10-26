@@ -4,7 +4,7 @@ import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js'
 import { loadConfig } from './config.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { redRefFor } from './routing/routing-refs.js';
