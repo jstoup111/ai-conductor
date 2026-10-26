@@ -221,6 +221,60 @@ describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
   });
 });
 
+// Covers: task:26
+describe('engine/daemon-dashboard — operator landing status (Task 26)', () => {
+  const baseState: InheritedState = {
+    halted: [],
+    inProgress: [{
+      slug: 'demo',
+      step: 'build',
+      activeChild: { child: 1 as never, total: 2, taskIds: ['task-1'] },
+    }],
+    eligible: [],
+    processed: [],
+    processedCount: 0,
+  };
+
+  function demoLine(output: string): string {
+    return output.split('\n').find((line) => line.includes('• demo ')) ?? '';
+  }
+
+  it('shows an undeclared operator landing on child 1 awaiting --done', () => {
+    const output = renderDashboard({
+      ...baseState,
+      inProgress: [{
+        ...baseState.inProgress[0]!,
+        activeChild: {
+          ...baseState.inProgress[0]!.activeChild!,
+          operatorLanding: { child: 1 as never, awaitingDone: true },
+        },
+      }],
+    });
+
+    expect(demoLine(output)).toContain('operator landing open on child 1; awaiting --done');
+  });
+
+  it('removes the --done wait after declaration and preserves the prior non-operator line', () => {
+    const declared = renderDashboard({
+      ...baseState,
+      inProgress: [{
+        ...baseState.inProgress[0]!,
+        activeChild: {
+          ...baseState.inProgress[0]!.activeChild!,
+          operatorLanding: { child: 1 as never, awaitingDone: false },
+        },
+      }],
+    });
+    const withoutOperatorRound = renderDashboard(baseState);
+
+    expect(demoLine(declared)).toContain('operator landing open on child 1');
+    expect(demoLine(declared)).not.toContain('awaiting --done');
+    expect(demoLine(withoutOperatorRound)).toBe(
+      '  • demo @build (child 1/2; tasks task-1) (last test outcome: unavailable) (children: unknown) (tokens: unavailable)',
+    );
+  });
+});
+
 describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
   let root: string;
   let worktreeBase: string;
