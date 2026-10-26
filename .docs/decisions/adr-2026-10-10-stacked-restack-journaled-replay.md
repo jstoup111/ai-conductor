@@ -391,6 +391,13 @@ Operator decisions (2026-10-10):
 > blocks in the plan by id. The same id with a different body halts
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
+> **Amended 2026-10-25 by #3421:** An unresolved `feature-repair` conflict also writes a durable
+> conflict record outside `restack/staging/` and halts with a resolution recipe. An operator can
+> then record a resolution with `ai-conductor stack restack-resolve`. The command applies this
+> decision's FR-8, FR-9 and path-ownership guards. A later run consumes that resolution as the
+> resolver's output for the child when the range and the parent tree match, and halts
+> `restack-resolution-stale` otherwise (`adr-2026-10-25-operator-recorded-restack-conflict-resolution`).
+
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
      1. journal recovery;
@@ -688,6 +695,11 @@ Operator decisions (2026-10-10):
       - `push_lease_refused` {ref, expected, actual}.
     - **Re-kick.** `rebase_skipped_for_stack` is no longer emitted for the re-kick, because it no
       longer skips.
+
+> **Amended 2026-10-25 by #3421:** `restack_refused`'s reason list also includes
+> `restack-resolution-stale`. A new variant, `restack_resolution {opId, child, action, tip, operator?}`,
+> reports an operator-recorded conflict resolution being `recorded` or `consumed`
+> (`adr-2026-10-25-operator-recorded-restack-conflict-resolution` decision 8).
     - **Base-advance attribution.** A `base-refresh` restack also persists `rebase_changed` with the
       unfiltered whole-stack delta, as `adr-2026-08-13-durable-base-advance-attribution` requires,
       so test failures caused by the base advance stay attributed to it.
