@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:rem-as-built-rem-as-built-r15
 import { describe, expect, it, vi } from 'vitest';
 import { runStackCommitGuard, type StackCommitGuardDependencies } from '../../src/engine/stack-commit-guard-cli.js';
 import type { SliceTopology } from '../../src/engine/slice-topology.js';
@@ -48,9 +48,17 @@ function guard(input: {
   marker?: 'absent' | 'unreadable' | 'marker';
   durable?: boolean | 'git-error';
   topology?: SliceTopology;
+  routingOn?: boolean;
   env?: NodeJS.ProcessEnv;
 }) {
   const output: string[] = [];
+  const loadConfig = vi.fn(async () => ({
+    ok: true as const,
+    config: { stacked_prs: { route_whole_feature_fixes: input.routingOn ?? true } },
+    warnings: [],
+  }));
+  const durableChildState = vi.fn(async () => input.durable ?? true);
+  const loadTopology = vi.fn(async () => input.topology ?? topology);
   const readMarker = vi.fn(async () => {
     if (input.marker === 'absent') return { kind: 'absent' } as const;
     if (input.marker === 'unreadable') return { kind: 'unreadable' } as const;
@@ -64,13 +72,14 @@ function guard(input: {
     env: input.env ?? {},
     symbolicRef: async () => input.branch,
     stagedPaths: async () => input.paths ?? ['src/changed.ts'],
-    hasDurableChildState: async () => input.durable ?? true,
-    loadSliceTopology: async () => input.topology ?? topology,
+    loadConfig,
+    hasDurableChildState: durableChildState,
+    loadSliceTopology: loadTopology,
     readRepairMarker: readMarker,
     readRouteRecord: readRoute,
     print: (line) => output.push(line),
   };
-  return { output, readMarker, readRoute, run: () => runStackCommitGuard(dependencies) };
+  return { output, loadConfig, durableChildState, loadTopology, readMarker, readRoute, run: () => runStackCommitGuard(dependencies) };
 }
 
 describe('stack-commit-guard', () => {
@@ -133,6 +142,17 @@ describe('stack-commit-guard', () => {
     });
 
     await expect(subject.run()).resolves.toBe(0);
+    expect(subject.readMarker).not.toHaveBeenCalled();
+    expect(subject.readRoute).not.toHaveBeenCalled();
+  });
+
+  it('abstains with routing off before any routing-state read', async () => {
+    const subject = guard({ branch: 'feat/c2/demo', routingOn: false });
+
+    await expect(subject.run()).resolves.toBe(0);
+    expect(subject.loadConfig).toHaveBeenCalledWith('/project');
+    expect(subject.durableChildState).not.toHaveBeenCalled();
+    expect(subject.loadTopology).not.toHaveBeenCalled();
     expect(subject.readMarker).not.toHaveBeenCalled();
     expect(subject.readRoute).not.toHaveBeenCalled();
   });

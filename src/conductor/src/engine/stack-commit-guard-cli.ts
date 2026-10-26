@@ -3,16 +3,18 @@
 // in Task 13; this module owns only the decision.
 
 import { execa } from 'execa';
+import { loadConfig } from './config.js';
 import { childBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
 import { readRepairMarker, readRouteRecord, type ReadRepairMarkerResult, type ReadRouteRecordResult } from './routing/route-record-store.js';
-import type { RoundId } from './routing/route-types.js';
+import { routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface StackCommitGuardDependencies {
   readonly projectRoot: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly symbolicRef?: () => Promise<string | undefined>;
   readonly stagedPaths?: () => Promise<readonly string[] | undefined>;
+  readonly loadConfig?: typeof loadConfig;
   readonly hasDurableChildState?: (worktree: string, slug: string) => Promise<boolean | 'git-error'>;
   readonly loadSliceTopology?: (
     worktree: string,
@@ -65,8 +67,9 @@ function refuse(print: (message: string) => void, detail: string): number {
 
 /**
  * Refuse commits that would put tracked work outside an active landing host.
- * The durable-state check deliberately precedes every routing-ref read: flat
- * features and pre-stack worktrees must retain the ordinary hook path.
+ * The routing setting and durable-state checks deliberately precede every
+ * routing-state read: flat, routing-off, and pre-stack worktrees retain the
+ * ordinary hook path.
  */
 export async function runStackCommitGuard(deps: StackCommitGuardDependencies): Promise<number> {
   const branch = await (deps.symbolicRef ?? (() => currentBranch(deps.projectRoot)))();
@@ -78,6 +81,9 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   if (paths === undefined) return refuse(print, 'cannot read staged paths; refusing commit');
   if (paths.length === 0) return 0;
   if (identity.kind === 'leaf' && isHaltRecordOnly(paths, identity.slug)) return 0;
+
+  const config = await (deps.loadConfig ?? loadConfig)(deps.projectRoot);
+  if (!routingSettingOn(config.ok ? config.config : undefined)) return 0;
 
   const durable = await (deps.hasDurableChildState ?? hasDurableChildState)(deps.projectRoot, identity.slug);
   if (durable === false) return 0;
