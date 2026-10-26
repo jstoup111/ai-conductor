@@ -281,6 +281,7 @@ async function createPrdAuditRemediationFixture(input: {
   criteria: string[];
   config?: Record<string, unknown>;
   priorLaps?: number;
+  complexityTier?: 'S' | 'M' | 'L';
   priorGrowthAdded?: number;
   existingTask?: boolean;
   repairTaskId?: string;
@@ -865,7 +866,7 @@ async function runRefusalReworkRun(input: {
 
   const state: Record<string, unknown> = {
     feature_desc: 'feature',
-    ...(input.recordTierLAtComplexity ? {} : { complexity_tier: 'M' }),
+    ...(input.recordTierLAtComplexity ? {} : { complexity_tier: input.complexityTier ?? 'M' }),
     track: 'product',
     run_started_at: Date.now() - 1_000,
     rebase: 'done',
@@ -990,7 +991,7 @@ async function runRefusalReworkRun(input: {
     fromStep: 'manual_test',
     config: {
       prd_audit: input.lapCap === undefined
-        ? (input.recordTierLAtComplexity ? {} : { max_remediation_laps: 1 })
+        ? (input.recordTierLAtComplexity || input.complexityTier !== undefined ? {} : { max_remediation_laps: 1 })
         : { max_remediation_laps: input.lapCap },
     } as never,
     ...(input.recordTierLAtComplexity
@@ -1262,6 +1263,18 @@ describe('prd_audit kickback', () => {
     });
 
     expect(fixture.calls).toContain('build');
+  });
+
+  it('names the current tier-S default allowance when refusal rework is spent', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      priorLaps: 2,
+      complexityTier: 'S',
+    });
+
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Refusal rework halted: prd_audit laps allowance exhausted.\nKickback budget (prd_audit): 2/2 consumed; 0 remaining — tier S allowance 2 (default)',
+    );
   });
 
   it('appends and charges every task in an admitted multi-task refusal gap', async () => {
@@ -1781,7 +1794,13 @@ describe('prd_audit kickback', () => {
     report: string,
     stories: string,
     setup?: (root: string) => Promise<void>,
-    options?: { root?: string; mode?: 'auto' | 'default'; daemon?: boolean },
+    options?: {
+      root?: string;
+      mode?: 'auto' | 'default';
+      daemon?: boolean;
+      complexityTier?: 'S' | 'M' | 'L';
+      configureConductor?: (conductor: Conductor) => void;
+    },
   ) {
     const root = options?.root ?? await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
     if (!options?.root) dirs.push(root);
@@ -1796,7 +1815,7 @@ describe('prd_audit kickback', () => {
 
     const state: Record<string, unknown> = {
       feature_desc: 'feature',
-      complexity_tier: 'M',
+      complexity_tier: options?.complexityTier ?? 'M',
       track: 'product',
       run_started_at: Date.now() - 1_000,
       rebase: 'done',
@@ -1873,6 +1892,7 @@ describe('prd_audit kickback', () => {
       fromStep: 'manual_test',
       gh: async () => ({ stdout: 'operator@example.test\n' }),
     });
+    options?.configureConductor?.(conductor);
     await conductor.run();
     return { root, calls, gateBlocks, state: await readState(statePath) };
   }
@@ -2787,6 +2807,47 @@ describe('prd_audit kickback', () => {
       },
     } as never);
     expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(6);
+  });
+
+  it('dispatches a fourth validation-join remediation round for an unconfigured tier-L feature', async () => {
+    let remediationDispatches = 0;
+    const fixture = await runGroupedPrdAudit(
+      [
+        '**PRD:** present',
+        '',
+        '## Verdict Table',
+        '| Criterion | Grade | Plan task | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| S2.1 | FIXABLE | 1 | Fixture repair is still required. |',
+      ].join('\n'),
+      storiesWithCriterion('Happy Path'),
+      undefined,
+      {
+        complexityTier: 'L',
+        configureConductor: (conductor) => {
+          (conductor as unknown as {
+            planRemediation: () => Promise<{
+              kind: 'route' | 'halt';
+              target?: StepName;
+              hint?: string;
+              evidence?: string;
+              detail?: string;
+              haltClass?: string;
+            }>;
+          }).planRemediation = async () => {
+            remediationDispatches++;
+            return remediationDispatches === 4
+              ? { kind: 'halt', detail: 'sentinel: fourth remediation round reached', haltClass: 'mechanical' }
+              : { kind: 'route', target: 'manual_test', hint: 'fixture retry', evidence: 'fixture evidence' };
+          };
+        },
+      },
+    );
+
+    expect(remediationDispatches).toBe(4);
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'sentinel: fourth remediation round reached',
+    );
   });
 
   it('halts a malformed PRD-audit report before remediation can append its task', async () => {

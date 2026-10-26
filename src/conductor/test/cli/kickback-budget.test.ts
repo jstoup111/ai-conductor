@@ -459,7 +459,7 @@ describe('kickback-budget inspect --child', () => {
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
-  it('keeps childless inspect human and JSON output byte-identical', async () => {
+  it('includes remediation allowance metadata in childless inspect output', async () => {
     const fixture = await makeFeature({
       version: 1, effectiveGrowthCap: 9, growth: { authored: 10, added: 2, byGate: { prd_audit: 2 } },
       gates: {
@@ -472,14 +472,14 @@ describe('kickback-budget inspect --child', () => {
       const planGrowth = { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 7, cap: 9, capSource: 'raised', authoredSource: 'ledger' };
       const expectedHuman = [
         'Kickback budget (build_review): 2/7 consumed; 5 remaining\nLatest reason: pinned\nAdjustment history: none\nResume authorization: none\nPlan growth: 2/9 added; 7 remaining (raised cap)\nMechanical faults: 0',
-        'Kickback budget (prd_audit): 1/3 consumed; 2 remaining\nLatest reason: pinned\nAdjustment history: none\nResume authorization: none\nPlan growth: 2/9 added; 7 remaining (raised cap)',
-        'Kickback budget (architecture_review_as_built): 1/4 consumed; 3 remaining\nLatest reason: pinned\nAdjustment history: none\nResume authorization: none\nPlan growth: 2/9 added; 7 remaining (raised cap)',
+        'Kickback budget (prd_audit): 1/3 consumed; 2 remaining — tier unrecorded, treated as M; allowance 3 (raised from 3)\nLatest reason: pinned\nAdjustment history: none\nResume authorization: none\nPlan growth: 2/9 added; 7 remaining (raised cap)',
+        'Kickback budget (architecture_review_as_built): 1/4 consumed; 3 remaining — tier unrecorded, treated as M; allowance 4 (raised from 3)\nLatest reason: pinned\nAdjustment history: none\nResume authorization: none\nPlan growth: 2/9 added; 7 remaining (raised cap)',
       ].join('\n\n');
       const expectedJson = JSON.stringify({
         feature: 'feature', gates: [
           { gate: 'build_review', consumed: 2, limit: 7, remaining: 5, latestReason: 'pinned', adjustments: [], mechanicalFaults: 0, planGrowth },
-          { gate: 'prd_audit', consumed: 1, limit: 3, remaining: 2, latestReason: 'pinned', adjustments: [], laps: 1, lapCap: 3, pendingLaps: 0, planGrowth },
-          { gate: 'architecture_review_as_built', consumed: 1, limit: 4, remaining: 3, latestReason: 'pinned', adjustments: [], laps: 1, lapCap: 4, pendingLaps: 0, planGrowth },
+          { gate: 'prd_audit', consumed: 1, limit: 3, remaining: 2, latestReason: 'pinned', adjustments: [], laps: 1, lapCap: 3, pendingLaps: 0, planGrowth, tier: null, allowanceSource: 'raised' },
+          { gate: 'architecture_review_as_built', consumed: 1, limit: 4, remaining: 3, latestReason: 'pinned', adjustments: [], laps: 1, lapCap: 4, pendingLaps: 0, planGrowth, tier: null, allowanceSource: 'raised' },
         ],
       });
       await expect(inspect(fixture, undefined)).resolves.toEqual({ code: 0, output: expectedHuman });
@@ -1161,12 +1161,12 @@ describe('kickback-budget inspect reports remediation lap consumption', () => {
     {
       name: 'reports a consumed remediation lap despite zero generic re-opens',
       entry: { ...baseEntry, count: 0, cumulative: 0, laps: 1 },
-      human: '1/1 consumed; 0 remaining', consumed: 1, remaining: 0,
+      human: '1/3 consumed; 2 remaining', consumed: 1, remaining: 2,
     },
     {
       name: 'reports no consumed remediation laps despite generic re-opens',
       entry: { ...baseEntry, count: 2, cumulative: 5, laps: 0 },
-      human: '0/1 consumed; 1 remaining', consumed: 0, remaining: 1,
+      human: '0/3 consumed; 3 remaining', consumed: 0, remaining: 3,
     },
   ])('$name', async ({ entry, human, consumed, remaining }) => {
     // No config is written: inspect must fall back to the remediation gate's default lap cap.
@@ -1180,7 +1180,7 @@ describe('kickback-budget inspect reports remediation lap consumption', () => {
       expect(jsonResult.code).toBe(0);
       expect(JSON.parse(jsonResult.output).gates).toEqual(expect.arrayContaining([
         expect.objectContaining({
-          gate: 'architecture_review_as_built', consumed, limit: 1, remaining,
+          gate: 'architecture_review_as_built', consumed, limit: 3, remaining,
         }),
       ]));
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
@@ -1190,6 +1190,83 @@ describe('kickback-budget inspect reports remediation lap consumption', () => {
 // Covers: task:8
 // Feature-scoped inspect projects the shared, non-persisting growth budget,
 // including the unresolved fail-closed view.
+describe('kickback-budget inspect remediation tier allowance', () => {
+  it('renders a tier-M configured prd-audit allowance in human and JSON output', async () => {
+    const fixture = await makeFeature({
+      version: 1,
+      gates: { prd_audit: { ...baseEntry, laps: 1, adjustmentsKnown: true } },
+    });
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M' }));
+      await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_remediation_laps:\n    M: 5\n');
+
+      const human: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => human.push(line) },
+      )).toBe(0);
+      expect(human.join('\n')).toContain('Kickback budget (prd_audit): 1/5 consumed; 4 remaining — tier M allowance 5 (configured)');
+
+      const json: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => json.push(line) },
+      )).toBe(0);
+      expect(JSON.parse(json.join('\n')).gates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ gate: 'prd_audit', tier: 'M', limit: 5, allowanceSource: 'configured' }),
+      ]));
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('renders a tier-M raised as-built allowance in human and JSON output', async () => {
+    const fixture = await makeFeature({
+      version: 1,
+      gates: { architecture_review_as_built: { ...baseEntry, laps: 1, effectiveLapCap: 5, adjustmentsKnown: true } },
+    });
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M' }));
+      await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps:\n    M: 3\n');
+
+      const human: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => human.push(line) },
+      )).toBe(0);
+      expect(human.join('\n')).toContain('Kickback budget (architecture_review_as_built): 1/5 consumed; 4 remaining — tier M allowance 5 (raised from 3)');
+
+      const json: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => json.push(line) },
+      )).toBe(0);
+      expect(JSON.parse(json.join('\n')).gates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ gate: 'architecture_review_as_built', tier: 'M', limit: 5, allowanceSource: 'raised' }),
+      ]));
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['unparseable', '{not json'],
+  ])('treats a %s conduct state as an unrecorded tier', async (_name, stateContents) => {
+    const fixture = await makeFeature({
+      version: 1,
+      gates: { prd_audit: { ...baseEntry, laps: 1, adjustmentsKnown: true } },
+    });
+    try {
+      if (stateContents !== undefined) await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), stateContents);
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+      expect(output.join('\n')).toContain('tier unrecorded, treated as M; allowance 3 (default)');
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
+
 describe('kickback-budget inspect daemon plan-growth budget', () => {
   async function daemonFeature(input: {
     slug?: string;
@@ -1427,7 +1504,7 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
         { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => humanOutput.push(line) },
       )).toBe(1);
       expect(humanOutput).toEqual([[
-        'Kickback budget (architecture_review_as_built): 0/1 consumed; 1 remaining\nLatest reason: none\nAdjustment history: none\nResume authorization: none\nPlan growth: plan unresolved; 0 added',
+        'Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)\nLatest reason: none\nAdjustment history: none\nResume authorization: none\nPlan growth: plan unresolved; 0 added',
         'prd_audit: budget unavailable (durable entry failed validation)',
         'build_review: budget unavailable (durable entry failed validation)',
       ].join('\n\n')]);
@@ -1440,9 +1517,10 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
       expect(jsonOutput).toEqual([JSON.stringify({
         feature: 'feature',
         gates: [{
-          gate: 'architecture_review_as_built', consumed: 0, limit: 1, remaining: 1,
-          latestReason: '', adjustments: [], laps: 0, lapCap: 1, pendingLaps: 0,
+          gate: 'architecture_review_as_built', consumed: 0, limit: 3, remaining: 3,
+          latestReason: '', adjustments: [], laps: 0, lapCap: 3, pendingLaps: 0,
           planGrowth: { authored: 0, added: 0, byGate: {}, remaining: 0, cap: null, capSource: 'config-derived', authoredSource: 'unresolved' },
+          tier: null, allowanceSource: 'default',
         }],
         unavailableGates: ['prd_audit', 'build_review'],
       })]);

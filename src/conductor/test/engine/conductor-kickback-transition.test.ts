@@ -195,6 +195,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'BUILD dispatch halted: architecture_review_as_built laps allowance exhausted',
     );
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Kickback budget (architecture_review_as_built): 4/4 consumed; 0 remaining — tier L allowance 4 (default)',
+    );
   });
 
   it('halts an unconfigured tier-S prd-audit third lap without charging it at BUILD dispatch', async () => {
@@ -210,6 +213,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(build).not.toHaveBeenCalled();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({ gates: { prd_audit: { laps: 2 } } });
     await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('kickback-cap');
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Kickback budget (prd_audit): 2/2 consumed; 0 remaining — tier S allowance 2 (default)',
+    );
   });
 
   it('uses the current tier when a feature changes from L to S between prd-audit laps', async () => {

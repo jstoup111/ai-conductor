@@ -610,6 +610,7 @@ import {
   readPlanGrowthBudget,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
+  resolveRemediationLapAllowance,
   validationJoinRemediationRoundCap,
 } from './remediation-caps.js';
 import type { RemediationGateAppendBudget } from './remediation-caps.js';
@@ -3906,6 +3907,7 @@ export class Conductor {
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
     blocker: RefusalReworkAllowanceBlocker,
+    tier: ConductState['complexity_tier'],
   ): Promise<string> {
     if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused);
     const refusedBlock = renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, []));
@@ -3927,7 +3929,16 @@ export class Conductor {
     }
     const reason = this.withActiveChild(
       `Refusal rework halted: prd_audit ${blocker.allowance} allowance exhausted.\n` +
-      `${renderKickbackBudgetView(entry, 'prd_audit', blocker.fallbackLapCap, blocker.growth)}\n${findings}\n\n` +
+      `${renderKickbackBudgetView(
+        entry,
+        'prd_audit',
+        blocker.fallbackLapCap,
+        blocker.growth,
+        undefined,
+        undefined,
+        0,
+        resolveRemediationLapAllowance('prd_audit', this.config, tier),
+      )}\n${findings}\n\n` +
       `${refusedBlock}\n\n` +
       renderKickbackRecoveryHint({ slug, gate: 'prd_audit', allowance: blocker.allowance }),
     );
@@ -9230,6 +9241,7 @@ export class Conductor {
                   prdAuditRoute.route.detail,
                   prdAuditRoute.route.refused,
                   blocker,
+                  state.complexity_tier,
                 )
                 : await this.writeRefusalReworkHalt(
                   prdAuditRoute.route.detail,
@@ -9692,7 +9704,7 @@ export class Conductor {
                 gapMemberNamesForMerge.length > 0 &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                   ? await refusalReworkAllowanceAvailable()
-                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, undefined))
+                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, state.complexity_tier))
               ) {
                 mtMergeHandled = true;
                 const evidence: RemediationGateProvenance[] = [];
@@ -9851,7 +9863,7 @@ export class Conductor {
               !mtMergeHandled && this.daemon &&
               (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                 ? await refusalReworkAllowanceAvailable()
-                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, undefined))
+                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, state.complexity_tier))
             ) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
@@ -10302,6 +10314,9 @@ export class Conductor {
             const fallbackLapCap = remediationLapCapForGate(
               gate, this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
             );
+            const remediationAllowance = gate === 'prd_audit' || gate === 'architecture_review_as_built'
+              ? resolveRemediationLapAllowance(gate, this.config, state.complexity_tier)
+              : undefined;
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
               : withPendingGrowth({
@@ -10318,6 +10333,10 @@ export class Conductor {
                   gate,
                   fallbackLapCap,
                   growthView,
+                  undefined,
+                  undefined,
+                  0,
+                  remediationAllowance,
                 )
               : `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
 
@@ -12447,6 +12466,7 @@ export class Conductor {
                       refusalRoute.detail,
                       refusalRoute.refused,
                       refusalAllowanceBlocker,
+                      state.complexity_tier,
                     );
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(refusedReason);

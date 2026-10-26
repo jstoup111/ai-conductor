@@ -102,6 +102,16 @@ describe('resolveRemediationLapAllowance', () => {
     }
   });
 
+  it('bounds an unconfigured tier-L validation join by its four-lap allowance', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-validation-join-tier-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      expect(await validationJoinRemediationRoundCap(root, {} as never, 'L')).toBeGreaterThanOrEqual(4);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('resolves tier maps after user/project config merging without inventing a lap cap', async () => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-config-'));
     const userConfigDir = join(root, 'user');

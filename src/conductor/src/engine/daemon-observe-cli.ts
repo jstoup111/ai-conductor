@@ -26,7 +26,8 @@ import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock }
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance } from './remediation-caps.js';
+import { readState } from './state.js';
 import { loadConfig } from './config.js';
 import {
   isUnreadableKickbackGate,
@@ -783,17 +784,20 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       );
     }
     const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
+    const state = await readState(join(featureRoot, '.pipeline', 'conduct-state.json'));
+    const tier = state.ok ? state.value.complexity_tier : undefined;
     const renderBudget = (gate: 'build_review' | 'prd_audit' | 'architecture_review_as_built') => {
       const entry = ledger.gates[gate];
       const pendingLaps = gate === 'build_review' ? 0 : ledger.pendingRepair?.charges[gate]?.laps ?? 0;
       const view = renderKickbackBudgetView(
         entry,
         gate,
-        kickbackBudgetFallbackLimit(gate, budgetConfig, undefined),
+        kickbackBudgetFallbackLimit(gate, budgetConfig, tier),
         undefined,
         undefined,
         child,
         pendingLaps,
+        gate === 'build_review' ? undefined : resolveRemediationLapAllowance(gate, budgetConfig, tier),
       ).replace(/\n/g, ' | ');
       const allowance = entry?.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);

@@ -1408,7 +1408,7 @@ describe('engine/daemon-observe-cli', () => {
         await runDaemonStatus({ registryPath: await registry([record('repo-remediation-lap', repo)]), out: (line) => out.push(line) });
 
         expect(out.find((line) => line.includes('KICKBACK BUDGET [laps-feature]:') && line.includes('architecture_review_as_built'))).toContain(
-          'Kickback budget (architecture_review_as_built): 1/1 consumed; 0 remaining',
+          'Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining — tier unrecorded, treated as M; allowance 3 (default)',
         );
       });
 
@@ -1422,8 +1422,8 @@ describe('engine/daemon-observe-cli', () => {
         await runDaemonStatus({ registryPath: await registry([record('repo-fresh-remediation', repo)]), out: (line) => out.push(line) });
 
         const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [fresh-feature]:'));
-        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/1 consumed; 1 remaining'))).toHaveLength(1);
-        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/1 consumed; 1 remaining'))).toHaveLength(1);
+        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
+        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
       });
 
       // Covers: task:4
