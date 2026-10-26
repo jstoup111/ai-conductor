@@ -299,7 +299,7 @@ describe('kickback budget view', () => {
     }, pendingRepair: {
       receiptId: 'repair-1', taskIds: ['rem-as-built-1'],
       charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
-    } });
+    } }, 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
     try {
       const inspected = await inspectFeature(fixture);
       expect(inspected.human).toContain('Kickback budget (architecture_review_as_built): 0/1 consumed; 0 remaining');
@@ -319,7 +319,7 @@ describe('kickback budget view', () => {
     }, pendingRepair: {
       receiptId: 'repair-1', taskIds: ['rem-prd-1'],
       charges: { prd_audit: { laps: 1, growth: 0 } },
-    } });
+    } }, 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
     try {
       const inspected = await inspectFeature(fixture);
       const asBuiltBlock = inspected.human.split('\n\n').find((block) => block.includes('Kickback budget (architecture_review_as_built):'));
@@ -339,7 +339,7 @@ describe('kickback budget view', () => {
     }, pendingRepair: {
       receiptId: 'repair-1', taskIds: ['rem-as-built-1'],
       charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
-    } });
+    } }, 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
     try {
       const inspected = await inspectFeature(fixture);
       expect(inspected.human).toContain('Kickback budget (architecture_review_as_built): 1/1 consumed; 0 remaining');

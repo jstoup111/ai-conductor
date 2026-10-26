@@ -1482,6 +1482,54 @@ describe('engine/daemon-observe-cli', () => {
         expect(prdBudget).not.toContain('allowance');
       });
 
+      // Covers: task:9
+      it('keeps build-review cap-evidence output free of remediation allowance metadata', async () => {
+        const repo = join(root, 'repo-build-review-cap-evidence');
+        const featureRoot = await writeActivePlan(repo, 'build-review-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            build_review: {
+              count: 4, cumulative: 4, treeHash: null, lastReason: 'review cap', priorVerdict: false,
+              resolvedBefore: 0, effectiveLimit: 6, adjustmentsKnown: true,
+              capEvidence: {
+                gate: 'build_review', consumed: 4, limit: 6, latestReason: 'review cap', haltGeneration: 'halt-1',
+              },
+            },
+          } }),
+          'utf8',
+        );
+        const status: string[] = [];
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-build-review-cap-evidence', repo)]),
+          out: (line) => status.push(line),
+        });
+
+        const inspect: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'human' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+        )).toBe(0);
+        const inspectJson: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'json' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspectJson.push(line) },
+        )).toBe(0);
+
+        const expected = 'Kickback budget (build_review): 4/6 consumed; 2 remaining';
+        const statusLine = status.find((line) => line.includes('KICKBACK BUDGET [build-review-feature]:') && line.includes('build_review'));
+        const inspectLine = inspect.join('\n').split('\n\n').find((block) => block.startsWith('Kickback budget (build_review):'));
+        expect(statusLine).toContain(expected);
+        expect(inspectLine).toContain(expected);
+        expect(statusLine).not.toMatch(/— tier|allowance \d/);
+        expect(inspectLine).not.toMatch(/— tier|allowance \d/);
+        const buildReview = (JSON.parse(inspectJson[0]) as { gates: Array<Record<string, unknown>> }).gates
+          .find((gate) => gate.gate === 'build_review');
+        expect(buildReview).toMatchObject({ gate: 'build_review', consumed: 4, limit: 6, remaining: 2 });
+        expect(buildReview).not.toHaveProperty('tier');
+        expect(buildReview).not.toHaveProperty('allowanceSource');
+      });
+
       // Covers: task:5
       it('omits build-review budget without cap evidence or adjustment history', async () => {
         const repo = join(root, 'repo-review-without-budget');
