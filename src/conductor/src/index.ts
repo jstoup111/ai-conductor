@@ -2084,7 +2084,9 @@ async function dispatchCliCommand(): Promise<void> {
     const interactiveRun = await runInteractiveConductorWithLease({
       projectRoot,
       featureDesc: opts.featureDesc,
-      run: async () => conductor.run(),
+      run: async () => {
+        await conductor.run();
+      },
     });
     if (interactiveRun.kind === 'refused') {
       console.error(interactiveRun.message);
