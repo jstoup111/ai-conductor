@@ -212,7 +212,7 @@ so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files
 | `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
 | `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
 | `test/corpus/` | 6 | Checks whose verdict depends on the live `.docs/` corpus: ADR corpus conformance, shipped records, and projection limits that must admit the largest corpus inputs. The only tier docs-only pull requests run. | `npm test -- test/corpus/` |
-| `test/structural/` | 13 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
+| `test/structural/` | 26 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
@@ -418,6 +418,26 @@ is `--bare`, commented out, or annotated `// portability-ok: <reason>`. It also 
 no-caller claims (`nothing imports`, `no callers`/`no importers`, inert-module claims, and `nothing`
 calling, using, or invoking a backticked identifier). It fails only when a relative import or symbol
 reference contradicts a claim; truthful claims and matching prose below the leading comment block pass.
+
+### Layer ratchet
+
+**`layer-ratchet.test.ts`** reads every `.ts` file under `src/conductor/src/`, classifies it by its
+first path segment, and checks its top-level value imports and `export … from` re-exports against
+the [dependency direction](code-organization.md#dependency-direction) and the committed
+`layer-allowlist/`. The checker is the pure module `layer-ratchet.ts`. Each failure line reads
+`<kind> <location> <detail>`; `upward` and `cycle` lines end with the edge's allowlist file name.
+
+| Kind | Fix |
+| --- | --- |
+| `upward`, `cycle` | Remove the import, or make it `import type`. Do not allowlist new edges. |
+| `stale-entry` | Delete the named file from `layer-allowlist/`; its edge is gone or no longer violates. |
+| `malformed-entry` | Rename or delete it; names are `encodeURIComponent(from)+encodeURIComponent(to).edge`, paths relative to `src/conductor/src/`. |
+| `unclassifiable-file` | Move the file under `types/`, `execution/`, `engine/`, `ui/`, `tools/`, or the `src/` root. |
+| `unresolved-specifier` | Fix the relative import so it resolves to a `.ts` file or `index.ts` inside `src/conductor/src/`. |
+
+```bash
+cd src/conductor && npm test -- test/structural/layer-ratchet.test.ts
+```
 
 ### Conductor facade guards
 
