@@ -38,6 +38,12 @@ describe('build-review scope source', () => {
     expect(() => safeRepoRelativePath('The affected test is test/widget.test.ts.')).toThrow(BuildReviewSourceReadError);
   });
 
+  it('inventories a percent-encoded filename as an ordinary repository path', () => {
+    const path = 'test/layer-allowlist/engine%2Fa.ts+engine%2Fb.ts.edge';
+    expect(safeRepoRelativePath(path)).toBe(path);
+    expect(parseNameStatusZ(`A\u0000${path}\u0000`)).toEqual([{ kind: 'A', path }]);
+  });
+
   it('reads each pinned blob once and never falls back to live content', async () => {
     const calls: string[][] = [];
     const git: GitRunner = async (args) => {

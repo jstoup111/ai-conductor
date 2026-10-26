@@ -30,7 +30,7 @@ function bounded(value: string): string {
   return `${value.slice(0, ERROR_EXCERPT_BYTES)}… [truncated ${value.length - ERROR_EXCERPT_BYTES} bytes]`;
 }
 
-const CANONICAL_REPO_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9.](?:[A-Za-z0-9._\/@+ -]*[A-Za-z0-9._\/@+-])?(?:\/[A-Za-z0-9.](?:[A-Za-z0-9._\/@+ -]*[A-Za-z0-9._\/@+-])?)*$/;
+const CANONICAL_REPO_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9.](?:[A-Za-z0-9._\/@+% -]*[A-Za-z0-9._\/@+%-])?(?:\/[A-Za-z0-9.](?:[A-Za-z0-9._\/@+% -]*[A-Za-z0-9._\/@+%-])?)*$/;
 
 /** Shared source/persisted path grammar; prose is never a repository path. */
 export function isCanonicalBuildReviewRepoRelativePath(path: string): boolean {
