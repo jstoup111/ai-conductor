@@ -2,9 +2,30 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const prerequisiteMocks = vi.hoisted(() => ({
+  rerouteRound: vi.fn(),
+  settleRoutedBuildClaim: vi.fn(),
+}));
+
+vi.mock('../../../src/engine/routing/prerequisite-claim.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/prerequisite-claim.js')>();
+  return {
+    ...actual,
+    rerouteRound: (...args: Parameters<typeof actual.rerouteRound>) => {
+      prerequisiteMocks.rerouteRound(...args);
+      return actual.rerouteRound(...args);
+    },
+    settleRoutedBuildClaim: (...args: Parameters<typeof actual.settleRoutedBuildClaim>) => {
+      prerequisiteMocks.settleRoutedBuildClaim(...args);
+      return actual.settleRoutedBuildClaim(...args);
+    },
+  };
+});
 
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { Conductor } from '../../../src/engine/conductor.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
@@ -15,6 +36,8 @@ import { closureRefFor, rejectedPinRefFor, repairMarkerRefFor, routeRecordRefFor
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { ALL_STEPS } from '../../../src/engine/steps.js';
+import type { ConductState, StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const c1 = parseChildId(1)!;
@@ -246,6 +269,82 @@ describe('verified prerequisite reroute (real local Git)', () => {
         worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('lacks prerequisite paths') });
       expect(await routingRefs(subject.git)).toBe(before);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('does not reroute an operator round from a verified-shape prerequisite claim', async () => {
+    const subject = await fixture({ destinationInRecord: false });
+    try {
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('missing operator route record');
+      const operator = {
+        ...stored.record,
+        kind: 'operator' as const,
+        operator: {
+          origin: 'land' as const,
+          reason: 'reviewer request',
+          operator: 'operator@example.test',
+          entryStep: 'acceptance_specs' as const,
+          carried: [],
+          otherTips: { 'feat/c1/demo': subject.rejected as CommitSha },
+          priorRegion: {
+            statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' } as const,
+            verdicts: {},
+          },
+        },
+      };
+      if ((await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: operator }])).kind !== 'updated') {
+        throw new Error('could not make operator route record');
+      }
+      await expect(verifyPrerequisiteClaim({
+        claim: { outcome: 'blocked-by-prerequisite', child: c2, symbols: ['parseB'] }, host: c1, slug: 'demo', git: subject.git,
+      })).resolves.toMatchObject({ kind: 'verified', destination: c2 });
+
+      await mkdir(join(subject.repo, '.pipeline', 'children', '1'), { recursive: true });
+      const parentState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+      Object.assign(parentState, { feature_desc: 'demo', complexity_tier: 'M', run_started_at: 1 });
+      await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify(parentState));
+      await writeFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+        acceptance_specs: 'done', build: 'pending', test_suite: 'done', build_review: 'done',
+      }));
+      const beforeTip = await refAt(subject.git, 'refs/heads/feat/c1/demo');
+      prerequisiteMocks.rerouteRound.mockClear();
+      prerequisiteMocks.settleRoutedBuildClaim.mockClear();
+      let parkAfterBuild = false;
+      const dispatched: StepName[] = [];
+      const run = vi.fn(async (step: StepName) => {
+        dispatched.push(step);
+        if (step !== 'build') throw new Error(`unexpected dispatch: ${step}`);
+        parkAfterBuild = true;
+        return {
+          success: true,
+          finalStructuredResult: { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] },
+        };
+      });
+      const conductor = new Conductor({
+        projectRoot: subject.repo,
+        stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+        featureSlug: 'demo', fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
+        config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+        events: new ConductorEventEmitter(), stepRunner: { run }, acceptanceRedExec: vi.fn(),
+        operatorParkBoundary: async () => parkAfterBuild,
+        childRegionLifecycle: {
+          resolveActiveChild: async () => ({
+            kind: 'active', child: c1, position: c1, isLeaf: false, branch: 'feat/c1/demo', routedRepair: { child: c1, roundId },
+          }),
+          enterHostRegion: async () => ({ kind: 'resume', pinnedBase: subject.closed1 }) as never,
+          enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        },
+      });
+
+      await conductor.run();
+
+      expect(dispatched).toEqual(['build']);
+      expect(run).toHaveBeenCalledWith('build', expect.anything(), expect.not.objectContaining({ routedPrerequisiteClaim: true }));
+      expect(prerequisiteMocks.settleRoutedBuildClaim).not.toHaveBeenCalled();
+      expect(prerequisiteMocks.rerouteRound).not.toHaveBeenCalled();
+      expect(await readRepairMarker(subject.repo, 'demo')).toMatchObject({ kind: 'marker', marker: { host: c1, roundId } });
+      expect(await refAt(subject.git, 'refs/heads/feat/c1/demo')).toBe(beforeTip);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
