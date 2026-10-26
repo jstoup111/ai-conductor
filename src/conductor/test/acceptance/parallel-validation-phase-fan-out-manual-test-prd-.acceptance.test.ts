@@ -840,7 +840,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             max_appended_ratio: 1,
             max_remediation_laps: 2,
           },
-          architecture_review_as_built: { remediation: { enabled: true } },
+          architecture_review_as_built: {
+            remediation: { enabled: true },
+            // This fixture specifically verifies the one-lap as-built cap.
+            max_remediation_laps: 1,
+          },
         } as never,
       });
       await conductor.run();
@@ -883,7 +887,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             max_appended_ratio: 1,
             max_remediation_laps: 2,
           },
-          architecture_review_as_built: { remediation: { enabled: true } },
+          architecture_review_as_built: {
+            remediation: { enabled: true },
+            max_remediation_laps: 1,
+          },
         } as never,
       }).run();
 
