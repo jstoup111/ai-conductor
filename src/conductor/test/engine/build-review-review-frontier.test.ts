@@ -375,7 +375,7 @@ describe("build-review review frontier", () => {
   });
 
   // Covers: task:9
-  it("Task 9: lets an applied-open source with no current anchor add no hunk or full lap", () => {
+  it("Task 9: keeps every P hunk for unapplied file or absent anchors but adds no hunk or full lap for applied-open sources", () => {
     const files: readonly ChangedFileReference[] = [{
       path: "src/example.ts",
       changeKind: "modified",
