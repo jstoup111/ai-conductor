@@ -245,6 +245,7 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `stacked_prs` | object | disabled | [stacked_prs](#stacked_prs) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
 | `prd_audit` | object | see section | [prd_audit](#prd_audit) |
+| `plan_review` | object | unset | [plan_review](#plan_review) |
 | `architecture_review_as_built` | object | see section | [architecture_review_as_built](#architecture_review_as_built) |
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
@@ -1862,6 +1863,19 @@ max_appended_ratio))`. `FIXABLE` findings beyond that cap, or a `FIXABLE` findin
 tasks. A merged spec whose plan predates `prd_audit`'s remediation caps (pre-existing appended
 remediation tasks) counts those tasks toward the authored baseline rather than the cap, so an old feature
 does not retroactively exceed a cap it was never measured against.
+
+## plan_review
+
+Prompt budget for the DECIDE-phase plan review (`compose plan-review` and the daemon `plan_review` step).
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `plan_review.max_prompt_chars` | positive integer | unset (runner limit `400000`) | Maximum characters the review prompt may contain before review refuses to dispatch |
+
+Any other key under `plan_review`, or a non-positive or non-integer value, fails config validation. The
+`--max-prompt-chars` flag on [`compose plan-review`](cli.md#compose-subcommands) overrides this value
+for one run. A refusal names each prompt section's size, the largest section, and the exact value that
+would admit the prompt.
 
 ## architecture_review_as_built
 

@@ -123,7 +123,7 @@ type EngineerDispatchDescriptor =
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
   }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
-  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string }
+  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
@@ -318,10 +318,14 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const accept = parseFlag(argv, '--accept') ?? undefined;
     const acknowledge = argv.includes('--acknowledge') || undefined;
     const reason = parseFlag(argv, '--reason') ?? undefined;
+    const maxPromptCharsRaw = parseFlag(argv, '--max-prompt-chars');
+    const maxPromptChars = maxPromptCharsRaw === null ? undefined : Number(maxPromptCharsRaw);
+    const invalidMaxPromptChars = maxPromptCharsRaw !== null &&
+      (maxPromptChars === undefined || !Number.isInteger(maxPromptChars) || maxPromptChars <= 0);
     if (accept && acknowledge) return { kind: 'guide' };
-    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason']);
+    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason', '--max-prompt-chars']);
     if (unk) return { kind: 'reject', sub: 'plan-review', flag: unk };
-    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}) };
+    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}), ...(invalidMaxPromptChars ? { invalidMaxPromptChars: true } : maxPromptChars === undefined ? {} : { maxPromptChars }) };
   }
 
   if (subCmd === 'poll') {
@@ -652,6 +656,8 @@ export interface DispatchEngineerOpts {
   env?: NodeJS.ProcessEnv;
   /** Injectable reviewer executor for the deterministic plan-review boundary. */
   providerExecutor?: RunPlanReviewInput['providerExecutor'];
+  /** Injectable plan-review runner so command wiring can be asserted without a provider call. */
+  runPlanReview?: typeof runPlanReview;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -918,7 +924,7 @@ export const SUBCOMMAND_HELP = {
     'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
   'plan-review':
-    'compose plan-review --project <name> --worktree <path> [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
+    'compose plan-review --project <name> --worktree <path> [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
     'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
     'Mutates: writes only .docs/plan-review/<plan-stem>.md and composer events.\n' +
     'Loop fit: DECIDE gate after coherence-check and before land.',
@@ -977,7 +983,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose dep-audit --project <name>         — read-only dependency drift report\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
-      '  ai-conductor compose plan-review --project <n> --worktree <p> [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
+      '  ai-conductor compose plan-review --project <n> --worktree <p> [--max-prompt-chars <positive-integer>] [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
@@ -1472,7 +1478,9 @@ export async function dispatchEngineer(
     }
 
     case 'plan-review': {
-      const { project: projectName, worktree, accept, acknowledge, reason } = dispatch;
+      const { project: projectName, worktree, accept, acknowledge, reason, maxPromptChars, invalidMaxPromptChars } = dispatch;
+      if (invalidMaxPromptChars) { printErr('engineer plan-review: --max-prompt-chars must be a positive integer'); return 1; }
+      if (maxPromptChars !== undefined && (accept || acknowledge)) { printErr('engineer plan-review: --max-prompt-chars applies only to a review run'); return 1; }
       await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const record = (await reader.listProjects()).find((project) => project.name === projectName);
@@ -1502,7 +1510,7 @@ export async function dispatchEngineer(
           const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
           let ledgerError: string | undefined;
           const safeEmit = async (event: any) => { try { await events.emitOrThrow(event); } catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error); } };
-          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr });
+          const artifact = await (opts.runPlanReview ?? runPlanReview)({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr, maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars });
           if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
           if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
         }

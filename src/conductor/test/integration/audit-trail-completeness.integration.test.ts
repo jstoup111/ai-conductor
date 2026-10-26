@@ -146,6 +146,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Ownership refusals remain durable in the event ledger and terminal, but
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
+  github_operation_failed: 'not-audited-by-design',
   session_command_refused: 'not-audited-by-design',
   github_bypass_attempt: 'not-audited-by-design',
   github_bypass_result: 'not-audited-by-design',
@@ -522,6 +523,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     reason: 'other-owner',
     remedy: 'ask-resource-owner',
+  },
+  github_operation_failed: {
+    type: 'github_operation_failed',
+    target: { repository: 'acme/repo', kind: 'pull-request', number: 1 },
+    operation: 'pull-request.edit',
+    error: 'GitHub rejected the update',
   },
   session_command_refused: {
     type: 'session_command_refused', eventId: 'refusal-1',

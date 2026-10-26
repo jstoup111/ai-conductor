@@ -345,6 +345,7 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
+  isHumanRequiredPublicationDisposition,
   publicationProgressAllowance,
   nonRetryablePublicationReason,
   renderProseHumanRequiredDetail,
@@ -10651,7 +10652,10 @@ export class Conductor {
           const verifyExecution = verifyCursor === undefined || verifySlug === undefined
             ? undefined
             : resolveExecutionChild(verifyCursor, verifySlug);
-          if (verifySlug !== undefined && verifyExecution?.source === 'routed-host') {
+          // Verify-green re-proves an already-closed child against its
+          // close-time RED ref. The leaf never closes, so a routed leaf host
+          // proves itself through the ordinary acceptance_specs step.
+          if (verifySlug !== undefined && verifyExecution?.source === 'routed-host' && !verifyExecution.target.isLeaf) {
             const verified = await verifyGreenAcceptance({
               worktree: this.projectRoot,
               slug: verifySlug,
@@ -11768,7 +11772,15 @@ export class Conductor {
               return;
             }
             if (route.kind === 'halt') {
-              await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
+              const disposition = result.publicationDisposition;
+              await emitTracked({
+                type: 'finish_publication_disposition',
+                disposition: 'human_required',
+                ...(isHumanRequiredPublicationDisposition(disposition) ? {
+                  reason: disposition.reason,
+                  ...(disposition.detail === undefined ? {} : { detail: disposition.detail }),
+                } : {}),
+              });
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason: route.reason,

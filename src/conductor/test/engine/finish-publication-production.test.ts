@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:24, task:rem-as-built-rem-as-built-r17-5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:24, task:rem-as-built-rem-as-built-r17-5, task:rem-operator-5-r2, task:rem-as-built-rem-asbuilt-7242ec34-1
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -9,6 +9,7 @@ import {
   createProductionReleaseReadinessObserver,
   publishAcceptedBuildReviewRiskToRetainedPr,
 } from '../../src/engine/finish-publication-production.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -19,13 +20,199 @@ import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
+import type { GithubOperationName, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const commandResult = { stdout: '' };
+
+function githubOperationFailedEvent(input: {
+  repository?: string;
+  number?: number;
+  operation?: GithubOperationName;
+  error: string;
+}) {
+  return {
+    type: 'github_operation_failed',
+    operation: input.operation ?? 'pull-request.edit',
+    target: {
+      kind: 'pull-request',
+      repository: input.repository ?? 'owner/repo',
+      number: input.number ?? 7,
+    },
+    error: input.error,
+  } as const;
+}
+
+describe('authorProse pass-window publish failures', () => {
+  const pullRequestUrl = 'https://github.com/owner/repo/pull/7';
+
+  async function withRoot(run: (root: string) => Promise<void>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-pass-window-'));
+    try {
+      await run(root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  async function runAuthorProsePass(
+    root: string,
+    dispatchAuthoring: () => Promise<{ success: boolean }>,
+    flushSessionEvents?: () => Promise<void>,
+  ): Promise<void> {
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication: async (input: {
+        effects: { authorProse?: (request: { pullRequestUrl: string }) => Promise<void> };
+      }) => {
+        await input.effects.authorProse!({ pullRequestUrl });
+        return { kind: 'complete' as const };
+      },
+    }));
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+        acquireInteractiveIntent: async () => 'keep',
+        observeReleaseReadiness: async () => 'present',
+        events,
+        flushSessionEvents,
+      });
+      await coordinator.advance({
+        state: { feature_desc: 'feature' } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => dispatchAuthoring(),
+        emit: async () => {},
+      });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  }
+
+  const events = new ConductorEventEmitter();
+
+  it('throws the matching same-PR edit failure emitted by this pass flush', async () => {
+    await withRoot(async (root) => {
+      let flushes = 0;
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          if (++flushes === 2) await events.emit(githubOperationFailedEvent({ error: 'token lacks pull-request write scope' }));
+        },
+      )).rejects.toMatchObject({
+        name: 'PublicationOperationFailedError',
+        operation: 'pull-request.edit',
+        error: 'token lacks pull-request write scope',
+      });
+    });
+  });
+
+  it('ignores a pre-pass failure and failures for another PR, repository, operation, or event kind', async () => {
+    await events.emit(githubOperationFailedEvent({ error: 'pre-pass failure' }));
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          await events.emit(githubOperationFailedEvent({ number: 8, error: 'other number' }));
+          await events.emit(githubOperationFailedEvent({ repository: 'other/repo', error: 'other repository' }));
+          await events.emit(githubOperationFailedEvent({ operation: 'pull-request.comment.create', error: 'other operation' }));
+          await events.emit({ type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS' });
+        },
+      )).resolves.toBeUndefined();
+    });
+  });
+
+  it('uses the last matching failure from the pass and removes its handler after rejection', async () => {
+    await withRoot(async (root) => {
+      let flushes = 0;
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          if (++flushes !== 2) return;
+          await events.emit(githubOperationFailedEvent({ error: 'first failure' }));
+          await events.emit(githubOperationFailedEvent({ error: 'last failure' }));
+        },
+      )).rejects.toMatchObject({ error: 'last failure' });
+      await events.emit(githubOperationFailedEvent({ error: 'after rejection' }));
+    });
+  });
+
+  it('ignores an unre-emitted sibling-ledger failure that predates the authorProse pass', async () => {
+    await withRoot(async (root) => {
+      appendCloseoutEvent(root, {
+        ...githubOperationFailedEvent({ error: 'failure from an earlier pass' }),
+        ts: '2026-10-24T00:00:00.000Z',
+      });
+      await expect(readFile(join(root, '.pipeline', 'pipeline-events.jsonl'), 'utf8'))
+        .resolves.toContain('failure from an earlier pass');
+
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        // This is the pre-subscribe drain. It deliberately does not re-emit
+        // the existing sibling-ledger record onto the event bus.
+        async () => undefined,
+      )).resolves.toBeUndefined();
+    });
+  });
+
+  it('does not attribute an older matching failure flushed after a rejected pre-pass drain', async () => {
+    await withRoot(async (root) => {
+      let flushes = 0;
+      const flush = async () => {
+        if (++flushes === 1) throw new Error('tail unavailable');
+        await events.emit(githubOperationFailedEvent({ error: 'failure from an earlier pass' }));
+      };
+      await expect(runAuthorProsePass(
+        root,
+        async () => {
+          // The next successful flush replays a record that predates this
+          // pass. A failed pre-pass drain must have left no observer active.
+          await flush();
+          return { success: true };
+        },
+        flush,
+      )).resolves.toBeUndefined();
+      expect(flushes).toBe(2);
+    });
+  });
+
+  it('does not attribute a bus failure when the session tail cannot be flushed', async () => {
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(root, async () => {
+        await events.emit(githubOperationFailedEvent({ error: 'unflushed failure' }));
+        return { success: true };
+      })).resolves.toBeUndefined();
+    });
+  });
+
+  it('keeps the unsuccessful-dispatch error ahead of a matching event', async () => {
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: false }),
+        async () => events.emit(githubOperationFailedEvent({ error: 'token scope missing' })),
+      )).rejects.toThrow('PR prose authoring dispatch did not complete successfully');
+    });
+  });
+});
 
 async function observeImplementationEvidence(input: {
   root: string;

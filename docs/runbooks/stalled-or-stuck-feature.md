@@ -411,7 +411,10 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
   dispatched, so no provider pass is spent), a publication transition that ran but left its owned
   state unchanged (`publication_transition_unmoved` — the detail names the transition and the
   state that did not move, whether the transition reported success or asked for a retry it could
-  not perform), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
+  not perform), a PR edit that failed during the authoring pass so the prose never reached the
+  PR (`publication_operation_failed` — the detail is `pull-request.edit failed: <GitHub error>`,
+  e.g. a token missing a required scope; the daemon log also shows
+  `✗ GitHub operation failed: pull-request.edit on <target> — <error>`), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
   `invalid_shipped_record`), and destructive or unrecognized publication intent
   (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
 

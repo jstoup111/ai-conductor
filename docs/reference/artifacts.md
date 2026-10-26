@@ -1098,6 +1098,11 @@ line. `CloseoutEventTail` admits only these types (`ADMITTED_EXTERNAL_PIPELINE_E
 - `build_review_reduced_coverage_accepted`
 - `build_review_disposition_refused`
 - `build_review_outer_verdict`
+- `github_operation_failed` — appended by the `github-operation` subcommand when a guarded GitHub
+  operation runs and fails. Carries `operation`, `target`, and `error`. `error` is bounded before
+  it is written: request payload strings become `«payload»`, a leading `Command failed:` line is
+  dropped, and the text is capped at 1000 characters. A ledger write failure never changes the
+  operation's own result.
 - `kickback_budget_adjustment_authorized` — appended at most once per `adjustmentId`, under a
   writer lease.
 
@@ -1110,6 +1115,13 @@ re-emitted. A malformed or unadmitted complete line is consumed once so later va
 observable; the tail emits one `pipeline_tail_diagnostic` instead of replaying or exposing the line.
 `readMergedFeatureEvents` (used by [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail))
 merges this ledger with `events.jsonl` by `ts`.
+
+FINISH PR-prose authoring also reads this ledger. It flushes the tail before dispatching an
+authoring pass to fix a boundary, then flushes again after the pass. A `github_operation_failed`
+for `pull-request.edit` on the same pull request inside that window halts FINISH with
+`publication_operation_failed`, unless re-observation shows the prose changed anyway. If the first
+flush fails, the pass attributes no failures, so an earlier pass's failure is never reported as
+this one's.
 
 ### `.pipeline/audit-trail/events.jsonl`
 

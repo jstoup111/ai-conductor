@@ -1,4 +1,4 @@
-// Covers: task:4, task:3, task:1, task:2
+// Covers: task:4, task:3, task:1, task:2, task:5, task:rem-operator-5-r2
 // Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
@@ -9,8 +9,10 @@ import {
   EventPersistError,
   isForwardedFromFeature,
   persistOnActiveEventSpine,
+  startSessionEventTail,
   startFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
+import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
@@ -95,6 +97,35 @@ describe('EventPersister', () => {
       if (value === undefined) throw new Error('scripted clock exhausted');
       return value;
     },
+  });
+
+  it('flushes a fresh ledger read after joining an in-flight poll', async () => {
+    const received: ConductorEvent[] = [];
+    emitter.on('github_operation_failed', (event) => { received.push(event); });
+    let releaseFirstRead: ((content: Buffer) => void) | undefined;
+    let reads = 0;
+    const tail = new CloseoutEventTail({
+      projectRoot: tempDir,
+      events: emitter,
+      readLedger: vi.fn(() => {
+        reads += 1;
+        if (reads === 1) return new Promise<Buffer>((resolve) => { releaseFirstRead = resolve; });
+        return Promise.resolve(Buffer.from(`${JSON.stringify({
+          type: 'github_operation_failed', operation: 'pull-request.edit',
+          target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+          error: 'appended after first read', ts: '2026-10-25T00:00:00.000Z',
+        })}\n`));
+      }),
+    });
+    const scope = startSessionEventTail(tempDir, emitter, undefined, tail);
+
+    const poll = tail.poll();
+    const flushed = scope.flush();
+    releaseFirstRead!(Buffer.from(''));
+    await Promise.all([poll, flushed]);
+
+    expect(received).toEqual([expect.objectContaining({ error: 'appended after first read' })]);
+    expect(reads).toBe(2);
   });
 
   const configuredMember = (executionId: string, member = 'reviewer'): ExecutionContext => ({
@@ -766,6 +797,32 @@ describe('EventPersister', () => {
       nextDisposition: 'trial-required',
       forwarded: true,
     });
+  });
+
+  it('flushes a newly appended external event without stopping the feature tail', async () => {
+    const globalEvents = new ConductorEventEmitter();
+    const observed: ConductorEvent[] = [];
+    globalEvents.on('github_operation_failed', (event) => { observed.push(event); });
+    const scope = startFeatureEventPersistence(tempDir, globalEvents, 'feature');
+    const ledger = join(tempDir, '.pipeline', 'pipeline-events.jsonl');
+    await mkdir(join(tempDir, '.pipeline'), { recursive: true });
+
+    await writeFile(ledger, `${JSON.stringify({
+      type: 'github_operation_failed', operation: 'pull-request.edit',
+      target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+      error: 'first failure', ts: '2026-10-25T00:00:00.000Z',
+    })}\n`);
+    await scope.flush();
+    await writeFile(ledger, `${JSON.stringify({
+      type: 'github_operation_failed', operation: 'pull-request.edit',
+      target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+      error: 'second failure', ts: '2026-10-25T00:00:01.000Z',
+    })}\n`, { flag: 'a' });
+    await scope.flush();
+    scope.stop();
+
+    expect(observed.map((event) => event.type === 'github_operation_failed' ? event.error : undefined))
+      .toEqual(['first failure', 'second failure']);
   });
 
   it('persists only the closed progress contract, not doctor diagnostics', async () => {

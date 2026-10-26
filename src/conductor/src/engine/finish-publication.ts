@@ -30,6 +30,24 @@ export class StackPublicationRetryError extends Error {
   }
 }
 
+/** A guarded operation failed while a FINISH effect was publishing PR prose. */
+export class PublicationOperationFailedError extends Error {
+  override readonly name = 'PublicationOperationFailedError';
+
+  constructor(
+    readonly operation: string,
+    readonly error: string,
+  ) {
+    super(`${operation} failed: ${error}`);
+  }
+}
+
+export function isPublicationOperationFailedError(
+  error: unknown,
+): error is PublicationOperationFailedError {
+  return error instanceof PublicationOperationFailedError;
+}
+
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
  * derives these values from authoritative repository and external evidence;
@@ -544,6 +562,7 @@ export type HumanRequiredReason =
   | 'judgment_halt_prose'
   | 'halt_state_pr'
   | 'publication_transition_unmoved'
+  | 'publication_operation_failed'
   | 'publication_coordinator_unavailable'
   | 'ambiguous_pr_identity'
   | 'invalid_shipped_record'
@@ -648,6 +667,10 @@ export const HUMAN_REQUIRED_REASONS = {
   publication_transition_unmoved: {
     message: 'A FINISH publication transition did not change the state it owns.',
     nextAction: 'Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH.',
+  },
+  publication_operation_failed: {
+    message: 'A FINISH pull-request publish failed, so the authored prose never reached the pull request.',
+    nextAction: 'Resolve the failure named below, then retry FINISH.',
   },
   publication_coordinator_unavailable: {
     message: 'FINISH publication coordination is unavailable.',
@@ -889,6 +912,16 @@ export function routeFinishPublicationDisposition(
         ...(disposition.reason === 'stack_tip_diverged' ? { haltClass: 'stack-tip-diverged' as const } : {}),
       };
   }
+}
+
+/**
+ * Narrows a boundary value before its human-required metadata is forwarded
+ * onto the conductor event spine.
+ */
+export function isHumanRequiredPublicationDisposition(
+  disposition: unknown,
+): disposition is { kind: 'human_required'; reason: string; detail?: string } {
+  return isExactDisposition(disposition) && disposition.kind === 'human_required';
 }
 
 function isExactDisposition(
@@ -1445,6 +1478,7 @@ export type AdvanceFinishPublicationResult =
       reason:
         | 'publication_transition_unmoved'
         | 'publication_coordinator_unavailable'
+        | 'publication_operation_failed'
         | 'ambiguous_pr_identity'
         | 'invalid_shipped_record'
         | 'stack_tip_diverged'
@@ -1934,6 +1968,7 @@ async function advanceFinishPublicationUnreconciled(
     });
     return coalescePublicationEffect(input.effects, 'author_pr_prose', async () => {
       let dispatchFailure = false;
+      let publicationFailure: PublicationOperationFailedError | undefined;
       try {
         await input.effects.authorProse!(prProseAuthoringRequest(pr));
       } catch (error) {
@@ -1944,14 +1979,38 @@ async function advanceFinishPublicationUnreconciled(
             detail: error.message,
           };
         }
-        // A dispatcher can lose its response after the provider already edited
-        // the PR. The mandatory re-observation below is the only authority.
-        dispatchFailure = true;
+        if (isPublicationOperationFailedError(error)) {
+          publicationFailure = error;
+        } else {
+          // A dispatcher can lose its response after the provider already edited
+          // the PR. The mandatory re-observation below is the only authority.
+          dispatchFailure = true;
+        }
       }
 
       const observedAfterAuthoring = await input.observe();
       if (observedAfterAuthoring.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+
+      if (publicationFailure !== undefined) {
+        if (
+          observedAfterAuthoring.pr.identity === 'one' &&
+          observedAfterAuthoring.pr.prose !== 'placeholder' &&
+          observedAfterAuthoring.pr.prose !== 'indeterminate'
+        ) {
+          return advancedPublicationTransition(
+            input.emit,
+            'author_pr_prose',
+            snapshot,
+            observedAfterAuthoring,
+          );
+        }
+        return {
+          kind: 'human_required',
+          reason: 'publication_operation_failed',
+          detail: `${publicationFailure.operation} failed: ${publicationFailure.error}`,
+        };
       }
 
       // A lost authoring response is not evidence that the completed pass

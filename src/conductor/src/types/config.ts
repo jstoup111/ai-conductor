@@ -799,6 +799,10 @@ export interface HarnessConfig {
    * `steps.build_review.disable: true` is rejected by `validateConfig()`.
    */
   build_review?: BuildReviewConfig;
+  /** Optional prompt-character budget for the plan-review runner. */
+  plan_review?: {
+    max_prompt_chars?: number;
+  };
   /**
    * CI watch feature that observes shipped PRs' CI and drives bounded
    * auto-remediation of red ships. Absent → enabled (true, fail-safe).

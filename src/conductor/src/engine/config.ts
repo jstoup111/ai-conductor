@@ -117,7 +117,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
     'executor_isolation', 'supervisor_max_stale_hours',
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review',
-    'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
+    'prd_audit', 'plan_review', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
     'feature_applicability',
     'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup', 'reclaim_merged_worktrees',
@@ -145,6 +145,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   kickback_escalation: ['enabled'],
   cumulative_kickback_bound: ['enabled'],
   prd_audit: ['max_remediation_laps', 'max_appended_tasks', 'max_appended_ratio', 'halt_on_any_plan_gap'],
+  plan_review: ['max_prompt_chars'],
   architecture_review_as_built: ['checks', 'remediation', 'max_remediation_laps'],
   'architecture_review_as_built.remediation': ['enabled'],
   'architecture_review_as_built.checks': ['tiers'],
@@ -1640,6 +1641,11 @@ export function validateConfig(
     }
   }
 
+  {
+    const err = validatePlanReviewBlock(obj.plan_review);
+    if (err) return { ok: false, error: err };
+  }
+
   // architecture_review_as_built — per-check tier overrides and bounded
   // remediation policy. Defaults keep the remediation path enabled with one
   // lap unless the project opts out or raises the cap.
@@ -2025,6 +2031,34 @@ function validatePrdAuditBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'prd_audit.halt_on_any_plan_gap must be a boolean',
+    };
+  }
+
+  return null;
+}
+
+function validatePlanReviewBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'plan_review must be an object' };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.plan_review);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in plan_review: "${key}"` };
+    }
+  }
+
+  const maxPromptChars = obj.max_prompt_chars;
+  if (
+    maxPromptChars !== undefined &&
+    (typeof maxPromptChars !== 'number' || !Number.isInteger(maxPromptChars) || maxPromptChars <= 0)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'plan_review.max_prompt_chars must be a positive integer',
     };
   }
 

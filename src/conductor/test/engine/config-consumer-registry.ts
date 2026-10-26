@@ -99,6 +99,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     CONDUCTOR,
   ]),
   prd_audit: consumer([REMEDIATION_CAPS, PRD_AUDIT_ROUTING]),
+  plan_review: consumer([
+    'src/conductor/src/engine/engineer-cli.ts',
+    STEP_RUNNERS,
+  ]),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
   ci_watch: consumer(DAEMON_CLI),
   build_progress_halt: consumer(DAEMON_CLI),
@@ -304,6 +308,12 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'prd_audit.max_appended_tasks': consumer(REMEDIATION_CAPS),
   'prd_audit.max_appended_ratio': consumer(REMEDIATION_CAPS),
   'prd_audit.halt_on_any_plan_gap': consumer(PRD_AUDIT_ROUTING),
+
+  // ── plan_review ──────────────────────────────────────────────────────────
+  'plan_review.max_prompt_chars': consumer([
+    'src/conductor/src/engine/engineer-cli.ts',
+    STEP_RUNNERS,
+  ]),
 
   // ── architecture_review_as_built ──────────────────────────────────────────
   // `checks.<check>.tiers` is the as-built policy's own input; the remediation

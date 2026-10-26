@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5, task:8, task:21, task:37, rem-ab5-1
+// Covers: task:1, task:3, task:4, task:5, task:8, task:21, task:37, rem-ab5-1
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
@@ -10,6 +10,25 @@ import {
 describe('config consumer registry', () => {
   it('is total over validator-accepted keys', () => {
     expect(() => assertRegistryCovers(CONFIG_CONSUMER_KEY_SETS, configConsumerRegistry)).not.toThrow();
+
+    // Keep the plan-review keys explicit here: total registry coverage alone
+    // does not show which runtime boundaries own this configuration.
+    expect(CONFIG_CONSUMER_KEY_SETS.top).toContain('plan_review');
+    expect(CONFIG_CONSUMER_KEY_SETS.plan_review).toContain('max_prompt_chars');
+    expect(configConsumerRegistry).toMatchObject({
+      plan_review: {
+        consumer: [
+          'src/conductor/src/engine/engineer-cli.ts',
+          'src/conductor/src/engine/step-runners.ts',
+        ],
+      },
+      'plan_review.max_prompt_chars': {
+        consumer: [
+          'src/conductor/src/engine/engineer-cli.ts',
+          'src/conductor/src/engine/step-runners.ts',
+        ],
+      },
+    });
   });
 
   it('declares the consumer for OTel attributes admitted by validation', () => {

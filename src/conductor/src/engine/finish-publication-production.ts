@@ -52,6 +52,7 @@ import {
   resolveUnattendedPublicationIntent,
   StackPublicationHaltError,
   StackPublicationRetryError,
+  PublicationOperationFailedError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -88,6 +89,7 @@ import {
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
 import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
+import { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
@@ -140,7 +142,9 @@ export interface ProductionFinishPublicationDeps {
   /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
   remoteGit?: typeof executeRemoteGit;
   /** Canonical event spine; required for D9 warned operator-credential fallback. */
-  events?: { emit(event: ConductorEvent): Promise<void> };
+  events?: ConductorEventEmitter;
+  /** Delivers completed external-process records without stopping the feature tail. */
+  flushSessionEvents?: () => Promise<void>;
   /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
@@ -1781,7 +1785,38 @@ export function createProductionFinishPublicationCoordinator(
           ...(dispatchAuthoring
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
-                  const dispatched = await dispatchAuthoring(request);
+                  const pullRequest = repositoryAndNumber(request.pullRequestUrl);
+                  let lastFailure: { operation: string; error: string } | undefined;
+                  const observeFailure = (event: ConductorEvent) => {
+                    if (
+                      event.type === 'github_operation_failed'
+                      && event.operation === 'pull-request.edit'
+                      && event.target.kind === 'pull-request'
+                      && event.target.repository === pullRequest?.repository
+                      && event.target.number === pullRequest.number
+                    ) {
+                      lastFailure = { operation: event.operation, error: event.error };
+                    }
+                  };
+                  // Establish the pass boundary before observing failures. The
+                  // pre-subscribe drain advances any earlier sibling-ledger
+                  // records, while the post-dispatch fresh flush projects only
+                  // records produced by this authoring pass.
+                  const canObserveFailures = pullRequest !== undefined
+                    && deps.events !== undefined
+                    && deps.flushSessionEvents !== undefined;
+                  let observingFailures = false;
+                  if (canObserveFailures) {
+                    // A failed drain leaves the sibling-ledger cursor at an
+                    // unknown boundary. Do not subscribe in that case: a
+                    // later successful flush could replay a failure from an
+                    // earlier authoring pass and misattribute it here.
+                    observingFailures = await deps.flushSessionEvents!()
+                      .then(() => true, () => false);
+                    if (observingFailures) deps.events!.on('github_operation_failed', observeFailure);
+                  }
+                  try {
+                    const dispatched = await dispatchAuthoring(request);
                   // A failed provider run returns, it does not throw. Passing
                   // it through as a completed pass made the coordinator's
                   // fixed-point guard read an aborted attempt as "authoring
@@ -1790,8 +1825,15 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
+                    if (observingFailures) {
+                      await deps.flushSessionEvents!().catch(() => undefined);
+                      if (lastFailure) throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
+                    }
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
+                  }
+                  } finally {
+                    if (observingFailures) deps.events!.off('github_operation_failed', observeFailure);
                   }
                 },
               }

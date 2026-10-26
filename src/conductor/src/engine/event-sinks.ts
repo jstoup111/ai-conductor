@@ -131,6 +131,7 @@ export const EVENT_SINKS = {
   // Ownership denials remain visible and durable through the one event spine;
   // the event excludes payloads and request bodies by construction.
   github_operation_refused: { render: true, persist: true, audit: false, otel: false },
+  github_operation_failed: { render: true, persist: true, audit: false, otel: false },
   github_write_credential_fallback: { render: true, persist: true, audit: false, otel: false },
   bot_co_author_skipped: { render: true, persist: true, audit: false, otel: false },
   provider_discovery: { render: false, persist: true, audit: false, otel: false },

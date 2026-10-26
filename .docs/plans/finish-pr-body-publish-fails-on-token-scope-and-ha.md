@@ -30,9 +30,9 @@ pass-window reader, and the conductor-level integration proof.
     - `ambiguous` identity → `ambiguous_pr_identity`;
     - prose that is neither `placeholder` nor `indeterminate` → `advancedPublicationTransition`;
     - otherwise → `{ kind: 'human_required', reason: 'publication_operation_failed', detail: '<operation> failed: <error>' }`.
-  - **Production reader.** Add `readPassPublishFailure(projectRoot, offset, pullRequestUrl)` to `finish-publication-production.ts`. Before calling `dispatchAuthoring`, the production `authorProse` records the byte size of `<projectRoot>/.pipeline/pipeline-events.jsonl` (0 when missing). After a successful dispatch, it reads the bytes past that offset and splits them on `\n`. It skips blank and unparseable lines. It keeps records with `type === 'github_operation_failed'`, `operation === 'pull-request.edit'`, `target.kind === 'pull-request'`, and `target.repository`/`target.number` equal to the `owner/repo` and number parsed from `pullRequestUrl`. If any match, it throws `PublicationOperationFailedError` built from the last one. Any read error counts as no failure. The existing `!dispatched.success` throw stays first and unchanged.
+  - **Production observer (on the spine).** The production `authorProse` never reads `.pipeline/pipeline-events.jsonl`; `CloseoutEventTail` stays its only reader. `ProductionFinishPublicationDeps` gains a subscribable `events` (`on`/`off`, as `ConductorEventEmitter`) and `flushSessionEvents?: () => Promise<void>`. `SessionEventTailOwner` and `startFeatureEventPersistence` gain `flush()`: one `CloseoutEventTail.poll()` that joins any in-flight read and does not stop the tail. The FINISH coordinator call sites (`daemon-cli.ts`, `index.ts`, `executor-child-runtime.ts`) pass the feature scope's emitter and `flush`. Before calling `dispatchAuthoring`, `authorProse` registers an `on('github_operation_failed')` handler that keeps events with `operation === 'pull-request.edit'`, `target.kind === 'pull-request'`, and `target.repository`/`target.number` equal to the `owner/repo` and number parsed from `pullRequestUrl`. After the dispatch it awaits `flushSessionEvents()`, then `off`s the handler in a `finally`. If any event matched and the dispatch succeeded, it throws `PublicationOperationFailedError` built from the last one. With no subscribable `events` or no `flushSessionEvents`, nothing is attributed. The existing `!dispatched.success` throw stays first and unchanged.
 - **Pattern context.** The typed-effect-error pattern is the region-restore classification in the `author_pr_prose` branch (search `isRegionRestoreError`): a discriminated error thrown by the effect and classified inside the `coalescePublicationEffect` callback. The allowed variation is that this path re-observes before deciding. The external-event pattern is `appendCloseoutEvent` plus `ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES` (search `closeout-events.ts`, `closeout-tail.ts`).
-- **Spine.** No new channel (`.agents/skills/event-spine/SKILL.md` §4 A+B). The sibling ledger is the existing single-writer external ledger in the same union, re-emitted by the session tail.
+- **Spine.** No new channel (`.agents/skills/event-spine/SKILL.md` §4 A+B). The sibling ledger is the existing single-writer external ledger in the same union, re-emitted by the session tail. The FINISH decision consumes the re-emitted bus events, not the ledger file (operator decision 2026-10-25, resolving build_review decision stop 64898260).
 
 ## Prerequisites
 
@@ -155,30 +155,36 @@ pass-window reader, and the conductor-level integration proof.
 **Type:** negative-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/finish-publication-production.test.ts` (new `describe('authorProse pass-window publish failures')`). Each uses a temp `projectRoot` and a `dispatchAuthoring` stub that appends lines to `<projectRoot>/.pipeline/pipeline-events.jsonl` during the call and returns `{ success: true }`, with the PR at `https://github.com/owner/repo/pull/7`:
-   - (a) one matching `github_operation_failed` (operation `pull-request.edit`, target `owner/repo#7`) appended during the call → `authorProse` rejects with `PublicationOperationFailedError` carrying that operation and error;
-   - (b) a matching record present before the call and none during it → resolves;
-   - (c) during-call records for `owner/repo#8`, for `other/repo#7`, and for operation `pull-request.comment.create` → resolves;
-   - (d) two matching records during the call → rejects with the second record's error;
-   - (e) no ledger file, and an unreadable ledger path (a directory at that path) → resolves;
-   - (f) a malformed line plus a matching record during the call → rejects with the matching record's error;
-   - (g) a stub returning `{ success: false }` after appending a matching record → rejects with the existing `PR prose authoring dispatch did not complete successfully` error, not `PublicationOperationFailedError`;
-   - (h) during-call records only of other admitted kinds (e.g. `build_review_outer_verdict`) → resolves.
-2. Verify RED.
-3. Implement in `finish-publication-production.ts`: a `readPassPublishFailure(projectRoot, offset, pullRequestUrl)` helper and the pre-dispatch size capture plus post-dispatch read in the production `authorProse`, exactly as Technical Approach describes. Keep the `!dispatched.success` throw first. Throw `PublicationOperationFailedError` (Task 4) for the last match.
-4. Verify GREEN.
-5. Commit: "Attribute this pass's PR edit failures in FINISH authoring".
+1. Write failing tests in `src/conductor/test/engine/finish-publication-production.test.ts` (new `describe('authorProse pass-window publish failures')`). Each uses a real `ConductorEventEmitter` as `events` and a `flushSessionEvents` stub that emits queued `github_operation_failed` events onto it; the `dispatchAuthoring` stub queues events during the call and returns `{ success: true }`, with the PR at `https://github.com/owner/repo/pull/7`:
+   - (a) one matching event (operation `pull-request.edit`, target `owner/repo#7`) delivered by the post-dispatch flush → `authorProse` rejects with `PublicationOperationFailedError` carrying that operation and error;
+   - (b) a matching event emitted before the call and none during it → resolves;
+   - (c) during-call events for `owner/repo#8`, for `other/repo#7`, and for operation `pull-request.comment.create` → resolves;
+   - (d) two matching events during the call → rejects with the second event's error;
+   - (e) no `flushSessionEvents` dependency, and a flush that rejects → resolves;
+   - (f) a stub returning `{ success: false }` after queuing a matching event → rejects with the existing `PR prose authoring dispatch did not complete successfully` error, not `PublicationOperationFailedError`;
+   - (g) during-call events only of other kinds (e.g. `build_review_outer_verdict`) → resolves;
+   - (h) after `authorProse` settles, resolved or rejected, a matching event emitted on `events` is not attributed to any later pass (the handler was removed).
+2. Add `flush()` to `SessionEventTailOwner` and `startFeatureEventPersistence` in `event-persister.ts`, with a test in `event-persister` tests that a record appended to `.pipeline/pipeline-events.jsonl` is emitted by `flush()` and the tail keeps polling afterwards.
+3. Verify RED.
+4. Implement the production observer in `finish-publication-production.ts` exactly as Technical Approach describes, and pass the feature emitter and `flush` from the FINISH coordinator call sites. Delete `readPassPublishFailure` and the byte-offset `stat`. Keep the `!dispatched.success` throw first. Throw `PublicationOperationFailedError` (Task 4) for the last match.
+5. Verify GREEN.
+6. Commit: "Attribute this pass's PR edit failures in FINISH authoring from the event bus".
 
 **Done when:**
-- [test] A production test asserts that `authorProse` rejects with `PublicationOperationFailedError` carrying operation and error when a same-PR `pull-request.edit` failure is appended during a successful dispatch.
-- [test] A production test asserts that `authorProse` resolves for a matching record written before the pre-dispatch offset, for during-call records naming another PR number, another repository, or `pull-request.comment.create`, and for during-call records only of other admitted kinds.
-- [test] A production test asserts that with two matching during-call records the rejection carries the last record's error, and that a malformed line beside a matching record still rejects with that record.
-- [test] A production test asserts that `authorProse` resolves without throwing when the ledger is missing or unreadable.
-- [test] A production test asserts that an unsuccessful dispatch rejects with `PR prose authoring dispatch did not complete successfully` and not `PublicationOperationFailedError`, even with a matching record.
+- [test] A production test asserts that `authorProse` rejects with `PublicationOperationFailedError` carrying operation and error when a same-PR `pull-request.edit` failure is delivered on the bus by the post-dispatch flush of a successful dispatch.
+- [test] A production test asserts that `authorProse` resolves for a matching event emitted before the dispatch, for during-call events naming another PR number, another repository, or `pull-request.comment.create`, and for during-call events only of other kinds.
+- [test] A production test asserts that with two matching during-call events the rejection carries the last event's error.
+- [test] A production test asserts that `authorProse` resolves without throwing when the flush dependency is missing or rejects, and that its handler is removed once it settles.
+- [test] A production test asserts that an unsuccessful dispatch rejects with `PR prose authoring dispatch did not complete successfully` and not `PublicationOperationFailedError`, even with a matching event.
+- [test] An event-persister test asserts `flush()` emits a newly appended sibling-ledger record without stopping the tail.
+- `finish-publication-production.ts` contains no read of `pipeline-events.jsonl`.
 
 **Files likely touched:**
-- `src/conductor/src/engine/finish-publication-production.ts` — pass-window reader and `authorProse` wiring
+- `src/conductor/src/engine/finish-publication-production.ts` — bus observer and `authorProse` wiring
+- `src/conductor/src/engine/event-persister.ts` — tail `flush()`
+- `src/conductor/src/daemon-cli.ts`, `src/conductor/src/index.ts`, `src/conductor/src/engine/executor-child-runtime.ts` — pass emitter and flush
 - `src/conductor/test/engine/finish-publication-production.test.ts` — production tests
+- `src/conductor/test/engine/event-persister.test.ts` — flush test
 
 **Dependencies:** Tasks 1, 4
 
@@ -238,7 +244,7 @@ Task 4 ──┴──────────────▶ Task 6
 | Story 2 happy: Given that halt, when it is rendered and persisted, then the halt message names a failed PR publish, the next action tells the operator to resolve the named failure and retry FINISH, the detail contains the recorded error text (for example the missing `read:org` scope message), and the `finish_publication_disposition` and `loop_halt` events carry that reason and detail | 4, 6 | "contains the message `A FINISH pull-request publish failed, so the authored prose never reached the pull request.`, the next action `Resolve the failure named below, then retry FINISH.`, and the error text" | diff-local |
 | Story 2 happy: Given that halt, when its reason text is inspected, then it does not contain "left pr.prose unchanged at placeholder" | 4, 6 | "does not contain `left pr.prose unchanged at placeholder`" | diff-local |
 | Story 2 negative: Given a failure recorded during the pass, when re-observation shows the PR prose is no longer the placeholder, then the `author_pr_prose` transition advances normally and FINISH does not halt | 4 | "the same typed failure with authored prose re-observed returns `advanced` for `author_pr_prose` and no `human_required`" | diff-local |
-| Story 2 negative: Given a `github_operation_failed` record for this PR appended before the pass started, and none during it, when the pass completes leaving placeholder prose, then the earlier failure is not attributed and FINISH resolves `publication_transition_unmoved` as today | 5, 4 | "`authorProse` resolves for a matching record written before the pre-dispatch offset" | diff-local |
+| Story 2 negative: Given a `github_operation_failed` record for this PR appended before the pass started, and none during it, when the pass completes leaving placeholder prose, then the earlier failure is not attributed and FINISH resolves `publication_transition_unmoved` as today | 5, 4 | "`authorProse` resolves for a matching event emitted before the dispatch" | diff-local |
 | Story 2 negative: Given a failure recorded during the pass for a different pull-request number, a different repository, or a different operation such as `pull-request.comment.create`, when the pass completes leaving placeholder prose, then that record is not attributed and FINISH resolves `publication_transition_unmoved` | 5, 4 | "for during-call records naming another PR number, another repository, or `pull-request.comment.create`" | diff-local |
 | Story 2 negative: Given two failures for this PR recorded during the pass, when FINISH halts, then the detail carries the error of the last recorded failure | 6, 5 | "writes a HALT whose reason is `publication_operation_failed` with the second failure's missing-scope error in its detail" | diff-local |
 | Story 2 negative: Given a sibling ledger that is missing or unreadable after the pass, when the pass completes leaving placeholder prose, then FINISH treats it as no recorded failure and resolves `publication_transition_unmoved`, with no crash | 5, 4 | "`authorProse` resolves without throwing when the ledger is missing or unreadable" | diff-local |
@@ -270,3 +276,58 @@ Task 4 ──┴──────────────▶ Task 6
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-operator-5-r1: Replace the direct pipeline-events.jsonl reader in production authorProse with the bus observer Task 5 now specifies
+**Gate:** operator
+**Rationale:** Operator decision 2026-10-25 resolving build_review decision stop 64898260 (eventSpine vs. Task 5). The committed `readPassPublishFailure` parses `.pipeline/pipeline-events.jsonl` from a byte offset to decide FINISH's outcome, a second reader of the sibling ledger that `.agents/skills/event-spine/SKILL.md` §7 grades as a channel. ADR adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3 and Task 5 are amended so the decision is taken from `github_operation_failed` events re-emitted on the feature bus after a session-tail flush. This task migrates the already-committed Task 5 code to that design.
+**Parent task:** 5
+**Done when:**
+- [test] Every Task 5 Done-when check passes against the bus observer.
+- `finish-publication-production.ts` contains no read of `pipeline-events.jsonl` and no `readPassPublishFailure`.
+- [test] The conductor FINISH end-to-end tests (Task 6) still pass.
+
+### Task rem-operator-5-r2: Bound authorProse's pass window with a pre-subscribe drain and fresh-read flushes
+**Gate:** operator
+**Rationale:** Operator decision 2026-10-25 resolving as-built review 77725c2c findings 2-4 (ADR adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3). The session tail starts at offset zero and polls periodically (`closeout-tail.ts:37`, `:183`), so a pre-pass record can be delivered inside the subscription window and be attributed to this pass. `flush()` joins an in-flight poll (`closeout-tail.ts:121`), so a provider's final append can be missed before unsubscribe. `authorProse` subscribes and attributes even when `flushSessionEvents` is absent (`finish-publication-production.ts:1771`, `:1782`). Decision 3 is amended: drain the tail before subscribing, make every flush a fresh read, and attribute nothing without a flush dependency.
+**Parent task:** 5
+**Done when:**
+- [test] A production test asserts that a matching `pull-request.edit` failure appended to the sibling ledger before `authorProse` is called, and not yet re-emitted, is not attributed: `authorProse` resolves.
+- [test] An event-persister test asserts that `flush()` called while a poll is in flight still emits a record appended after that poll read the ledger, before `flush()` resolves.
+- [test] A production test asserts that with no `flushSessionEvents` dependency, `authorProse` resolves even when a matching failure is emitted on the bus during the dispatch.
+- [test] Every Task 5 Done-when check still passes.
+
+### Task rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8: Revert renderHumanRequiredHaltReason in src/conductor/src/engine/finish-publication.ts to return `${message} Next action: ${nextAction}${detail}` with no reason-code suffix. In the same change, delete the `expect(result.halt).toContain('publication_operation_failed')` assertion in test/acceptance/finish-pr-body-publish-fails-on-token-scope-and-ha.acceptance.test.ts and keep its existing message, next-action and missing-scope error-text assertions as the Story 2 proof.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework of the refused behavior. src/conductor/src/engine/finish-publication.ts:857 now appends ' Reason: ${disposition.reason}.' to every human_required FINISH halt. The operator refused that and asked for the renderer to be reverted. Verified by grep: the only consumer is the acceptance assertion expect(result.halt).toContain('publication_operation_failed') at test/acceptance/finish-pr-body-publish-fails-on-token-scope-and-ha.acceptance.test.ts:223. The conductor test (conductor-finish-publication.test.ts:1645-1654) already asserts the message and error text, not the code. That same acceptance test already asserts the Story 2 message, next action and missing-scope error text, so Story 2 coverage survives the removal. The renderer revert and the assertion removal have to land together, because either change alone breaks the other side. Task 4 owns the renderer and its rendering test. No new behavior is introduced.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 889a2042-4532-4800-8e17-16a5b4fbadd8 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 889a2042-4532-4800-8e17-16a5b4fbadd8 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-889a2042-4532-4800-8e17-16a5b4fbadd8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1.2-1: In src/conductor/src/engine/github-operations-cli.ts recordFailedOperation, drop the request.access allow-list so every result with kind 'failed' appends one github_operation_failed record, whatever the access class. Keep the bounded error, the redaction, and the best-effort try/catch unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified at src/conductor/src/engine/github-operations-cli.ts:289. recordFailedOperation returns early unless request.access is feature-write, shared-write or remote-ref-write, so a failure from a create-, intake-write- or read-access operation (for example pull-request.create or issue.create) writes no github_operation_failed record. That conflicts with Task 3's title ('records every failed result'), its Step 3 ('when result.kind === failed'), and ADR adr-2026-10-24's statement that every failed guarded operation reaches the spine. The fix is clear, conforming implementation and test drift that Task 3 already admits, so no architecture decision is needed. Confidence 95%.
+**Criterion:** S1.2
+**Parent task:** 3
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1.2-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1.2-2: In src/conductor/test/engine/github-operations-cli-failed-event.test.ts, add cases where failing create-access operations (pull-request.create and issue.create) and a failing intake-write or read operation each append exactly one github_operation_failed line with their operation and target to .pipeline/pipeline-events.jsonl. Assert that stdout still prints the failed result and the exit code is 1.
+**Gate:** prd-audit
+**Rationale:** Verified at src/conductor/src/engine/github-operations-cli.ts:289. recordFailedOperation returns early unless request.access is feature-write, shared-write or remote-ref-write, so a failure from a create-, intake-write- or read-access operation (for example pull-request.create or issue.create) writes no github_operation_failed record. That conflicts with Task 3's title ('records every failed result'), its Step 3 ('when result.kind === failed'), and ADR adr-2026-10-24's statement that every failed guarded operation reaches the spine. The fix is clear, conforming implementation and test drift that Task 3 already admits, so no architecture decision is needed. Confidence 95%.
+**Criterion:** S1.2
+**Parent task:** 3
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1.2-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-7242ec34-1: In src/conductor/src/engine/finish-publication-production.ts authorProse, subscribe the github_operation_failed observer only when the pre-subscribe flushSessionEvents drain succeeds. If the drain rejects, do not subscribe and attribute nothing for this pass: dispatch normally, skip the post-dispatch flush/lastFailure throw, and keep the !dispatched.success throw. In src/conductor/test/engine/finish-publication-production.test.ts, add a case: the first flush rejects, the next flush emits an older matching pull-request.edit failure for owner/repo#7 during the dispatch, and authorProse resolves. Keep every existing Task 5 and rem-operator-5-r2 test passing.
+**Gate:** as-built
+**Rationale:** I checked this against the code; it holds (95%). src/conductor/src/engine/finish-publication-production.ts:1779 runs `await deps.flushSessionEvents!().catch(() => undefined)` and then subscribes at :1780 even when that call rejected. CloseoutTailReader.read() (closeout-tail.ts:48-51) rethrows any ledger read error other than ENOENT before its offset moves. A later successful flush inside the window can therefore re-emit an older same-PR pull-request.edit failure and pin it on this pass. Approved ADR decision 3, as amended, already fixes the intended behaviour: drain before subscribing, and attribute nothing when there is no flush boundary. No architecture or product decision is needed, so this is conforming implementation and test work for BUILD. It falls within operator task rem-operator-5-r2 (pre-subscribe drain bounding the pass window) and its parent Task 5, whose step 1(e) already requires that a rejecting flush resolves without attribution. The repair keeps every existing Task 5 and rem-operator-5-r2 Done-when check. Only this one call site is affected: the post-dispatch flush at :1793 needs no change. Swallowing its error and then reading lastFailure attributes only events seen inside the window, which the drain has already bounded.
+**Governing clause:** adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3
+**Done when:**
+- adr-2026-10-24-finish-surfaces-guarded-publish-failures decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-7242ec34-1 is committed and its targeted tests pass.
