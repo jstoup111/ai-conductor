@@ -19,7 +19,7 @@ import { writeGitHooksAndWire } from '../worktree-prepare.js';
 import { routedRoundOpen } from './round-admission.js';
 import { admitRound } from './round-admission.js';
 import { pinHostEntry, restageHostRegion } from './host-region-entry.js';
-import { grantRoutedRepairCredit } from './round-receipt.js';
+import { grantRoutedRepairCredit, routedSealedAuthored } from './round-receipt.js';
 import { createRouteRecord, readRepairMarker, readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor, redRefFor, rejectedPinRefFor } from './routing-refs.js';
 import { parseRoundId, routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId, type RouteRecord } from './route-types.js';
@@ -607,9 +607,10 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
     if (priorRegion === undefined || otherTips === undefined) {
       return { kind: 'refused', detail: `cannot prepare operator round ${input.roundId}: host state or feature tips are unavailable` };
     }
+    const sealedAuthored = await routedSealedAuthored(input.worktree, input.slug, { cursor: { kind: 'active' }, config: undefined }, git);
     const created = await createRouteRecord(input.worktree, input.slug, {
       roundId: input.roundId,
-      sealedAuthored: 0,
+      sealedAuthored: sealedAuthored ?? 0,
       kind: 'operator',
       items: [],
       allocation: { [input.host]: { remTaskIds: [], blockBodies: [] } },
