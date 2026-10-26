@@ -263,9 +263,10 @@ export interface BuildReviewSettledHunkFinding {
 
 /** Current act cases that remain a frontier risk, split by applied effect. */
 export interface BuildReviewLiveActSourceIds {
-  readonly liveSourceIds: ReadonlySet<string>;
-  /** Only these sources may force the unmapped-source full-lap fallback. */
+  /** Live actions without an applied effect retain conservative file fallback. */
   readonly unappliedLiveSourceIds: ReadonlySet<string>;
+  /** Applied-open actions retain only their concrete current-hunk risk. */
+  readonly appliedLiveSourceIds: ReadonlySet<string>;
 }
 
 /**
@@ -276,18 +277,18 @@ export interface BuildReviewLiveActSourceIds {
 export function buildReviewLiveActSourceIds(
   cases: readonly RemediationCaseRecord[],
 ): BuildReviewLiveActSourceIds {
-  const liveSourceIds = new Set<string>();
   const unappliedLiveSourceIds = new Set<string>();
+  const appliedLiveSourceIds = new Set<string>();
   for (const [sourceId, { record }] of currentBuildReviewSourceLinks(cases)) {
     if (record.disposition !== "act") continue;
     const applied = record.effect.kind === "action" && record.effect.status === "applied";
     const live = record.resolution === "open" ||
       (record.effect.kind === "action" && (record.effect.status === "failed" || record.effect.status === "reserved"));
     if (!live) continue;
-    liveSourceIds.add(sourceId);
-    if (!applied) unappliedLiveSourceIds.add(sourceId);
+    if (applied) appliedLiveSourceIds.add(sourceId);
+    else unappliedLiveSourceIds.add(sourceId);
   }
-  return { liveSourceIds, unappliedLiveSourceIds };
+  return { unappliedLiveSourceIds, appliedLiveSourceIds };
 }
 
 /**
@@ -362,8 +363,10 @@ export interface SettledBuildReviewHunksInput {
    * completion semantics.
    */
   readonly resolvedAppliedActSourceIds?: ReadonlySet<string>;
-  /** Sources with live/remediation risk always keep their target in delta. */
-  readonly liveSourceIds?: ReadonlySet<string>;
+  /** Unapplied live sources retain their concrete or conservative file target. */
+  readonly unappliedLiveSourceIds?: ReadonlySet<string>;
+  /** Applied-open sources retain only concrete current-hunk targets. */
+  readonly appliedLiveSourceIds?: ReadonlySet<string>;
   /** Test-quality unresolved candidates are unknown risk, not absence. */
   readonly unknownSourceIds?: ReadonlySet<string>;
   /** Location-bearing unknown test scope facts, keyed by `unknownSourceIds`. */
@@ -382,7 +385,8 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
   );
   const nonBlocking = input.nonBlockingSourceIds ?? new Set<string>();
   const resolvedAppliedAct = input.resolvedAppliedActSourceIds ?? new Set<string>();
-  const live = input.liveSourceIds ?? new Set<string>();
+  const unappliedLive = input.unappliedLiveSourceIds ?? new Set<string>();
+  const appliedLive = input.appliedLiveSourceIds ?? new Set<string>();
   const unknown = input.unknownSourceIds ?? new Set<string>();
   const unknownSources = input.unknownSources ?? [];
   return current.filter((hunk) => {
@@ -397,13 +401,21 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
       ))) return false;
     for (const lap of eligible) {
       for (const source of lap.findings) {
-        const mapsHere = mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
+        const targets = mapBuildReviewFindingToHunks(source.finding, input.changedFiles);
+        const mapsHere = targets.some((target) =>
           target.kind === "hunks"
             ? target.hunks.some((candidate) => hunkKey(candidate) === key)
             : target.path === hunk.path,
         );
         if (!mapsHere) continue;
-        if (live.has(source.sourceId) || unknown.has(source.sourceId)) return false;
+        if (unknown.has(source.sourceId) || unappliedLive.has(source.sourceId)) return false;
+        if (appliedLive.has(source.sourceId)) {
+          // A repair can rewrite its old anchor. Its file fallback must not
+          // re-open unrelated hunks; only a concrete current anchor stays live.
+          if (targets.some((target) => target.kind === "hunks" &&
+            target.hunks.some((candidate) => hunkKey(candidate) === key))) return false;
+          continue;
+        }
         if (!nonBlocking.has(source.sourceId) && !resolvedAppliedAct.has(source.sourceId) && !lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId)) return false;
       }
     }

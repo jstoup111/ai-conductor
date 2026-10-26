@@ -4576,7 +4576,7 @@ TIER: M`,
       expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
 
       vi.spyOn(runner as any, 'liveBuildReviewActSourceIds').mockResolvedValue({
-        liveSourceIds: new Set([sourceId]), unappliedLiveSourceIds: new Set([sourceId]),
+        unappliedLiveSourceIds: new Set([sourceId]), appliedLiveSourceIds: new Set(),
       });
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {

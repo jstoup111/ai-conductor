@@ -3341,7 +3341,8 @@ export class DefaultStepRunner implements StepRunner {
       const settled = settledBuildReviewHunks({
         changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
         resolvedAppliedActSourceIds,
-        liveSourceIds: liveActSourceIds.liveSourceIds,
+        unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
+        appliedLiveSourceIds: liveActSourceIds.appliedLiveSourceIds,
         unknownSourceIds: new Set(unknownSources.map((source) => source.sourceId)),
         unknownSources,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
@@ -3399,7 +3400,8 @@ export class DefaultStepRunner implements StepRunner {
       const settled = settledBuildReviewHunks({
         changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
         resolvedAppliedActSourceIds,
-        liveSourceIds: liveActSourceIds.liveSourceIds,
+        unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
+        appliedLiveSourceIds: liveActSourceIds.appliedLiveSourceIds,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
           ? [{ reviewScope: artifact.reviewScope, findings: customJudgedSourcesFor(entry.id, artifact) }]
           : []),

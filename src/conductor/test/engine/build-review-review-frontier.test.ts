@@ -6,6 +6,7 @@ import {
   buildReviewLiveActSourceIds,
   buildReviewTestScopeUnknownSources,
   decideBuildReviewReviewScope,
+  hasUnappliedLiveSourceWithoutCurrentHunk,
   mapBuildReviewFindingToHunks,
   settledBuildReviewHunks,
   type BuildReviewPolicyIdentityInputs,
@@ -244,7 +245,7 @@ describe("build-review review frontier", () => {
     expect(mapBuildReviewFindingToHunks(imprecise, files)).toEqual([{ kind: "file", path: "src/example.ts" }]);
     const lap = { reviewScope: scope(), findings: [{ sourceId: "source-a", finding }] };
     expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]) })).toEqual([{ path: "src/example.ts", contentHash: "sha256:hunk-a" }]);
-    expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]), liveSourceIds: new Set(["source-a"]) })).toEqual([]);
+    expect(settledBuildReviewHunks({ changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], nonBlockingSourceIds: new Set(["source-a"]), unappliedLiveSourceIds: new Set(["source-a"]) })).toEqual([]);
   });
 
   // Covers: task:8
@@ -284,11 +285,12 @@ describe("build-review review frontier", () => {
     const live = buildReviewLiveActSourceIds(records);
     const lap = { reviewScope: scope(), findings: sourceIds.map((sourceId) => ({ sourceId, finding })) };
 
-    expect(live.liveSourceIds).toEqual(new Set(sourceIds));
     expect(live.unappliedLiveSourceIds).toEqual(new Set(["open", "failed", "reserved"]));
+    expect(live.appliedLiveSourceIds).toEqual(new Set(["open-applied"]));
     expect(settledBuildReviewHunks({
       changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap],
-      liveSourceIds: live.liveSourceIds,
+      unappliedLiveSourceIds: live.unappliedLiveSourceIds,
+      appliedLiveSourceIds: live.appliedLiveSourceIds,
     })).toEqual([]);
   });
 
@@ -303,12 +305,96 @@ describe("build-review review frontier", () => {
     const lap = { reviewScope: scope(), findings: [{ sourceId: "file", finding: fileLevel }, { sourceId: "missing", finding: missing }] };
 
     expect(settledBuildReviewHunks({
-      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], liveSourceIds: live,
+      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap], unappliedLiveSourceIds: live,
     })).toEqual([]);
     expect(decide({
       priorLaps: [{ lapId: lapId("lap-prior"), reviewScope: scope() }],
       settledHunks: [], openSourceUnmapped: true,
     })).toMatchObject({ mode: "full", reason: "open-source-unmapped" });
+  });
+
+  // Covers: task:9
+  it("keeps only changed and unapplied-risk hunks in L2 when an applied-open anchor was rewritten", () => {
+    const files: readonly ChangedFileReference[] = [{
+      path: "src/example.ts",
+      changeKind: "modified",
+      hunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: "sha256:changed" },
+        { oldStart: 10, oldCount: 1, newStart: 10, newCount: 1, contentHash: "sha256:unsettled" },
+        { oldStart: 20, oldCount: 1, newStart: 20, newCount: 1, contentHash: "sha256:settled" },
+      ],
+    }];
+    const appliedSource = {
+      concernKind: "duplication",
+      summary: "the repaired anchor was rewritten",
+      evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:rewritten", display: "old branch" } },
+    };
+    const unappliedSource = {
+      concernKind: "duplication",
+      summary: "still needs repair",
+      evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:unsettled", display: "open branch" } },
+    };
+    const cases = [
+      {
+        id: "case-applied", domain: "build_review" as const, disposition: "act" as const,
+        priority: "high" as const, rationale: "repair is awaiting closure", confidence: "high" as const,
+        resolution: "open" as const,
+        sources: [{ sourceId: "applied", outcome: "acted" as const, recordedAt: "2026-10-25T00:00:00Z" }],
+        effect: { id: "effect-applied", kind: "action" as const, status: "applied" as const, workOrderId: "order-applied" },
+      },
+      {
+        id: "case-unapplied", domain: "build_review" as const, disposition: "act" as const,
+        priority: "high" as const, rationale: "repair remains open", confidence: "high" as const,
+        resolution: "open" as const,
+        sources: [{ sourceId: "unapplied", outcome: "acted" as const, recordedAt: "2026-10-25T00:00:01Z" }],
+        effect: { kind: "none" as const },
+      },
+    ] satisfies readonly RemediationCaseRecord[];
+    const live = buildReviewLiveActSourceIds(cases);
+    const l1 = {
+      lapId: lapId("lap-l1"),
+      reviewScope: scope({
+        reviewedHunks: [
+          { path: "src/example.ts", contentHash: "sha256:unsettled" },
+          { path: "src/example.ts", contentHash: "sha256:settled" },
+        ],
+        deltaHunks: [
+          { path: "src/example.ts", contentHash: "sha256:unsettled" },
+          { path: "src/example.ts", contentHash: "sha256:settled" },
+        ],
+      }),
+    };
+    const sources = [
+      { sourceId: "applied", finding: appliedSource },
+      { sourceId: "unapplied", finding: unappliedSource },
+    ];
+    const settled = settledBuildReviewHunks({
+      changedFiles: files, mergeBase: "base-a", policyIdentity: "sha256:policy-a",
+      laps: [{ reviewScope: l1.reviewScope, findings: sources }],
+      unappliedLiveSourceIds: live.unappliedLiveSourceIds,
+      appliedLiveSourceIds: live.appliedLiveSourceIds,
+    });
+
+    expect(settled).toEqual([{ path: "src/example.ts", contentHash: "sha256:settled" }]);
+    expect(hasUnappliedLiveSourceWithoutCurrentHunk({
+      sources,
+      unappliedLiveSourceIds: live.unappliedLiveSourceIds,
+      changedFiles: files,
+    })).toBe(false);
+    expect(decide({
+      changedFiles: files,
+      priorLaps: [l1],
+      settledHunks: settled,
+      openSourceUnmapped: false,
+    })).toMatchObject({
+      mode: "delta",
+      deltaHunks: [
+        { path: "src/example.ts", contentHash: "sha256:changed" },
+        { path: "src/example.ts", contentHash: "sha256:unsettled" },
+      ],
+    });
   });
 
   // Covers: task:9
