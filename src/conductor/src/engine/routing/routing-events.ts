@@ -37,7 +37,7 @@ export function operatorRoundEvent(
 ): Extract<ConductorEvent, { type: 'operator_round' }> {
   return {
     type: 'operator_round', ...occurrence(), roundId, child: host,
-    origin: operator.origin, reason: operator.reason, phase,
+    origin: operator.origin, reason: operator.reason, action: phase,
   };
 }
 

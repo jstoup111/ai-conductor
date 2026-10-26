@@ -2315,7 +2315,7 @@ type ConductorEventBody =
       child: ChildId;
       origin: 'land' | 'rewind';
       reason: string;
-      phase: 'opened' | 'declared' | 'abandoned';
+      action: 'opened' | 'declared' | 'abandoned';
     }
   | {
       type: 'child_revalidated';

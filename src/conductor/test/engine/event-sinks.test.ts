@@ -655,7 +655,7 @@ const routingEvents = [
     child: routingChild,
     origin: 'land',
     reason: 'reviewer change',
-    phase: 'opened',
+    action: 'opened',
   },
   {
     type: 'child_revalidated',
