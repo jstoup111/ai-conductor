@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2, task:3, task:4, task:5, task:7, task:8, task:13, task:14, task:16, task:rem-prd-audit-rem-settle-aux-captures-per-dispatch
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
@@ -1488,7 +1490,7 @@ describe('executeProviderCandidates', () => {
       }),
       access: async () => {},
     };
-    const pi = new PiProvider('/resolved/pi', piSpawn, environment);
+    const pi = new PiProvider(dispatchGitGuard, '/resolved/pi', piSpawn, environment);
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true, output: 'must not run', exitCode: 0,
     }));
@@ -2601,7 +2603,7 @@ describe('executeProviderCandidates', () => {
 
   it('does not resume the second Claude attempt', async () => {
     const seen: Array<boolean | undefined> = [];
-    const claude = new ClaudeProvider();
+    const claude = new ClaudeProvider(dispatchGitGuard);
     vi.spyOn(claude, 'invoke').mockImplementation(async (options) => {
       seen.push(options.resume);
       return { success: true, output: 'ok', exitCode: 0 };

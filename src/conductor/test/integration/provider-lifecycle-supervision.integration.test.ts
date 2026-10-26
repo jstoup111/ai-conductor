@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -131,8 +133,8 @@ describe('provider lifecycle supervision at the real provider boundary', () => {
       claudeStarted.resolve();
       return quietClaudeCompletion.promise as any;
     });
-    const codex = new CodexProvider(codexDoctor, 'codex', undefined, codexProcessFactory);
-    const claude = new ClaudeProvider(undefined, claudeProcessFactory);
+    const codex = new CodexProvider(dispatchGitGuard, codexDoctor, 'codex', undefined, codexProcessFactory);
+    const claude = new ClaudeProvider(dispatchGitGuard, undefined, claudeProcessFactory);
     const sessions = new ProviderSessionStore({
       createSessionId: () => 'provider-lifecycle-session',
     });

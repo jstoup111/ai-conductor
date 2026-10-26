@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:10, task:19
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -115,7 +117,7 @@ describe('Pi lifecycle abort', () => {
       return subprocess;
     });
     // Provision HARNESS.md so Pi's invocation preflight reaches the spawn.
-    const pi = new PiProvider('pi', spawnPi as never, {
+    const pi = new PiProvider(dispatchGitGuard, 'pi', spawnPi as never, {
       stat: async (path) => ({
         isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
         isDirectory: () => false,

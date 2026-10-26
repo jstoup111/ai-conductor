@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from 'dispatch-git-guard.js';
+
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,9 +36,9 @@ describe('LIVE_E2E_PROVIDERS', () => {
 
     try {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'live-claude-token';
-      const oauthProvider = new ClaudeProvider();
+      const oauthProvider = new ClaudeProvider(dispatchGitGuard);
       delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-      const missingProvider = new ClaudeProvider();
+      const missingProvider = new ClaudeProvider(dispatchGitGuard);
 
       expect([oauthProvider.authenticationSource(), missingProvider.authenticationSource()]).toEqual([
         'oauth-token',
@@ -102,7 +104,7 @@ describe('LIVE_E2E_PROVIDERS', () => {
 
 const descriptorWithoutSelfHost: LiveE2EProviderDescriptor = {
   id: 'claude',
-  createProvider: () => new ClaudeProvider(),
+  createProvider: () => new ClaudeProvider(dispatchGitGuard),
   binaryName: 'claude',
   credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN',
   providerKey: 'claude',

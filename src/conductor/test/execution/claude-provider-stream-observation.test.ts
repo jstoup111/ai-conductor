@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,7 +17,7 @@ describe('ClaudeProvider provider stream observations', () => {
     const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
       resolveProcess = resolve;
     }), { stdout, kill: vi.fn() });
-    const provider = new ClaudeProvider(undefined, () => {
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, () => {
       resolveStarted!();
       return process as any;
     });
@@ -47,7 +49,7 @@ describe('ClaudeProvider provider stream observations', () => {
     const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
       resolveProcess = resolve;
     }), { stdout, kill: vi.fn() });
-    const provider = new ClaudeProvider(undefined, () => {
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, () => {
       resolveStarted!();
       return process as any;
     });

@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:12
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -26,7 +28,7 @@ describe('engine git guard boundary', () => {
     const before = await resolveRealGit();
     const processPathBeforeInvocation = process.env.PATH;
     const spawns: Array<{ env?: NodeJS.ProcessEnv }> = [];
-    const provider = new ClaudeProvider(undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
       spawns.push({ env: options.env });
       return Promise.resolve({ stdout: 'ok', stderr: '', exitCode: 0, failed: false }) as any;
     }) as any);

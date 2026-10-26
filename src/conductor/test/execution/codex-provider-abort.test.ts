@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:12
 import { describe, expect, it, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
@@ -22,7 +24,7 @@ const readyDoctor: CodexDoctorRunner = async () => ({
 });
 
 function provider(subprocessFactory: (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise) {
-  return new CodexProvider(readyDoctor, 'codex', undefined, subprocessFactory);
+  return new CodexProvider(dispatchGitGuard, readyDoctor, 'codex', undefined, subprocessFactory);
 }
 
 describe('CodexProvider abort handling', () => {

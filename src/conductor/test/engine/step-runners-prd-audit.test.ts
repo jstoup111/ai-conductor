@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:3, task:5, task:6, task:13, task:14, task:15
 import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -505,7 +507,7 @@ describe('PRD audit typed provider dispatch', () => {
       await access(schemaPath!);
       return { stdout: '', stderr: 'request timed out', exitCode: 1 };
     });
-    const adapter = new CodexProvider(
+    const adapter = new CodexProvider(dispatchGitGuard,
       async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 }),
       'codex', undefined, subprocess as never,
     );

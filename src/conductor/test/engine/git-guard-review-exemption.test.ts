@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:11
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -76,8 +78,8 @@ describe('build_review git-guard exemption', () => {
         }) as never;
       });
       const provider: LLMProvider = providerKey === 'claude'
-        ? new ClaudeProvider(undefined, subprocess as never)
-        : new CodexProvider(
+        ? new ClaudeProvider(dispatchGitGuard, undefined, subprocess as never)
+        : new CodexProvider(dispatchGitGuard,
           vi.fn(async () => ({
             stdout: JSON.stringify({
               schemaVersion: 1,

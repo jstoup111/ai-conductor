@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { describe, expect, it, vi } from 'vitest';
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
 
@@ -49,7 +51,7 @@ describe('ClaudeProvider abort handling', () => {
         }, { once: true });
       }) as unknown as ResultPromise,
     );
-    const provider = new ClaudeProvider(undefined, factory as ClaudeSubprocessFactory);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, factory as ClaudeSubprocessFactory);
 
     const invocation = provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
     await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
@@ -71,7 +73,7 @@ describe('ClaudeProvider abort handling', () => {
         }, { once: true });
       }) as unknown as ResultPromise,
     );
-    const provider = new ClaudeProvider(undefined, factory as ClaudeSubprocessFactory);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, factory as ClaudeSubprocessFactory);
 
     const invocation = provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
     await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
@@ -92,7 +94,7 @@ describe('ClaudeProvider abort handling', () => {
     const controller = new AbortController();
     controller.abort();
     const factory = vi.fn(() => successfulProcess());
-    const provider = new ClaudeProvider(undefined, factory as ClaudeSubprocessFactory);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, factory as ClaudeSubprocessFactory);
 
     const result = await provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
 
@@ -105,7 +107,7 @@ describe('ClaudeProvider abort handling', () => {
 
   it('keeps the pre-abort subprocess options and successful result unchanged when no signal is supplied', async () => {
     const factory = vi.fn((_file: string, _args: string[], _options: ExecaOptions) => successfulProcess());
-    const provider = new ClaudeProvider(undefined, factory as ClaudeSubprocessFactory);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, factory as ClaudeSubprocessFactory);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: true,
@@ -130,7 +132,7 @@ describe('ClaudeProvider abort handling', () => {
       child.stdout?.once('data', () => markReady());
       return child;
     };
-    const provider = new ClaudeProvider(undefined, factory);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, factory);
 
     const invocation = provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
     await ready;

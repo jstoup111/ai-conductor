@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2
 /**
  * RED acceptance specs for #1039.
@@ -69,11 +71,11 @@ function doctorResult(stdout: unknown, exitCode = 0) {
 }
 
 function providerWithDoctor(runDoctor: CodexDoctorRunner): CodexProvider {
-  return new CodexProvider(runDoctor, 'codex', undefined, mockExeca as never);
+  return new CodexProvider(dispatchGitGuard, runDoctor, 'codex', undefined, mockExeca as never);
 }
 
 function mockedCodexProvider(options?: { codexDoctorTimeoutMs?: number }): CodexProvider {
-  return new CodexProvider(
+  return new CodexProvider(dispatchGitGuard,
     mockExeca as never,
     'codex',
     undefined,
@@ -355,7 +357,7 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       if (!codexDescriptor || !claudeDescriptor) throw new Error('built-in provider catalog is incomplete');
       vi.spyOn(codexDescriptor, 'createAdapter').mockImplementation(mockedCodexProvider);
       vi.spyOn(claudeDescriptor, 'createAdapter').mockImplementation(
-        () => new ClaudeProvider(undefined, mockExeca as never),
+        () => new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never),
       );
       registerCliBuiltins(registry, new ConductorEventEmitter(), loaded.config);
       registry.markInitialized();

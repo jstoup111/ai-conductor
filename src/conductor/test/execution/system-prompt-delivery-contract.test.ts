@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:14
 import { readFile, stat } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +10,7 @@ import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/executi
 import {
   BUILT_IN_PROVIDERS,
   type BuiltInProviderId,
+  type ProviderFactoryOptions,
 } from '../../src/execution/provider-catalog.js';
 import { PiProvider, type PiEnvironment } from '../../src/execution/pi-provider.js';
 
@@ -88,7 +91,7 @@ const harnesses = {
   claude: {
     async invoke(systemPrompt: string): Promise<DeliveryCapture> {
       let capture: DeliveryCapture | undefined;
-      const provider = new ClaudeProvider(undefined, (async (
+      const provider = new ClaudeProvider(dispatchGitGuard, undefined, (async (
         _file: string,
         args: readonly string[],
         options: ExecaOptions,
@@ -111,6 +114,7 @@ const harnesses = {
     async invoke(systemPrompt: string): Promise<DeliveryCapture> {
       let capture: DeliveryCapture | undefined;
       const provider = new CodexProvider(
+        dispatchGitGuard,
         async () => ({
           stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }),
           exitCode: 0,
@@ -146,7 +150,7 @@ const harnesses = {
         homeDir: () => '/unused-home',
         cwd: () => '/unused-cwd',
       };
-      const provider = new PiProvider('pi', async (_file, args, options) => {
+      const provider = new PiProvider(dispatchGitGuard, 'pi', async (_file, args, options) => {
         capture = await captureDelivery(args, options, ['--append-system-prompt']);
         return completedPiResult();
       }, environment);
@@ -174,11 +178,11 @@ function assertDeliversSystemPrompt(id: string, capture: DeliveryCapture, text: 
 
 type ProviderDescriptor = {
   readonly id: string;
-  createAdapter(): Pick<LLMProvider, 'systemPromptCapability'>;
+  createAdapter(options: ProviderFactoryOptions): Pick<LLMProvider, 'systemPromptCapability'>;
 };
 
 async function runDeliveryContract(descriptor: ProviderDescriptor, harness: DeliveryHarness): Promise<void> {
-  expect(descriptor.createAdapter().systemPromptCapability).toEqual({ deliversSystemPrompt: true });
+  expect(descriptor.createAdapter({ dispatchGitGuard }).systemPromptCapability).toEqual({ deliversSystemPrompt: true });
 
   const shortCapture = await harness.invoke('S');
   assertDeliversSystemPrompt(descriptor.id, shortCapture, 'S');

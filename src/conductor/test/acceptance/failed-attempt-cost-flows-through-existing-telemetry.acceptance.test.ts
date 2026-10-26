@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * Validation: a failed provider attempt's usage travels exactly the same cost
  * telemetry path as a successful one, using only fields that already exist:
@@ -125,15 +127,15 @@ describe('validation: failed-attempt usage flows through the existing cost telem
 
   const workedPiStream = () => readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
 
-  const failedPi = async (stdout: string) => execute('pi', new PiProvider(
+  const failedPi = async (stdout: string) => execute('pi', new PiProvider(dispatchGitGuard,
     'pi', async () => ({ stdout, stderr: '', exitCode: 1 }), piEnvironment, undefined, () => undefined,
   ));
 
-  const claude = (stdout: string, exitCode: number) => execute('claude', new ClaudeProvider(
+  const claude = (stdout: string, exitCode: number) => execute('claude', new ClaudeProvider(dispatchGitGuard,
     undefined, (() => processResult(stdout, exitCode)) as never,
   ));
 
-  const failedCodex = (stdout: string) => execute('codex', new CodexProvider(
+  const failedCodex = (stdout: string) => execute('codex', new CodexProvider(dispatchGitGuard,
     readyDoctor, 'codex', undefined, (() => processResult(stdout, 1)) as never, undefined, () => RATE_CARD,
   ), CODEX_MODEL);
 
