@@ -8,7 +8,8 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { openOperatorRound } from '../../../src/engine/routing/operator-round.js';
-import { readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { readRoutedGrowthSnapshot, rebuildLedgerFromReceipts } from '../../../src/engine/routing/round-receipt.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -16,6 +17,12 @@ import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 const roots: string[] = [];
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
+const priorRoundId = parseRoundId('r2')!;
+const routedSealedAuthored = 3;
+const routing = {
+  cursor: { kind: 'active' },
+  config: { stacked_prs: { route_whole_feature_fixes: true } },
+};
 
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
@@ -103,6 +110,28 @@ describe('open operator round (real local Git)', () => {
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { entry: { pinnedBase: subject.closure } },
     });
+  });
+
+  // Covers: task:rem-as-built-rem-as-built-r3
+  it('seals an operator round with the routed denominator so receipt accounting remains readable', async () => {
+    const subject = await fixture();
+    const prior = await createRouteRecord(subject.repo, 'demo', {
+      roundId: priorRoundId,
+      sealedAuthored: routedSealedAuthored,
+      kind: 'audit',
+      items: [],
+      allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
+    }, { git: subject.git });
+    if (prior.kind !== 'created') throw new Error(`could not create prior route: ${prior.kind}`);
+
+    await expect(open(subject)).resolves.toMatchObject({ kind: 'opened', pinnedBase: subject.closure });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({
+      kind: 'record', record: { sealedAuthored: routedSealedAuthored },
+    });
+    await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git)).resolves.toEqual({
+      pendingAllocationTaskIds: [], sealedAuthored: routedSealedAuthored,
+    });
+    await expect(rebuildLedgerFromReceipts(subject.repo, 'demo', routing, subject.git)).resolves.toEqual({ kind: 'rebuilt' });
   });
 
   it('resumes after a post-marker crash without another route, switch, pin, or restage', async () => {
