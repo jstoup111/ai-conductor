@@ -227,33 +227,57 @@ describe('daemon backlog manifest discovery', () => {
     expect(logs).toEqual([]);
   });
 
+  // Covers: task:rem-prd-audit-15-r1
   it('preserves the frozen legacy discovery output and warning log', async () => {
-    const source = tree(artifacts('legacy'));
+    const source = tree({
+      ...artifacts('x'),
+      ...artifacts('x-y'),
+      ...artifactsWithout('x-w-blocked', '.docs/stories/x-w-blocked.md'),
+      ...artifacts('x-z-gated'),
+    });
     const logs: string[] = [];
 
     const result = await discoverBacklog('/unused', undefined, (line) => logs.push(line), {
       treeSource: source,
       writeBlockedSnapshot: async () => {},
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async (slug) => slug === 'x-z-gated'
+        ? { present: true as const, id: 'bob' }
+        : { present: true as const, id: 'alice' },
     });
 
     expect({ result, logs }).toEqual({
       result: {
-        items: [{
-          slug: 'legacy',
-          planPath: '.docs/plans/legacy.md',
-          storiesPath: '.docs/stories/legacy.md',
+        items: ['x-y', 'x'].map((slug) => ({
+          slug,
+          planPath: `.docs/plans/${slug}.md`,
+          storiesPath: `.docs/stories/${slug}.md`,
           tier: 'M',
           track: 'technical',
           sourceRef: 'acme/project#7',
           applicabilityDeclarations: [],
           applicabilityBaseContentSha256: 'sha256:a2edc98ee2fb7a91184812601544af9707a272cde550581f36d9bd933e7b0140',
           applicabilityIgnored: { cause: 'toggle-off', steps: ['manual_test'] },
-        }],
+        })),
         waiting: [],
-        blocked: [],
-        gated: [],
+        blocked: [{
+          slug: 'x-w-blocked',
+          reason: 'stories-missing',
+          remedy: 'Create the Stories file at .docs/stories/x-w-blocked.md on the default branch, or fix its reference in .docs/plans/x-w-blocked.md.',
+        }],
+        gated: [{
+          kind: 'spec',
+          slug: 'x-z-gated',
+          reason: 'other-owner',
+          otherOwner: 'bob',
+          remedy: 'declare an Owner: alice or the daemon\'s own owner for this spec',
+          sourceRef: 'acme/project#7',
+        }],
       },
-      logs: [],
+      logs: [
+        'skip x-w-blocked: merged spec cannot build — Stories file missing at .docs/stories/x-w-blocked.md. Create the Stories file at .docs/stories/x-w-blocked.md on the default branch, or fix its reference in .docs/plans/x-w-blocked.md. logged once.',
+        "skip x-z-gated: owner-gate — spec is owned by another operator ('bob'), not this daemon; logged once.",
+      ],
     });
   });
 });

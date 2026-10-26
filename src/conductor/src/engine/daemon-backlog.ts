@@ -914,7 +914,11 @@ export async function discoverBacklog(
   // alongside the existing warnOnce log line below — never in place of it.
   const gatedItems: GatedItem[] = [];
   const manifestSource = backlogTreeManifestSource(tree);
-  for (const [slug, candidate] of [...candidates].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [slug, candidate] of [...candidates].sort(([leftSlug], [rightSlug]) => {
+    const leftPlanFile = `${leftSlug}.md`;
+    const rightPlanFile = `${rightSlug}.md`;
+    return leftPlanFile < rightPlanFile ? -1 : leftPlanFile > rightPlanFile ? 1 : 0;
+  })) {
     let planRel = `.docs/plans/${candidate.planFile ?? `${slug}.md`}`;
     // Preserve the legacy candidate's historical read timing and fallback
     // behavior. Manifest candidates defer parsing until after identity-only
