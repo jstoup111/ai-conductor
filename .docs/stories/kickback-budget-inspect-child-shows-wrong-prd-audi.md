@@ -40,7 +40,7 @@ nor miss one already given.
 - Given the flat ledger's `prd_audit` entry fails validation while its other entries are valid, when the operator runs `kickback-budget inspect --feature <slug> --child 2`, then it prints `prd_audit: budget unavailable (durable entry failed validation)`, still renders the other gates, and exits 1, and the JSON form lists `prd_audit` in `unavailableGates`.
 - Given the child-2 ledger's `prd_audit` entry fails validation while the flat ledger's `prd_audit` entry is valid, when the operator runs `kickback-budget inspect --feature <slug> --child 2`, then the `prd_audit` block renders the flat ledger's values and the command exits 0.
 - Given neither ledger holds a pending adjustment, when the operator runs `kickback-budget inspect --feature <slug> --child 2`, then the bytes of the flat ledger and the child-2 ledger are unchanged.
-- Given a feature with no child state, when the operator runs `kickback-budget inspect --feature <slug>` in human or JSON form, then its output is byte-identical to the output before this change.
+- Given a feature with no child state, when the operator runs `kickback-budget inspect --feature <slug>` in human or JSON form, then its output is unchanged by the child-view behavior of this story: identical to the flat-feature inspect output, whose remediation-gate lines carry only the tier-and-allowance suffix and whose JSON carries only the `tier` and `allowanceSource` fields that #2413 adds.
 
 ### Done When
 - [ ] CLI inspect tests on a stacked fixture show the flat ledger's laps, cap, adjustment history, resume authorization and pending charge for both remediation gates, in human and JSON form, while the child-2 ledger holds stale copies.
