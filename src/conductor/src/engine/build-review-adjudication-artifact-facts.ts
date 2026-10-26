@@ -20,6 +20,19 @@ import type {
   BuildReviewFindingHunkTarget,
   BuildReviewProvenanceArtifact,
 } from './build-review-review-frontier.js';
+import { mapBuildReviewFindingToHunks } from './build-review-review-frontier.js';
+import type { ChangedFileReference } from './build-review-projections.js';
+
+export interface BuildReviewAdjudicationArtifactFactOptions {
+  /**
+   * The current lap's frozen diff, resolved from the artifact's immutable
+   * merge-base and head identities. Historical artifact reads need no ranges:
+   * they contribute digests, while only current sources enter provenance.
+   */
+  readonly changedFilesForArtifact?: (
+    artifact: BuildReviewBranchArtifact,
+  ) => Promise<readonly ChangedFileReference[] | undefined>;
+}
 
 type BuildReviewAdjudicationArtifactFacts = {
   readonly priorFindingDigests: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest>;
@@ -38,6 +51,7 @@ type BuildReviewAdjudicationArtifactFacts = {
 function buildReviewArtifactFinding(
   artifact: BuildReviewBranchArtifact,
   value: unknown,
+  changedFiles?: readonly ChangedFileReference[],
 ): { readonly sourceId: string; readonly digest: BuildReviewAdjudicationPriorFindingDigest; readonly targets: readonly BuildReviewFindingHunkTarget[] } | undefined {
   if (artifact.rubric === 'testQuality' || artifact.rubric === 'security' || artifact.rubric === 'implementationQuality') {
     const finding = value as BuildReviewFinding;
@@ -56,7 +70,9 @@ function buildReviewArtifactFinding(
         evidenceLocations: finding.evidenceLocations,
         lapId: artifact.lapId,
       },
-      targets: [{ kind: 'hunks', hunks: [{ path: finding.anchor.locus.path, contentHash: finding.anchor.locus.contentHash }] }],
+      targets: changedFiles === undefined
+        ? [{ kind: 'file', path: finding.anchor.locus.path }]
+        : mapBuildReviewFindingToHunks(finding, changedFiles),
     };
   }
   const identity = canonicalizeBuildReviewCustomFindingIdentity(value);
@@ -72,10 +88,9 @@ function buildReviewArtifactFinding(
       evidenceLocations: finding.evidenceLocations,
       lapId: artifact.lapId,
     },
-    targets: identity.canonicalPayload.sourceRegions.map((region) => ({
-      kind: 'hunks' as const,
-      hunks: [{ path: region.path, contentHash: region.contentHash }],
-    })),
+    targets: changedFiles === undefined
+      ? identity.canonicalPayload.sourceRegions.map((region) => ({ kind: 'file' as const, path: region.path }))
+      : mapBuildReviewFindingToHunks(value as import('./build-review-domain.js').BuildReviewCustomFinding, changedFiles),
   };
 }
 
@@ -87,6 +102,7 @@ function buildReviewArtifactFinding(
 export async function readBuildReviewAdjudicationArtifactFacts(
   projectRoot: string,
   aggregate: BuildReviewAggregate,
+  options: BuildReviewAdjudicationArtifactFactOptions = {},
   child?: ChildId,
 ): Promise<BuildReviewAdjudicationArtifactFacts> {
   const byLap = new Map<string, BuildReviewBranchArtifact[]>();
@@ -140,8 +156,9 @@ export async function readBuildReviewAdjudicationArtifactFacts(
     const scope = artifact.reviewScope;
     if (artifact.result.kind !== 'judged' || scope === undefined || 'kind' in scope || scope.predecessorLapId === undefined) continue;
     const predecessorArtifacts = byLap.get(scope.predecessorLapId) ?? [];
+    const changedFiles = await options.changedFilesForArtifact?.(artifact);
     for (const finding of artifact.result.findings) {
-      const projected = buildReviewArtifactFinding(artifact, finding);
+      const projected = buildReviewArtifactFinding(artifact, finding, changedFiles);
       if (projected === undefined) continue;
       sources[projected.sourceId] = {
         deltaHunks: scope.deltaHunks,

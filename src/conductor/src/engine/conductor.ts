@@ -36,6 +36,7 @@ import {
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { readBuildReviewAdjudicationArtifactFacts } from './build-review-adjudication-artifact-facts.js';
 export { readBuildReviewAdjudicationArtifactFacts } from './build-review-adjudication-artifact-facts.js';
+import { deriveChangedFileReferences } from './build-review-projections.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
@@ -13918,7 +13919,25 @@ export class Conductor {
                     advisoryFindingIds,
                     thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                   });
-                  const artifactFacts = await readBuildReviewAdjudicationArtifactFacts(this.projectRoot, aggregate, this.activeRegionChild);
+                  // Provenance regions are resolved against the immutable
+                  // diff named by each current artifact, never against an
+                  // anchor hash that may be a test title or custom region.
+                  const changedFilesBySource = new Map<string, Promise<ReturnType<typeof deriveChangedFileReferences> | undefined>>();
+                  const artifactFacts = await readBuildReviewAdjudicationArtifactFacts(this.projectRoot, aggregate, {
+                    changedFilesForArtifact: async (artifact) => {
+                      const scope = artifact.reviewScope;
+                      if (scope === undefined || 'kind' in scope) return undefined;
+                      const key = `${scope.mergeBase}..${scope.headSha}`;
+                      let changedFiles = changedFilesBySource.get(key);
+                      if (changedFiles === undefined) {
+                        changedFiles = this.git(['diff', '--no-ext-diff', key], { cwd: this.projectRoot })
+                          .then((result) => deriveChangedFileReferences(result.stdout))
+                          .catch(() => undefined);
+                        changedFilesBySource.set(key, changedFiles);
+                      }
+                      return changedFiles;
+                    },
+                  }, this.activeRegionChild);
                   // Settlement gate: `verdictRaw` is the aggregate the join
                   // recorded after every branch settled; the shared operation
                   // refuses anything that does not parse as that complete lap.

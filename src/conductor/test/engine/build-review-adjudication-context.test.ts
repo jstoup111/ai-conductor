@@ -303,7 +303,7 @@ describe('build-review adjudication context', () => {
     expect(Buffer.byteLength(JSON.stringify(expanded.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
   });
 
-  it('returns a typed overflow rather than exceeding the serialized ceiling when multi-digit omissions exhaust headroom', () => {
+  it('reserves multi-digit omission-counter headroom while dropping every digest', () => {
     const priorCases = Array.from({ length: 128 }, (_value, index) => priorCase(`case-${index.toString().padStart(3, '0')}`));
     const minimumContracts = Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p' }));
     const input = {
@@ -314,7 +314,10 @@ describe('build-review adjudication context', () => {
 
     expect(minimum).toMatchObject({ ok: true });
     if (!minimum.ok) return;
-    let remainingPadding = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 1 - Buffer.byteLength(JSON.stringify(minimum.context));
+    // 128 omitted candidates serialize as three digits. Reserve that width
+    // before adding digest content, rather than letting the final omission
+    // counter overflow an otherwise valid context.
+    let remainingPadding = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3 - Buffer.byteLength(JSON.stringify(minimum.context));
     expect(remainingPadding).toBeGreaterThan(0);
     const admittedTaskContracts = minimumContracts.map((task) => {
       const padding = Math.min(7_999, remainingPadding);
@@ -326,7 +329,7 @@ describe('build-review adjudication context', () => {
     const base = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests: new Map() });
     expect(base).toMatchObject({ ok: true });
     if (!base.ok) return;
-    expect(Buffer.byteLength(JSON.stringify(base.context))).toBe(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 1);
+    expect(Buffer.byteLength(JSON.stringify(base.context))).toBe(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3);
 
     const priorFindingDigests = new Map(priorCases.map((prior) => [prior.sources[0]!.sourceId, {
       rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
@@ -334,14 +337,10 @@ describe('build-review adjudication context', () => {
     }] as const));
     const result = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests });
 
-    if (result.ok) {
-      expect(result.context.priorDigestsOmitted).toBe(128);
-      expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
-      return;
-    }
-    expect(result.stop).toMatchObject({
-      code: 'serialized-byte-overflow', limit: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
-    });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorDigestsOmitted).toBe(128);
+    expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
   });
 
   it('keeps a prior source whose lap artifact is unreadable without a digest and does not count it as budget-omitted', async () => {

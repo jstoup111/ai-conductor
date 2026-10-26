@@ -419,7 +419,13 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
             target.hunks.some((candidate) => hunkKey(candidate) === key))) return false;
           continue;
         }
-        if (!nonBlocking.has(source.sourceId) && !resolvedAppliedAct.has(source.sourceId) && !lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId)) return false;
+        // Scope records predate the adjudication source-id prefix. A rubric
+        // already namespaces its own record, so preserve those durable bare
+        // finding IDs while accepting newer fully-qualified values too.
+        const bareFindingId = source.sourceId.slice(source.sourceId.indexOf(':') + 1);
+        const outOfDelta = lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId) ||
+          lap.reviewScope.outOfDeltaSourceIds.includes(bareFindingId);
+        if (!nonBlocking.has(source.sourceId) && !resolvedAppliedAct.has(source.sourceId) && !outOfDelta) return false;
       }
     }
     return true;

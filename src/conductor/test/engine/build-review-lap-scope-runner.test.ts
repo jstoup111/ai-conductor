@@ -592,7 +592,13 @@ describe('build-review lap scope runner', () => {
         results: { implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId: l2, snapshotDigest: 'sha256:l2', contractVersion: 'v4', findings: [recurrence], verdict: 'FAIL' }, testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
       });
 
-      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate);
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate, {
+        changedFilesForArtifact: async () => [{
+          path: 'src/feature.ts', changeKind: 'modified', hunks: [{
+            oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: h2,
+          }],
+        }],
+      });
       const [firstSource] = projectBuildReviewAggregateSources(joinBuildReviewRubricOutcomes({
         lapId: l1, snapshotDigest: 'sha256:l1',
         results: { implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId: l1, snapshotDigest: 'sha256:l1', contractVersion: 'v4', findings: [first], verdict: 'FAIL' }, testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
@@ -605,6 +611,50 @@ describe('build-review lap scope runner', () => {
         predecessorArtifacts: [expect.objectContaining({ lapId: l1 })],
         targets: [{ kind: 'hunks', hunks: [{ path: 'src/feature.ts', contentHash: h2 }] }],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:20, task:26
+  it('maps a test-quality region to its frozen diff hunk before selecting provenance', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-region-provenance-'));
+    try {
+      const l1 = parseBuildReviewLapId('lap-region-l1')!;
+      const l2 = parseBuildReviewLapId('lap-region-l2')!;
+      const hunk = `sha256:${'7'.repeat(64)}`;
+      const finding = {
+        concernKind: 'test-insensitive', severity: 'major' as const, summary: 'The changed test accepts a reverted implementation.',
+        evidenceLocations: ['test/feature.test.ts:12'],
+        anchor: { rubric: 'testQuality' as const, locus: {
+          path: 'test/feature.test.ts', contentHash: 'sha256:test-title', display: 'preserves feature behavior', startLine: 12, endLine: 12,
+        } },
+      };
+      const filesystem = { readFile: (path: string) => readFile(path, 'utf8'), mkdir: (path: string) => mkdir(path, { recursive: true }), writeFile, rename };
+      await writeBuildReviewBranchArtifact(root, {
+        rubric: 'testQuality', lapId: l1, snapshotDigest: 'sha256:region-l1',
+        result: { kind: 'judged', rubric: 'testQuality', lapId: l1, snapshotDigest: 'sha256:region-l1', contractVersion: 'v4', findings: [], verdict: 'PASS' },
+        provenance: { kind: 'fresh' },
+        reviewScope: { mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'l1', policyIdentity: 'policy', reviewedHunks: [], deltaHunks: [], outOfDeltaSourceIds: [] },
+      }, filesystem);
+      await writeBuildReviewBranchArtifact(root, {
+        rubric: 'testQuality', lapId: l2, snapshotDigest: 'sha256:region-l2',
+        result: { kind: 'judged', rubric: 'testQuality', lapId: l2, snapshotDigest: 'sha256:region-l2', contractVersion: 'v4', findings: [finding], verdict: 'FAIL' },
+        provenance: { kind: 'fresh' },
+        reviewScope: { mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'l2', policyIdentity: 'policy', predecessorLapId: l1, reviewedHunks: [{ path: 'test/feature.test.ts', contentHash: hunk }], deltaHunks: [{ path: 'test/feature.test.ts', contentHash: hunk }], outOfDeltaSourceIds: [] },
+      }, filesystem);
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: l2, snapshotDigest: 'sha256:region-l2',
+        results: { testQuality: { kind: 'judged', rubric: 'testQuality', lapId: l2, snapshotDigest: 'sha256:region-l2', contractVersion: 'v4', findings: [finding], verdict: 'FAIL' }, security: { kind: 'skipped', rubric: 'security', reason: 'disabled' } },
+      });
+      const [source] = projectBuildReviewAggregateSources(aggregate)!.filter((candidate) => candidate.rubric === 'testQuality');
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate, {
+        changedFilesForArtifact: async () => [{ path: 'test/feature.test.ts', changeKind: 'modified', hunks: [{ oldStart: 10, oldCount: 1, newStart: 10, newCount: 4, contentHash: hunk }] }],
+      });
+
+      expect(facts.provenance?.sources[buildReviewAdjudicationSourceId(source!)]?.targets).toEqual([
+        { kind: 'hunks', hunks: [{ path: 'test/feature.test.ts', contentHash: hunk }] },
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

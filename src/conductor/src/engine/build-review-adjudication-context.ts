@@ -680,11 +680,6 @@ export function assembleBuildReviewAdjudicationContext(
       ...(mode === 'case-v2' ? ['escalate' as const] : []),
     ]),
   });
-  const base = contextFor(freezePriorCases(new Set()), 0);
-  const baseBytes = bytes(JSON.stringify(base));
-  if (baseBytes > LIMITS.maxSerializedBytes) {
-    return { ok: false, stop: { code: 'serialized-byte-overflow', limit: LIMITS.maxSerializedBytes, actual: baseBytes } };
-  }
   const digestCandidates = input.priorCases.flatMap((caseRecord) => [...caseRecord.sources]
     .sort(comparePriorSources)
     .slice(-MAX_PRIOR_SOURCE_DIGESTS_PER_CASE)
@@ -693,6 +688,14 @@ export function assembleBuildReviewAdjudicationContext(
       : [{ key: priorDigestKey(caseRecord.id, source.sourceId), recordedAt: source.recordedAt, sourceId: source.sourceId, caseId: caseRecord.id }]))
     .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) ||
       left.sourceId.localeCompare(right.sourceId) || left.caseId.localeCompare(right.caseId));
+  // Account for the widest omission counter before admitting a byte of a
+  // digest. Otherwise removing the final digest can itself add digits to the
+  // counter and overflow a context that looked as though it had headroom.
+  const base = contextFor(freezePriorCases(new Set()), digestCandidates.length);
+  const baseBytes = bytes(JSON.stringify(base));
+  if (baseBytes > LIMITS.maxSerializedBytes) {
+    return { ok: false, stop: { code: 'serialized-byte-overflow', limit: LIMITS.maxSerializedBytes, actual: baseBytes } };
+  }
   const digestBudget = Math.min(MAX_PRIOR_SOURCE_DIGEST_BYTES, LIMITS.maxSerializedBytes - baseBytes);
   const includedDigestKeys = new Set(digestCandidates.map((candidate) => candidate.key));
   let priorDigestsOmitted = 0;
