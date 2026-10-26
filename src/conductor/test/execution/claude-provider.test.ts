@@ -390,14 +390,7 @@ describe('ClaudeProvider', () => {
         return { stdout: '', stderr: '', exitCode: 0, failed: false } as any;
       });
 
-      const originalTmpdir = process.env.TMPDIR;
-      process.env.TMPDIR = '/tmp';
-      try {
-        await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
-      } finally {
-        if (originalTmpdir === undefined) delete process.env.TMPDIR;
-        else process.env.TMPDIR = originalTmpdir;
-      }
+      await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).not.toContain('--append-system-prompt');

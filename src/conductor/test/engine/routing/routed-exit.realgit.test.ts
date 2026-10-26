@@ -385,11 +385,6 @@ describe('routed exit (real local Git)', () => {
   it('restacks an empty metadata commit instead of treating its matching tree as a no-commit exit', async () => {
     const subject = await fixture(false);
     await subject.gitRunner(['commit', '--allow-empty', '-qm', 'metadata only']);
-    await subject.gitRunner(['checkout', '-q', 'feat/c2/demo']);
-    await subject.gitRunner(['merge', '--no-ff', '-m', 'carry metadata', 'feat/c1/demo']);
-    await subject.gitRunner(['checkout', '-q', 'feat/daemon-demo']);
-    await subject.gitRunner(['merge', '--no-ff', '-m', 'carry child two', 'feat/c2/demo']);
-    await subject.gitRunner(['checkout', '-q', 'feat/c1/demo']);
     const recorded = recordingRunner(subject.gitRunner);
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: recorded.git })).resolves.toEqual({ kind: 'restacked' });
     const routeBlobs = updateTransactions(recorded.calls).flatMap((input) => [...input.matchAll(new RegExp(`update ${routeRecordRefFor('demo', roundId)} ([0-9a-f]{40})`, 'g'))]).map((match) => match[1]!);

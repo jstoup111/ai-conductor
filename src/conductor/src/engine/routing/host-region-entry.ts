@@ -445,7 +445,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
       kind: 'refused',
       detail:
         `operator-round-undeclared: landing ${input.roundId} on child ${input.host} is awaiting ` +
+        // ai-conductor:session-command-context=operator-only
         'ai-conductor stack land --done or ai-conductor stack land --abandon',
+        // /ai-conductor:session-command-context
     };
   }
   const hostState = stored.record.hosts[input.host];

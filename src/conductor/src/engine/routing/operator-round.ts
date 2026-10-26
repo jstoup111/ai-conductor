@@ -185,7 +185,9 @@ export async function checkDeclareOperatorRound(
   try {
     const commits = await git(['rev-list', `${closure}..${tip}`]);
     if (commits.exitCode !== 0 || commits.stdout.trim() === '' || await isHaltRecordOnlyDescendant(git, closure, tip, input.slug)) {
+      // ai-conductor:session-command-context=operator-only
       return { kind: 'refused', detail: 'the empty landing has no reviewer change; make one or run ai-conductor stack land --abandon' };
+      // /ai-conductor:session-command-context
     }
   } catch {
     return { kind: 'refused', detail: `cannot inspect landing commits on ${branch.branch}` };
@@ -331,7 +333,9 @@ export interface CheckOpenOperatorRoundDependencies {
 function command(slug: string, child: ChildId, carry: readonly ChildId[] = []): string {
   const carried = [...new Set(carry)].sort((left, right) => left - right)
     .map((position) => ` --carry ${position}`).join('');
+  // ai-conductor:session-command-context=operator-only
   return `ai-conductor stack land --slug ${slug} --child ${child}${carried} --reason "<why>"`;
+  // /ai-conductor:session-command-context
 }
 
 function refuse(kind: OpenOperatorRoundRefusalKind, text: string): CheckOpenOperatorRoundResult {
@@ -463,7 +467,9 @@ export async function checkOpenOperatorRound(
   const carriedPositions = [...new Set(input.carry)];
   const carriedBelow = carriedPositions.find((child) => positions.indexOf(child) <= positions.indexOf(input.child));
   if (carriedBelow !== undefined) {
+    // ai-conductor:session-command-context=operator-only
     return refuse('carried-below-host', `Child ${carriedBelow} is at or below host ${input.child}; land from the lowest affected child with ai-conductor stack land --child ${carriedBelow} --carry ${input.child} --reason "<why>".`);
+    // /ai-conductor:session-command-context
   }
 
   const carried: CarriedOperatorChild[] = [];

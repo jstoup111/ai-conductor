@@ -252,6 +252,7 @@ const REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES = [
 const ROUTING_EVENT_TYPES = [
   'remediation_routed',
   'remediation_rerouted',
+  'operator_round',
   'routed_repair_phase',
   'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
@@ -647,9 +648,19 @@ const routingEvents = [
     child: routingChild,
   },
   {
-    type: 'child_revalidated',
+    type: 'operator_round',
     eventId: 'routing-4',
     occurredAt: '2026-10-12T00:00:03.000Z',
+    roundId: routingRoundId,
+    child: routingChild,
+    origin: 'land',
+    reason: 'reviewer change',
+    phase: 'opened',
+  },
+  {
+    type: 'child_revalidated',
+    eventId: 'routing-5',
+    occurredAt: '2026-10-12T00:00:04.000Z',
     child: routingChild,
     generation: 1,
     closureSha: routingClosureSha,
@@ -711,6 +722,7 @@ describe('event sink subscriptions', () => {
       expect(Object.fromEntries(ROUTING_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]))).toEqual({
         remediation_routed: { render: false, persist: true, audit: false, otel: false },
         remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
+        operator_round: { render: false, persist: true, audit: false, otel: false },
         routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
         child_revalidated: { render: false, persist: true, audit: false, otel: false },
       });

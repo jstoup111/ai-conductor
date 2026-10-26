@@ -308,7 +308,9 @@ function halted(detail: string): RequestRoutedExitResult {
 function unlandedClosedChildCommitsHalt(slug: string, host: ChildId, child: ChildId): string {
   return [
     `unlanded-closed-child-commits: child ${child}`,
+    // ai-conductor:session-command-context=operator-only
     `ai-conductor stack land --slug ${slug} --child ${host} --carry ${child} --reason "<why>"`,
+    // /ai-conductor:session-command-context
     '',
   ].join('\n');
 }

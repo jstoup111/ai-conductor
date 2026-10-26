@@ -107,7 +107,9 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   if (!isHost) {
     return refuse(
       print,
+      // ai-conductor:session-command-context=operator-only
       `refusing tracked-file commit on ${branch}; ${stored.record.kind} round ${marker.marker.roundId} is hosted on ${hostBranch}. Commit on ${hostBranch} or run ai-conductor stack land --abandon.`,
+      // /ai-conductor:session-command-context
     );
   }
 

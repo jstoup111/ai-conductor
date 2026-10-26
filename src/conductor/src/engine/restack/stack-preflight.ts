@@ -100,7 +100,9 @@ function unlandedClosedChildCommitsHalt(slug: string, children: readonly number[
   const carry = carried.map((child) => ` --carry ${child}`).join('');
   return [
     `unlanded-closed-child-commits: ${subject}`,
+    // ai-conductor:session-command-context=operator-only
     `ai-conductor stack land --slug ${slug} --child ${host}${carry} --reason "<why>"`,
+    // /ai-conductor:session-command-context
     '',
   ].join('\n');
 }
@@ -178,7 +180,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
       if (stored.record.operator?.declaration === undefined && stored.record.hosts[marker.marker.host] !== 'abandoning') {
         const reason = formatOperatorHaltReason('operator-round-undeclared', stored.record.roundId);
         const body = `${reason}\noperator round ${stored.record.roundId} landing on child ${marker.marker.host} is awaiting ` +
+          // ai-conductor:session-command-context=operator-only
           'ai-conductor stack land --done or ai-conductor stack land --abandon\n';
+          // /ai-conductor:session-command-context
         await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
         await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
         return { kind: 'halted' };
