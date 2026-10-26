@@ -1,4 +1,7 @@
-// Covers: task:2, task:3, task:5, task:7
+// Covers: task:2, task:3, task:4, task:5, task:7
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -16,8 +19,11 @@ import {
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { ProviderRuntimeSet as RuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderRuntimeSet as RuntimeSet, createProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { validateSpawnPermit } from '../../src/execution/spawn-permit.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { CodexProvider } from '../../src/execution/codex-provider.js';
+import { PiProvider, type PiEnvironment } from '../../src/execution/pi-provider.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
   timedOut?: boolean;
@@ -87,7 +93,149 @@ function provider(): LLMProvider {
   };
 }
 
+async function settled<T>(operation: () => Promise<T>): Promise<{ value: T } | { error: string }> {
+  try {
+    return { value: await operation() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function expectTransparentMethod<T extends object, A extends readonly unknown[], R>(
+  target: T,
+  guarded: T,
+  method: keyof T,
+  ...args: A
+): Promise<void> {
+  const targetMethod = target[method] as unknown as (...received: A) => Promise<R>;
+  const guardedMethod = guarded[method] as unknown as (...received: A) => Promise<R>;
+  await expect(settled(() => targetMethod.apply(target, args))).resolves.toEqual(
+    await settled(() => guardedMethod.apply(guarded, args)),
+  );
+  await expect(settled(() => targetMethod.apply(target, args))).resolves.toEqual(
+    await settled(() => guardedMethod.call(guarded, ...args)),
+  );
+}
+
+class PrivateStateProvider implements LLMProvider {
+  readonly supportsSessionResume = false;
+  readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
+  private readonly secret = 'private-state';
+  private readonly identity = this;
+
+  private marker(): string {
+    return this.identity === this ? this.secret : 'wrong-receiver';
+  }
+
+  async invoke(): Promise<InvokeResult> {
+    return { success: true, output: this.secret, exitCode: 0 };
+  }
+
+  async prepareSelfHostAuth(): Promise<{ args: string[] }> {
+    return { args: [this.marker()] };
+  }
+
+  async resolveSelfHostExecutable(): Promise<string> {
+    return this.marker();
+  }
+
+  async readiness(): Promise<AuthenticationReadiness> {
+    if (this.marker() !== 'private-state') throw new Error(this.marker());
+    return { provider: 'codex', source: 'cached-login', state: 'ready' };
+  }
+
+  readOnlyReviewObservedCommandReach(): 'none' | 'possible' {
+    return this.marker() === 'private-state' ? 'none' : 'possible';
+  }
+}
+
 describe('ProviderRuntimeSet', () => {
+  it('keeps prototype members, private state, and declared fields transparent through the system-prompt guard', async () => {
+    const classProvider = new PrivateStateProvider();
+    const classRegistry = new PluginRegistry();
+    classRegistry.register('llm_provider', 'class-stub', classProvider);
+    classRegistry.markInitialized();
+    const guardedClassProvider = createProviderRuntimeSet(classRegistry)
+      .get('class-stub').provider as PrivateStateProvider;
+
+    for (const method of [
+      'prepareSelfHostAuth',
+      'resolveSelfHostExecutable',
+      'readiness',
+      'readOnlyReviewObservedCommandReach',
+    ] as const) {
+      await expectTransparentMethod(classProvider, guardedClassProvider, method);
+    }
+    for (const field of [
+      'supportsSessionResume',
+      'lifecycleCapability',
+      'nativeSchemaCapability',
+      'systemPromptCapability',
+    ] as const) {
+      expect(guardedClassProvider[field]).toBe(classProvider[field]);
+    }
+
+    const homeDir = await mkdtemp(join(tmpdir(), 'provider-runtime-'));
+    try {
+      const claude = new ClaudeProvider();
+      const codex = new CodexProvider(async () => {
+        throw new Error('doctor is stubbed');
+      });
+      const piEnvironment: PiEnvironment = {
+        stat: vi.fn(),
+        env: {},
+        homeDir: () => homeDir,
+        cwd: () => homeDir,
+      };
+      const pi = new PiProvider(
+        'pi',
+        async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+        piEnvironment,
+        undefined,
+        undefined,
+        async () => ({ stdout: 'pi-private-key', exitCode: 0 }),
+      );
+      const registry = new PluginRegistry();
+      registry.register('llm_provider', 'claude', claude);
+      registry.register('llm_provider', 'codex', codex);
+      registry.register('llm_provider', 'pi', pi);
+      registry.markInitialized();
+      const runtimes = createProviderRuntimeSet(registry);
+      const guardedClaude = runtimes.get('claude').provider as ClaudeProvider;
+      const guardedCodex = runtimes.get('codex').provider as CodexProvider;
+      const guardedPi = runtimes.get('pi').provider as PiProvider;
+
+      await expectTransparentMethod(claude, guardedClaude, 'prepareSelfHostAuth', {
+        provider: 'claude', homeDir,
+      });
+      await expectTransparentMethod(claude, guardedClaude, 'readOnlyReviewObservedCommandReach', {});
+      await expectTransparentMethod(codex, guardedCodex, 'readiness');
+      await expectTransparentMethod(codex, guardedCodex, 'prepareSelfHostAuth', {
+        provider: 'codex', homeDir,
+      });
+      await expectTransparentMethod(codex, guardedCodex, 'resolveSelfHostExecutable');
+      await expectTransparentMethod(pi, guardedPi, 'prepareSelfHostAuth', {
+        provider: 'pi', homeDir, model: 'deepseek/x',
+      });
+      await expectTransparentMethod(pi, guardedPi, 'resolveSelfHostExecutable');
+
+      for (const [target, guarded] of [[claude, guardedClaude], [codex, guardedCodex], [pi, guardedPi]] as const) {
+        for (const field of [
+          'supportsSessionResume',
+          'lifecycleCapability',
+          'nativeSchemaCapability',
+          'systemPromptCapability',
+        ] as const) {
+          expect(guarded[field]).toBe(target[field]);
+        }
+      }
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('passes a declared provider its system-prompt options unchanged', async () => {
     const result = { success: true, output: 'declared result', exitCode: 0 };
     const options: InvokeOptions = { prompt: '/x', systemPrompt: 'S' };
