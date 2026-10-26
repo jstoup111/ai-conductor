@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
@@ -128,19 +129,21 @@ describe('build_review lap scope runner', () => {
     } as never);
   }
 
-  async function run(headSha: string, mergeBase = 'a'.repeat(40)): Promise<void> {
+  async function run(headSha: string, mergeBase = 'a'.repeat(40), child?: ChildId): Promise<void> {
     await expect((runner as never as { runRubricBuildReviewInner: (...args: unknown[]) => Promise<unknown> })
       .runRubricBuildReviewInner({
         sourceSnapshot: { digest: `sha256:${headSha}`, mergeBase, headSha, diff: DIFF },
-      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+      }, config, 'M', 'plan.md', undefined, undefined, child)).resolves.toMatchObject({ success: true });
   }
 
-  function artifactPath(headSha: string): string {
-    return join(projectDir, '.pipeline', 'build-review', `lap-${headSha}`, `${IMPLEMENTATION_QUALITY}.json`);
+  function artifactPath(headSha: string, child?: ChildId): string {
+    return child === undefined
+      ? join(projectDir, '.pipeline', 'build-review', `lap-${headSha}`, `${IMPLEMENTATION_QUALITY}.json`)
+      : join(projectDir, '.pipeline', 'children', String(child), 'build-review', `lap-${headSha}`, `${IMPLEMENTATION_QUALITY}.json`);
   }
 
-  async function artifact(headSha: string): Promise<any> {
-    return JSON.parse(await readFile(artifactPath(headSha), 'utf8'));
+  async function artifact(headSha: string, child?: ChildId): Promise<any> {
+    return JSON.parse(await readFile(artifactPath(headSha, child), 'utf8'));
   }
 
   it('records and announces a full first lap followed by a delta lap', async () => {
@@ -163,10 +166,13 @@ describe('build_review lap scope runner', () => {
 
   it('uses a full scope when a restacked child has a new merge base', async () => {
     installJudgedDispatch();
-    await run('3'.repeat(40), 'a'.repeat(40));
-    await run('4'.repeat(40), 'b'.repeat(40));
+    const child = parseChildId(1)!;
+    await run('3'.repeat(40), 'a'.repeat(40), child);
+    // The restack's feature-repair kickback presents the child runner with a
+    // new merge base; child-local artifacts must not borrow root-lap scope.
+    await run('4'.repeat(40), 'b'.repeat(40), child);
 
-    expect((await artifact('4'.repeat(40))).reviewScope).toMatchObject({
+    expect((await artifact('4'.repeat(40), child)).reviewScope).toMatchObject({
       mode: 'full', reason: 'merge-base-changed', sequence: 2, mergeBase: 'b'.repeat(40),
     });
   });
