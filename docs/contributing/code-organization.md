@@ -200,9 +200,9 @@ nothing outside `tools/` may import `tools/`.
 any value-import cycle, and any such edge missing from the allowlist. Type-only imports, type-only
 re-exports, and dynamic `import()` are not edges.
 
-Existing violations are frozen in `test/structural/layer-allowlist/`, one empty file per
-(importing file, imported file) pair. The allowlist can only shrink: an entry whose edge disappears
-or stops violating fails the test as stale.
+Existing violations are frozen in `test/structural/layer-allowlist.txt`, one sorted
+`<from> -> <to>` line per (importing file, imported file) pair. The allowlist can only shrink: an
+entry whose edge disappears or stops violating fails the test as stale.
 
 | Allowlisted edge | Entries | Example |
 | --- | --- | --- |

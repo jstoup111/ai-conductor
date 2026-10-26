@@ -4,11 +4,11 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { checkLayerRatchet, decodeAllowlistName, encodeAllowlistName, formatRatchetViolations } from './layer-ratchet.js';
+import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, parseAllowlistEntry, readAllowlistEntries } from './layer-ratchet.js';
 
 const structuralDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = join(structuralDirectory, '../../src');
-const allowlistDirectory = join(structuralDirectory, 'layer-allowlist');
+const allowlistFile = join(structuralDirectory, 'layer-allowlist.txt');
 
 async function sourceFiles(directory = sourceDirectory): Promise<Map<string, string>> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -430,21 +430,18 @@ describe('structural: layer ratchet', () => {
   it.each([
     ['engine/conductor.ts', 'ui/events.ts'],
     ['engine/engineer/intake/x.ts', 'cli.ts'],
-  ])('round-trips allowlist names for %s and %s', (from, to) => {
-    expect(decodeAllowlistName(encodeAllowlistName(from, to))).toEqual({ from, to });
-  });
-
-  it('encodes collision-prone file pairs differently', () => {
-    expect(encodeAllowlistName('engine/a-b.ts', 'ui/c.ts')).not.toBe(
-      encodeAllowlistName('engine/a/b.ts', 'ui/c.ts'),
-    );
+  ])('round-trips allowlist entries for %s and %s', (from, to) => {
+    expect(formatAllowlistEntry(from, to)).toBe(`${from} -> ${to}`);
+    expect(parseAllowlistEntry(formatAllowlistEntry(from, to))).toEqual({ from, to });
   });
 
   it.each([
-    'not-an-edge.txt',
-    'engine%2Fa.ts+ui%2Fb.ts+types%2Fc.ts.edge',
-    '..%2Fx.ts+ui%2Fb.ts.edge',
-    'engine%2fa.ts+ui%2Fb.ts.edge',
+    'engine/a.ts ui/b.ts',
+    'engine/a.ts -> ui/b.ts -> types/c.ts',
+    '../x.ts -> ui/b.ts',
+    'engine/a.ts  ->  ui/b.ts',
+    'engine/a.js -> ui/b.ts',
+    'engine/./a.ts -> ui/b.ts',
   ])('reports malformed allowlist entry %s', (entry) => {
     const result = checkLayerRatchet({ files: new Map(), allowlist: [entry] });
 
@@ -452,9 +449,23 @@ describe('structural: layer ratchet', () => {
   });
 
   it.each([
-    ['an upward edge', new Map([['engine/a.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]), [encodeAllowlistName('engine/a.ts', 'ui/b.ts')]],
-    ['a same-layer cycle', new Map([['engine/a.ts', "import './b.js';"], ['engine/b.ts', "import './a.js';"]]), [encodeAllowlistName('engine/a.ts', 'engine/b.ts'), encodeAllowlistName('engine/b.ts', 'engine/a.ts')]],
-    ['duplicate imports of one pair', new Map([['engine/a.ts', "import '../ui/b.js';\nimport '../ui/b.js';"], ['ui/b.ts', '']]), [encodeAllowlistName('engine/a.ts', 'ui/b.ts')]],
+    ['a duplicate', ['engine/a.ts -> ui/b.ts', 'engine/a.ts -> ui/b.ts']],
+    ['an out-of-order entry', ['engine/b.ts -> ui/b.ts', 'engine/a.ts -> ui/b.ts']],
+  ])('reports %s as malformed so the file stays sorted and unique', (_description, allowlist) => {
+    const files = new Map([['engine/a.ts', "import '../ui/b.js';"], ['engine/b.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]);
+
+    expect(checkLayerRatchet({ files, allowlist }).violations).toContainEqual({ kind: 'malformed-entry', entry: allowlist[1] });
+  });
+
+  it('reads allowlist entries while skipping blank lines and # comments', () => {
+    expect(readAllowlistEntries('# header\n\nengine/a.ts -> ui/b.ts\n# note\nengine/c.ts -> ui/d.ts\n'))
+      .toEqual(['engine/a.ts -> ui/b.ts', 'engine/c.ts -> ui/d.ts']);
+  });
+
+  it.each([
+    ['an upward edge', new Map([['engine/a.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]), [formatAllowlistEntry('engine/a.ts', 'ui/b.ts')]],
+    ['a same-layer cycle', new Map([['engine/a.ts', "import './b.js';"], ['engine/b.ts', "import './a.js';"]]), [formatAllowlistEntry('engine/a.ts', 'engine/b.ts'), formatAllowlistEntry('engine/b.ts', 'engine/a.ts')]],
+    ['duplicate imports of one pair', new Map([['engine/a.ts', "import '../ui/b.js';\nimport '../ui/b.js';"], ['ui/b.ts', '']]), [formatAllowlistEntry('engine/a.ts', 'ui/b.ts')]],
   ])('covers %s with allowlist entries', (_description, files, allowlist) => {
     expect(checkLayerRatchet({ files, allowlist }).violations).toEqual([]);
   });
@@ -462,17 +473,17 @@ describe('structural: layer ratchet', () => {
   it('reports only an unlisted edge inside an otherwise allowlisted cycle', () => {
     const result = checkLayerRatchet({ files: new Map([
       ['engine/a.ts', "import './b.js';\nimport './c.js';"], ['engine/b.ts', "import './c.js';"], ['engine/c.ts', "import './a.js';"],
-    ]), allowlist: [encodeAllowlistName('engine/a.ts', 'engine/b.ts'), encodeAllowlistName('engine/b.ts', 'engine/c.ts'), encodeAllowlistName('engine/c.ts', 'engine/a.ts')] });
+    ]), allowlist: [formatAllowlistEntry('engine/a.ts', 'engine/b.ts'), formatAllowlistEntry('engine/b.ts', 'engine/c.ts'), formatAllowlistEntry('engine/c.ts', 'engine/a.ts')] });
     expect(result.violations).toEqual([expect.objectContaining({ kind: 'cycle', file: 'engine/a.ts', imported: 'engine/c.ts' })]);
   });
 
-  it('formats an unlisted upward violation with its allowlist name', () => {
+  it('formats an unlisted upward violation with the allowlist entry that would cover it', () => {
     const result = checkLayerRatchet({ files: new Map([['engine/a.ts', "import '../ui/b.js';"], ['ui/b.ts', '']]), allowlist: [] });
-    expect(formatRatchetViolations(result.violations)).toContain(encodeAllowlistName('engine/a.ts', 'ui/b.ts'));
+    expect(formatRatchetViolations(result.violations)).toContain(formatAllowlistEntry('engine/a.ts', 'ui/b.ts'));
   });
 
-  it('formats a stale entry with its allowlist filename', () => {
-    const entry = encodeAllowlistName('engine/a.ts', 'ui/b.ts');
+  it('formats a stale entry with its allowlist line', () => {
+    const entry = formatAllowlistEntry('engine/a.ts', 'ui/b.ts');
     const result = checkLayerRatchet({ files: new Map([['engine/a.ts', ''], ['ui/b.ts', '']]), allowlist: [entry] });
 
     expect(formatRatchetViolations(result.violations)).toContain(entry);
@@ -482,22 +493,19 @@ describe('structural: layer ratchet', () => {
     ["import type { B } from '../ui/b.js';", 'type-only import'],
     ['', 'no import'],
   ])('reports edge-missing for an entry with %s', (source, _description) => {
-    const entry = encodeAllowlistName('engine/a.ts', 'ui/b.ts');
+    const entry = formatAllowlistEntry('engine/a.ts', 'ui/b.ts');
     expect(checkLayerRatchet({ files: new Map([['engine/a.ts', source], ['ui/b.ts', 'export type B = string;']]), allowlist: [entry] }).violations)
       .toEqual([{ kind: 'stale-entry', entry, reason: 'edge-missing' }]);
   });
 
   it('reports not-a-violation after a two-file cycle is broken', () => {
-    const entry = encodeAllowlistName('engine/a.ts', 'engine/b.ts');
+    const entry = formatAllowlistEntry('engine/a.ts', 'engine/b.ts');
     expect(checkLayerRatchet({ files: new Map([['engine/a.ts', "import './b.js';"], ['engine/b.ts', '']]), allowlist: [entry] }).violations)
       .toEqual([{ kind: 'stale-entry', entry, reason: 'not-a-violation' }]);
   });
 
   it('reports every freed entry after a four-file cycle is broken', () => {
-    const entries = ['a+b', 'b+c', 'c+d'].map((pair) => {
-      const [from, to] = pair.split('+');
-      return encodeAllowlistName(`engine/${from}.ts`, `engine/${to}.ts`);
-    });
+    const entries = [['a', 'b'], ['b', 'c'], ['c', 'd']].map(([from, to]) => formatAllowlistEntry(`engine/${from}.ts`, `engine/${to}.ts`));
     const result = checkLayerRatchet({ files: new Map([
       ['engine/a.ts', "import './b.js';"], ['engine/b.ts', "import './c.js';"], ['engine/c.ts', "import './d.js';"], ['engine/d.ts', ''],
     ]), allowlist: entries });
@@ -505,14 +513,11 @@ describe('structural: layer ratchet', () => {
   });
 
   it('ratchets the real source tree against the committed allowlist', async () => {
-    const entries = await readdir(allowlistDirectory);
+    const entries = readAllowlistEntries(await readFile(allowlistFile, 'utf8'));
     const result = checkLayerRatchet({ files: await sourceFiles(), allowlist: entries });
 
     expect(result.scannedFileCount).toBeGreaterThan(0);
+    expect(entries.length).toBeGreaterThan(0);
     expect(result.violations, formatRatchetViolations(result.violations)).toEqual([]);
-    expect(entries.every((entry) => {
-      const pair = decodeAllowlistName(entry);
-      return pair !== undefined && encodeAllowlistName(pair.from, pair.to) === entry;
-    })).toBe(true);
   });
 });

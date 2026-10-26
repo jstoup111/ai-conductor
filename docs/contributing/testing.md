@@ -424,14 +424,14 @@ reference contradicts a claim; truthful claims and matching prose below the lead
 **`layer-ratchet.test.ts`** reads every `.ts` file under `src/conductor/src/`, classifies it by its
 first path segment, and checks its top-level value imports and `export … from` re-exports against
 the [dependency direction](code-organization.md#dependency-direction) and the committed
-`layer-allowlist/`. The checker is the pure module `layer-ratchet.ts`. Each failure line reads
-`<kind> <location> <detail>`; `upward` and `cycle` lines end with the edge's allowlist file name.
+`layer-allowlist.txt`. The checker is the pure module `layer-ratchet.ts`. Each failure line reads
+`<kind> <location> <detail>`; `upward` and `cycle` lines end with the edge's allowlist entry.
 
 | Kind | Fix |
 | --- | --- |
 | `upward`, `cycle` | Remove the import, or make it `import type`. Do not allowlist new edges. |
-| `stale-entry` | Delete the named file from `layer-allowlist/`; its edge is gone or no longer violates. |
-| `malformed-entry` | Rename or delete it; names are `encodeURIComponent(from)+encodeURIComponent(to).edge`, paths relative to `src/conductor/src/`. |
+| `stale-entry` | Delete the named line from `layer-allowlist.txt`; its edge is gone or no longer violates. |
+| `malformed-entry` | Fix or delete the line. Each is `<from> -> <to>`, paths relative to `src/conductor/src/`, lines sorted and unique; `#` lines and blank lines are ignored. |
 | `unclassifiable-file` | Move the file under `types/`, `execution/`, `engine/`, `ui/`, `tools/`, or the `src/` root. |
 | `unresolved-specifier` | Fix the relative import so it resolves to a `.ts` file or `index.ts` inside `src/conductor/src/`. |
 

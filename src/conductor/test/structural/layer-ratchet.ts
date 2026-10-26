@@ -33,7 +33,7 @@ interface UpwardViolation {
   line: number;
   imported: string;
   edge: string;
-  allowlistName?: string;
+  allowlistEntry?: string;
 }
 
 interface CycleViolation {
@@ -42,7 +42,7 @@ interface CycleViolation {
   line: number;
   imported: string;
   cycle: readonly string[];
-  allowlistName?: string;
+  allowlistEntry?: string;
 }
 
 interface MalformedEntryViolation {
@@ -65,6 +65,7 @@ export interface LayerRatchetResult {
 
 export interface LayerRatchetInput {
   files: ReadonlyMap<string, string>;
+  /** Allowlist entries, one `from -> to` line each, as returned by `readAllowlistEntries`. */
   allowlist: readonly string[];
 }
 
@@ -83,8 +84,15 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
   const edges: LayerRatchetEdge[] = [];
   const violations: LayerRatchetViolation[] = [];
 
+  // Strictly ascending order keeps the file free of duplicates and makes concurrent
+  // additions land on different lines.
+  let previous: string | undefined;
   for (const entry of allowlist) {
-    if (decodeAllowlistName(entry) === undefined) violations.push({ kind: 'malformed-entry', entry });
+    if (parseAllowlistEntry(entry) === undefined || (previous !== undefined && entry <= previous)) {
+      violations.push({ kind: 'malformed-entry', entry });
+    } else {
+      previous = entry;
+    }
   }
 
   for (const [file, source] of files) {
@@ -135,14 +143,14 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
   }
 
   const allowedPairs = new Set(allowlist.flatMap((entry) => {
-    const pair = decodeAllowlistName(entry);
+    const pair = parseAllowlistEntry(entry);
     return pair === undefined ? [] : [`${pair.from}\u0000${pair.to}`];
   }));
   const livePairs = new Set(violations.flatMap((violation) => (
     violation.kind === 'upward' || violation.kind === 'cycle' ? [`${violation.file}\u0000${violation.imported}`] : []
   )));
   for (const entry of allowlist) {
-    const pair = decodeAllowlistName(entry);
+    const pair = parseAllowlistEntry(entry);
     if (pair === undefined) continue;
     const key = `${pair.from}\u0000${pair.to}`;
     if (!edges.some((edge) => edge.file === pair.from && edge.imported === pair.to)) {
@@ -157,10 +165,10 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
       uncovered.push(violation);
       continue;
     }
-    const allowlistName = encodeAllowlistName(violation.file, violation.imported);
+    const allowlistEntry = formatAllowlistEntry(violation.file, violation.imported);
     if (allowedPairs.has(`${violation.file}\u0000${violation.imported}`)) continue;
     const named: UpwardViolation | CycleViolation = { ...violation };
-    Object.defineProperty(named, 'allowlistName', { value: allowlistName, enumerable: false });
+    Object.defineProperty(named, 'allowlistEntry', { value: allowlistEntry, enumerable: false });
     uncovered.push(named);
   }
   return { scannedFileCount: files.size, edges, violations: uncovered };
@@ -173,33 +181,37 @@ export function formatRatchetViolations(violations: readonly LayerRatchetViolati
       : 'line' in violation ? `${violation.file}:${violation.line}` : violation.file;
     const detail = violation.kind === 'upward' ? violation.edge
       : violation.kind === 'cycle' ? violation.cycle.join(' -> ') : violation.kind;
-    const name = 'allowlistName' in violation && violation.allowlistName !== undefined
-      ? ` ${violation.allowlistName}` : '';
+    const name = 'allowlistEntry' in violation && violation.allowlistEntry !== undefined
+      ? ` (allowlist entry: ${violation.allowlistEntry})` : '';
     return `${violation.kind} ${location} ${detail}${name}`;
   }).join('\n');
 }
 
-export function encodeAllowlistName(from: string, to: string): string {
-  return `${encodeURIComponent(from)}+${encodeURIComponent(to)}.edge`;
+const ALLOWLIST_SEPARATOR = ' -> ';
+
+export function formatAllowlistEntry(from: string, to: string): string {
+  return `${from}${ALLOWLIST_SEPARATOR}${to}`;
 }
 
-export function decodeAllowlistName(name: string): AllowlistPair | undefined {
-  if (!name.endsWith('.edge')) return undefined;
-  const parts = name.slice(0, -'.edge'.length).split('+');
+/** A canonical `from -> to` line naming two source-relative `.ts` paths, or undefined. */
+export function parseAllowlistEntry(entry: string): AllowlistPair | undefined {
+  const parts = entry.split(ALLOWLIST_SEPARATOR);
   if (parts.length !== 2) return undefined;
-  try {
-    const [from, to] = parts.map((part) => decodeURIComponent(part));
-    if (!isAllowlistPath(from) || !isAllowlistPath(to)) return undefined;
-    return encodeAllowlistName(from, to) === name ? { from, to } : undefined;
-  } catch {
-    return undefined;
-  }
+  const [from, to] = parts;
+  if (!isAllowlistPath(from) || !isAllowlistPath(to)) return undefined;
+  return formatAllowlistEntry(from, to) === entry ? { from, to } : undefined;
+}
+
+/** The entry lines of an allowlist file; blank lines and `#` comments are not entries. */
+export function readAllowlistEntries(text: string): string[] {
+  return text.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
 }
 
 function isAllowlistPath(path: string): boolean {
   return path.endsWith('.ts')
     && !path.startsWith('/')
-    && path.split('/').every((segment) => segment !== '' && segment !== '..');
+    && !/\s/.test(path)
+    && path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 interface TarjanFrame {

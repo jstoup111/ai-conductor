@@ -72,27 +72,29 @@ As a contributor, I want a value import that closes an import cycle to fail even
 
 As a contributor, I want today's violations listed once each as allowlist entries, with every entry that no longer matches a live violation failing the check, so that existing debt does not block work while the debt list can only get shorter.
 
+> **Amended 2026-10-26 (operator-directed):** entries are lines of one sorted text file, `layer-allowlist.txt`, instead of encoded file names in a directory. The criteria below are restated for that format; see `adr-2026-10-07-conductor-decomposition-target-architecture` D5.
+
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a fixture with an upward value edge and an allowlist entry for exactly that importing-file and imported-file pair, when the checker evaluates it, then it reports no violation for that edge.
 - Given a fixture with a value edge inside a cycle and an allowlist entry for that file pair, when the checker evaluates it, then it reports no violation for that edge.
 - Given a fixture in which one importing file has two separate value import statements from the same imported file, which together form one upward edge, when the checker evaluates it with one allowlist entry for that file pair, then it reports no violation.
-- Given an allowlisted file pair, when its allowlist entry's file name is decoded, then it yields the same importing-file and imported-file paths, and two different file pairs never encode to the same file name.
+- Given an allowlisted file pair, when its `from -> to` entry line is parsed, then it yields the same importing-file and imported-file paths, and formatting that pair reproduces the line exactly.
 - Given the real tree, when the ratchet runs, then the set of allowlist entries equals the set of value edges that are upward or lie inside a cycle, with no missing entry and no stale entry.
 
 #### Negative Paths
-- Given an allowlist entry for a file pair that has no value edge in the fixture, because the import was deleted or made type-only, when the checker evaluates it, then it reports a stale-entry failure naming that allowlist file.
+- Given an allowlist entry for a file pair that has no value edge in the fixture, because the import was deleted or made type-only, when the checker evaluates it, then it reports a stale-entry failure naming that allowlist line.
 - Given a fixture in which a two-file cycle was broken by removing one of its edges, and the surviving edge is same-layer and still has an allowlist entry, when the checker evaluates it, then it reports the surviving edge's entry as stale because that edge is no longer a violation.
-- Given a fixture in which removing one edge frees several entries of a larger cycle at once, when the checker evaluates it, then it reports every freed entry by file name in one run, not just the first.
-- Given a file in the allowlist directory whose name does not decode to a pair of `src/conductor/src/` paths, when the checker evaluates it, then it fails and names that file as a malformed entry.
-- Given an unlisted violation, when the checker reports it, then the failure message includes the exact allowlist file name that would cover that edge.
+- Given a fixture in which removing one edge frees several entries of a larger cycle at once, when the checker evaluates it, then it reports every freed entry line in one run, not just the first.
+- Given an allowlist line that does not parse to a pair of `src/conductor/src/` paths, or that is a duplicate or out of sorted order, when the checker evaluates it, then it fails and names that line as a malformed entry.
+- Given an unlisted violation, when the checker reports it, then the failure message includes the exact allowlist line that would cover that edge.
 
 ### Done When
-- [ ] The allowlist is a directory with one file per allowed edge, and the file name alone identifies the edge.
+- [ ] The allowlist is one sorted text file with one `from -> to` line per allowed edge, and the line alone identifies the edge.
 - [ ] The real-tree ratchet test passes with the committed allowlist, and its entry count equals the computed number of upward-or-cycle value edges.
-- [ ] A stale-entry failure and a malformed-entry failure each name the offending allowlist file name.
-- [ ] A round-trip test encodes and decodes every committed entry, and asserts that no two file pairs share a name.
+- [ ] A stale-entry failure and a malformed-entry failure each name the offending allowlist line.
+- [ ] A round-trip test formats and parses entries, and the checker rejects malformed, duplicate and out-of-order lines.
 
 ## Story 4: The ratchet fails closed on input it cannot classify or resolve
 

@@ -28,7 +28,7 @@ describe('build-review scope source', () => {
     ]);
   });
 
-  it.each(['/absolute.ts', '../escape.ts', 'src/../../escape.ts', 'src/has\u0000nul.ts'])(
+  it.each(['/absolute.ts', '../escape.ts', 'src/../../escape.ts', 'src/has\u0000nul.ts', 'test/engine%2Fa.ts'])(
     'rejects unsafe repository path %j',
     (path) => expect(() => safeRepoRelativePath(path)).toThrow(BuildReviewSourceReadError),
   );
@@ -36,12 +36,6 @@ describe('build-review scope source', () => {
   it('keeps a normal space-bearing filename while rejecting prose rather than a repository path', () => {
     expect(safeRepoRelativePath('test/widget name.test.ts')).toBe('test/widget name.test.ts');
     expect(() => safeRepoRelativePath('The affected test is test/widget.test.ts.')).toThrow(BuildReviewSourceReadError);
-  });
-
-  it('inventories a percent-encoded filename as an ordinary repository path', () => {
-    const path = 'test/layer-allowlist/engine%2Fa.ts+engine%2Fb.ts.edge';
-    expect(safeRepoRelativePath(path)).toBe(path);
-    expect(parseNameStatusZ(`A\u0000${path}\u0000`)).toEqual([{ kind: 'A', path }]);
   });
 
   it('reads each pinned blob once and never falls back to live content', async () => {
