@@ -98,7 +98,7 @@ describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
     state.blocked = [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'approve stories' }];
     state.gated = [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'other', remedy: 'wait' }];
     state.inProgress = [{ slug: 'running', step: 'build', tier: 'M' }];
-    state.waiting = [{ slug: 'waiting', verdict: { kind: 'blocked', blockers: [{ repo: 'r', number: 1 }] } }];
+    state.waiting = [{ slug: 'waiting', verdict: { kind: 'blocked', blockers: [{ repo: 'r', number: '1' }] } }];
     state.eligible = [{ slug: 'eligible', tier: 'S' }];
     state.parked = Array.from({ length: 3 }, (_, i) => ({ slug: `parked-${i}`, annotation: i === 0 ? 'orphan' as const : undefined }));
     state.retainedWorktrees = [{ slug: 'retained', reason: 'pr-closed-unmerged' }];
