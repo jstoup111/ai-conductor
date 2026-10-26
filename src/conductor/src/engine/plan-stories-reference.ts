@@ -1,5 +1,5 @@
 import { posix, win32 } from 'node:path';
-import { planStem } from './artifacts.js';
+import { planStem } from './plan-stem.js';
 import { resolveFeatureArtifact, type ManifestSource } from './feature-manifest-source.js';
 
 const STORIES_LINE = /^\s*\*\*Stories:\*\*\s*(.*?)\s*$/im;

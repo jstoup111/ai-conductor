@@ -1023,11 +1023,16 @@ export class ClaudeProvider implements LLMProvider {
 /** Stands in for the per-invocation file when argv is only inspected, never launched. */
 const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
 
+// A test can temporarily override TMPDIR while exercising a subprocess path.
+// Preserve the startup marker so a concurrent or nested helper cannot redirect
+// a prompt file into the operator's real temp directory after clearing it.
+const testTmpRootAtModuleLoad = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+
 /** Write one invocation's system prompt to a private temp file Claude reads at startup. */
 async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
   // Resolve this at invocation time: Vitest installs its run root after some
   // modules have already loaded, and fixtures can temporarily change TMPDIR.
-  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? testTmpRootAtModuleLoad ?? tmpdir();
   const dir = await mkdtemp(join(tempRoot, 'ai-conductor-claude-system-prompt-'));
   const path = join(dir, 'system-prompt.md');
   await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });

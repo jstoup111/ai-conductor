@@ -7,6 +7,7 @@ import type {
   VerdictFreshnessOutcome,
 } from '../types/events.js';
 import { slugify } from './worktree.js';
+import { planStem } from './plan-stem.js';
 import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
@@ -607,9 +608,7 @@ export function verdictFreshnessComparand(ctx: CompletionContext): number | unde
  * helper strips only the trailing `.md` extension from the basename, leaving
  * interior dots (e.g. `phase-9.3b-intake.md`) intact.
  */
-export function planStem(planFilePath: string): string {
-  return basename(planFilePath, '.md');
-}
+export { planStem };
 
 /**
  * Project-declared extra artifact globs for a step, drawn from config. Only the
