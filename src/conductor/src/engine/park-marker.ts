@@ -9,7 +9,7 @@
 // primitives are spelled once instead of being duplicated across the
 // conductor, the dashboard, and the daemon loop.
 
-import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -174,15 +174,45 @@ export async function createOwnedPark(root: string, slug: string): Promise<Owned
 export async function releaseOwnedPark(root: string, slug: string, token: ParkToken): Promise<void> {
   const mainRoot = await resolveMainRepoRoot(root);
   const markerPath = parkedMarkerPath(mainRoot, slug);
-  let body: string;
+  const claimPath = `${markerPath}.release-${encodeURIComponent(token)}`;
+
+  // A prior interrupted release can leave this caller's deterministic claim
+  // behind. Removing that private claim cannot affect a later canonical park.
+  await rm(claimPath, { force: true });
+
   try {
-    body = await readFile(markerPath, 'utf-8');
+    await rename(markerPath, claimPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw err;
   }
-  if (!carriesOwnedParkToken(body, token)) return;
-  await rm(markerPath, { force: true });
+
+  let body: string;
+  try {
+    body = await readFile(claimPath, 'utf-8');
+  } catch (err) {
+    await restoreParkClaim(claimPath, markerPath);
+    throw err;
+  }
+  if (!carriesOwnedParkToken(body, token)) {
+    await restoreParkClaim(claimPath, markerPath);
+    return;
+  }
+  await rm(claimPath, { force: true });
+}
+
+/**
+ * Restore a non-owned park claim without overwriting a marker another caller
+ * recreated while it was claimed. `link` supplies the required exclusive
+ * create: a newer canonical marker wins on EEXIST.
+ */
+async function restoreParkClaim(claimPath: string, markerPath: string): Promise<void> {
+  try {
+    await link(claimPath, markerPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+  await rm(claimPath, { force: true });
 }
 
 /**
