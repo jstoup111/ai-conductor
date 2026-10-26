@@ -118,7 +118,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'executor_isolation', 'supervisor_max_stale_hours',
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review',
     'prd_audit', 'plan_review', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
-    'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
+    'retry_routing', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
     'feature_applicability',
     'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup', 'reclaim_merged_worktrees',
     'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
@@ -159,8 +159,6 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
   gate_code_validity: ['enabled'],
   retry_routing: ['enabled'],
-  coverage_binding: ['judge'],
-  'coverage_binding.judge': ['enabled', 'batch_size'],
   feature_applicability: ['enabled'],
   otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance', 'spool'],
   'otel.spool': ['enabled', 'max_bytes'],
@@ -183,6 +181,8 @@ const DEPRECATED_BUILD_REVIEW_ADR =
   'adr-2026-08-22-build-review-opt-in-rubric-container';
 const DEPRECATED_WIRING_ADR =
   'adr-2026-08-14-retire-build-review-wiring-rubric';
+const RETIRED_COVERAGE_BINDING_ADR =
+  'adr-2026-10-23-slice-topology-from-sealed-plan';
 /**
  * Top-level blocks retired without a migration. Feature branches cut before the
  * retirement still carry them in their own `.ai-conductor/config.yml`, and the
@@ -192,6 +192,13 @@ const DEPRECATED_WIRING_ADR =
 const RETIRED_TOP_LEVEL_KEYS: ReadonlyMap<string, string> = new Map([
   // #3122: the ADR corpus is always repo-wide; the flag staged here is gone.
   ['conflict_check', 'adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag'],
+  ['coverage_binding', RETIRED_COVERAGE_BINDING_ADR],
+]);
+
+/** Retired built-ins are ignored before custom-step validation so legacy
+ * routing settings cannot be reinterpreted as custom declarations. */
+const RETIRED_BUILT_IN_STEPS: ReadonlyMap<string, string> = new Map([
+  ['coverage_binding', RETIRED_COVERAGE_BINDING_ADR],
 ]);
 
 /** Default hard floor for live provider-stream observation emission. */
@@ -850,6 +857,15 @@ export function validateConfig(
         ok: false,
         error: { type: 'validation_error', message: 'steps must be an object' },
       };
+    }
+
+    for (const name of Object.keys(obj.steps as Record<string, unknown>)) {
+      const retiredAdr = RETIRED_BUILT_IN_STEPS.get(name);
+      if (retiredAdr === undefined) continue;
+      const key = `steps.${name}`;
+      warnings.push(`${key} is retired and ignored (${retiredAdr}).`);
+      deprecatedKeys.push({ key, adr: retiredAdr });
+      delete (obj.steps as Record<string, unknown>)[name];
     }
 
     // Built-in steps are the linear gate-loop table PLUS the out-of-band steps
@@ -1857,16 +1873,6 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
     if (obj.retry_routing !== undefined || materializeDefaults) {
       obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
-    }
-  }
-
-  // coverage_binding — retained for compatibility; the step is a no-op and
-  // never reads judge.enabled or judge.batch_size.
-  {
-    const err = validateCoverageBindingBlock(obj.coverage_binding);
-    if (err) return { ok: false, error: err };
-    if (obj.coverage_binding !== undefined || materializeDefaults) {
-      obj.coverage_binding = resolveCoverageBindingBlock(obj.coverage_binding);
     }
   }
 
@@ -2913,50 +2919,6 @@ function resolveRetryRoutingBlock(raw: unknown): { enabled: boolean } {
   };
 }
 
-function validateCoverageBindingBlock(raw: unknown): ConfigError | null {
-  if (raw === undefined) return null;
-  if (!isPlainObject(raw)) {
-    return { type: 'validation_error', message: 'coverage_binding must be an object' };
-  }
-  const block = raw as Record<string, unknown>;
-  const allowedBlockKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.coverage_binding);
-  for (const key of Object.keys(block)) {
-    if (!allowedBlockKeys.has(key)) {
-      return { type: 'validation_error', message: `Unknown key in coverage_binding: "${key}"` };
-    }
-  }
-  if (block.judge === undefined) return null;
-  if (!isPlainObject(block.judge)) {
-    return { type: 'validation_error', message: 'coverage_binding.judge must be an object' };
-  }
-  const judge = block.judge as Record<string, unknown>;
-  const allowedJudgeKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS['coverage_binding.judge']);
-  for (const key of Object.keys(judge)) {
-    if (!allowedJudgeKeys.has(key)) {
-      return {
-        type: 'validation_error',
-        message: `Unknown key in coverage_binding.judge: "${key}"`,
-      };
-    }
-  }
-  if (judge.enabled !== undefined && typeof judge.enabled !== 'boolean') {
-    return {
-      type: 'validation_error',
-      message: 'coverage_binding.judge.enabled must be a boolean',
-    };
-  }
-  if (
-    judge.batch_size !== undefined
-    && (typeof judge.batch_size !== 'number' || !Number.isInteger(judge.batch_size) || judge.batch_size <= 0)
-  ) {
-    return {
-      type: 'validation_error',
-      message: 'coverage_binding.judge.batch_size must be a positive integer',
-    };
-  }
-  return null;
-}
-
 function validateFeatureApplicabilityBlock(raw: unknown): ConfigError | null {
   if (raw === undefined) return null;
   if (!isPlainObject(raw)) {
@@ -2979,17 +2941,6 @@ function validateFeatureApplicabilityBlock(raw: unknown): ConfigError | null {
     };
   }
   return null;
-}
-
-function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean; batch_size: number } } {
-  const block = isPlainObject(raw) ? raw as Record<string, unknown> : {};
-  const judge = isPlainObject(block.judge) ? block.judge as Record<string, unknown> : {};
-  return {
-    judge: {
-      enabled: typeof judge.enabled === 'boolean' ? judge.enabled : false,
-      batch_size: typeof judge.batch_size === 'number' ? judge.batch_size : 8,
-    },
-  };
 }
 
 function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {

@@ -102,12 +102,7 @@ import {
 import { evaluateAdrAssumptionLedgers } from './adr-assumption-ledger-scope.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  coverageBindingEnvelopePath,
-  parseCoverageBindingEnvelope,
-  projectChildOwnership,
-} from './coverage-binding-envelope.js';
+import { loadSliceTopology } from './slice-topology.js';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
@@ -361,7 +356,6 @@ export const STEP_ARTIFACT_CONTRACTS = {
     },
   ],
   worktree: [],
-  coverage_binding: [{ pattern: '.pipeline/coverage-binding.json', scope: 'run' }],
   acceptance_specs: [
     'spec/acceptance/**/*',
     'spec/requests/**/*',
@@ -2048,24 +2042,16 @@ async function groundDispositionOnlyEvidence(
   const allAuthoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
   let authoritativeCriteria = allAuthoritativeCriteria;
   if (ctx.activeChild !== undefined) {
-    let envelope;
-    try {
-      envelope = parseCoverageBindingEnvelope(
-        JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
-      );
-    } catch {
-      envelope = null;
-    }
-    if (
-      envelope === null ||
-      !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
-      envelope.storyOwnership === undefined
-    ) {
+    const topology = ctx.featureDesc === undefined
+      ? undefined
+      : await loadSliceTopology(dir, ctx.featureDesc);
+    if (topology?.kind !== 'sliced') {
       return dispositionGroundingRefusal(
-        `disposition-only evidence cannot be validated for child ${ctx.activeChild}: coverage-binding ownership is missing or invalid`,
+        `disposition-only evidence cannot be validated for child ${ctx.activeChild}: sealed-plan story ownership is unavailable`,
       );
     }
-    const ownedStories = new Set(projectChildOwnership(envelope, ctx.activeChild).storyIds);
+    const ownedStories = new Set(Object.entries(topology.storyOwnership)
+      .flatMap(([storyId, position]) => position === ctx.activeChild ? [storyId] : []));
     authoritativeCriteria = allAuthoritativeCriteria.filter((criterion) =>
       [...ownedStories].some((storyId) => criterion.startsWith(`Story ${storyId} `)),
     );
@@ -2990,22 +2976,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       ? { done: true }
       : { done: false, reason: `plan review has unresolved blocking finding(s): ${unresolved.map(({ id }) => id).join(', ')}` };
   },
-  coverage_binding: async (dir): Promise<CompletionResult> => {
-    const path = coverageBindingEnvelopePath(dir);
-    let envelope;
-    try {
-      envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(path, 'utf8')));
-    } catch {
-      envelope = null;
-    }
-    if (envelope === null) {
-      return { done: false, reason: '.pipeline/coverage-binding.json is missing or invalid' };
-    }
-    if (!(COVERAGE_BINDING_COMPLETION_STATUSES as readonly string[]).includes(envelope.status)) {
-      return { done: false, reason: `.pipeline/coverage-binding.json has non-completing status: ${envelope.status}` };
-    }
-    return { done: true };
-  },
   // Build is "done" only when (a) no halt marker is present and (b) every
   // task in .pipeline/task-status.json is completed or skipped. The halt-
   // marker check exists because a pipeline session that exits at the user's
@@ -3306,21 +3276,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // would make sibling criteria leak into this child.  This outcome is only
     // available with an active child, so flat (non-stacked) features retain
     // the ordinary evidence requirement.
-    if (ctx.activeChild !== undefined) {
-      let envelope;
-      try {
-        envelope = parseCoverageBindingEnvelope(
-          JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
-        );
-      } catch {
-        envelope = null;
-      }
-      if (
-        envelope !== null &&
-        COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) &&
-        envelope.storyOwnership !== undefined &&
-        projectChildOwnership(envelope, ctx.activeChild).storyIds.length === 0
-      ) {
+    if (ctx.activeChild !== undefined && ctx.featureDesc !== undefined) {
+      const topology = await loadSliceTopology(dir, ctx.featureDesc);
+      if (topology.kind === 'sliced' && !Object.values(topology.storyOwnership).includes(ctx.activeChild)) {
         return { done: true, acceptanceOutcome: 'no-owned-criteria' };
       }
     }

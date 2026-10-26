@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from '../../../src/engine/halt-classification.js';
 import { dispatchKickbackBudgetCommand } from '../../../src/engine/kickback-budget-cli.js';
@@ -86,7 +86,7 @@ async function stack() {
 }
 
 async function writeEnvelope(repo: string, runId: string) {
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId,

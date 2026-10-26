@@ -556,8 +556,8 @@ must be taken from one cited task's `Done when` block, and the disposition is
 #### 7a. Independent Coverage Judgement
 
 **GATE: before the plan lands, a fresh subagent judges every criterion row. The plan's author never
-judges its own checks.** This is the only coverage judgement: the engine's `coverage_binding` step
-is a no-op and does not re-judge before BUILD.
+judges its own checks.** This is the only coverage judgement: no engine step re-judges coverage
+before BUILD.
 
 1. Build one claim per criterion row: the exact criterion text and every `Done when` bullet of each
    cited task, verbatim. Include nothing else — no plan prose, stories, files, or rationale — so the

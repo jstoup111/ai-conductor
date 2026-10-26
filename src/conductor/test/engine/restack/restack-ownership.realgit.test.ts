@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { replayChildRange, type CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
@@ -17,7 +17,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -71,7 +71,7 @@ async function fixture(initialFiles: Readonly<Record<string, string>> = {}) {
   await git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await commit('L1', 'leaf.txt', 'leaf\n');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

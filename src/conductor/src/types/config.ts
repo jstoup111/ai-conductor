@@ -407,17 +407,6 @@ export interface RetryRoutingConfig {
   enabled?: boolean;
 }
 
-/**
- * Retired coverage-binding judge settings. Still accepted and validated so
- * existing configs load, but ignored: the coverage_binding step is a no-op.
- */
-export interface CoverageBindingConfig {
-  judge?: {
-    enabled?: boolean;
-    batch_size?: number;
-  };
-}
-
 /** Per-project opt-in for declaring selected feature steps inapplicable. */
 export interface FeatureApplicabilityConfig {
   enabled?: boolean;
@@ -642,8 +631,6 @@ export interface HarnessConfig {
    * runtime resolution (not this type). See `RetryRoutingConfig`.
    */
   retry_routing?: RetryRoutingConfig;
-  /** Pre-BUILD criterion-to-Done-when binding judge. Absent → disabled. */
-  coverage_binding?: CoverageBindingConfig;
   /** Per-project opt-in for declaring selected feature steps inapplicable. */
   feature_applicability?: FeatureApplicabilityConfig;
   /**

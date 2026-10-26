@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { clearMarker, REKICK_SENTINEL, resumeRebaseFirst } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
@@ -25,7 +25,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -79,7 +79,7 @@ async function stackFixture(advance: { path: string; content: string }) {
   const advancedDefault = await commit('base advance', advance.path, advance.content);
   await git('worktree', 'add', '-q', repo, 'feat/daemon-demo');
   cwd = repo;
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'rekick-restack', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

@@ -1,6 +1,6 @@
 import { access, readFile } from 'node:fs/promises';
 import { writeSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { execa } from 'execa';
 import {
   PROTECTED_ARTIFACT_SEAL_PATH,
@@ -17,14 +17,8 @@ import { clearMarker } from './daemon-rekick.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import {
-  resolveCoverageBindingDecideSet,
-  type CoverageBindingDecideSet,
-} from './coverage-binding-decide-set.js';
-import {
-  voidCoverageBindingForDecideChange,
-  type VoidCoverageBindingForDecideChangeOptions,
-} from './coverage-binding-void.js';
+import { resolveFeaturePlanPath } from './artifacts.js';
+import { slicePositionsFromPlan, verifySlicePositions } from './slice-topology.js';
 
 export interface ResealDispatch {
   kind: 'reseal';
@@ -185,18 +179,51 @@ export interface ResealCommandDependencies {
   resolveBaseBranch?: (projectRoot: string) => Promise<string>;
   reseal?: (options: ResealProtectedArtifactSealOptions) => Promise<ProtectedArtifactSeal>;
   clearHalt?: (worktreePath: string) => Promise<void>;
-  resolveCoverageBindingDecideSet?: (
-    projectRoot: string,
-    featureDesc: string | undefined,
-  ) => Promise<CoverageBindingDecideSet | undefined>;
-  voidCoverageBindingForDecideChange?: (
-    options: VoidCoverageBindingForDecideChangeOptions,
-  ) => Promise<void>;
   events?: ConductorEventEmitter;
 }
 
 function refusalPath(condition: string): string | undefined {
   return condition.match(/(\.docs\/(?:plans|stories)\/[^\s\n]+)/)?.[1];
+}
+
+function repositoryRelativePath(worktree: string, path: string): string {
+  return relative(worktree, path).replaceAll('\\', '/');
+}
+
+/**
+ * Child branches, closure refs, and their recorded positions are durable
+ * stack state.  A reseal may change task membership within those positions,
+ * but it must not change the topology under an already-created stack.
+ */
+async function positionChangeRefusal(
+  worktree: string,
+  slug: string,
+  paths: readonly string[],
+): Promise<string | undefined> {
+  const planPath = await resolveFeaturePlanPath(worktree, slug);
+  if (!planPath || !paths.includes(repositoryRelativePath(worktree, planPath))) return undefined;
+
+  const planText = await readFile(planPath, 'utf8').catch(() => undefined);
+  if (planText === undefined) return undefined;
+  const positions = slicePositionsFromPlan(planText);
+  const topology = await verifySlicePositions(
+    worktree,
+    slug,
+    // An invalid manifest cannot establish proposed positions. Probe with an
+    // empty proposal only to recover the sealed positions for a useful refusal;
+    // never treat that placeholder as a valid unsliced plan.
+    positions ?? [],
+    makeGitRunner(worktree),
+    repositoryRelativePath(worktree, planPath),
+  );
+  if (!topology) return undefined;
+  if (positions === undefined) {
+    return `cannot establish proposed sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}]; cause plan-invalid`;
+  }
+  if (topology.cause !== 'positions-changed') {
+    return `cannot verify sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}], proposed [${topology.planPositions?.join(',') ?? ''}]; cause ${topology.cause}`;
+  }
+  return `cannot change sealed stack positions: recorded [${topology.recordedPositions?.join(',') ?? ''}] and proposed [${topology.planPositions?.join(',') ?? ''}]`;
 }
 
 /** Reseal one feature worktree without entering the conductor pipeline. */
@@ -270,6 +297,12 @@ export async function dispatchResealCommand(
     (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
   const resolveBaseBranch = deps.resolveBaseBranch ?? resolveResealBaseBranch;
 
+  const positionRefusal = await positionChangeRefusal(worktree, command.slug, command.paths);
+  if (positionRefusal) {
+    await refuse(positionRefusal);
+    return 1;
+  }
+
   let resealed: ProtectedArtifactSeal;
   try {
     resealed = await reseal({
@@ -300,22 +333,6 @@ export async function dispatchResealCommand(
   const nextFingerprints = new Map(
     resealed.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
   );
-  const decideSet = await (deps.resolveCoverageBindingDecideSet ?? resolveCoverageBindingDecideSet)(
-    worktree,
-    command.slug,
-  );
-  if (decideSet) {
-    await (deps.voidCoverageBindingForDecideChange ?? voidCoverageBindingForDecideChange)({
-      projectRoot: worktree,
-      decideSet,
-      rebaselines: command.paths.map((path) => ({
-        path,
-        priorFingerprint: priorFingerprints.get(path) ?? '',
-        newFingerprint: nextFingerprints.get(path) ?? '',
-      })),
-      events,
-    });
-  }
   await events.emitOrThrow({
     type: 'protected_artifact_reseal',
     paths: command.paths.map((path) => ({

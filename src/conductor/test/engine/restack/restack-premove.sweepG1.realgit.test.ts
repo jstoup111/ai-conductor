@@ -9,14 +9,14 @@ import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 
 import { createProtectedArtifactSeal } from '../../../src/engine/protected-artifact-seal.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner, REBASE_UNTRACKED_QUARANTINE_DIR } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -64,7 +64,7 @@ async function fixture(
   let advancedDefault = await commit('base advance', advance.path, advance.content);
   for (const extra of extraAdvances) advancedDefault = await commit('base advance', extra.path, extra.content);
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -220,19 +220,19 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
   // Covers: S5.7, task:9
   it('halts on an already-violated protected-artifact seal before any ref moves', async () => {
     const subject = await fixture();
-    await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'approved\n');
-    await subject.git(['add', '.docs/plans/demo.md']);
-    await subject.git(['commit', '-qm', 'add approved plan']);
+    await mkdir(join(subject.repo, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'approved\n');
+    await subject.git(['add', '.docs/decisions/approved.md']);
+    await subject.git(['commit', '-qm', 'add approved decision']);
     await createProtectedArtifactSeal({ projectRoot: subject.repo, baselineCommit: await tipOf(subject, 'HEAD') });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'mutated\n');
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'mutated\n');
     const before = await refSnapshot(subject);
 
     await expect(restack(subject)).resolves.toEqual({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('protected-artifact seal error');
     expect(await refSnapshot(subject)).toBe(before);
-    await expect(readFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'utf8')).resolves.toBe('mutated\n');
+    await expect(readFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'utf8')).resolves.toBe('mutated\n');
   });
 
   // Covers: S5.8, task:9

@@ -39,8 +39,8 @@ trap cleanup EXIT
 
 SKILLS_DIR="${WORKDIR}/skills"
 ARCHITECTURE_FILE="${WORKDIR}/ARCHITECTURE.md"
-mkdir -p "${SKILLS_DIR}/exact-row" "${SKILLS_DIR}/engine-row" "${SKILLS_DIR}/tdd" "${SKILLS_DIR}/engineer"
-for skill in exact-row engine-row tdd engineer; do
+mkdir -p "${SKILLS_DIR}/exact-row" "${SKILLS_DIR}/engine-row" "${SKILLS_DIR}/tdd" "${SKILLS_DIR}/engineer" "${SKILLS_DIR}/coverage-binding"
+for skill in exact-row engine-row tdd engineer coverage-binding; do
   printf '%s\n' '---' "name: ${skill}" '---' > "${SKILLS_DIR}/${skill}/SKILL.md"
 done
 

@@ -6,7 +6,6 @@ import {
   access as accessFile,
   unlink as unlinkFile,
   stat,
-  rename,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
 import { withGateTier } from './gate-event-tier.js';
@@ -206,11 +205,12 @@ import {
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
+import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
-import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
+import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
@@ -486,9 +486,7 @@ import {
 } from './rebase.js';
 import {
   applyRebaseTransition,
-  clampRebaseContinuation,
   completeInterruptedRebaseOperation,
-  isRebaseCoverageRefresh,
 } from './rebase-transition.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -717,6 +715,7 @@ export class Conductor {
   /** The feature-level store is restored after a routed return reaches leaf. */
   private readonly rootStateStore: ConductStateStore<ConductState>;
   private readonly resolveActiveChild: typeof resolveActiveChild;
+  private readonly stackPreflight: typeof runStackPreflight;
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
@@ -876,18 +875,23 @@ export class Conductor {
     return assertNever(hostEntry);
   }
 
-  private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
+  private async renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): Promise<string> {
     switch (cursor.kind) {
       case 'divergent':
         return `child ${cursor.child} failed active-child check ${cursor.check}`;
       case 'repair-pending':
         return `child stack repair is pending for closed child ${cursor.repairChildren.join(', ')}`;
-      case 'envelope-missing':
-        return 'coverage-binding envelope is missing while child state exists';
+      case 'topology-unavailable': {
+        const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
+        return formatStackCursorRefusal(
+          this.projectRoot, slug, cursor.cause,
+          `slice topology is unavailable while child state exists (${cursor.cause})`, cursor,
+        );
+      }
       case 'detached-head':
-        return 'worktree is in detached HEAD while resolving the active child';
+        return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'detached-head', 'worktree is in detached HEAD while resolving the active child');
       case 'git-error':
-        return 'git failed while resolving the active child cursor';
+        return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'git-error', 'git failed while resolving the active child cursor');
     }
   }
 
@@ -2559,6 +2563,7 @@ export class Conductor {
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.resolveActiveChild = opts.childRegionLifecycle?.resolveActiveChild ?? resolveActiveChild;
+    this.stackPreflight = opts.stackPreflight ?? runStackPreflight;
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
     this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
@@ -2790,7 +2795,7 @@ export class Conductor {
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
     if (isUnroutedRepairPending(cursor)) {
-      await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+      await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
       return false;
     }
     const execution = resolveExecutionChild(cursor, slug);
@@ -2799,11 +2804,8 @@ export class Conductor {
       return true;
     }
     if (cursor.kind === 'no-child') return true;
-    // A DECIDE change voided coverage binding. Resume re-runs coverage_binding
-    // first; BUILD-region entry resolves the child once the envelope is rebound.
-    if (cursor.kind === 'envelope-missing' && cursor.voided && getStepStatus(state, 'coverage_binding') !== 'done') return true;
 
-    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
     return false;
   }
 
@@ -4913,15 +4915,11 @@ export class Conductor {
         const ordinaryTarget = earliestRemediationTarget(routedFixes, steps);
         if (ordinaryTarget.unresolved.length > 0) return undefined;
         if (ordinaryTarget.target === 'build' && planPath) {
-          const envelope = await readCoverageBindingEnvelope(this.projectRoot, {
-            readFile: (path) => readFile(path, 'utf8'), mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-            writeFile: (path, contents) => writeFile(path, contents, 'utf8'), rename,
-          });
-          if (!envelope?.sliceMembership) {
-            return { kind: 'halt', haltClass: 'needs-human', detail: 'routing cannot read the sealed task-slice ownership envelope' };
+          const topology = await loadSliceTopology(this.projectRoot, this.featureSlug, { planPath });
+          if (topology.kind !== 'sliced') {
+            return { kind: 'halt', haltClass: 'needs-human', detail: 'routing cannot resolve the sealed plan slice topology' };
           }
-          const declaredPositions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-            .filter((position) => Number.isSafeInteger(position) && position > 0).sort((a, b) => a - b) as ChildId[];
+          const declaredPositions = topology.positions as ChildId[];
           if (declaredPositions.length > 1) {
             if (await publishedStackRefusal(this.projectRoot, this.featureSlug)) {
               await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
@@ -4993,7 +4991,7 @@ export class Conductor {
                   existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
                   provenance,
                 };
-              }), envelope, planText,
+              }), sliceMembership: topology.sliceMembership, planText,
               appendedChildren: await readAppendedRemediationTaskChildren(this.projectRoot),
               declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
               judge: (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
@@ -6776,7 +6774,7 @@ export class Conductor {
             return;
           }
         }
-        const preflight = await runStackPreflight({
+        const preflight = await this.stackPreflight({
           worktree: this.projectRoot,
           slug: resumeSlug,
           events: this.events,
@@ -6825,14 +6823,14 @@ export class Conductor {
         if (slug) {
           const cursor = await this.resolveActiveChild(this.projectRoot, slug);
           if (isUnroutedRepairPending(cursor)) {
-            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
             return;
           }
           const execution = resolveExecutionChild(cursor, slug);
           if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
             await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
           } else if (cursor.kind !== 'no-child') {
-            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+            await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
             return;
           }
         }
@@ -7663,7 +7661,7 @@ export class Conductor {
             if (childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
             if (isUnroutedRepairPending(cursor)) {
-              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor));
               return;
             }
             const execution = resolveExecutionChild(cursor, slug);
@@ -7689,7 +7687,7 @@ export class Conductor {
               activeChildRequiresClosure = execution.source === 'routed-host'
                 || (execution.source === 'cursor' && !target.isLeaf);
             } else if (cursor.kind !== 'no-child') {
-              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+              await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
             }
             }
@@ -15426,7 +15424,7 @@ export class Conductor {
               const next = await this.resolveActiveChild(this.projectRoot, slug);
               const nextExecution = resolveExecutionChild(next, slug);
               if (nextExecution.source !== 'cursor' && nextExecution.source !== 'routed-host' && nextExecution.source !== 'revalidating') {
-                await this.haltChildRegionRefusal(this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+                await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
                 return;
               }
               activeChild = nextExecution.target;
@@ -15448,7 +15446,7 @@ export class Conductor {
             if (next.kind !== 'active') {
               const reason = next.kind === 'no-child'
                 ? `cannot resolve next child after closing ${activeChild.child}: cursor returned no-child`
-                : this.renderChildCursorRefusal(next);
+                : await this.renderChildCursorRefusal(next);
               await this.haltChildRegionRefusal(reason);
               return;
             }
@@ -15769,19 +15767,10 @@ export class Conductor {
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
-    const envelope = await readCoverageBindingEnvelope(this.projectRoot, {
-      readFile: (path) => readFile(path, 'utf8'),
-      mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-      writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-      rename,
-    });
-    const declaredPositions = envelope?.sliceMembership === undefined
-      ? []
-      : [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-        .filter((position) => Number.isSafeInteger(position) && position > 0)
-        .sort((left, right) => left - right) as ChildId[];
+    const topology = await loadSliceTopology(this.projectRoot, slug);
+    const declaredPositions = topology.kind === 'sliced' ? topology.positions as ChildId[] : [];
     if (declaredPositions.length === 0) {
-      return { kind: 'halted', reason: 'taskless routing cannot read the sealed task-slice ownership envelope' };
+      return { kind: 'halted', reason: 'taskless routing cannot resolve the sealed plan slice topology' };
     }
     const judged = await runResidueRoutingCall({
       items: [{ itemId: input.findingId(execution.target.child), rationale: input.reason }],
@@ -16054,13 +16043,6 @@ export class Conductor {
 
     const topo = deriveGateTopology(steps);
 
-    // Read before this pass recomputes the verdict: a rebase-origin kickback on
-    // coverage_binding is the durable mark, written by both rebase tails (the
-    // foreground step and the mandatory re-kick), that the dispatch which just
-    // finished was an in-place post-rebase refresh and not lifecycle authoring.
-    const coverageRefreshedAfterRebase = step.name === 'coverage_binding' &&
-      await isRebaseCoverageRefresh(this.projectRoot);
-
     // The `rebase` step is engine-native: its gate verdict (and any FR-5
     // downstream kickbacks) were already written authoritatively by
     // runRebaseStep from git state, not from a file artifact. Recomputing it
@@ -16092,7 +16074,6 @@ export class Conductor {
         const verdicts = await readAllVerdicts(this.projectRoot);
         const reopened: Record<string, StepStatus> = {};
         for (const target of [
-          'coverage_binding',
           'build',
           'test_suite',
           'build_review',
@@ -16263,13 +16244,7 @@ export class Conductor {
         { navigate: false },
       );
       if (frontKickback === 'halt') return 'halt';
-      // adr-2026-09-11-selective-post-rebase-verification D4: coverage refreshed
-      // after a rebase continues from the verification tail. Linear i++ here
-      // would walk acceptance authoring and a completed BUILD again.
-      const refreshed = coverageRefreshedAfterRebase
-        ? (await readVerdict(this.projectRoot, 'coverage_binding'))?.satisfied === true
-        : false;
-      if (!refreshed) return null; // front half stays linear (before the first loop gate)
+      return null; // front half stays linear (before the first loop gate)
     }
 
     // Mark tier/mode-skipped steps in the looped region as 'skipped' so the
@@ -16406,12 +16381,7 @@ export class Conductor {
     // Apply the same backward-only, bounded reconciliation as resume entry so
     // the tail never selects a step whose own gate immediately rejects an
     // earlier prerequisite.
-    const selectedIndex = clampRebaseContinuation(
-      steps,
-      state,
-      clampToRunnablePrerequisite(steps, state, indexOf(decision.step)),
-      coverageRefreshedAfterRebase,
-    );
+    const selectedIndex = clampToRunnablePrerequisite(steps, state, indexOf(decision.step));
     const selectedStep = steps[selectedIndex];
     if (!selectedStep) return indexOf(decision.step);
 
@@ -16810,7 +16780,7 @@ export class Conductor {
         await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
         return { success: true };
       }
-      const preflight = await runStackPreflight({
+      const preflight = await this.stackPreflight({
         worktree: this.projectRoot,
         slug: stackSlug,
         events: this.events,

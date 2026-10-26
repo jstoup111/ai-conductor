@@ -23,6 +23,7 @@ import { requestRoutedExit } from '../routing/routed-exit.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
+import { formatStackCursorRefusal, type StackCursorFailureCause } from '../stack-cursor-recovery.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
@@ -65,6 +66,25 @@ export interface RunStackPreflightOptions {
   readonly routedRoundOpen?: typeof routedRoundOpen;
 }
 
+async function haltUnresolvableCursor(
+  options: RunStackPreflightOptions,
+  cause: StackCursorFailureCause,
+  detail: string,
+  topology: {
+    readonly planPath?: string;
+    readonly positionsRef?: string;
+    readonly recordedPositions?: readonly number[];
+    readonly planPositions?: readonly number[];
+  } = {},
+): Promise<Extract<StackPreflightResult, { kind: 'halted' }>> {
+  const body = `cannot resolve stack cursor: ${cause}: ${await formatStackCursorRefusal(
+    options.worktree, options.slug, cause, detail, topology,
+  )}\n`;
+  await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
+  await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
+  return { kind: 'halted' };
+}
+
 async function deferredBaseRefresh(events: ConductorEventEmitter | undefined): Promise<void> {
   await events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
 }
@@ -91,7 +111,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   const published = await publishedStackRefusal(options.worktree, options.slug, { git: options.git });
   const recovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
   if (recovery.kind === 'live-owner' || recovery.kind === 'halted') return { kind: 'halted' };
-  if (recovery.kind === 'unavailable') return recovery;
+  if (recovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', recovery.detail);
 
   // Recovery is safe while a feature is parked; changing closure refs is not.
   // A matching, staged authorization is the sole exception.  In the regular
@@ -115,10 +135,10 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // entry point; until then recovery remains the sole owner of cleanup.
   const secondRecovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
   if (secondRecovery.kind === 'live-owner' || secondRecovery.kind === 'halted') return { kind: 'halted' };
-  if (secondRecovery.kind === 'unavailable') return secondRecovery;
+  if (secondRecovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', secondRecovery.detail);
 
   const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
-  if (durable === 'git-error') return { kind: 'unavailable', detail: 'cannot inspect durable child state' };
+  if (durable === 'git-error') return haltUnresolvableCursor(options, 'git-error', 'cannot inspect durable child state');
   if (!durable) return { kind: recovery.kind === 'none' && secondRecovery.kind === 'none' ? 'no-stack' : 'recovered' };
 
   const config = await loadConfig(options.worktree);
@@ -178,17 +198,19 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
 
   const cursor = receiptCursor ?? await resolveActiveChild(options.worktree, options.slug, { git: options.git });
   if (cursor.kind === 'no-child') return { kind: 'no-stack' };
-  // A voided envelope has no repair to perform; coverage_binding re-runs and
-  // rebinds the stack before any child region is entered.
-  if (cursor.kind === 'envelope-missing' && cursor.voided) return { kind: 'clear' };
   if (cursor.kind === 'divergent') {
     await haltRestack(options.worktree, cursor.check, options.events, { child: cursor.child });
     return { kind: 'halted' };
   }
   if (cursor.kind !== 'repair-pending') {
-    return cursor.kind === 'git-error' || cursor.kind === 'detached-head' || cursor.kind === 'envelope-missing'
-      ? { kind: 'unavailable', detail: `cannot resolve stack cursor: ${cursor.kind}` }
-      : { kind: 'clear' };
+    if (cursor.kind === 'topology-unavailable') {
+      const { kind: _kind, cause, ...topology } = cursor;
+      return haltUnresolvableCursor(options, cause, `slice topology is unavailable (${cause})`, topology);
+    }
+    if (cursor.kind === 'git-error' || cursor.kind === 'detached-head') {
+      return haltUnresolvableCursor(options, cursor.kind, `cannot resolve stack cursor: ${cursor.kind}`);
+    }
+    return { kind: 'clear' };
   }
 
   if (cursor.foreignRoundChildren?.length) {

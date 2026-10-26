@@ -594,7 +594,7 @@ describe('preferred Pi escalation and fallback isolation', () => {
     };
 
     const result = await executeProviderCandidates({
-      step: 'coverage_binding', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
+      step: 'plan_review', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
       runtimes: runtimeSet(config, { claude, pi }), sessions: new ProviderSessionScope(vi.fn()), config,
       modelFallbackLadder: ['opus', 'sonnet'], options: { prompt: 'Judge.', cwd: '/workspace' },
     });

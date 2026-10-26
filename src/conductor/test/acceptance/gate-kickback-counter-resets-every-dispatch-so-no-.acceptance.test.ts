@@ -159,7 +159,6 @@ function frontDone(): ConductState {
     plan: 'done',
     architecture_diagram: 'skipped',
     architecture_review: 'skipped',
-    coverage_binding: 'done',
     acceptance_specs: 'skipped',
   };
 }

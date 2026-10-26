@@ -277,10 +277,9 @@ baseline stale by design. Review the amendment, then reseal the reviewed paths w
 [`ai-conductor reseal`](cli.md#ai-conductor-reseal) before the feature is re-queued — it runs only from an
 interactive operator terminal, refuses the whole reseal if any unlisted protected path has also
 drifted, and records the old and new fingerprints, trigger, and rationale in both the seal's
-`rebaselines` entry and the audit trail. If a resealed, changed path belongs to the current
-coverage-binding DECIDE set and its completed coverage evidence is still current, the engine marks
-that evidence `invalidated`, makes the gate unsatisfied with a `decide-change` origin, and re-runs
-the no-op coverage-binding step before BUILD resumes. Editing the JSON directly is never a valid reseal.
+`rebaselines` entry and the audit trail. Once a stacked feature has child state, a plan reseal that
+changes its `## Slices` positions is refused with the recorded and proposed positions; task
+membership may change within the recorded positions. Editing the JSON directly is never a valid reseal.
 
 Verification also tolerates these cases without halting:
 
@@ -367,7 +366,6 @@ Every pattern declares one lifecycle scope:
 | `architecture_diagram` | `.docs/architecture/*.md` | repository |
 | `architecture_review` | `.docs/decisions/architecture-review-*.md` (feature), `.docs/decisions/adr-*.md` (repository) | mixed |
 | `worktree` | *(none)* | — |
-| `coverage_binding` | `.pipeline/coverage-binding.json` | run |
 | `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares | repository |
 | `build` | `.pipeline/task-status.json` | run |
 | `build_review` | `.pipeline/build-review.json` | run |
@@ -537,7 +535,6 @@ Agent-authored, engine-validated. Alphabetized.
 | `build-review-rejections/<lap>/<rubric>.<attempt>.json` | `{ version: 1, rubric, rubricKind: 'builtin'\|'custom', lapId, attempt, reason: 'invalid-structured-result', detail, rejection?, provider?, model?, structuredResult, output?, outputBytes?, outputTruncated?, promptPath?, promptSha256?, regionComparison? }`. One write-once record per reviewer response rejected by the rubric's structured-result contract; `attempt` increments per rubric within a lap. `output` keeps the first 1 MiB of raw reviewer output (`outputTruncated` marks a cut). Custom-rubric records add `promptPath`/`promptSha256` for the exact delivered prompt, retained at `build-review/<lap>/<rubric>.prompt.txt`, and `regionComparison` for each cited source region checked against the frozen commit. The `build_review_rubric_infrastructure_failure` event names the record in `retainedResponsePath`. Best-effort diagnostic evidence: a failed write never changes the review outcome, and these writes are excluded from the lap input digest. | `build-review-rejection-retention.ts`, `step-runners.ts` |
 | `build-review-work-order.json` | `{ version: 'v1', domain: 'build_review', feature, effectId, cases[], attemptedCaseIds? }`. The effect-bound, feature-local ordered BUILD work from a post-join adjudication; BUILD records `attemptedCaseIds` before dispatch so restart recovery and repeat detection remain durable. | build-review adjudication coordinator |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
-| `coverage-binding.json` | `{ version: 1, slug, runId, status, entries[], sliceMembership?, storyOwnership? }`. The no-op `coverage_binding` step writes `status: "disabled"` with an empty `entries` array; the remaining entry and status shapes below are accepted only so envelopes written before the judge was retired still parse. `status` is `disabled`, `done`, `failed`, `partial`, `refused`, or `invalidated`; entries bind engine-stamped digests to a criterion verdict and cited task checks, to a DECIDE amendment's plan-obligation verdict, or (`kind: "conflict"`) to a plan-conflict verdict `{ claimKind, claimId, verdict, taskIds?, conflict? }`, where `claimKind` is `criterion` or `adr-decision`, `verdict` is `consistent`, `conflicts`, `not-applicable`, or `unjudged`, and `taskIds` and `conflict` appear only with `conflicts`. When a plan declares a valid `## Slices` manifest, `sliceMembership` records `{ taskSlices, titles }`: each non-remediation task id maps to its positive slice position, and `titles` preserves the ordered slice titles. When [`stacked_prs`](configuration.md#stacked_prs) admits the sliced plan, `storyOwnership` maps each story id to its slice position. `partial` checkpoints accepted batches, and `invalidated` retains the prior entries as a re-judgement baseline; neither is completion evidence. | `coverage_binding` step |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |

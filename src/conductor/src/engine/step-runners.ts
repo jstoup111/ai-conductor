@@ -64,35 +64,18 @@ import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFa
 import type { CiRepairDiagnosticReason } from '../types/events.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
-  parseComplexityTier,
-  parseStackedDeliverySignoff,
   resolveFeaturePlanPath,
   splitStoryBlocks,
   selectFeaturePlan,
 } from './artifacts.js';
 import { pipelinePathFor } from './child-context.js';
 import { runPlanReview } from './plan-review-runner.js';
-import {
-  customStepsInPerChildRegion,
-  deriveStoryOwnership,
-  evaluateStackEligibility,
-  validatePlanSlices,
-} from './plan-slices.js';
-import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
-import { resolveCoverageBindingDecideSet } from './coverage-binding-decide-set.js';
-import {
-  projectChildOwnership,
-  readCoverageBindingEnvelope,
-  writeCoverageBindingCodeStamp,
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-  type CoverageBindingSliceMembership,
-} from './coverage-binding-envelope.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { loadSliceTopology } from './slice-topology.js';
 import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { assertNever } from './routing/route-types.js';
 import { PREREQUISITE_CLAIM_SCHEMA } from './routing/prerequisite-claim.js';
-import { parseFeatureRef } from './feature-branch-identity.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
 import {
@@ -115,7 +98,7 @@ import {
   readBuildReviewRubricSkill,
 } from './build-review-registry.js';
 import { currentCommitSha } from './project-prelude.js';
-import { loadConfig, resolveGateCodeValidityConfig } from './config.js';
+import { resolveGateCodeValidityConfig } from './config.js';
 import {
   assembleBuildReviewInputs,
   TestSuiteProofError,
@@ -123,9 +106,6 @@ import {
   type BuildReviewInputOptions,
 } from './build-review-inputs.js';
 
-type PositionImmutabilityCheck =
-  | { readonly kind: 'clear' }
-  | { readonly kind: 'refused'; readonly reason: string };
 
 /** The routed-host overlay, when present, owns build_review's child-local base. */
 export function resolveBuildReviewExecutionChild(
@@ -148,81 +128,6 @@ export function resolveBuildReviewExecutionChild(
   return assertNever(execution);
 }
 
-function recordedPositions(value: string): number[] | undefined {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed) || !parsed.every((position) => Number.isSafeInteger(position) && position > 0)) return undefined;
-    const positions = [...new Set(parsed)].sort((left, right) => left - right);
-    return positions.length === parsed.length ? positions : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Once child state exists, the ref written at child-one creation is the
- * durable position authority.  The envelope may be recreated with a
- * worktree, so comparing it to its predecessor would let a reseal silently
- * change the stack topology.
- */
-async function verifyStackPositionImmutability(
-  projectDir: string,
-  slug: string,
-  positions: readonly number[],
-  git: GitRunner,
-): Promise<PositionImmutabilityCheck> {
-  if (slug === '') return { kind: 'clear' };
-
-  let childDirectoryExists = false;
-  try {
-    childDirectoryExists = (await readdir(join(projectDir, '.pipeline', 'children'))).length > 0;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return { kind: 'refused', reason: 'coverage_binding cannot inspect existing child state' };
-    }
-  }
-
-  const gitDirectory = await git(['rev-parse', '--git-dir']).catch(() => undefined);
-  // Non-git unit fixtures have no refs to inspect. A real worktree that loses
-  // git access while child state exists is refused above/below, never guessed.
-  if (!gitDirectory || gitDirectory.exitCode !== 0) {
-    return childDirectoryExists
-      ? { kind: 'refused', reason: 'coverage_binding cannot inspect existing child refs' }
-      : { kind: 'clear' };
-  }
-
-  const childRefs = await git(['for-each-ref', '--format=%(refname)', 'refs/heads/feat']).catch(() => undefined);
-  const closureRefs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]).catch(() => undefined);
-  if (!childRefs || childRefs.exitCode !== 0 || !closureRefs || closureRefs.exitCode !== 0) {
-    return { kind: 'refused', reason: 'coverage_binding cannot inspect existing child refs' };
-  }
-  const hasChildRef = childRefs.stdout.split('\n').some((ref) => {
-    const identity = parseFeatureRef(ref.trim());
-    return identity.kind === 'child' && identity.slug === slug;
-  });
-  const hasClosureRef = closureRefs.stdout.trim() !== '';
-  if (!hasChildRef && !hasClosureRef && !childDirectoryExists) return { kind: 'clear' };
-
-  const positionsRef = `refs/conductor/${slug}/positions`;
-  const recorded = await git(['cat-file', '-p', positionsRef]).catch(() => undefined);
-  const priorPositions = recorded && recorded.exitCode === 0 ? recordedPositions(recorded.stdout) : undefined;
-  if (!priorPositions) {
-    return { kind: 'refused', reason: `coverage_binding cannot read sealed positions from ${positionsRef}` };
-  }
-
-  const currentPositions = [...new Set(positions)].sort((left, right) => left - right);
-  const added = currentPositions.filter((position) => !priorPositions.includes(position));
-  const removed = priorPositions.filter((position) => !currentPositions.includes(position));
-  if (added.length === 0 && removed.length === 0) return { kind: 'clear' };
-  const changes = [
-    ...added.map((position) => `position ${position} was added`),
-    ...removed.map((position) => `position ${position} was removed`),
-  ];
-  return {
-    kind: 'refused',
-    reason: `coverage_binding refused: sealed child positions are immutable after child state exists; ${changes.join('; ')}`,
-  };
-}
 import {
   composeContainmentAdvisoryOutput,
   runContainmentFloor,
@@ -776,8 +681,6 @@ export interface StepRunnerOptions {
   buildReviewPolicyCapture?: typeof captureInstalledReviewPolicyBundle;
   /** Shared event spine for engine-owned build-review occurrences. */
   events?: ConductorEventEmitter;
-  /** Test-only envelope filesystem seam for coverage-binding checkpoints. */
-  coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
   /** Test-only atomic filesystem seam for gap-plan authority persistence. */
   remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
@@ -1047,13 +950,6 @@ const FINISH_PROSE_DIFF_BUDGET =
   'Do not print the whole branch diff: read only targeted hunks (`git diff <base>..HEAD -- <path>`) ' +
   'for the few files whose behavior the prose must describe, and keep each read small. ';
 
-const productionCoverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile,
-  rename,
-};
-
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -1088,7 +984,6 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewPolicyCatalog?: StepRunnerOptions['buildReviewPolicyCatalog'];
   private buildReviewPolicyCapture: typeof captureInstalledReviewPolicyBundle;
   private events?: ConductorEventEmitter;
-  private coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
   private remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
@@ -1173,7 +1068,6 @@ export class DefaultStepRunner implements StepRunner {
       ?? productionBuildReviewPolicyCatalog(this.projectDir);
     this.buildReviewPolicyCapture = options?.buildReviewPolicyCapture ?? captureInstalledReviewPolicyBundle;
     this.events = options?.events;
-    this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
     this.remediationPlanStoreFilesystem = options?.remediationPlanStoreFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
@@ -1279,9 +1173,6 @@ export class DefaultStepRunner implements StepRunner {
     // fresh-uuid/resume:false pattern).
     if (step === 'build_review') {
       return this.runBuildReview(state.complexity_tier, opts?.executionContext, opts?.readOnlyReviewCapabilities);
-    }
-    if (step === 'coverage_binding') {
-      return this.runCoverageBinding();
     }
     if (step === 'plan_review' && this.providerRuntimes && this.sessionStore && this.config) {
       try {
@@ -5305,163 +5196,6 @@ export class DefaultStepRunner implements StepRunner {
     });
   }
 
-  /**
-   * coverage_binding is a no-op gate (#N): it never dispatches a judge, never
-   * runs claim or ADR-obligation checks, never reopens tasks, and never
-   * halts on plan content. It keeps only the stacked-delivery topology
-   * bookkeeping its envelope carries (slice membership and story ownership),
-   * and refuses solely when a started stack's sealed positions would change.
-   * Invalid or stack-ineligible slices build flat.
-   */
-  private async runCoverageBinding(): Promise<StepRunResult> {
-    const filesystem = this.coverageBindingFilesystem ?? {
-      readFile: (path: string) => readFile(path, 'utf8'),
-      mkdir: (path: string) => mkdir(path, { recursive: true }).then(() => undefined),
-      writeFile,
-      rename,
-    };
-    let sliceMembership: CoverageBindingSliceMembership | undefined;
-    // Feature-baseline metadata, populated only after the same ownership
-    // predicate that admits stacked delivery.
-    let storyOwnership: Readonly<Record<string, number>> | undefined;
-    const judgedHead = await this.gitRunner(['rev-parse', 'HEAD'])
-      .then((result) => (result.exitCode === 0 ? result.stdout.trim() : ''))
-      .catch(() => '');
-
-    const planPath = this.planPathOverride
-      ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
-    let planText: string | undefined;
-    if (planPath) {
-      try {
-        planText = await readFile(planPath, 'utf8');
-      } catch (error) {
-        this.log(`coverage_binding: plan unreadable, recording no slice topology: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-
-    if (planText !== undefined) {
-      const sliceValidation = validatePlanSlices(planText);
-      if (sliceValidation.kind === 'invalid') {
-        this.log(`coverage_binding: plan slices are invalid; building flat (${sliceValidation.violations.map((violation) => violation.message).join('; ')})`);
-      }
-      if (sliceValidation.kind === 'sliced') {
-        sliceMembership = {
-          taskSlices: Object.fromEntries(sliceValidation.slices.flatMap((slice) =>
-            slice.taskIds
-              .filter((taskId) => !isEngineAppendedRemediationTaskId(taskId))
-              .map((taskId) => [taskId, slice.position]),
-          )),
-          titles: sliceValidation.slices.map((slice) => slice.title),
-        };
-        const configResult = await loadConfig(this.projectRoot);
-        const freshConfig = configResult.ok
-          ? configResult.config
-          : configResult.error.type === 'missing'
-            ? undefined
-            : this.config;
-        if (freshConfig?.stacked_prs?.enabled === true) {
-          const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
-          const storiesPath = decideSet?.storiesPath;
-          const storiesText = storiesPath === undefined || storiesPath === null
-            ? ''
-            : await readFile(join(this.projectDir, storiesPath), 'utf8').catch(() => '');
-          const complexityPath = join(this.projectDir, '.docs', 'complexity', `${basename(planPath!, '.md')}.md`);
-          const complexityContent = await readFile(complexityPath, 'utf8').catch(() => null);
-          const ownership = deriveStoryOwnership(
-            planText,
-            sliceValidation.slices,
-            new Set(splitStoryBlocks(storiesText).flatMap(({ id }) => id === undefined ? [] : [id])),
-          );
-          const eligibility = evaluateStackEligibility({
-            tier: parseComplexityTier(complexityContent),
-            signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
-            slicePositions: sliceValidation.slices.map(({ position }) => position),
-            maxSlices: freshConfig.stacked_prs.max_slices ?? 1,
-            regionCoupledSteps: customStepsInPerChildRegion(buildStepRegistry(freshConfig)),
-            complexityPath: relative(this.projectDir, complexityPath).replaceAll('\\', '/'),
-          });
-          const reasons = [
-            ...(ownership.kind === 'invalid' ? ownership.violations.map(({ message }) => message) : []),
-            ...(eligibility.kind === 'ineligible' ? eligibility.reasons : []),
-          ];
-          if (reasons.length > 0) {
-            this.log(`coverage_binding: plan is not eligible for stacked delivery; building flat (${reasons.join('; ')})`);
-          } else if (ownership.kind === 'owned') {
-            storyOwnership = ownership.ownership;
-          }
-        }
-      }
-    }
-
-    // The positions ref is the only durable topology authority after the
-    // region begins: a started stack never silently changes shape.
-    const positionGuard = await verifyStackPositionImmutability(
-      this.projectDir,
-      this.featureDesc,
-      sliceMembership === undefined ? [] : Object.values(sliceMembership.taskSlices),
-      this.gitRunner,
-    );
-    if (positionGuard.kind === 'refused') {
-      return { success: false, output: positionGuard.reason, refusal: { kind: 'needs-human', reason: positionGuard.reason } };
-    }
-
-    const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
-    let membershipMoved = false;
-    if (previous?.sliceMembership !== undefined) {
-      if (sliceMembership === undefined) {
-        await this.events?.emit({
-          type: 'plan_slices_changed', step: 'coverage_binding', moved: [], added: [], removed: [], manifest: 'dropped',
-        });
-      } else {
-        const currentMembership = sliceMembership;
-        const previousTaskSlices = previous.sliceMembership.taskSlices;
-        const currentTaskSlices = currentMembership.taskSlices;
-        const taskIds = [...new Set([...Object.keys(previousTaskSlices), ...Object.keys(currentTaskSlices)])].sort();
-        const moved = taskIds.flatMap((taskId) => {
-          const from = previousTaskSlices[taskId];
-          const to = currentTaskSlices[taskId];
-          return from !== undefined && to !== undefined && from !== to ? [{ taskId, from, to }] : [];
-        });
-        membershipMoved = moved.length > 0;
-        const added = taskIds.filter((taskId) => previousTaskSlices[taskId] === undefined && currentTaskSlices[taskId] !== undefined);
-        const removed = taskIds.filter((taskId) => previousTaskSlices[taskId] !== undefined && currentTaskSlices[taskId] === undefined);
-        const titlesChanged = previous.sliceMembership.titles.length !== currentMembership.titles.length ||
-          previous.sliceMembership.titles.some((title, index) => title !== currentMembership.titles[index]);
-        if (moved.length > 0 || added.length > 0 || removed.length > 0 || titlesChanged) {
-          await this.events?.emit({
-            type: 'plan_slices_changed', step: 'coverage_binding', moved, added, removed, manifest: 'unchanged',
-          });
-        }
-      }
-    }
-    const storyReowns = !membershipMoved && previous?.storyOwnership !== undefined && storyOwnership !== undefined
-      ? [...new Set([...Object.keys(previous.storyOwnership), ...Object.keys(storyOwnership)])]
-        .sort()
-        .flatMap((story) => {
-          const from = previous.storyOwnership![story];
-          const to = storyOwnership[story];
-          return from !== undefined && to !== undefined && from !== to ? [{ story, from, to }] : [];
-        })
-      : [];
-
-    await writeCoverageBindingEnvelope(this.projectDir, {
-      version: 1,
-      slug: this.featureDesc || 'unknown-feature',
-      runId: this.runId,
-      status: 'disabled',
-      entries: [],
-      ...(sliceMembership === undefined ? {} : { sliceMembership }),
-      ...(storyOwnership === undefined ? {} : { storyOwnership }),
-    }, filesystem);
-    // Rebase preservation needs to know which HEAD this run recorded.
-    if (judgedHead) {
-      await writeCoverageBindingCodeStamp(this.projectDir, { runId: this.runId, codeStamp: judgedHead }, filesystem);
-    }
-    await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
-    for (const reown of storyReowns) await this.events?.emit({ type: 'story_reowned', ...reown });
-    return { success: true, output: 'coverage_binding judge disabled' };
-  }
-
   private async runBuildReview(
     tier?: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
@@ -5833,30 +5567,38 @@ export class DefaultStepRunner implements StepRunner {
     const active = await resolveActiveChild(this.projectDir, this.featureDesc);
     if (active.kind !== 'active') return '';
 
-    const envelope = await readCoverageBindingEnvelope(
-      this.projectDir,
-      this.coverageBindingFilesystem ?? productionCoverageBindingFilesystem,
-    );
-    if (envelope === null) {
-      throw new Error(`acceptance_specs cannot resolve child ${active.child} ownership: coverage-binding envelope is missing or invalid`);
+    const topology = await loadSliceTopology(this.projectDir, this.featureDesc);
+    if (topology.kind !== 'sliced') {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} ownership: sealed-plan topology is unavailable`);
     }
-    const ownership = projectChildOwnership(envelope, active.position);
-    const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc);
-    if (decideSet?.storiesPath === null || decideSet?.storiesPath === undefined) {
-      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature DECIDE set has no stories artifact`);
+    const planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc);
+    if (!planPath) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature plan is missing`);
+    }
+    let planText: string;
+    try {
+      planText = await readFile(planPath, 'utf8');
+    } catch (error) {
+      throw new Error(`acceptance_specs cannot read child ${active.child} plan at ${relative(this.projectDir, planPath)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const storiesPath = resolvePlanStoriesPath(relative(this.projectDir, planPath).replaceAll('\\', '/'), planText);
+    if (storiesPath === null) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature plan has no valid stories artifact`);
     }
 
     let storiesText: string;
     try {
-      storiesText = await readFile(join(this.projectDir, decideSet.storiesPath), 'utf8');
+      storiesText = await readFile(join(this.projectDir, storiesPath), 'utf8');
     } catch (error) {
-      throw new Error(`acceptance_specs cannot read child ${active.child} stories at ${decideSet.storiesPath}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`acceptance_specs cannot read child ${active.child} stories at ${storiesPath}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const ownedStories = new Set(ownership.storyIds);
+    const ownership = Object.entries(topology.storyOwnership)
+      .flatMap(([storyId, position]) => position === active.position ? [storyId] : []);
+    const ownedStories = new Set(ownership);
     const blocks = splitStoryBlocks(storiesText).filter((block) => block.id !== undefined && ownedStories.has(block.id));
     if (blocks.length !== ownedStories.size) {
       const present = new Set(blocks.flatMap((block) => block.id === undefined ? [] : [block.id]));
-      const missing = ownership.storyIds.filter((id) => !present.has(id));
+      const missing = ownership.filter((id) => !present.has(id));
       throw new Error(`acceptance_specs cannot resolve child ${active.child} owned stories: missing ${missing.join(', ')}`);
     }
 

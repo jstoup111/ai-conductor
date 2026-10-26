@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId, type ChildId } from '../../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { writeHaltMarker } from '../../../src/engine/halt-marker.js';
 import { renderHaltRecord } from '../../../src/engine/halt-record.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
@@ -40,7 +40,7 @@ const roots: string[] = [];
 const committer = { name: 'Restack halt seam sweep', email: 'restack@example.test', date: '2030-02-03T04:05:06Z' };
 const deadOwner = { host: 'dead-halt-seam-owner', pid: 1, processStartTime: '0' };
 const recoverSpy = vi.mocked(recoverRestackJournal);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -184,7 +184,7 @@ async function stackFixture() {
   await mainGit(['checkout', '-q', 'main']);
   const advancedDefault = await commit('base advance', 'base.txt', 'advanced\n');
   await mainGit(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

@@ -282,7 +282,7 @@ provisioning wires it automatically.
 
 On any branch other than `feat/c<k>/<slug>` it exits 0 without reading state. On a child branch it
 collects the task ids from the message and `.pipeline/current-task`, then resolves each id's owning child
-from the coverage-binding envelope's slice membership plus the remediation-task child map in
+from the sealed plan's slice membership plus the remediation-task child map in
 `.pipeline/engine-state.json`.
 
 | Exit | Meaning | Hook behavior |
@@ -1031,9 +1031,10 @@ selects the execution child; other gates use the flat ledger. A feature with no 
 resolved, for example on a diverged stack, these commands exit 1 before any read or write. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
 `rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
 
-`task start|done --child <k>` also requires the coverage-binding envelope's slice membership to place
-the task in child `k`. `task status` uses that same membership to filter its output. A missing envelope,
-an unmapped task, or a task in another child exits 1.
+`task start|done --child <k>` also requires the sealed plan's slice membership to place the task in
+child `k`. `task status` uses that same membership to filter its output. Unavailable slice topology
+(missing or invalid plan, changed or unreadable positions), an unsliced plan, an unmapped task, or a
+task in another child exits 1.
 Engine-appended remediation task ids skip the membership check. After validation the verb runs
 unchanged against the flat `task-status.json` and `current-task`.
 
@@ -1577,9 +1578,11 @@ an `operator` origin, distinct from step-attributed records. See
 [the stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation)
 for the full recovery procedure.
 
-When the changed resealed path is a current coverage-binding DECIDE input, a completed
-coverage-binding result is invalidated. The next re-kick runs the no-op coverage-binding step before
-BUILD, which re-records only the plan's slice topology. No task is reopened.
+When the feature has child state and a resealed path is its plan, `reseal` compares the plan's
+`## Slices` positions with `refs/conductor/<slug>/positions` before resealing. A change that moves,
+adds, or removes a position, an invalid manifest, or an unverifiable positions ref refuses the whole
+reseal and names the recorded and proposed positions. Task membership may change within the recorded
+positions. No task is reopened.
 
 The `--reason` rationale is not just an audit-trail entry: the next `build_review` on this feature
 renders every `operator-reseal`-triggered entry, with its paths, rationale, and commit range, in the

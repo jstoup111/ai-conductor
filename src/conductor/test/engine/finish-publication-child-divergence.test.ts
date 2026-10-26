@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { pushedTipRef } from '../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import type { GithubMutationExecutionContext, GhRunner } from '../../src/engine/tracker-client.js';
@@ -20,7 +20,7 @@ const leafUrl = 'https://github.com/acme/demo/pull/500';
 let root: string;
 let origin: string;
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -38,7 +38,7 @@ async function ref(name: string): Promise<string> {
 async function sealStack(): Promise<void> {
   const positions = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify([c1, c3, c5]) });
   await git(['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { one: c1, three: c3, leaf: c5 }, titles: ['One', 'Three', 'Leaf'] },
     storyOwnership: { S1: c1, S3: c3, S5: c5 },
@@ -216,6 +216,8 @@ beforeEach(async () => {
     '## Story S1: One',
     '',
     '## Story S3: Three',
+    '',
+    '## Story S5: Leaf',
   ].join('\n'));
 });
 

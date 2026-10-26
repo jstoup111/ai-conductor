@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
@@ -48,7 +48,7 @@ async function repository(prefix: string) {
 }
 
 async function seal(repo: string) {
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

@@ -721,59 +721,6 @@ type ConductorEventBody =
       reason?: string;
     }
   | {
-      /** One terminal judgement of a criterion-to-Done-when binding claim. */
-      type: 'coverage_binding_judged';
-      step: 'coverage_binding';
-      verdict: 'asserts' | 'does-not-assert' | 'not-applicable';
-      digest: string;
-      taskIds: string[];
-    }
-  | {
-      /** One terminal judgement of a DECIDE amendment's plan obligation. */
-      type: 'coverage_binding_amendment_judged';
-      step: 'coverage_binding';
-      verdict: 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
-      digest: string;
-      artifactPath: string;
-      taskIds: string[];
-    }
-  | {
-      /** One terminal judgement that a plan task can coexist with a sealed claim. */
-      type: 'coverage_binding_conflict_judged';
-      step: 'coverage_binding';
-      claimKind: 'criterion' | 'adr-decision';
-      claimId: string;
-      verdict: 'consistent' | 'conflicts' | 'not-applicable' | 'unjudged';
-      taskIds: string[];
-    }
-  | {
-      /** The default-off coverage-binding judge completed without dispatching. */
-      type: 'coverage_binding_disabled';
-      step: 'coverage_binding';
-    }
-  | {
-      /** A changed resolved DECIDE input voided completed coverage evidence. */
-      type: 'coverage_binding_invalidated';
-      paths: string[];
-      origin: 'decide-change';
-    }
-  | {
-      /** A void exposed a completed task contradicted by current DECIDE coverage. */
-      type: 'coverage_binding_task_reopened';
-      step: 'coverage_binding';
-      taskId: string;
-      digest: string;
-    }
-  | {
-      /** Recorded slice membership changed after a coverage-binding re-validation. */
-      type: 'plan_slices_changed';
-      step: 'coverage_binding';
-      moved: Array<{ taskId: string; from: number; to: number }>;
-      added: string[];
-      removed: string[];
-      manifest: 'unchanged' | 'dropped';
-    }
-  | {
       /** A source-grounded reviewer session was dispatched for one plan-review round. */
       type: 'plan_review_dispatched';
       round: number;
@@ -2323,13 +2270,6 @@ type ConductorEventBody =
       ref: RefName;
       expected: CommitSha;
       actual: CommitSha;
-    }
-  | {
-      /** A reseal changed a story's owner without moving any task. */
-      type: 'story_reowned';
-      story: string;
-      from: number;
-      to: number;
     }
   // ── Routed whole-feature repair occurrences ─────────────────────────────
   | {

@@ -72,7 +72,7 @@ At finish, its committed shipped record retains the current Cost and Time totals
 unchanged record skips a duplicate commit.
 
 Each dispatch sets up shared project memory and reports its placement in the daemon log and, when
-enabled, OpenTelemetry. Build-review rubric and coverage-binding provider attempts retain their
+enabled, OpenTelemetry. Build-review rubric provider attempts retain their
 owning step’s execution identity for trace attribution. See
 [per-dispatch setup](docs/guides/running-the-daemon.md#per-dispatch-hook).
 

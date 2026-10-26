@@ -94,7 +94,6 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
   ]),
   build_review: consumer(RESOLVED_CONFIG),
-  coverage_binding: none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
   feature_applicability: consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
@@ -229,7 +228,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'stacked_prs.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     STEP_RUNNERS,
-    'src/conductor/src/engine/child-cursor.ts',
+    'src/conductor/src/engine/slice-topology.ts',
   ]),
   'stacked_prs.max_slices': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
@@ -291,11 +290,6 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_severity': consumer(RESOLVED_CONFIG),
 
-  // ── coverage_binding ────────────────────────────────────────────────────
-  // Retired judge keys: validated for compatibility, read by nothing.
-  'coverage_binding.judge': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
-  'coverage_binding.judge.enabled': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
-  'coverage_binding.judge.batch_size': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
   'feature_applicability.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,

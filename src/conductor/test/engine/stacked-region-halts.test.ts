@@ -1,4 +1,4 @@
-// Covers: task:10.1
+// Covers: task:9, task:10.1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,9 +19,10 @@ const activeChild1: ActiveChildResolution = {
 const cursorRefusals: Array<[ActiveChildResolution, string]> = [
   [{ kind: 'divergent', child: child1, check: 'closed-child-rewritten' }, 'child 1 failed active-child check closed-child-rewritten'],
   [{ kind: 'divergent', child: child1, check: 'range-not-ancestor' }, 'child 1 failed active-child check range-not-ancestor'],
-  [{ kind: 'envelope-missing' }, 'coverage-binding envelope is missing while child state exists'],
-  [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child'],
-  [{ kind: 'git-error' }, 'git failed while resolving the active child cursor'],
+  [{ kind: 'topology-unavailable', cause: 'plan-missing' }, 'slice topology is unavailable while child state exists (plan-missing)\nRecovery:\nai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt'],
+  [{ kind: 'topology-unavailable', cause: 'positions-changed', planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: [1, 3] }, 'slice topology is unavailable while child state exists (positions-changed); plan path .docs/plans/demo.md; recorded positions [1,2]; plan positions [1,3]\nRecovery:\nai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt'],
+  [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child\nRecovery:\ngit switch feat/daemon-demo'],
+  [{ kind: 'git-error' }, 'git failed while resolving the active child cursor\nRecovery:\nrm -f .pipeline/HALT .pipeline/HALT.class'],
 ];
 
 beforeEach(async () => {

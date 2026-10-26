@@ -1,16 +1,12 @@
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseChildId, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
-import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
+import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveGitRef } from './routing/git-ref-resolver.js';
+import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
+export { hasDurableChildState } from './slice-topology.js';
 import { resolveThroughMap } from './rebase-translate.js';
 import { readRepairMarker, readRevalidationQueue, readRouteRecord } from './routing/route-record-store.js';
 import type { RoundId } from './routing/route-types.js';
@@ -40,8 +36,7 @@ export type RepairPendingChildResolution = ActiveChildTarget & {
 
 export type ActiveChildResolution =
   | { kind: 'no-child' }
-  /** `voided`: an operator-sanctioned DECIDE change invalidated a completed envelope; coverage_binding re-runs before BUILD. */
-  | { kind: 'envelope-missing'; voided?: true }
+  | ({ kind: 'topology-unavailable' } & Omit<Extract<SliceTopology, { kind: 'unavailable' }>, 'kind'>)
   | { kind: 'detached-head' }
   | { kind: 'git-error' }
   | { kind: 'divergent'; child: ChildId; check: 'closed-child-rewritten' | 'range-not-ancestor' }
@@ -50,6 +45,8 @@ export type ActiveChildResolution =
 
 export interface ActiveChildDependencies {
   readonly git?: GitRunner;
+  /** Reuse the cursor's durable-state probe in its immediate topology read. */
+  readonly reuseDurableChildState?: boolean;
 }
 
 /**
@@ -72,43 +69,29 @@ export interface ChildBaseDependencies {
   readonly git?: GitRunner;
 }
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
-
-function positionsFromEnvelope(
-  envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>,
-): ChildId[] {
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) return [];
-  return [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+function positionsFromTopology(topology: SliceTopology): ChildId[] {
+  if (topology.kind !== 'sliced') return [];
+  return topology.positions
     .map((position) => parseChildId(position))
-    .filter((position): position is ChildId => position !== undefined)
-    .sort((left, right) => left - right);
+    .filter((position): position is ChildId => position !== undefined);
 }
 
-/** Returns the terminal position declared by the completed sealed envelope. */
+async function currentFeatureTopology(worktree: string): Promise<SliceTopology | undefined> {
+  const git = makeGitRunner(worktree);
+  const branch = await runGit(git, ['symbolic-ref', '-q', '--short', 'HEAD']);
+  if (!branch || branch.exitCode !== 0) return undefined;
+  const slug = featureSlugOf(parseFeatureBranch(branch.stdout.trim()));
+  return slug === undefined ? undefined : loadSliceTopology(worktree, slug, { git });
+}
+
+/** Returns the terminal position declared by the sealed plan. */
 export async function resolveSealedLeaf(worktree: string): Promise<ChildId | undefined> {
-  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
-  try {
-    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-  } catch {
-    return undefined;
-  }
-  return positionsFromEnvelope(envelope).at(-1);
+  return positionsFromTopology(await currentFeatureTopology(worktree) ?? { kind: 'unsliced' }).at(-1);
 }
 
-/** Returns the first position declared by the completed sealed envelope. */
+/** Returns the first position declared by the sealed plan. */
 export async function resolveSealedFirst(worktree: string): Promise<ChildId | undefined> {
-  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
-  try {
-    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-  } catch {
-    return undefined;
-  }
-  return positionsFromEnvelope(envelope).at(0);
+  return positionsFromTopology(await currentFeatureTopology(worktree) ?? { kind: 'unsliced' }).at(0);
 }
 
 type ClosedChild = { child: ChildId; tip: string };
@@ -119,63 +102,6 @@ async function runGit(git: GitRunner, args: string[]) {
   } catch {
     return undefined;
   }
-}
-
-/**
- * Whether durable child state survives for this feature, independent of the
- * current stacked-prs setting. A recreated worktree can lose
- * `.pipeline/children` while retaining the child branches and closure refs.
- */
-export async function hasDurableChildState(
-  worktree: string,
-  slug: string,
-  dependencies: ActiveChildDependencies = {},
-): Promise<boolean | 'git-error'> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
-  try {
-    if ((await readdir(join(worktree, '.pipeline', 'children'))).length > 0) return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'git-error';
-  }
-  // Legacy N=1 callers and unit fixtures may intentionally have no Git
-  // boundary.  Without child state on disk they cannot have durable child
-  // refs, so preserve the flat path instead of making resume preflight fail.
-  if (!existsSync(join(worktree, '.git'))) return false;
-  const refs = await runGit(git, ['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
-  if (!refs || refs.exitCode !== 0) return 'git-error';
-  if (refs.stdout.split('\n').some((ref) => {
-    const identity = parseFeatureRef(ref.trim());
-    return identity.kind === 'child' && identity.slug === slug;
-  })) return true;
-  // The feature-owned conductor namespace is durable across worktree
-  // recreation.  Do not restrict this probe to closure receipts: a published
-  // positions/publication receipt is itself enough to keep the stack guard on.
-  // Push receipts are durable stack state only for child branches.  The leaf
-  // receipt is ordinary N=1 publication evidence and must retain the flat
-  // FINISH path.
-  const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
-  if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
-  const prefix = `refs/conductor/${slug}/`;
-  return conductorRefs.stdout.split('\n').some((line) => {
-    const ref = line.trim();
-    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length), slug);
-  });
-}
-
-/** Stack-owned names under `refs/conductor/<slug>/`: exact refs and ref directories. */
-const STACK_OWNED_CONDUCTOR_REFS = ['positions', 'publication', 'leaf-moved', 'cascades'] as const;
-const STACK_OWNED_CONDUCTOR_REF_DIRS = ['closed/', 'restack/'] as const;
-const STACK_PUSH_RECEIPT_DIRS = ['pushed/', 'push-intent/'] as const;
-
-function isStackOwnedConductorRef(name: string, slug: string): boolean {
-  const receiptBranch = STACK_PUSH_RECEIPT_DIRS
-    .find((dir) => name.startsWith(dir));
-  if (receiptBranch !== undefined) {
-    const identity = parseFeatureBranch(name.slice(receiptBranch.length));
-    return identity.kind === 'child' && identity.slug === slug;
-  }
-  return (STACK_OWNED_CONDUCTOR_REFS as readonly string[]).includes(name) ||
-    STACK_OWNED_CONDUCTOR_REF_DIRS.some((dir) => name.startsWith(dir));
 }
 
 async function closedChildren(slug: string, positions: readonly ChildId[], git: GitRunner): Promise<ClosedChild[] | 'git-error'> {
@@ -230,13 +156,8 @@ export async function resolveChildBase(
   if (child === undefined) return { kind: 'none' };
 
   const git = dependencies.git ?? makeGitRunner(worktree);
-  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>> | null;
-  try {
-    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-  } catch {
-    envelope = null;
-  }
-  const positions = positionsFromEnvelope(envelope);
+  const topology = await loadSliceTopology(worktree, slug, { git });
+  const positions = positionsFromTopology(topology);
   const index = positions.indexOf(child);
 
   // A routed host's record freezes the repair comparison before any branch
@@ -329,28 +250,19 @@ export async function resolveActiveChild(
   const artifacts = await hasDurableChildState(worktree, slug, { git });
   if (artifacts === 'git-error') return { kind: 'git-error' };
 
-  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
-  try {
-    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-  } catch {
-    return artifacts ? { kind: 'envelope-missing' } : { kind: 'no-child' };
+  const topology = await loadSliceTopology(worktree, slug, {
+    git,
+    ...(dependencies.reuseDurableChildState ? { durableChildState: artifacts } : {}),
+  });
+  if (topology.kind === 'unavailable') {
+    const { kind: _kind, ...details } = topology;
+    return artifacts ? { kind: 'topology-unavailable', ...details } : { kind: 'no-child' };
   }
-  const positions = positionsFromEnvelope(envelope);
-  if (positions.length === 0) {
-    if (!artifacts) return { kind: 'no-child' };
-    // Only voidCoverageBindingForDecideChange writes an invalidated envelope
-    // with a predecessor; a torn or absent envelope stays a plain refusal.
-    return envelope?.status === 'invalidated' && envelope.predecessor !== undefined
-      ? { kind: 'envelope-missing', voided: true }
-      : { kind: 'envelope-missing' };
-  }
+  const positions = positionsFromTopology(topology);
+  if (positions.length === 0) return { kind: 'no-child' };
 
-  // A missing optional project config is today's ordinary N=1 default, not a
-  // cursor failure. A malformed config is handled by configuration validation
-  // before BUILD; it cannot make an existing child state disappear here.
   const config = await loadConfig(worktree);
-  const eligible = config.ok && config.config.stacked_prs?.enabled === true && positions.length >= 2 &&
-    envelope?.storyOwnership !== undefined;
+  const eligible = topology.kind === 'sliced' && positions.length >= 2 && topology.stackEligibility.kind === 'eligible';
   if (!artifacts && !eligible) return { kind: 'no-child' };
 
   // Routing metadata is only consulted after durable child state established

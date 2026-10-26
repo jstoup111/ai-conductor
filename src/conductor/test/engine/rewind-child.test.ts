@@ -176,7 +176,6 @@ describe('rewind --child demotions', () => {
     root = await mkdtemp(join(tmpdir(), 'rewind-child-demotions-'));
     const flatState: ConductState = {
       ...completeState,
-      coverage_binding: 'done',
       last_step: 'prd_audit',
     };
     paths = [
@@ -239,7 +238,7 @@ describe('rewind --child demotions', () => {
           { field: 'build', expected: 'done', intent, next: 'stale' },
           { field: 'test_suite', expected: 'done', intent, next: 'stale' },
           { field: 'build_review', expected: 'done', intent, next: 'stale' },
-          { field: 'last_step', expected: 'build_review', intent, next: 'coverage_binding' },
+          { field: 'last_step', expected: 'build_review', intent, next: 'plan_review' },
         ],
       }]],
       [paths[3], [{
@@ -309,7 +308,7 @@ describe('rewind --child derived records, event, and rollback', () => {
         await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) =>
           writeFile(join(childRoot, 'gates', `${step}.json`), `${JSON.stringify({ child, step })}\n`, 'utf-8')));
       }),
-      writeFile(flat, `${JSON.stringify({ ...completeState, coverage_binding: 'done', last_step: 'prd_audit' }, null, 2)}\n`, 'utf-8'),
+      writeFile(flat, `${JSON.stringify({ ...completeState, last_step: 'prd_audit' }, null, 2)}\n`, 'utf-8'),
       writeFile(join(root, '.pipeline', 'HALT'), 'operator action required\n', 'utf-8'),
       writeFile(join(root, '.pipeline', 'HALT.class'), 'needs-human\n', 'utf-8'),
       ...['manual_test', 'prd_audit', 'architecture_review_as_built', 'rebase', 'finish'].map((step) =>

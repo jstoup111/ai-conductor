@@ -383,15 +383,9 @@ export async function dispatchRewindCommand(
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
   const cursor = await resolveActiveChildForCurrentFeature(cwd);
-  if (cursor.kind === 'envelope-missing' && cursor.voided) {
-    console.error(
-      'rewind: coverage binding was voided by a DECIDE change, so no child is active yet. '
-      + 'Clear the halt instead (rm -f .pipeline/HALT .pipeline/HALT.class); resume re-runs coverage_binding, then BUILD.',
-    );
-    return 1;
-  }
   if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
-    console.error(`rewind: active child resolution refused (${cursor.kind})`);
+    const detail = cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+    console.error(`rewind: active child resolution refused (${detail})`);
     return 1;
   }
   const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);

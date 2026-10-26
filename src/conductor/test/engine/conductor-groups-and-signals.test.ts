@@ -3859,7 +3859,6 @@ describe('engine/conductor', () => {
         plan: 'done', coherence_check: 'done', plan_review: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
-        coverage_binding: 'done',
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
@@ -6650,9 +6649,6 @@ describe('engine/conductor', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify(passingBuildReviewAggregate()),
             );
-          } else if (step === 'coverage_binding') {
-            await _mkdir(join(dir, '.pipeline'), { recursive: true });
-            await _wf(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'disabled', entries: [] }));
           } else if (step === 'manual_test') {
             await _wf(
               join(dir, '.pipeline/manual-test-results.md'),

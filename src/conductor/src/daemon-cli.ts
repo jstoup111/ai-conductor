@@ -206,7 +206,11 @@ import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js'
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
-import { runStackPreflight } from './engine/restack/stack-preflight.js';
+import {
+  runStackPreflight,
+  type RunStackPreflightOptions,
+  type StackPreflightResult,
+} from './engine/restack/stack-preflight.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -1276,6 +1280,24 @@ export function attachFeatureEventRenderer(
   };
 }
 
+/**
+ * Run the stack repair boundary that precedes every daemon re-kick.
+ *
+ * Keeping this small boundary exported lets the dispatch-level test exercise
+ * the same call that protects `runConductorInWorktree`, rather than proving
+ * only `runStackPreflight` in isolation.
+ */
+export async function runDaemonRekickStackPreflight(
+  options: RunStackPreflightOptions,
+  log: (message: string) => void,
+): Promise<StackPreflightResult> {
+  const result = await runStackPreflight(options);
+  if (result.kind === 'halted' || result.kind === 'unavailable') {
+    log(`stack preflight ${options.slug}: ${result.kind}`);
+  }
+  return result;
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
@@ -2044,7 +2066,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // chained base refresh owns consumption of REKICK through its journal;
     // otherwise resumeRebaseFirst retains its historical one-shot behavior.
     const rekickPath = join(pipelineDir, 'REKICK');
-    const stackPreflight = await runStackPreflight({
+    const stackPreflight = await runDaemonRekickStackPreflight({
       worktree: wt.path,
       slug: item.slug,
       baseRefreshDue: existsSync(rekickPath),
@@ -2073,9 +2095,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`);
         }
       },
-    });
+    }, featureLog);
     if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') {
-      featureLog(`stack preflight ${item.slug}: ${stackPreflight.kind}`);
       return;
     }
     const resume = await resumeRebaseFirst({

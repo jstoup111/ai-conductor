@@ -507,31 +507,6 @@ describe('DefaultStepRunner', () => {
     }
   });
 
-  it('writes disabled coverage-binding completion evidence without invoking a provider', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-'));
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'coverage-run-1', projectDir, {
-      featureDesc: 'coverage-binding-feature',
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', emptyState)).resolves.toEqual({
-        success: true,
-        output: 'coverage_binding judge disabled',
-      });
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toEqual({
-        version: 1,
-        slug: 'coverage-binding-feature',
-        runId: 'coverage-run-1',
-        status: 'disabled',
-        entries: [],
-      });
-      expect(provider.invoke).not.toHaveBeenCalled();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
   async function exhaustLifecycle(projectDir: string) {
     let now = 0;
     const episodeStore: ProviderLifecycleEpisodeStore = {
