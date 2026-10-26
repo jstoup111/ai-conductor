@@ -88,6 +88,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly headSha: string;
   /** The graded diff by reference — paths, change kinds, and hunk line ranges. */
   readonly changedFiles: readonly ChangedFileReference[];
+  /** Durable operator landing reason for a routed operator host, when present. */
+  readonly operatorWorkOrder?: string;
 }
 
 export interface TestQualityProjection extends CommonProjection<'testQuality'> {
@@ -451,6 +453,7 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     mergeBase: snapshot.mergeBase,
     headSha: snapshot.headSha,
     changedFiles: deriveChangedFileReferences(snapshot.diff),
+    ...(snapshot.operatorWorkOrder === undefined ? {} : { operatorWorkOrder: snapshot.operatorWorkOrder }),
   };
 }
 
