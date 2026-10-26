@@ -496,7 +496,6 @@ export async function dispatchRewindCommand(
         const demotions = CHILD_REGION_STEPS
           .slice(CHILD_REGION_STEPS.indexOf(entryStep))
           .map((step) => ({ child, step }));
-        await clear(cwd, demotions);
         const demoted = demotions.map(({ child: demotedChild, step }) => `children/${demotedChild}/${step}`);
         if (dependencies.emit) {
           await dependencies.emit({ target: command.target, demoted, child });
@@ -510,6 +509,7 @@ export async function dispatchRewindCommand(
           });
           persister.stop();
         }
+        await clear(cwd, demotions);
         console.log(`Rewound child ${child} to ${command.target}.`);
         return 0;
       } catch (error) {
