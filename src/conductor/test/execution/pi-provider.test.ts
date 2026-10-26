@@ -545,7 +545,11 @@ describe('PiProvider', () => {
     registry.register('llm_provider', 'pi', provider);
     registry.markInitialized();
 
-    await createProviderRuntimeSet(registry).get('pi').provider.invoke({ prompt: '/x', systemPrompt: 'S' });
+    await createProviderRuntimeSet(registry).get('pi').provider.invoke({
+      ...invokeOptions,
+      prompt: '/x',
+      systemPrompt: 'S',
+    });
 
     expect({ spawned: spawn.mock.calls.length, delivered }).toEqual({ spawned: 1, delivered: 'S' });
   });
