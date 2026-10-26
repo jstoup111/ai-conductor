@@ -1,7 +1,7 @@
 import { parseIntakeSourceRef, planStem, resolveFeaturePlanPath, type FinishChoice } from './artifacts.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
+import { MalformedFeatureManifestError, resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 
 export type PrDisposition = 'opened' | 'none' | 'unrecorded';
 
@@ -62,7 +62,8 @@ export async function resolveRunSourceRef(
     const sourceRefLine = intakeContent?.match(/^\s*Source-Ref:[^\S\r\n]*(\S+)?[^\r\n]*$/im);
     if (!sourceRefLine?.[1]) return undefined;
     return parseIntakeSourceRef(intakeContent);
-  } catch {
+  } catch (error) {
+    if (error instanceof MalformedFeatureManifestError) throw error;
     return undefined;
   }
 }

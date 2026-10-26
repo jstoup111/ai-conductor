@@ -1,4 +1,4 @@
-// Covers: task:12, task:rem-prd-audit-12
+// Covers: task:12, task:rem-prd-audit-12, task:rem-as-built-rem-as-built-7, task:rem-as-built-rem-as-built-8
 
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildPrdAuditProjection } from '../../src/engine/prd-audit-projection.js';
+import { createFinishPresentationRepair } from '../../src/engine/finish-presentation-repair.js';
 import { resolveFeatureRemoteMutation } from '../../src/engine/remote-git-operations.js';
 import { resolveRunSourceRef } from '../../src/engine/run-provenance.js';
 import { createShipDraftPublicationDependencies } from '../../src/engine/ship-draft-pr.js';
@@ -64,6 +65,59 @@ describe('SHIP manifest routing', () => {
       legacyManifest: 'org/repo#12',
       omitted: undefined,
     });
+  });
+
+  it('fails closed on malformed intake manifests in SHIP presentation readers', async () => {
+    const projectRoot = await root();
+    await write(projectRoot, '.docs/plans/f.md', '# plan\n');
+    await write(projectRoot, '.docs/f/manifest.json', '{not json');
+    const repair = createFinishPresentationRepair({
+      projectRoot,
+      gh: async () => {
+        throw new Error('presentation repair must stop before GitHub');
+      },
+    });
+
+    await expect(resolveRunSourceRef(projectRoot, 'f')).rejects.toThrow('.docs/f/manifest.json');
+    await expect(repair({
+      prUrl: 'https://github.com/org/repo/pull/12',
+      state: { feature_desc: 'f' },
+      mode: 'capture-only',
+    })).rejects.toThrow('.docs/f/manifest.json');
+  });
+
+  it('routes coherence waivers through the manifest while retaining legacy and omitted-kind behavior', async () => {
+    const projectRoot = await root();
+    await write(projectRoot, '.pipeline/engine-state.json', JSON.stringify({ feature_desc: 'f', activePlanPath: '.docs/plans/f.md' }));
+    await write(projectRoot, '.docs/plans/f.md', `# Plan\n\n**Stories:** .docs/stories/f.md\n\n## Technical Approach\n\nRoute active documents.\n\n### Task 1: projection\n\n**Story:** Story 1\n\n**Done when:**\n- projection remains available\n`);
+    await write(projectRoot, '.docs/stories/f.md', `## Story 1: projection\n\n### Happy Path\n- Given an artifact, when it is routed, then the projection reads it.\n\n### Negative Paths\n- Given an omitted artifact, when it is routed, then the projection reports it absent.\n`);
+    await write(projectRoot, '.docs/specs/f.md', '# PRD\n\n## Functional Requirements\n- FR-17: The active waiver requirement.\n');
+    await write(projectRoot, '.docs/coherence-waivers/f.md', 'Waives: FR-17\n\nRationale: Legacy path.\n');
+    await write(projectRoot, 'source.ts', 'export const version = 1;\n');
+    await commitFixture(projectRoot, 'feature/f');
+    await write(projectRoot, 'source.ts', 'export const version = 2;\n');
+
+    const legacy = await buildPrdAuditProjection(projectRoot);
+    await write(projectRoot, '.docs/f/relocated-waiver.md', 'Waives: FR-17\n\nRationale: Relocated path.\n');
+    await write(projectRoot, '.docs/f/manifest.json', manifest('f', [
+      { kind: 'plan', path: '.docs/plans/f.md' },
+      { kind: 'stories', path: '.docs/stories/f.md' },
+      { kind: 'prd', path: '.docs/specs/f.md' },
+      { kind: 'coherence-waiver', path: '.docs/f/relocated-waiver.md' },
+    ]));
+    const relocated = await buildPrdAuditProjection(projectRoot);
+    await write(projectRoot, '.docs/f/manifest.json', manifest('f', [
+      { kind: 'plan', path: '.docs/plans/f.md' },
+      { kind: 'stories', path: '.docs/stories/f.md' },
+      { kind: 'prd', path: '.docs/specs/f.md' },
+    ]));
+    const omitted = await buildPrdAuditProjection(projectRoot);
+    await write(projectRoot, '.docs/f/manifest.json', '{not json');
+
+    expect(legacy).toMatchObject({ ok: true, projection: { prd: { waivedRequirements: [expect.objectContaining({ rationale: 'Legacy path.' })] } } });
+    expect(relocated).toMatchObject({ ok: true, projection: { prd: { waivedRequirements: [expect.objectContaining({ rationale: 'Relocated path.' })] } } });
+    expect(omitted).toMatchObject({ ok: true, projection: { prd: { waivedRequirements: [] } } });
+    await expect(buildPrdAuditProjection(projectRoot)).rejects.toThrow('.docs/f/manifest.json');
   });
 
   it('uses a relocated coherence artifact for the PRD projection and treats an omitted coherence artifact as absent', async () => {

@@ -1401,7 +1401,8 @@ export class Conductor {
         ? null
         : await readFile(join(this.projectRoot, intakePath), 'utf-8').catch(() => null);
       return parseIntakeSourceRef(intakeContent);
-    } catch {
+    } catch (error) {
+      if (error instanceof MalformedFeatureManifestError) throw error;
       // Intake marker read failed — no source ref (no-op in every repair).
       return undefined;
     }

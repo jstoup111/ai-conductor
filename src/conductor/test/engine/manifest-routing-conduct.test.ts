@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-11
+// Covers: task:rem-prd-audit-11, task:rem-prd-audit-rem-prd-audit-15
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -144,5 +144,17 @@ describe('manifest routing — conduct and BUILD readers', () => {
     await expect(checkStepCompletion(root, 'acceptance_specs', {
       planPath: join(root, '.docs/plans/f.md'),
     })).rejects.toThrow('.docs/f/manifest.json');
+  });
+
+  it('fails closed on a malformed intake manifest instead of reporting no source ref', async () => {
+    const root = await tree({
+      '.docs/f/manifest.json': '{not json',
+    });
+    const instance = conductor(root) as unknown as {
+      resolveIntakeSourceRef(featureDesc: string | undefined, planPath: string | undefined): Promise<string | undefined>;
+    };
+
+    await expect(instance.resolveIntakeSourceRef('f', '.docs/plans/f.md'))
+      .rejects.toThrow('.docs/f/manifest.json');
   });
 });

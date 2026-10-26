@@ -12,7 +12,7 @@ import { extractRegionBytes, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
 import { RegionRestoreError } from './region-restore-error.js';
 import { runTrackerUrlRead } from './tracker-client.js';
-import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
+import { MalformedFeatureManifestError, resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 
 /**
  * Production-facing form of the existing FINISH presentation sequence.  The
@@ -44,7 +44,10 @@ export function createFinishPresentationRepair(input: {
           sourceRef = parseIntakeSourceRef(await readFile(join(cwd, intakePath), 'utf8').catch(() => null));
         }
       }
-    } catch { /* floors remain valid without an intake source reference */ }
+    } catch (error) {
+      if (error instanceof MalformedFeatureManifestError) throw error;
+      // Floors remain valid without an intake source reference.
+    }
     let testEvidenceLine: string | undefined;
     try {
       const tasks = normalizeTasks(JSON.parse(await readFile(join(cwd, '.pipeline/task-status.json'), 'utf8')));
