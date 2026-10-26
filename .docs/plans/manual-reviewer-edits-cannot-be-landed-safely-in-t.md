@@ -958,3 +958,22 @@ Slice 2: 4 ── 5
          25 (19, 22)
 Slice 3: 27 (9, 20) ── 28;  29 ── 30;  31 (10, 17, 27, 29)
 ```
+
+### Task rem-as-built-rem-as-built-r5: src/conductor/src/engine/daemon-runner.ts: acquire the feature dispatch lease (and re-check the park) before createWorktree/prepareWorktree for stacked features; extend daemon-dispatch-lease.test.ts to assert lease acquire is recorded before any git worktree add from worktree-shared.ts
+**Gate:** as-built
+**Rationale:** Verified 98%. Tasks 2 and 3 already require the lease to be acquired before prepareWorktree and before any interactive worktree or conduct-state mutation. The code acquires it after createWorktree (daemon-runner.ts:421 vs :427) and after session/context setup (index.ts:1916-1917 vs :2109). This is implementation drift from approved D2 and is admitted by Tasks 2 and 3.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r5 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r1
+### Task rem-as-built-rem-as-built-r6: src/conductor/src/index.ts interactive run: move stacked-feature lease acquisition ahead of session-state creation (~:1916) and managed-context preparation (~:1917); extend interactive-run-lease.test.ts to assert the lease is held before either mutation
+**Gate:** as-built
+**Rationale:** Verified 98%. Tasks 2 and 3 already require the lease to be acquired before prepareWorktree and before any interactive worktree or conduct-state mutation. The code acquires it after createWorktree (daemon-runner.ts:421 vs :427) and after session/context setup (index.ts:1916-1917 vs :2109). This is implementation drift from approved D2 and is admitted by Tasks 2 and 3.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r1
