@@ -4,6 +4,7 @@ import type { ProviderWith } from './provider-catalog.js';
 import type { ManagedSessionContext } from './managed-session-context.js';
 import type {
   AuthenticationSource,
+  AuthenticationReadinessState,
   CodexProbeFailure,
   CodexProbeFailureFacts,
   CodexProbeFailureKind,
@@ -14,6 +15,7 @@ import type {
 } from '../types/provider.js';
 export type {
   AuthenticationSource,
+  AuthenticationReadinessState,
   CodexProbeFailure,
   CodexProbeFailureFacts,
   CodexProbeFailureKind,
@@ -31,13 +33,6 @@ export interface ProviderStreamCandidateObserver {
 }
 
 export type ProviderUnavailableScope = 'run';
-
-/** Every state the provider may report for the selected authentication source. */
-export type AuthenticationReadinessState =
-  | 'ready'
-  | 'missing'
-  | 'unusable'
-  | 'probe-failed';
 
 /** A closed indication that non-authentication doctor checks are degraded. */
 export type UnrelatedHealth = 'degraded';
