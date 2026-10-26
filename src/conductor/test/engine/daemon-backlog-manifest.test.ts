@@ -68,7 +68,7 @@ function artifactsWithout(slug: string, path: string): Record<string, string> {
 }
 
 describe('daemon backlog manifest discovery', () => {
-  it('discovers a manifest-only feature and reads every listed discovery artifact', async () => {
+  it('discovers a manifest-backed feature at the standard artifact paths and reads every listed discovery artifact', async () => {
     const source = tree({
       '.docs/f/manifest.json': manifest('f'),
       ...artifacts('f'),
@@ -93,6 +93,42 @@ describe('daemon backlog manifest discovery', () => {
       '.docs/track/f.md',
       '.docs/applicability/f.md',
       '.docs/intake/f.md',
+    ]));
+  });
+
+  it('discovers a manifest-backed feature from non-legacy artifact paths', async () => {
+    const paths = {
+      plan: '.docs/f/decide/implementation-plan.md',
+      stories: '.docs/f/decide/accepted-stories.md',
+      coherence: '.docs/f/validation/coherence.md',
+      complexity: '.docs/f/metadata/complexity.md',
+      track: '.docs/f/metadata/track.md',
+      intake: '.docs/f/metadata/intake.md',
+    };
+    const source = tree({
+      '.docs/f/manifest.json': JSON.stringify({
+        schemaVersion: 1,
+        slug: 'f',
+        artifacts: Object.entries(paths).map(([kind, path]) => ({ kind, path })),
+      }),
+      [paths.plan]: PLAN,
+      [paths.stories]: STORIES,
+      [paths.coherence]: COHERENCE,
+      [paths.complexity]: 'Tier: M\n',
+      [paths.track]: 'Track: technical\n',
+      [paths.intake]: 'Source-Ref: acme/project#7\n',
+    });
+
+    const result = await discoverBacklog('/unused', undefined, undefined, { treeSource: source });
+
+    expect(result.items).toEqual([expect.objectContaining({
+      slug: 'f',
+      planPath: paths.plan,
+      storiesPath: paths.stories,
+    })]);
+    expect(source.reads).toEqual(expect.arrayContaining([
+      '.docs/f/manifest.json',
+      ...Object.values(paths),
     ]));
   });
 
