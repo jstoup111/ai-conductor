@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-26T18:30:44.016Z
 Slug: decide-artifacts-are-too-repetitive-for-people-to-
 Class: needs-human
 Halting step: unknown
