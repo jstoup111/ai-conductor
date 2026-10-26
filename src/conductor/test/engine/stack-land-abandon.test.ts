@@ -92,7 +92,8 @@ describe('stack land --abandon', () => {
     await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), `${formatOperatorHaltReason('operator-round-undeclared', roundId)}\n`);
     await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), 'needs-human\n');
-    await releaseOwnedPark(subject.repo, 'demo', subject.park.token);
+    await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8'))
+      .resolves.toContain(`owned-park-token: ${subject.park.token}`);
 
     expect(detectStackLandCommand(['node', 'ai-conductor', 'stack', 'land', '--slug', 'demo', '--abandon']))
       .toEqual({ kind: 'stack-land-abandon', slug: 'demo' });
@@ -104,6 +105,25 @@ describe('stack land --abandon', () => {
     await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await record(subject)).record).toMatchObject({ phase: 'closed', hosts: { 1: 'abandoned' } });
+  });
+
+  it('preserves a park recreated under foreign ownership during abandon', async () => {
+    const subject = await fixture();
+    let foreignToken: string | undefined;
+
+    const output: string[] = [];
+    expect(await abandon(subject, {
+      abandonRound: async (input: Parameters<typeof abandonOperatorRound>[0]) => {
+        await releaseOwnedPark(subject.repo, 'demo', subject.park.token);
+        const foreign = await createOwnedPark(subject.repo, 'demo');
+        if (!foreign.created) throw new Error('expected foreign owned park');
+        foreignToken = foreign.token;
+        return abandonOperatorRound(input);
+      },
+    }, output), output.join('\n')).toBe(0);
+
+    await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8'))
+      .resolves.toContain(`owned-park-token: ${foreignToken}`);
   });
 
   it('refuses a built host and a live lease without changing the landing', async () => {

@@ -260,7 +260,13 @@ async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch
     if (reconciled.kind === 'unavailable') return refused(print, reconciled.detail);
     const cleared = await (deps.clearMatchingHalt ?? clearMatchingOperatorHalt)(worktree, marker.roundId);
     if (cleared === 'unrelated') print('stack land: abandon succeeded, but an unrelated needs-human HALT remains.');
-    if (park.created) await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, park.token);
+    // The open round normally still owns the existing park. If it was
+    // removed before abandon, retain a fresh park through the reset instead.
+    // Either token-based release preserves a marker recreated by someone else.
+    const parkToken = park.created
+      ? park.token
+      : checked.stored.record.operator?.park?.token as ParkToken | undefined;
+    if (parkToken !== undefined) await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, parkToken);
     print(`stack land: abandoned ${marker.roundId} on child ${marker.host}.`);
     return 0;
   } catch (error) {
