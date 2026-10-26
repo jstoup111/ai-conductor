@@ -96,7 +96,7 @@ describe('N=1 golden renderings', () => {
     // The child owns a separate run root and may report that it reclaimed a
     // stale root from an interrupted earlier invocation. That guard notice is
     // expected setup telemetry; any other child stderr remains a failure.
-    expect(result.stderr).toMatch(/^(?:|tmpdir-leak-guard: swept \d+ stale run root\(s\) left behind by a previous interrupted run: .+\n)$/);
+    expect(result.stderr).toMatch(/^(?:|tmpdir-leak-guard: swept \d+ stale run root\(s\) left behind by a previous interrupted run: .+\n?)$/);
   }, 30_000);
 
   // Covers: task:17, task:rem-operator-17-r3
