@@ -15338,6 +15338,10 @@ export class Conductor {
                 roundId: execution.roundId,
                 host: execution.target.child,
                 events: this.events,
+                resolver: this.stepRunner.resolveRebaseConflict
+                  ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+                  : undefined,
+                resolverCap: resolveRebaseResolutionAttempts(this.config),
               });
               if (exited.kind === 'halted') {
                 // requestRoutedExit supplies the durable diagnostic (including
