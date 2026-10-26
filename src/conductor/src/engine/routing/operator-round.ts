@@ -1,18 +1,26 @@
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { ChildId } from '../child-context.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
+import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
+import { switchToChild } from '../child-lifecycle.js';
+import { createRoutedConductStateStore } from '../conduct-state-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
 import { loadConfig } from '../config.js';
+import { verdictPathFor } from '../gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { loadSliceTopology, type SliceTopology } from '../slice-topology.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
+import { writeGitHooksAndWire } from '../worktree-prepare.js';
 import { routedRoundOpen } from './round-admission.js';
-import { readRepairMarker, readRevalidationQueue, routingFenceOpen } from './route-record-store.js';
+import { admitRound } from './round-admission.js';
+import { pinHostEntry, restageHostRegion } from './host-region-entry.js';
+import { grantRoutedRepairCredit } from './round-receipt.js';
+import { createRouteRecord, readRepairMarker, readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor, redRefFor } from './routing-refs.js';
-import { routingSettingOn, type CarriedOperatorChild } from './route-types.js';
+import { routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId } from './route-types.js';
 
 export interface CheckOpenOperatorRoundInput {
   readonly worktree: string;
@@ -243,4 +251,161 @@ export async function checkOpenOperatorRound(
     return refuse('verify-green-contract-missing', `Child ${input.child} has no verify-green contract; restore red/c${input.child} or acceptance evidence, then retry ${command(input.slug, input.child, input.carry)}.`);
   }
   return { kind: 'accepted', topology, host: input.child, closure, carried };
+}
+
+export interface OpenOperatorRoundInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly reason: string;
+  readonly operator: string;
+  readonly carried: readonly CarriedOperatorChild[];
+  readonly park?: { readonly token: string };
+  readonly emitter: ConductorEventEmitter;
+  readonly git?: GitRunner;
+}
+
+export type OpenOperatorRoundResult =
+  | { readonly kind: 'opened'; readonly pinnedBase: CommitSha }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+async function readPriorRegion(
+  worktree: string,
+  host: ChildId,
+): Promise<OperatorRouteSection['priorRegion'] | undefined> {
+  const state = await createRoutedConductStateStore(worktree, host).read();
+  if (!state.ok) return undefined;
+  const verdicts: Record<string, string> = {};
+  for (const step of CHILD_REGION_STEPS) {
+    try {
+      verdicts[step] = await readFile(verdictPathFor(worktree, step, host), 'utf8');
+    } catch {
+      // A gate without a verdict is a normal completed-state shape. Only files
+      // that exist are part of the byte-preserving abandon snapshot.
+    }
+  }
+  return { statuses: Object.fromEntries(CHILD_REGION_STEPS.map((step) => [step, state.value[step]])) as OperatorRouteSection['priorRegion']['statuses'], verdicts };
+}
+
+async function readOtherFeatureTips(
+  git: GitRunner,
+  slug: string,
+  host: ChildId,
+): Promise<Record<string, CommitSha> | undefined> {
+  const hostBranch = childBranchFor(slug, host);
+  if (!hostBranch.ok) return undefined;
+  try {
+    const listed = await git(['for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/heads/feat']);
+    if (listed.exitCode !== 0) return undefined;
+    const tips: Record<string, CommitSha> = {};
+    for (const line of listed.stdout.split('\n').filter(Boolean)) {
+      const [branch, rawTip] = line.split(' ');
+      const tip = rawTip === undefined ? undefined : parseCommitSha(rawTip);
+      if (!branch || !tip || branch === hostBranch.branch) continue;
+      if (branch === `feat/daemon-${slug}` || branch.startsWith('feat/c') && branch.endsWith(`/${slug}`)) {
+        tips[branch] = tip;
+      }
+    }
+    return Object.keys(tips).length === 0 ? undefined : tips;
+  } catch {
+    return undefined;
+  }
+}
+
+async function switchToOperatorHost(
+  input: OpenOperatorRoundInput,
+  branch: string,
+  git: GitRunner,
+): Promise<{ readonly kind: 'switched' } | { readonly kind: 'refused'; readonly detail: string }> {
+  try {
+    const current = await git(['symbolic-ref', '--short', 'HEAD']);
+    if (current.exitCode !== 0) return { kind: 'refused', detail: 'cannot determine current branch before operator host switch' };
+    if (current.stdout.trim() === branch) return { kind: 'switched' };
+  } catch {
+    return { kind: 'refused', detail: 'cannot determine current branch before operator host switch' };
+  }
+  const switched = await switchToChild(input.worktree, { child: input.host, position: input.host, branch }, input.emitter, undefined, { git });
+  return switched.kind === 'completed'
+    ? { kind: 'switched' }
+    : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to operator host ${branch}` };
+}
+
+/**
+ * Opens (or resumes) an operator-owned landing after its caller has completed
+ * the read-only admission predicate. Durable writes deliberately advance in
+ * the same order as the operator contract, so a crash resumes from the first
+ * absent state instead of opening a second round.
+ */
+export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<OpenOperatorRoundResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  let stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind === 'absent') {
+    // Both values belong to the prepared record and must be observed before
+    // the first mutation, preserving the precise state abandon will restore.
+    const priorRegion = await readPriorRegion(input.worktree, input.host);
+    const otherTips = await readOtherFeatureTips(git, input.slug, input.host);
+    if (priorRegion === undefined || otherTips === undefined) {
+      return { kind: 'refused', detail: `cannot prepare operator round ${input.roundId}: host state or feature tips are unavailable` };
+    }
+    const created = await createRouteRecord(input.worktree, input.slug, {
+      roundId: input.roundId,
+      sealedAuthored: 0,
+      kind: 'operator',
+      items: [],
+      allocation: { [input.host]: { remTaskIds: [], blockBodies: [] } },
+      operator: {
+        origin: 'land',
+        reason: input.reason,
+        operator: input.operator,
+        entryStep: 'acceptance_specs',
+        ...(input.park === undefined ? {} : { park: input.park }),
+        carried: input.carried,
+        otherTips,
+        priorRegion,
+      },
+    }, { git });
+    if (created.kind !== 'created') return { kind: 'refused', detail: `cannot create prepared operator round: ${created.kind}` };
+    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  }
+  if (stored.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable` };
+  if (stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land' || stored.record.hosts[input.host] === undefined) {
+    return { kind: 'refused', detail: `operator round ${input.roundId} does not match landing host ${input.host}` };
+  }
+
+  if (stored.record.phase === 'prepared') {
+    try {
+      await writeGitHooksAndWire(input.worktree);
+    } catch (error) {
+      return { kind: 'refused', detail: `cannot wire operator commit hooks: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    const admitted = await admitRound(input.worktree, input.slug, stored.record, input.host, { git });
+    if (admitted.kind !== 'admitted') return { kind: 'refused', detail: `cannot admit operator round after marker transaction: ${admitted.detail}` };
+    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    if (stored.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable after marker transaction` };
+  }
+
+  const hostState = stored.record.hosts[input.host];
+  if (hostState !== 'admitted' && hostState !== 'repairing') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} host ${input.host} is not admitted` };
+  }
+  const pinned = await pinHostEntry(input.worktree, input.slug, stored, input.host, git);
+  if (pinned.kind === 'refused') return pinned;
+  stored = pinned.stored;
+  const switched = await switchToOperatorHost(input, pinned.target.branch, git);
+  if (switched.kind === 'refused') return switched;
+
+  if (stored.record.hosts[input.host] === 'admitted') {
+    const restaged = await restageHostRegion(input.worktree, input.slug, input.host, stored.record, git);
+    if (restaged.kind === 'refused') return restaged;
+    const repairing = transitionHost(stored, input.host, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') return { kind: 'refused', detail: `operator round ${input.roundId} host ${input.host} cannot enter repairing` };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record: repairing.record },
+    ], { git });
+    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot enter operator host repairing: ${wrote.kind}` };
+  }
+  const credit = await grantRoutedRepairCredit({ projectRoot: input.worktree, child: input.host, roundId: input.roundId });
+  if (credit.kind === 'refused') return { kind: 'refused', detail: `cannot grant operator repair credit: ${credit.detail}` };
+  return { kind: 'opened', pinnedBase: pinned.pinnedBase };
 }

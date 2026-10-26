@@ -617,7 +617,7 @@ export async function ensureSessionHooks(
  * Attribution hooks fail open, while the preventive pre-commit control fails
  * closed: a worktree without it must never enter BUILD/SHIP.
  */
-async function writeGitHooksAndWire(
+export async function writeGitHooksAndWire(
   worktreePath: string,
   log?: (msg: string) => void,
 ): Promise<void> {

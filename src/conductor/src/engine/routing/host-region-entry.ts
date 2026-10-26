@@ -186,7 +186,7 @@ function terminalJournal(journal: Awaited<ReturnType<typeof readRestackJournal>>
   return routingFenceOpen(journal);
 }
 
-async function hostTarget(
+export async function resolveHostEntryTarget(
   git: GitRunner,
   slug: string,
   host: ChildId,
@@ -234,7 +234,7 @@ async function verifyOrSwitch(
     : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to host branch ${target.branch}` };
 }
 
-async function restageHostRegion(
+export async function restageHostRegion(
   worktree: string,
   slug: string,
   host: ChildId,
@@ -292,6 +292,63 @@ async function restageHostRegion(
     }
   }
   return assertNever(record.kind);
+}
+
+export type PinHostEntryResult =
+  | { readonly kind: 'pinned'; readonly stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' }; readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+/**
+ * Persist the host's closure/tree baseline before any caller switches its
+ * worktree.  Operator landings and conductor-driven routing share this exact
+ * durable entry fence so a crash cannot grade against the post-closure tip.
+ */
+export async function pinHostEntry(
+  worktree: string,
+  slug: string,
+  stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' },
+  host: ChildId,
+  git: GitRunner,
+): Promise<PinHostEntryResult> {
+  const resolved = await resolveHostEntryTarget(git, slug, host);
+  if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
+  let current = stored;
+  let pinnedBase = current.record.entry?.host === host ? current.record.entry.pinnedBase : undefined;
+  if (current.record.entry?.host !== host) {
+    let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
+    const queue = await readRevalidationQueue(worktree, slug, { git });
+    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
+    switch (current.record.kind) {
+      case 'revalidate':
+        if (!queued || queue.kind !== 'queue') {
+          return { kind: 'refused', detail: `revalidate host ${host} has no queued entry to pin` };
+        }
+        revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+        break;
+      case 'audit':
+        if (queued && queue.kind === 'queue') {
+          revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+        }
+        break;
+      case 'operator':
+        break;
+      default:
+        return assertNever(current.record.kind);
+    }
+    const next = {
+      ...current.record,
+      entry: { host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
+    };
+    const wrote = await writeRoutingTransaction(worktree, slug, [
+      { kind: 'update-record', previous: current, record: next },
+    ], { git });
+    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot pin routing host entry: ${wrote.kind}` };
+    pinnedBase = resolved.pinnedBase;
+    const reread = await readRouteRecord(worktree, slug, current.record.roundId, { git });
+    if (reread.kind !== 'record') return { kind: 'refused', detail: `routing record ${current.record.roundId} is unavailable after pin` };
+    current = reread;
+  }
+  return { kind: 'pinned', stored: current, target: resolved.target, pinnedBase: pinnedBase! };
 }
 
 async function bindHostObligations(
@@ -387,42 +444,11 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} is not admitted` };
   }
 
-  const resolved = await hostTarget(git, input.slug, input.host);
-  if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
-  let pinnedBase = stored.record.entry?.host === input.host ? stored.record.entry.pinnedBase : undefined;
-  if (stored.record.entry?.host !== input.host) {
-    let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
-    const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
-    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === input.host) : undefined;
-    switch (stored.record.kind) {
-      case 'revalidate':
-        if (!queued || queue.kind !== 'queue') {
-          return { kind: 'refused', detail: `revalidate host ${input.host} has no queued entry to pin` };
-        }
-        revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
-        break;
-      case 'audit':
-        if (queued && queue.kind === 'queue') {
-          revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
-        }
-        break;
-      case 'operator':
-        break;
-      default:
-        return assertNever(stored.record.kind);
-    }
-    const next = {
-      ...stored.record,
-      entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
-    };
-    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
-      { kind: 'update-record', previous: stored, record: next },
-    ], { git });
-    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot pin routing host entry: ${wrote.kind}` };
-    pinnedBase = resolved.pinnedBase;
-    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-    if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after pin` };
-  }
+  const pinned = await pinHostEntry(input.worktree, input.slug, stored, input.host, git);
+  if (pinned.kind === 'refused') return pinned;
+  const resolved = { target: pinned.target };
+  const pinnedBase = pinned.pinnedBase;
+  stored = pinned.stored;
 
   const switched = await verifyOrSwitch(input, resolved.target, git);
   if (switched.kind === 'refused') return switched;
