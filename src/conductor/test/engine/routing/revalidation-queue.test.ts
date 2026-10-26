@@ -9,6 +9,7 @@ import { acknowledgeQueueEntry, consumeLowestQueued, mergeQueueGeneration } from
 import { readRepairMarker, readRevalidationQueue, readRouteRecord, transitionHost, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { readRoutedGrowthSnapshot } from '../../../src/engine/routing/round-receipt.js';
 import { emptyUnsettledReceipt, parseRoundId, type RegionGate, type RevalidationQueueEntry, type RevalidationQueueRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 
@@ -67,8 +68,11 @@ async function durableQueueFixture() {
   return { repo, git };
 }
 
-async function seedClosedRound(subject: Awaited<ReturnType<typeof durableQueueFixture>>): Promise<void> {
-  const roundId = parseRoundId('r1')!;
+async function seedClosedRound(
+  subject: Awaited<ReturnType<typeof durableQueueFixture>>,
+  overrides: Partial<RouteRecord> = {},
+): Promise<void> {
+  const roundId = overrides.roundId ?? parseRoundId('r1')!;
   const closed: RouteRecord = {
     roundId,
     sealedAuthored: 1,
@@ -80,6 +84,7 @@ async function seedClosedRound(subject: Awaited<ReturnType<typeof durableQueueFi
     currentHostIndex: 0,
     receipt: emptyUnsettledReceipt(),
     outbox: [],
+    ...overrides,
   };
   const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(closed) })).stdout.trim();
   await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
@@ -176,5 +181,44 @@ describe('revalidation queue generations', () => {
     } finally {
       await rm(subject.repo, { recursive: true, force: true });
     }
+  });
+
+  describe('authored denominator', () => {
+    const routing = {
+      cursor: { kind: 'active' },
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } },
+    };
+
+    it('seals no authored denominator on a revalidation round', async () => {
+      const subject = await durableQueueFixture();
+      try {
+        await seedClosedRound(subject, { sealedAuthored: 17 });
+        await expect(consumeLowestQueued(subject.repo, 'demo', { git: subject.git })).resolves.toMatchObject({ kind: 'admitted' });
+        const stored = await readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!, { git: subject.git });
+        if (stored.kind !== 'record') throw new Error('expected revalidate record');
+        expect(stored.record.kind).toBe('revalidate');
+        expect(stored.record.sealedAuthored).toBeUndefined();
+        await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git))
+          .resolves.toMatchObject({ sealedAuthored: 17 });
+      } finally {
+        await rm(subject.repo, { recursive: true, force: true });
+      }
+    });
+
+    it('ignores the zero denominator a legacy revalidation round recorded', async () => {
+      const subject = await durableQueueFixture();
+      try {
+        await seedClosedRound(subject, { sealedAuthored: 17 });
+        // Shape written before revalidation rounds stopped sealing a placeholder.
+        await seedClosedRound(subject, {
+          roundId: parseRoundId('r2')!, kind: 'revalidate', sealedAuthored: 0, items: [],
+          allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
+        });
+        await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git))
+          .resolves.toMatchObject({ sealedAuthored: 17 });
+      } finally {
+        await rm(subject.repo, { recursive: true, force: true });
+      }
+    });
   });
 });
