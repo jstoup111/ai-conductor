@@ -35,7 +35,7 @@ describe('registerTerminalBuiltins', () => {
 
     expect({
       renderer: withRendererRegistry.tryGet('ui_renderer', 'terminal'),
-      starts: start.mock.calls.map(([renderers]) => renderers?.length ?? 0),
+      starts: start.mock.calls.map((args) => args[0]?.length ?? 0),
       subscribers: [withRendererSubscriber, withoutRendererSubscriber].every(
         (subscriber) => subscriber instanceof TerminalSubscriber,
       ),
