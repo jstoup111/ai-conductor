@@ -422,14 +422,17 @@ reference contradicts a claim; truthful claims and matching prose below the lead
 ### Layer ratchet
 
 **`layer-ratchet.test.ts`** reads every `.ts` file under `src/conductor/src/`, classifies it by its
-first path segment, and checks its top-level value imports and `export … from` re-exports against
-the [dependency direction](code-organization.md#dependency-direction) and the committed
-`layer-allowlist.txt`. The checker is the pure module `layer-ratchet.ts`. Each failure line reads
+first path segment, and checks every module reference — imports including `import type`,
+`export … from` re-exports, inline `import('…')` types, and dynamic `import()` — against the
+[dependency direction](code-organization.md#dependency-direction) and the committed
+`layer-allowlist.txt`. Cycle detection uses value imports and value re-exports only. A separate case
+fails if the allowlist holds any upward-edge entry. The checker is the pure module `layer-ratchet.ts`. Each failure line reads
 `<kind> <location> <detail>`; `upward` and `cycle` lines end with the edge's allowlist entry.
 
 | Kind | Fix |
 | --- | --- |
-| `upward`, `cycle` | Remove the import, or make it `import type`. Do not allowlist new edges. |
+| `upward` | Move the dependency down, or invert it into a port the higher layer injects. `import type` does not clear it. Never allowlist an upward edge. |
+| `cycle` | Remove the value import, or make it `import type`. Do not allowlist new edges. |
 | `stale-entry` | Delete the named line from `layer-allowlist.txt`; its edge is gone or no longer violates. |
 | `malformed-entry` | Fix or delete the line. Each is `<from> -> <to>`, paths relative to `src/conductor/src/`, lines sorted and unique; `#` lines and blank lines are ignored. |
 | `unclassifiable-file` | Move the file under `types/`, `execution/`, `engine/`, `ui/`, `tools/`, or the `src/` root. |
