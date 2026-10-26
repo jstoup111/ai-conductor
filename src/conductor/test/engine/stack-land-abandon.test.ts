@@ -1,4 +1,4 @@
-// Covers: task:24, task:rem-as-built-rem-as-built-r11
+// Covers: task:24, task:rem-as-built-rem-as-built-r11, task:rem-as-built-rem-as-built-r12
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -178,5 +178,28 @@ describe('stack land --abandon', () => {
     await abandon(subject, { abandonRound: (input: Parameters<typeof abandonOperatorRound>[0]) => abandonOperatorRound({ ...input, git: crashing }) });
 
     await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8')).resolves.toContain('owned-park-token:');
+  });
+
+  it('abandons an open rewind-origin round through the round authority', async () => {
+    const subject = await fixture();
+    const stored = await record(subject);
+    const rewind = {
+      ...stored.record,
+      operator: { ...stored.record.operator!, origin: 'rewind' as const },
+    };
+    await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: rewind }], { git: subject.git });
+
+    const output: string[] = [];
+    expect(await abandon(subject, {}, output), output.join('\n')).toBe(0);
+    expect((await record(subject)).record).toMatchObject({ phase: 'closed', hosts: { 1: 'abandoned' } });
+  });
+
+  it('abandons an admitted landing from a clean checkout before the host switch', async () => {
+    const subject = await fixture();
+    await subject.git(['switch', '-q', leafBranchFor('demo')]);
+
+    const output: string[] = [];
+    expect(await abandon(subject, {}, output), output.join('\n')).toBe(0);
+    expect((await record(subject)).record).toMatchObject({ phase: 'closed', hosts: { 1: 'abandoned' } });
   });
 });

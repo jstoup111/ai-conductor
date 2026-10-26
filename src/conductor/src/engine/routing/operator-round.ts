@@ -1,7 +1,7 @@
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import { ConductorEventEmitter } from '../../ui/events.js';
 import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { switchToChild } from '../child-lifecycle.js';
 import { createRoutedConductStateStore } from '../conduct-state-store.js';
@@ -229,7 +229,7 @@ export async function checkAbandonOperatorRound(
 ): Promise<CheckAbandonOperatorRoundResult> {
   const git = input.git ?? makeGitRunner(input.worktree);
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land' || stored.record.phase !== 'open') {
+  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.phase !== 'open') {
     return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable for abandon` };
   }
   const state = stored.record.hosts[input.host];
@@ -246,10 +246,6 @@ export async function checkAbandonOperatorRound(
   const branch = childBranchFor(input.slug, input.host);
   if (!branch.ok) return { kind: 'refused', detail: branch.reason };
   try {
-    const current = await git(['symbolic-ref', '--short', 'HEAD']);
-    if (current.exitCode !== 0 || current.stdout.trim() !== branch.branch) {
-      return { kind: 'refused', detail: `abandon must run on ${branch.branch}` };
-    }
     const untracked = await git(['ls-files', '--others', '--exclude-standard']);
     if (untracked.exitCode !== 0 || untracked.stdout.trim() !== '') {
       return { kind: 'refused', detail: 'the dirty worktree must be committed or stashed before abandoning the landing' };
@@ -752,6 +748,27 @@ async function onOperatorHostBranch(
   }
 }
 
+async function switchToAbandonHost(
+  worktree: string,
+  slug: string,
+  host: ChildId,
+  git: GitRunner,
+): Promise<{ readonly kind: 'switched' } | { readonly kind: 'refused'; readonly detail: string }> {
+  const branch = childBranchFor(slug, host);
+  if (!branch.ok) return { kind: 'refused', detail: branch.reason };
+  try {
+    const current = await git(['symbolic-ref', '--short', 'HEAD']);
+    if (current.exitCode !== 0) return { kind: 'refused', detail: `cannot determine current branch before abandoning host ${host}` };
+    if (current.stdout.trim() === branch.branch) return { kind: 'switched' };
+  } catch {
+    return { kind: 'refused', detail: `cannot determine current branch before abandoning host ${host}` };
+  }
+  const switched = await switchToChild(worktree, { child: host, position: host, branch: branch.branch }, new ConductorEventEmitter(), undefined, { git });
+  return switched.kind === 'completed'
+    ? { kind: 'switched' }
+    : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to operator host ${branch.branch}` };
+}
+
 /**
  * Reverts an operator landing without advancing the round to the leaf. The
  * return-to-leaf recovery is deliberately a later owner; this function only
@@ -771,6 +788,8 @@ export async function abandonOperatorRound(
   const branch = childBranchFor(input.slug, input.host);
   if (!branch.ok) return { kind: 'refused', detail: branch.reason };
   const hostRef = `refs/heads/${branch.branch}`;
+  const switched = await switchToAbandonHost(input.worktree, input.slug, input.host, git);
+  if (switched.kind === 'refused') return switched;
   if (stored.record.hosts[input.host] === 'admitted' || stored.record.hosts[input.host] === 'repairing') {
     const [rejectedTip, resetTip] = await Promise.all([
       resolveCommitRef(git, hostRef),
