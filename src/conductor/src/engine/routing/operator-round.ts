@@ -229,7 +229,7 @@ export async function checkAbandonOperatorRound(
 ): Promise<CheckAbandonOperatorRoundResult> {
   const git = input.git ?? makeGitRunner(input.worktree);
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.phase !== 'open') {
+  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.operator === undefined || stored.record.phase !== 'open') {
     return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable for abandon` };
   }
   const state = stored.record.hosts[input.host];
