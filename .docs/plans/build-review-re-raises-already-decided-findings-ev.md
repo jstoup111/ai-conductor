@@ -763,3 +763,32 @@ Slice 2
 - [x] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [x] Dependencies are explicit and acyclic
 - [x] Tasks do not invalidate each other's fixtures or assertions (swept by plan review at Tier L)
+
+### Task rem-as-built-rem-6: Child-scope the build_review branch-artifact paths the same way the aggregate and case store are already child-scoped. Apply this to the scope-history reader (step-runners.ts:3463), the branch-artifact writers (:3860, :4186, :4287, :4884), and the readers in build-review-effective.ts:321 and build-review-adjudication-artifact-facts.ts:107. Add a test in which a sibling child's records settle no hunk for another child.
+**Gate:** as-built
+**Rationale:** Verified (98%): priorArtifactsFor at step-runners.ts:3463 reads every root .pipeline/build-review/lap-* directory with no child discriminator, and the writes at :3860, :4186, :4287 and :4884 are also root-scoped. Task 4's done-when explicitly requires a stacked child to read only its own branch artifacts and case store, so the plan already admits this repair. The readers in build-review-effective.ts:321 and build-review-adjudication-artifact-facts.ts:107 are included because they consume the same scope history. Routes to BUILD.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r4
+### Task rem-as-built-rem-2: In step-runners.ts, pass the testQuality test-scope analysis version and binding identity into buildReviewPolicyIdentity for the testQuality rubric. Add a runner-level test showing that a change to either value makes the next lap full instead of delta.
+**Gate:** as-built
+**Rationale:** Verified (100%): the built-in buildReviewPolicyIdentity call at step-runners.ts:3539 omits the testQuality test-scope analysis version and binding identity, so frontier hashing receives nulls. ADR D1 and Task 2 require both inputs, and Task 6 owns production scope calculation. The fix conforms to the ADR, so it routes to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r4
+### Task rem-as-built-rem-5: In step-runners.ts, derive testQuality indeterminateCandidates from the current test scope only: the current sourceSnapshot candidates at the current merge base and policy identity, superseded by later resolutions. Stop taking them from all historical artifacts. Add a test in which a candidate that was indeterminate in L1 and resolved in L2 no longer vetoes settlement of its hunk, while a currently indeterminate candidate still does.
+**Gate:** as-built
+**Rationale:** Verified (99%): step-runners.ts:3553-3565 collects indeterminate scope resolutions from every historical artifact and forwards them as current unknown sources. ADR D2 and Task 9's done-when restrict the veto to indeterminate candidates 'of the current test scope', so a resolved historical candidate keeps hunks unsettled forever. This is conforming implementation drift and routes to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 2
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-5 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r4
