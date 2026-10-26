@@ -507,3 +507,14 @@ none. Daemon discovery finds specs by manifest. 17 tasks in three slices. No art
 - The repair for task rem-as-built-rem-as-built-8 is committed and its targeted tests pass.
 **Child:** 2
 **Round:** r3
+
+### Task rem-prd-audit-15-r1: In src/conductor/src/engine/daemon-backlog.ts, restore legacy iteration order: sort discovery candidates by the legacy plan file name ('<slug>.md') with locale-independent code-unit comparison (the default Array.prototype.sort order), replacing the localeCompare on bare slugs. Add a RED-first case to test/engine/daemon-backlog-manifest.test.ts 'preserves the frozen legacy discovery output'. With no manifest, it uses a multi-candidate tree that includes prefix pairs (e.g. x and x-y) and at least one blocked item and one warning. It asserts that eligible, blocked and gated items and the log lines equal the pre-change order (x-y before x).
+**Gate:** prd-audit
+**Rationale:** Verified (95%): src/engine/daemon-backlog.ts:917 now sorts candidates by bare slug with localeCompare, while main sorted `[...planFiles].sort()` (UTF-16 code-unit order on '<slug>.md'). For plans x.md and x-y.md the legacy order was x-y then x; the new order is x then x-y, and localeCompare also depends on locale. Eligible, blocked and warning output follows iteration order, so the no-manifest output no longer matches the frozen legacy output that task 15's third doneWhen requires. The existing frozen-output test (daemon-backlog-manifest.test.ts:230) uses one candidate, so it cannot catch the reorder. This is implementation and test drift inside approved task 15, with no architectural or product decision involved, so it routes to BUILD.
+**Criterion:** S4.3
+**Parent task:** 15
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-15-r1 is committed and its targeted tests pass.
+**Child:** 3
+**Round:** r4
