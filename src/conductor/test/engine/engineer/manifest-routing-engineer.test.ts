@@ -1,4 +1,4 @@
-// Covers: task:14
+// Covers: task:rem-prd-audit-14
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { initialSpecPublication } from '../../../src/engine/engineer-cli.js';
 import { traceBranchIssue } from '../../../src/engine/engineer/intake/overlap-sources.js';
+import { MalformedFeatureManifestError } from '../../../src/engine/feature-manifest-source.js';
 import { readMutationProvenance } from '../../../src/engine/owner-gate/mutation-provenance.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 
@@ -140,5 +141,21 @@ describe('engineer spec-branch manifest routing (Task 14)', () => {
       readIssueState: async () => 'OPEN',
       cwd: root,
     })).resolves.toBeNull();
+  });
+
+  it('fails closed on a malformed spec-branch manifest when tracing intake provenance', async () => {
+    const root = await fixture({
+      [LEGACY_INTAKE]: 'Owner: legacy-owner\nSource-Ref: owner/repo#101\n',
+      [`.docs/${SLUG}/manifest.json`]: '{ malformed JSON',
+    });
+
+    await expect(traceBranchIssue({
+      git: makeGitRunner(root),
+      branch: BRANCH,
+      repository: 'owner/repo',
+      readIssueState: async () => 'OPEN',
+      cwd: root,
+    })).rejects.toSatisfy((error: unknown) => error instanceof MalformedFeatureManifestError
+      && error.message.includes(`.docs/${SLUG}/manifest.json`));
   });
 });

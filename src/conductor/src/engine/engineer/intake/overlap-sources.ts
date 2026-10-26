@@ -13,7 +13,11 @@ import {
 import { runTrackerRead, type GhRunner } from '../../tracker-client.js';
 import { parseIntakeSourceRef } from '../../artifacts.js';
 import { parseSourceRef } from '../issue-ref.js';
-import { gitRefManifestSource, resolveFeatureArtifact } from '../../feature-manifest-source.js';
+import {
+  gitRefManifestSource,
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+} from '../../feature-manifest-source.js';
 import { extractCitedPaths } from './cited-paths.js';
 import { sanitizeInboundText, INBOUND_ARMOR_LINE } from './sanitize-inbound.js';
 import type { IssueOverlap } from './overlap-suggestions.js';
@@ -199,7 +203,7 @@ export async function traceBranchIssue({
     }
     return null;
   } catch (error) {
-    if (error instanceof BranchIssueStateReadError) throw error;
+    if (error instanceof BranchIssueStateReadError || error instanceof MalformedFeatureManifestError) throw error;
     return null;
   }
 }
