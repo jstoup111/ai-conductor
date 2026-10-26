@@ -111,6 +111,7 @@ describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
     expect(output).toContain('PROCESSED (1)');
   });
 
+  // Covers: task:rem-prd-audit-8
   it('clips compact details to the budget but never a slug, and resolves a safe row budget', () => {
     const longSlug = 's'.repeat(50); const reason = 'x'.repeat(280);
     const output = renderDashboard({ ...base(), halted: [{ slug: longSlug, reason, tier: 'M', step: 'build' }] }, { mode: 'compact', rowBudget: 80 });
@@ -158,6 +159,7 @@ describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
     }
   });
 
+  // Covers: task:rem-prd-audit-12
   it('assigns each overlapping slug to its highest-ranked group in full and compact renders', () => {
     const slugs = Array.from({ length: 50 }, (_, index) => `generated-${index}`);
     const names = ['parked', 'halted', 'inProgress', 'retained', 'processed', 'blocked', 'gated', 'waiting', 'eligible'] as const;
@@ -1294,6 +1296,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
+  // Covers: task:rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451
   it('renders an unparked halted slug with its reason and clear-to-resume remedy', () => {
     const out = renderDashboard({
       halted: [{ slug: 'held-by-halt', reason: 'needs human DECIDE' }],

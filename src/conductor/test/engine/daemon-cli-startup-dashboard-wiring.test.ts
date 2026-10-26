@@ -51,6 +51,7 @@ describe('daemon-cli startup dashboard wiring (Task 8)', () => {
     expect(scans).toBe(0);
   });
 
+  // Covers: task:rem-prd-audit-10
   it('uses compact rendering defaults so the console includes the processed count', async () => {
     const rendered: string[] = [];
     const binding = createStartupDashboardBinding({
