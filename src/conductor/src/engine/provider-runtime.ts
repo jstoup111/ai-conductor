@@ -1,5 +1,6 @@
 import type {
   AuthenticationReadiness,
+  InvokeOptions,
   LLMProvider,
   ProviderLifecycleCapability,
   ProviderNativeSchemaCapability,
@@ -27,6 +28,43 @@ export interface ProviderRuntime {
   builtIn: boolean;
   availability: ModelAvailability;
   runWideUnavailable?: { reason: string };
+}
+
+/**
+ * Refuses engine-owned system prompts unless the provider explicitly declares
+ * that it delivers them.  The proxy leaves the registry's provider instance
+ * untouched while binding non-invocation methods to their original target.
+ */
+export function guardSystemPromptDelivery(
+  key: string,
+  provider: LLMProvider,
+): LLMProvider {
+  return new Proxy(provider, {
+    get(target, property) {
+      if (property === 'invoke') {
+        return async (options: InvokeOptions) => {
+          if (
+            typeof options.systemPrompt === 'string' &&
+            options.systemPrompt.length > 0 &&
+            target.systemPromptCapability?.deliversSystemPrompt !== true
+          ) {
+            return {
+              success: false,
+              output: `Provider ${key} cannot receive the engine system prompt: missing systemPromptCapability declaration. Recovery action: declare systemPromptCapability.deliversSystemPrompt and deliver InvokeOptions.systemPrompt to the model.`,
+              exitCode: 1,
+              providerInvocationSkipped: true,
+              executionDisposition: 'not-started' as const,
+              systemPromptUndeliverable: true as const,
+            };
+          }
+          return target.invoke(options);
+        };
+      }
+
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 export class ProviderRuntimeSet {
@@ -109,7 +147,7 @@ export function createProviderRuntimeSet(
       const provider = registry.get<LLMProvider>('llm_provider', key);
       return {
         key,
-        provider,
+        provider: guardSystemPromptDelivery(key, provider),
         lifecycleCapability: provider.lifecycleCapability,
         nativeSchemaCapability: provider.nativeSchemaCapability,
         policy,

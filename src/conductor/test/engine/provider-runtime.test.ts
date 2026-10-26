@@ -1,4 +1,4 @@
-// Covers: task:5, task:7
+// Covers: task:2, task:5, task:7
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -88,6 +88,47 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it.each([
+    { name: 'missing declaration' },
+    {
+      name: 'false declaration',
+      systemPromptCapability: { deliversSystemPrompt: false },
+    },
+    { name: 'empty declaration', systemPromptCapability: {} },
+  ])('refuses system-prompt delivery for a recorder provider with a $name', async ({
+    systemPromptCapability,
+  }) => {
+    const invoke = vi.fn(async () => ({
+      success: true,
+      output: 'provider should not be called',
+      exitCode: 0,
+    }));
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'recorder', {
+      invoke,
+      ...(systemPromptCapability === undefined ? {} : { systemPromptCapability }),
+    });
+    registry.markInitialized();
+
+    const createRuntimeSet = await loadRuntimeSetFactory();
+    expect(createRuntimeSet).toBeTypeOf('function');
+    const result = await createRuntimeSet!(registry)
+      .get('recorder')
+      .provider.invoke({ prompt: '/x', systemPrompt: 'S' });
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      output:
+        'Provider recorder cannot receive the engine system prompt: missing systemPromptCapability declaration. Recovery action: declare systemPromptCapability.deliversSystemPrompt and deliver InvokeOptions.systemPrompt to the model.',
+      exitCode: 1,
+      providerInvocationSkipped: true,
+      executionDisposition: 'not-started',
+      systemPromptUndeliverable: true,
+    });
+    expect(result.providerUnavailable).toBeUndefined();
+  });
+
   it('exposes native schema from a Pi adapter when its descriptor declares nativeSchema', () => {
     const runtimes = new RuntimeSet([{
       key: 'pi',
@@ -327,12 +368,12 @@ describe('ProviderRuntimeSet', () => {
         firstCustom?.key,
       ],
       providerIdentity: [
-        firstClaude?.provider === claude,
-        firstCodex?.provider === codex,
-        firstCustom?.provider === custom,
-        secondClaude?.provider === claude,
-        secondCodex?.provider === codex,
-        secondCustom?.provider === custom,
+        firstClaude?.provider !== claude,
+        firstCodex?.provider !== codex,
+        firstCustom?.provider !== custom,
+        secondClaude?.provider !== claude,
+        secondCodex?.provider !== codex,
+        secondCustom?.provider !== custom,
       ],
       policies: [
         firstClaude?.policy === CLAUDE_MODEL_POLICY,
