@@ -1606,6 +1606,9 @@ export class Conductor {
         const cursor = await this.resolveActiveChild(this.projectRoot, slug);
         const execution = resolveExecutionChild(cursor, slug);
         if (execution?.source !== 'routed-host' || execution.roundId === undefined) return undefined;
+        // A routed leaf takes ordinary acceptance_specs (it never closes, so
+        // verify-green never runs for it); its ordinary predicate applies.
+        if (execution.target.isLeaf) return undefined;
         const headSha = await currentCommitSha(this.projectRoot);
         // Routed completion must never fall through to the legacy RED
         // predicate.  Supply the expected identity even when the recorded

@@ -1,5 +1,6 @@
 // Covers: task:9, task:207
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -338,5 +339,23 @@ describe('Conductor routed acceptance verify-green path', () => {
     // to compare against; it proves itself through the ordinary step.
     expect(mocks.verifyGreenAcceptance).not.toHaveBeenCalled();
     expect(runner.run.mock.calls.map((call) => (call as unknown[])[0])).toContain('acceptance_specs');
+  });
+
+  it('expects a verify-green record at completion for a routed child host but not for the leaf host', async () => {
+    const { root } = await routedFixture();
+    // completionCtx only derives the routed expectation with a resolvable HEAD.
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    git('init', '-q', '-b', 'main');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'base');
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    const contextFor = (host: ReturnType<typeof parseChildId> & {}) =>
+      (routedConductor(root, new ConductorEventEmitter(), runner, host) as unknown as {
+        completionCtx: (state: Record<string, unknown>) => Promise<{ routedVerifyGreen?: unknown }>;
+      }).completionCtx({ feature_desc: 'demo' });
+
+    await expect(contextFor(child)).resolves.toMatchObject({ routedVerifyGreen: { roundId, host: child } });
+    // The leaf never closes and never runs verify-green, so its ordinary
+    // acceptance_specs completion predicate applies.
+    expect((await contextFor(parseChildId(2)!)).routedVerifyGreen).toBeUndefined();
   });
 });

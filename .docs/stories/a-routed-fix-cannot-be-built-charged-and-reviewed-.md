@@ -132,7 +132,7 @@ worktree recreation or an older child never blocks a repair on missing RED evide
 - Given a child with no owned criteria and so no RED marker, when it closes, then no `red/c<k>` ref is written, and its later routed pass runs verify-green without a refusal.
 - Given host 1's routed pass with a present RED marker whose digest differs from `red/c1`, when `acceptance_specs` runs, then the step fails naming the digest mismatch.
 - Given an N=1 feature, when `acceptance_specs` runs, then today's RED lifecycle applies unchanged.
-- Given a routed pass whose host is the leaf, which never closes and so has no `red/c<leaf>` ref, when `acceptance_specs` runs, then verify-green is not invoked and the ordinary `acceptance_specs` step runs for the leaf.
+- Given a routed pass whose host is the leaf, which never closes and so has no `red/c<leaf>` ref, when `acceptance_specs` runs, then verify-green is not invoked, the ordinary `acceptance_specs` step runs for the leaf, and its completion is judged by the ordinary predicate rather than by a verify-green record.
 
 ### Done When
 - [ ] Tests assert `closeChild` writes `red/c<k>` only with routing on and a RED marker, accepts a same-digest blob on resume, and refuses a different one.
