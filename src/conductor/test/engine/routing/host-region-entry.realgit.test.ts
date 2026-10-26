@@ -33,6 +33,11 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
   roots.push(repo);
   const git = makeGitRunner(repo);
   await git(['init', '-q', '-b', 'main']);
+  // This fixture is removed immediately after each case. Keep Git from
+  // detaching maintenance that can still create paths under .git during
+  // teardown, racing the recursive remove in afterEach.
+  await git(['config', 'maintenance.auto', 'false']);
+  await git(['config', 'gc.auto', '0']);
   await git(['config', 'user.email', 'host-region@example.invalid']);
   await git(['config', 'user.name', 'Host region']);
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
