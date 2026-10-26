@@ -5,10 +5,12 @@ import type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch
 import { ConductorEventEmitter } from '../ui/events.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
+import { loadConfig } from './config.js';
 import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
 import { HALT_MARKER } from './halt-marker.js';
 import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult, type ParkToken } from './park-marker.js';
 import { clearHaltAtomically } from './rewind.js';
+import { hasDurableChildState } from './slice-topology.js';
 import {
   checkDeclareOperatorRound,
   checkAbandonOperatorRound,
@@ -25,13 +27,15 @@ import {
   type OpenOperatorRoundResult,
 } from './routing/operator-round.js';
 import { nextRoundId, readRepairMarker, readRouteRecord } from './routing/route-record-store.js';
-import type { CarriedOperatorChild, RoundId } from './routing/route-types.js';
+import { routingSettingOn, type CarriedOperatorChild, type RoundId } from './routing/route-types.js';
 
 export interface StackLandCliDeps {
   readonly cwd?: string;
   readonly print?: (message: string) => void;
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly resolveWorktree?: (slug: string) => Promise<string | undefined>;
+  readonly loadConfig?: typeof loadConfig;
+  readonly hasDurableChildState?: typeof hasDurableChildState;
   readonly checkOpen?: typeof checkOpenOperatorRound;
   readonly acquireLease?: typeof acquireFeatureDispatchLease;
   readonly createPark?: typeof createOwnedPark;
@@ -49,6 +53,28 @@ export interface StackLandCliDeps {
   readonly releasePark?: typeof releaseOwnedPark;
   readonly clearMatchingHalt?: (worktree: string, roundId: RoundId) => Promise<'cleared' | 'absent' | 'unrelated'>;
   readonly emitter?: ConductorEventEmitter;
+}
+
+type StackLandEligibility = { readonly kind: 'eligible' } | { readonly kind: 'refused'; readonly detail: string };
+
+/**
+ * Reject stack-land commands that could not have created their routing state.
+ * Run this before reading the repair marker so a flattened or routing-disabled
+ * feature cannot use a stale marker to enter the mutation path.
+ */
+async function checkStackLandEligibility(worktree: string, slug: string, deps: StackLandCliDeps): Promise<StackLandEligibility> {
+  const config = await (deps.loadConfig ?? loadConfig)(worktree);
+  if (!routingSettingOn(config.ok ? config.config : undefined)) {
+    return { kind: 'refused', detail: 'Routing is disabled by stacked_prs.route_whole_feature_fixes; enable it before using stack land.' };
+  }
+  const durable = await (deps.hasDurableChildState ?? hasDurableChildState)(worktree, slug);
+  if (durable === 'git-error') {
+    return { kind: 'refused', detail: 'Cannot determine durable child state; refusing stack land.' };
+  }
+  if (!durable) {
+    return { kind: 'refused', detail: `Feature ${slug} is not a stacked feature; stack land is unavailable.` };
+  }
+  return { kind: 'eligible' };
 }
 
 function leaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResult, { readonly kind: 'acquired' }>): string {
@@ -176,6 +202,8 @@ async function dispatchStackLandDoneCommand(command: StackLandDoneDispatch, deps
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
   const worktree = await (deps.resolveWorktree ?? ((slug) => resolveCliFeatureWorktree(slug, { cwd, resolveMainRoot: deps.resolveMainRoot })))(command.slug);
   if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
+  const eligibility = await checkStackLandEligibility(worktree, command.slug, deps);
+  if (eligibility.kind === 'refused') return refused(print, eligibility.detail);
   const marker = await readRoundFromMarker(worktree, command.slug);
   if (marker === undefined) return refused(print, 'no open operator landing is available to declare.');
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land --done');
@@ -212,6 +240,8 @@ async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
   const worktree = await (deps.resolveWorktree ?? ((slug) => resolveCliFeatureWorktree(slug, { cwd, resolveMainRoot: deps.resolveMainRoot })))(command.slug);
   if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
+  const eligibility = await checkStackLandEligibility(worktree, command.slug, deps);
+  if (eligibility.kind === 'refused') return refused(print, eligibility.detail);
   const marker = await readRoundFromMarker(worktree, command.slug);
   if (marker === undefined) return refused(print, 'no open operator landing is available to abandon.');
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land --abandon');
@@ -260,6 +290,9 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
     resolveMainRoot: deps.resolveMainRoot,
   })))(command.slug);
   if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
+
+  const eligibility = await checkStackLandEligibility(worktree, command.slug, deps);
+  if (eligibility.kind === 'refused') return refused(print, eligibility.detail);
 
   const check = deps.checkOpen ?? checkOpenOperatorRound;
   const checked: CheckOpenOperatorRoundResult = await check({

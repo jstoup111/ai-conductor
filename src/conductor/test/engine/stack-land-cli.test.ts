@@ -1,5 +1,5 @@
-// Covers: task:10, task:rem-as-built-rem-as-built-r10
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:10, task:rem-as-built-rem-as-built-r10, task:rem-as-built-rem-as-built-r16
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -34,7 +34,11 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   return {
     resolveMainRoot: vi.fn().mockResolvedValue('/main'),
     resolveWorktree: vi.fn().mockResolvedValue('/worktree'),
+    loadConfig: vi.fn().mockResolvedValue({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: true } } }),
+    hasDurableChildState: vi.fn().mockResolvedValue(true),
     checkOpen: vi.fn().mockResolvedValue(accepted()),
+    readRepairMarker: vi.fn(),
+    readRouteRecord: vi.fn(),
     resolveOperator: vi.fn().mockResolvedValue('operator@example.test'),
     acquireLease: vi.fn().mockResolvedValue({ kind: 'acquired', lease: { release } }),
     createPark: vi.fn().mockResolvedValue({ created: false }),
@@ -154,6 +158,39 @@ describe('stack land CLI open path', () => {
     expect(deps.acquireLease).not.toHaveBeenCalled();
     expect(deps.createPark).not.toHaveBeenCalled();
     expect(deps.print).toHaveBeenCalledWith(expect.stringContaining('not stacked'));
+  });
+
+  it.each([
+    ['flat', true, false, 'Feature demo is not a stacked feature'],
+    ['routing disabled', false, true, 'Routing is disabled'],
+  ])('refuses %s stacks before any command reads repair refs or creates a lease', async (_name, routingOn, durable, detail) => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-land-ineligible-'));
+    haltRoots.push(root);
+    for (const stackLandCommand of [
+      command,
+      { kind: 'stack-land-done' as const, slug: 'demo' },
+      { kind: 'stack-land-abandon' as const, slug: 'demo' },
+    ]) {
+      const readRepairMarker = vi.fn();
+      const deps = dependencies({
+        resolveMainRoot: vi.fn().mockResolvedValue(root),
+        resolveWorktree: vi.fn().mockResolvedValue(root),
+        loadConfig: vi.fn().mockResolvedValue({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: routingOn } } }),
+        hasDurableChildState: vi.fn().mockResolvedValue(durable),
+        readRepairMarker,
+      });
+
+      await expect(dispatchStackLandCommand(stackLandCommand, deps as never)).resolves.toBe(1);
+
+      expect(deps.checkOpen).not.toHaveBeenCalled();
+      expect(readRepairMarker).not.toHaveBeenCalled();
+      expect(deps.readRouteRecord).not.toHaveBeenCalled();
+      expect(deps.nextRound).not.toHaveBeenCalled();
+      expect(deps.acquireLease).not.toHaveBeenCalled();
+      expect(deps.createPark).not.toHaveBeenCalled();
+      if (!routingOn) expect(deps.hasDurableChildState).not.toHaveBeenCalled();
+      await expect(readdir(join(root, '.daemon', 'leases'))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
   });
 
   it('reports a live owner and does not park or open a round', async () => {
