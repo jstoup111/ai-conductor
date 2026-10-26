@@ -195,6 +195,7 @@ import {
   type BuildReviewSettledHunkFinding,
 } from './build-review-review-frontier.js';
 import { deriveChangedFileReferences } from './build-review-projections.js';
+import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import {
   buildReviewConfidenceFloors,
@@ -3291,6 +3292,18 @@ export class DefaultStepRunner implements StepRunner {
       }));
       return artifacts.filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== undefined);
     };
+    // Candidate ids are the frozen evidence records that back the current
+    // source snapshot's uncertain candidates.  Other evidence records (for
+    // example established targets) must not revive an old indeterminate
+    // candidate merely because they happen to remain in the snapshot.
+    const currentTestScopeCandidateIds = new Set((inputs.sourceSnapshot.testScope?.candidates ?? []).flatMap((candidate) => {
+      const region = candidate.declaration?.span ?? candidate.diagnostic?.span;
+      if (region === undefined) return [];
+      const key = buildReviewScopeCandidateIdentityKey({ source: candidate.source, region });
+      return (inputs.sourceSnapshot.testScopeEvidence ?? [])
+        .filter((evidence) => buildReviewScopeCandidateIdentityKey({ source: evidence.source, region: evidence.region }) === key)
+        .map((evidence) => evidence.id);
+    }));
     const resolvedAppliedActSourceIds = await this.resolvedAppliedBuildReviewActSourceIds(config, child);
     const builtInJudgedResultFor = (
       artifact: Awaited<ReturnType<typeof priorArtifactsFor>>[number],
@@ -3340,14 +3353,32 @@ export class DefaultStepRunner implements StepRunner {
       const sources = artifacts.flatMap((artifact) => judgedSourcesFor(entry.id, artifact));
       const unknownSources = entry.id !== 'testQuality' ? [] : buildReviewTestScopeUnknownSources({
         unresolvedMarkers: inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [],
-        indeterminateCandidates: artifacts.flatMap((artifact) => {
-          const result = builtInJudgedResultFor(artifact);
-          return result?.rubric === 'testQuality'
-            ? result.scopeResolutions?.filter((candidate): candidate is import('./build-review-domain.js').BuildReviewCandidateScopeResolutionIndeterminate =>
-              candidate.status === 'indeterminate' && (inputs.sourceSnapshot.testScopeEvidence ?? []).some((evidence) => evidence.id === candidate.candidateId),
-            ) ?? []
-            : [];
-        }),
+        indeterminateCandidates: (() => {
+          // Scope resolution is state, not an accumulating warning list.  The
+          // last compatible resolution for each *current* candidate wins, so
+          // an L2 resolution retires L1's indeterminate result while a still
+          // indeterminate current candidate remains conservative risk.
+          const latest = new Map<string, {
+            readonly sequence: number;
+            readonly resolution: import('./build-review-domain.js').BuildReviewCandidateScopeResolution;
+          }>();
+          for (const artifact of artifacts) {
+            const result = builtInJudgedResultFor(artifact);
+            const scope = artifact.reviewScope;
+            if (result?.rubric !== 'testQuality' || !scope || 'kind' in scope ||
+              scope.mergeBase !== inputs.sourceSnapshot.mergeBase || scope.policyIdentity !== policyIdentity) continue;
+            for (const resolution of result.scopeResolutions ?? []) {
+              if (!currentTestScopeCandidateIds.has(resolution.candidateId)) continue;
+              const previous = latest.get(resolution.candidateId);
+              if (previous === undefined || scope.sequence >= previous.sequence) {
+                latest.set(resolution.candidateId, { sequence: scope.sequence, resolution });
+              }
+            }
+          }
+          return [...latest.values()].flatMap(({ resolution }) =>
+            resolution.status === 'indeterminate' ? [resolution] : [],
+          );
+        })(),
       });
       const settled = settledBuildReviewHunks({
         changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,

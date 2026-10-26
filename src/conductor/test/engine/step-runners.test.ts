@@ -4713,8 +4713,8 @@ TIER: M`,
       await expect(readFile(join(dir, '.pipeline', 'build-review', 'lap-current', 'portable.json'), 'utf8')).resolves.toContain('"scope-empty"');
     });
 
-    // Covers: task:9
-    it('keeps only current test-scope uncertainty in the frontier', async () => {
+    // Covers: task:2, task:6, task:9, task:rem-as-built-rem-2, task:rem-as-built-rem-5
+    it('uses compatible current test-scope resolutions for the frontier and policy identity', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {
@@ -4723,10 +4723,19 @@ TIER: M`,
         },
       } as HarnessConfig, CLAUDE_POLICY);
       const entry = config.catalog.find((candidate) => candidate.id === 'testQuality')!;
-      const hunk = deriveChangedFileReferences([
+      const diff = [
         'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
         '-export const value = false;', '+export const value = true;',
-      ].join('\n'))[0]!.hunks[0]!;
+        '@@ -10 +10 @@', '-export const other = false;', '+export const other = true;',
+      ].join('\n');
+      const [resolvedHunk, indeterminateHunk] = deriveChangedFileReferences(diff)[0]!.hunks;
+      const candidates = [
+        { id: 'candidate-resolved', source: { fileName: 'src/example.ts', side: 'head' as const }, region: { start: 0, end: 1 } },
+        { id: 'candidate-current', source: { fileName: 'src/example.ts', side: 'head' as const }, region: { start: 2, end: 3 } },
+      ];
+      const testScope = { candidates: candidates.map((candidate) => ({
+        source: candidate.source, declaration: { span: candidate.region }, markers: [], associationChanges: [], reasons: ['uncertain-association'],
+      })) };
       const engineIdentity = {
         engineStamp: 'engine-a', skillDigests: { testQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
       };
@@ -4739,7 +4748,7 @@ TIER: M`,
         model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
         testScope: {
           analysisVersion: 'test-scope-v2',
-          bindingIdentity: `sha256:${createHash('sha256').update(JSON.stringify(['candidate-current'])).digest('hex')}`,
+          bindingIdentity: `sha256:${createHash('sha256').update(JSON.stringify(candidates.map((candidate) => candidate.id).sort())).digest('hex')}`,
         },
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
@@ -4748,14 +4757,29 @@ TIER: M`,
         result: {
           kind: 'judged', rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', contractVersion: 'v4', findings: [], verdict: 'PASS',
           scopeResolutions: [{
-            candidateId: 'candidate-unreadable', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable',
-            sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: hunk.contentHash, display: 'covered test' },
+            candidateId: 'candidate-resolved', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable',
+            sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: resolvedHunk!.contentHash, display: 'covered test' },
             obligationReferences: ['task:1'],
           }],
         },
         reviewScope: {
           mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity,
-          reviewedHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+          reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
+        },
+      }));
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-resolved'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-resolved', 'testQuality.json'), JSON.stringify({
+        version: 2, rubric: 'testQuality', lapId: 'lap-resolved', snapshotDigest: 'sha256:resolved', provenance: { kind: 'fresh' },
+        result: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-resolved', snapshotDigest: 'sha256:resolved', contractVersion: 'v4', findings: [], verdict: 'PASS',
+          scopeResolutions: [
+            { candidateId: 'candidate-resolved', status: 'resolved', sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: resolvedHunk!.contentHash, display: 'covered test' }, obligationReferences: ['task:1'], associationReason: 'The candidate is now covered.' },
+            { candidateId: 'candidate-current', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable', sourceRegion: { path: 'src/example.ts', startLine: 10, endLine: 10, contentHash: indeterminateHunk!.contentHash, display: 'current test' }, obligationReferences: ['task:2'] },
+          ],
+        },
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'resolved', policyIdentity,
+          reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
         },
       }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, { config });
@@ -4769,13 +4793,11 @@ TIER: M`,
       await expect((runner as any).runRubricBuildReviewInner({
         sourceSnapshot: {
           digest: 'sha256:current', mergeBase: 'base', headSha: 'current',
-          diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
-          testScopeAnalysisVersion: 'test-scope-v2', testScopeEvidence: [{ id: 'candidate-current' }],
-          testQuality: { unresolvedMarkers: [{ selector: 'src/example.ts', reference: 'task:unbound' }] },
+          diff, testScopeAnalysisVersion: 'test-scope-v2', testScope, testScopeEvidence: candidates,
         },
       }, config, 'M', 'plan.md')).rejects.toThrow('expected unknown frontier observation');
 
-      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }] });
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: indeterminateHunk!.contentHash }] });
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
@@ -4784,14 +4806,9 @@ TIER: M`,
       });
 
       await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current-without-candidate', mergeBase: 'base', headSha: 'current-without-candidate',
-          diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
-          testScopeAnalysisVersion: 'test-scope-v2', testScopeEvidence: [{ id: 'candidate-current' }],
-        },
+        sourceSnapshot: { digest: 'sha256:version-changed', mergeBase: 'base', headSha: 'version-changed', diff, testScope, testScopeEvidence: candidates, testScopeAnalysisVersion: 'test-scope-v3' },
       }, config, 'M', 'plan.md')).rejects.toThrow('expected stale unknown to be ignored');
-
-      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
@@ -4800,12 +4817,25 @@ TIER: M`,
       });
 
       await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:child-current', mergeBase: 'base', headSha: 'child-current',
-          diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
-          testScopeAnalysisVersion: 'test-scope-v2', testScopeEvidence: [{ id: 'candidate-current' }],
-        },
-      }, config, 'M', 'plan.md', undefined, undefined, parseChildId('1'))).rejects.toThrow('expected child-local frontier observation');
+        sourceSnapshot: { digest: 'sha256:binding-changed', mergeBase: 'base', headSha: 'binding-changed', diff, testScope, testScopeEvidence: [...candidates.slice(0, 1), { ...candidates[1]!, id: 'candidate-rebound' }], testScopeAnalysisVersion: 'test-scope-v2' },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected child-local frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.testQuality;
+        throw new Error('expected sibling child frontier isolation');
+      });
+      await mkdir(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling', 'testQuality.json'), JSON.stringify({
+        version: 2, rubric: 'testQuality', lapId: 'lap-sibling', snapshotDigest: 'sha256:sibling', provenance: { kind: 'fresh' },
+        result: { kind: 'judged', rubric: 'testQuality', lapId: 'lap-sibling', snapshotDigest: 'sha256:sibling', contractVersion: 'v4', findings: [], verdict: 'PASS' },
+        reviewScope: { mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'sibling', policyIdentity, reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [] },
+      }));
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: { digest: 'sha256:child-current', mergeBase: 'base', headSha: 'child-current', diff, testScope, testScopeEvidence: candidates, testScopeAnalysisVersion: 'test-scope-v2' },
+      }, config, 'M', 'plan.md', undefined, undefined, parseChildId('1'))).rejects.toThrow('expected sibling child frontier isolation');
 
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'first-lap' });
     });
