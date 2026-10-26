@@ -28,6 +28,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
 import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 const CURRENT_TEST_SUITE_PROOF = {
   status: 'CURRENT',
@@ -731,7 +732,7 @@ describe('EventPersister', () => {
 
     await emitter.emit({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'unusable',
       elapsedSeconds: 3,
@@ -744,7 +745,7 @@ describe('EventPersister', () => {
     const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
     expect(record).toEqual({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'unusable',
       elapsedSeconds: 3,
@@ -762,7 +763,7 @@ describe('EventPersister', () => {
 
     await emitter.emit({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,
@@ -800,7 +801,7 @@ describe('EventPersister', () => {
 
     await scope.events.emit({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,
@@ -865,7 +866,7 @@ describe('EventPersister', () => {
     const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
 
     await emitter.emit({
-      type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+      type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login',
       readiness: 'unusable', elapsedSeconds: 60, nextProbeDelaySeconds: 30,
       degradation: 'credential-failure',
     });

@@ -1,4 +1,4 @@
-import { dispatchGitGuard } from 'dispatch-git-guard.js';
+import { dispatchGitGuard } from './dispatch-git-guard.js';
 
 // Covers: task:1, task:2, task:4, task:5
 import { execFileSync } from 'node:child_process';

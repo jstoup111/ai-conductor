@@ -1,4 +1,4 @@
-import { dispatchGitGuard } from 'dispatch-git-guard.js';
+import { dispatchGitGuard } from './dispatch-git-guard.js';
 
 // Covers: task:20
 import { existsSync } from 'node:fs';

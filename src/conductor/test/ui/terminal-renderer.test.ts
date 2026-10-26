@@ -6,6 +6,7 @@ import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_operation_failed', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
@@ -262,7 +263,7 @@ describe('TerminalRenderer', () => {
   it('renders typed credential-park progress without a lifecycle restart', async () => {
     await renderer.handle({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'unusable',
       elapsedSeconds: 3,
@@ -280,7 +281,7 @@ describe('TerminalRenderer', () => {
     async (parserRejection) => {
       const rawDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
       await renderer.handle({
-        type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+        type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login',
         readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure',
         probeFailureKind: 'unparseable-output', parserRejection, nextDisposition: 'trial-required',
       });
@@ -293,7 +294,7 @@ describe('TerminalRenderer', () => {
   it('renders only closed credential-park progress fields', async () => {
     const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
     await renderer.handle({
-      type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+      type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login',
       readiness: 'unusable', elapsedSeconds: 60, nextProbeDelaySeconds: 30,
       degradation: 'credential-failure',
     });

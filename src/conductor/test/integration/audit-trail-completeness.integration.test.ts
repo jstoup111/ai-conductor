@@ -33,6 +33,7 @@ import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 /**
  * Compile-time drift guard (writing-system-tests §3 / plan Task 18(b)):
@@ -571,8 +572,8 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   bot_co_author_skipped: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
   provider_discovery: {
     type: 'provider_discovery',
-    installed: ['claude', 'codex'],
-    missing: [{ id: 'pi', reason: 'not-found' }],
+    installed: [toProviderId('claude'), toProviderId('codex')],
+    missing: [{ id: toProviderId('pi'), reason: 'not-found' }],
   },
   provider_attempt: {
     type: 'provider_attempt',
@@ -670,7 +671,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   session_policy: {
     type: 'session_policy',
     step: 'build',
-    provider: 'codex',
+    provider: toProviderId('codex'),
     reason: 'session resume unsupported',
   },
   step_retry: { type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'tests failed' },
@@ -686,7 +687,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   credentials_park: { type: 'credentials_park', reason: 'no creds' },
   credentials_park_progress: {
     type: 'credentials_park_progress',
-    provider: 'codex',
+    provider: toProviderId('codex'),
     source: 'cached-login',
     readiness: 'probe-failed',
     elapsedSeconds: 3,

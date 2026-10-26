@@ -1,4 +1,4 @@
-import { dispatchGitGuard } from 'dispatch-git-guard.js';
+import { dispatchGitGuard } from './dispatch-git-guard.js';
 
 import { access, lstat, readdir } from 'node:fs/promises';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
