@@ -468,6 +468,11 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider read-only review mode is unavailable.',
     recoveryAction: 'Install or update the provider so its read-only review mode is available, then re-queue this feature.',
   };
+  if (result.systemPromptUndeliverable === true) return {
+    provider, capability: 'system-prompt-delivery',
+    reason: result.output ?? 'Provider cannot receive the engine system prompt.',
+    recoveryAction: 'Declare systemPromptCapability on the provider and deliver InvokeOptions.systemPrompt, then re-queue this feature.',
+  };
   if (result.providerUnavailable === true) return {
     provider, capability: 'synchronous-spawn-permit',
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider lifecycle capability is unavailable.',
@@ -1330,7 +1335,10 @@ export async function executeProviderCandidates({
       };
     }
     // A prepared cache hit or cancellation did not consult provider availability.
-    if (result.providerUnavailable === true) {
+    if (
+      result.providerUnavailable === true ||
+      result.systemPromptUndeliverable === true
+    ) {
       setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     }
     const invokedModel = invocation?.invokedModel;

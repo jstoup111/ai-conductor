@@ -20,8 +20,11 @@ import {
 } from '../../src/engine/provider-model-policy.js';
 import {
   ProviderRuntimeSet,
+  createProviderRuntimeSet,
   type ProviderRuntime,
 } from '../../src/engine/provider-runtime.js';
+import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import type { ProviderAvailability } from '../../src/engine/provider-availability.js';
 import { ProviderSessionScope, ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { createProviderLifecycleSupervisor } from '../../src/engine/provider-lifecycle.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -147,6 +150,61 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('classifies an undeliverable system prompt as setup-unavailable without suppressing the provider', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'done',
+      exitCode: 0,
+    }));
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'recorder', { invoke });
+    registry.markInitialized();
+    const providerAvailability: ProviderAvailability = {
+      isAvailable: vi.fn(() => true),
+      suppress: vi.fn(),
+    };
+    const attempts: ProviderAttemptMetadata[] = [];
+    const runtimes = createProviderRuntimeSet(registry);
+
+    const refused = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['recorder'],
+      preferredProvider: 'recorder',
+      config: { provider_substitution: 'disallow' },
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability,
+      options: { prompt: 'build', cwd: '/workspace', systemPrompt: 'S' },
+      onAttempt: (_step, attempt) => { attempts.push(attempt); },
+    });
+
+    expect(refused.attempts).toEqual([
+      expect.objectContaining({
+        provider: 'recorder',
+        invoked: false,
+        skipReason: 'setup-unavailable',
+        setupCapability: 'system-prompt-delivery',
+      }),
+    ]);
+    expect(attempts).toEqual(refused.attempts);
+    expect(refused.attempts[0]?.setupCapability).not.toBe('synchronous-spawn-permit');
+    expect(invoke).not.toHaveBeenCalled();
+    expect(providerAvailability.suppress).not.toHaveBeenCalledWith('recorder', expect.any(Number));
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['recorder'],
+      preferredProvider: 'recorder',
+      config: { provider_substitution: 'disallow' },
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability,
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it('returns unknown managed-observation completeness after a successful provider invocation', async () => {
     const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
 
