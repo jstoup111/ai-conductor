@@ -7133,7 +7133,9 @@ export class Conductor {
     // PRD-audit is deliberately not coupled to the generic remediation
     // counter. Its tier-aware remediation allowance is the sole allowance
     // for a criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
-    const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config, MAX_KICKBACKS_PER_GATE, undefined);
+    const prdAuditRemediationLapCap = (): number => remediationLapCapForGate(
+      'prd_audit', this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+    );
     // Refusal rework is admitted before /remediate runs.  Unlike the old
     // process-local round counter this reads the durable gate and growth
     // records, so a daemon restart cannot buy another lap and an operator
@@ -7147,15 +7149,16 @@ export class Conductor {
           isUnreadableKickbackGrowth(ledger)
         ) return { kind: 'unreadable' };
         const entry = ledger.gates.prd_audit;
-        const lapCap = entry?.effectiveLapCap ?? prdAuditRemediationLapCap;
+        const fallbackLapCap = prdAuditRemediationLapCap();
+        const lapCap = entry?.effectiveLapCap ?? fallbackLapCap;
         if ((entry?.laps ?? 0) >= lapCap) {
-          return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap: prdAuditRemediationLapCap };
+          return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap };
         }
         const { growth, cap: growthCap, capSource, authoredSource } = await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true });
         if (growth.remaining > 0) return undefined;
         return {
           kind: 'exhausted', allowance: 'growth', consumed: growth.added, limit: growthCap,
-          fallbackLapCap: prdAuditRemediationLapCap,
+          fallbackLapCap,
           growth: { ...growth, cap: growthCap, capSource, authoredSource },
         };
       } catch {
@@ -9496,7 +9499,7 @@ export class Conductor {
                 prdAuditUnsatisfied &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                   ? await refusalReworkAllowanceAvailable()
-                  : remediationRounds < prdAuditRemediationLapCap)
+                  : remediationRounds < prdAuditRemediationLapCap())
               ) {
                 // Preserve the pre-existing PRD-audit append attempt before
                 // the terminal design/invalid as-built refusal. Its planner
@@ -14397,7 +14400,7 @@ export class Conductor {
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
               let remediationPlannerFault: string | undefined;
-              if (remediationRounds < prdAuditRemediationLapCap) {
+              if (remediationRounds < prdAuditRemediationLapCap()) {
                 const outcome = await this.planRemediation(
                   state,
                   steps,
@@ -14462,7 +14465,7 @@ export class Conductor {
                 state.feature_desc,
                 makeGitRunner(this.projectRoot),
               );
-              if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
+              if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap()) {
                 prdAuditSelfHeals++;
                 await emitTracked({
                   type: 'kickback',
@@ -14511,7 +14514,7 @@ export class Conductor {
                 cls.kind === 'invalid-evidence'
                   ? `prd-audit halted: current typed output is unavailable — ${lastError ?? cls.summary}`
                   : cls.kind === 'impl-only'
-                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
+                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap()}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches

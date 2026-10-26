@@ -803,6 +803,10 @@ async function runRefusalReworkRun(input: {
   reports: string[];
   decisionId?: string;
   lapCap?: number;
+  /** Seed durable PRD-audit laps before the run starts. */
+  priorLaps?: number;
+  /** Start unrecorded and have the interactive complexity step record tier L. */
+  recordTierLAtComplexity?: boolean;
   mode?: 'auto' | 'default';
   manualTestFail?: boolean;
   asBuilt?: 'approved' | 'blocked-remediable';
@@ -861,7 +865,7 @@ async function runRefusalReworkRun(input: {
 
   const state: Record<string, unknown> = {
     feature_desc: 'feature',
-    complexity_tier: 'M',
+    ...(input.recordTierLAtComplexity ? {} : { complexity_tier: 'M' }),
     track: 'product',
     run_started_at: Date.now() - 1_000,
     rebase: 'done',
@@ -872,15 +876,36 @@ async function runRefusalReworkRun(input: {
     state[step.name] = 'done';
   }
   await writeState(statePath, state as ConductState);
+  if (input.priorLaps !== undefined) {
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
+          resolvedBefore: 0, laps: input.priorLaps,
+        },
+      },
+    });
+  }
 
   const calls: StepName[] = [];
   const retryReasons: string[] = [];
   const kickbacks: Array<{ from: string; to: string; count: number; evidence?: string }> = [];
   let prdAuditDispatches = 0;
   const runner: StepRunner = {
-    run: async (step, _state, options) => {
+    run: async (step, _stepState, options) => {
       calls.push(step);
       if (step === 'manual_test') {
+        if (input.recordTierLAtComplexity) {
+          // Execute the engine-owned complexity transition after run() has
+          // installed its pre-loop state, without broadening this fixture to
+          // re-run the complete BUILD path.
+          const internal = conductor as unknown as {
+            haltState: ConductState;
+            runComplexityStep: (state: ConductState) => Promise<unknown>;
+          };
+          await internal.runComplexityStep(internal.haltState);
+        }
         await writeFile(
           join(root, '.pipeline', 'manual-test-results.md'),
           input.manualTestFail
@@ -963,7 +988,14 @@ async function runRefusalReworkRun(input: {
     verifyArtifacts: true,
     maxRetries: 1,
     fromStep: 'manual_test',
-    config: { prd_audit: { max_remediation_laps: input.lapCap ?? 1 } } as never,
+    config: {
+      prd_audit: input.lapCap === undefined
+        ? (input.recordTierLAtComplexity ? {} : { max_remediation_laps: 1 })
+        : { max_remediation_laps: input.lapCap },
+    } as never,
+    ...(input.recordTierLAtComplexity
+      ? { onComplexityAssessment: async () => 'L' as const }
+      : {}),
     gh: async () => ({ stdout: 'operator@example.test\n' }),
   });
   if (input.remediationMode === 'stale') {
@@ -1209,6 +1241,27 @@ describe('prd_audit kickback', () => {
     const ledger = await readKickbackLedger(fixture.root);
     expect(ledger.gates.prd_audit).toMatchObject({ laps: 1 });
     expect(ledger.growth).toMatchObject({ added: 1, byGate: { prd_audit: 1 } });
+  });
+
+  it('dispatches BUILD against the tier-L prd_audit allowance recorded at complexity', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      priorLaps: 3,
+      recordTierLAtComplexity: true,
+    });
+
+    expect(fixture.calls).toContain('build');
+    expect((await readKickbackLedger(fixture.root)).gates.prd_audit).toMatchObject({ laps: 4 });
+  });
+
+  it('admits refusal rework against the tier-L allowance recorded at complexity', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      priorLaps: 3,
+      recordTierLAtComplexity: true,
+    });
+
+    expect(fixture.calls).toContain('build');
   });
 
   it('appends and charges every task in an admitted multi-task refusal gap', async () => {
@@ -2708,7 +2761,7 @@ describe('prd_audit kickback', () => {
     expect(
       remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0),
     ).toBe(1);
-    expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(1);
+    expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(3);
     expect(
       remediationLapCapForGate(
         'architecture_review_as_built',
@@ -2723,7 +2776,7 @@ describe('prd_audit kickback', () => {
     const root = await mkdtemp(join(tmpdir(), 'join-round-cap-'));
     dirs.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
-    expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(2);
+    expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(3);
     await writeKickbackLedger(root, {
       version: 1,
       gates: {
