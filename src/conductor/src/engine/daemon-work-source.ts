@@ -27,6 +27,11 @@ export interface DiscoverySnapshot {
 export interface WorkSource {
   discover(opts: { refresh: boolean }): Promise<BacklogItem[]>;
   snapshot?: (parkedSlugs: readonly string[]) => Promise<DiscoverySnapshot | undefined>;
+  partitions?: () => {
+    waiting: WaitingItem[];
+    blocked: BlockedSpecItem[];
+    gated: GatedItem[];
+  } | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,6 +160,14 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
     pollDurationMs: number;
   } | undefined;
   return {
+    partitions() {
+      if (!latestStates) return undefined;
+      return {
+        waiting: [...latestStates.waiting],
+        blocked: [...latestStates.blocked],
+        gated: [...latestStates.gated],
+      };
+    },
     async snapshot(parkedSlugs) {
       if (!latestStates) return undefined;
       const observedAt = (deps.now ?? Date.now)();
