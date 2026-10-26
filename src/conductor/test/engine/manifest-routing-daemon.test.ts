@@ -1,4 +1,4 @@
-// Covers: task:13
+// Covers: task:13, task:rem-prd-audit-13
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -164,6 +164,13 @@ describe('daemon manifest routing', () => {
 
     await write(worktree, '.docs/f/manifest.json', manifest([]));
     await expect(readSourceRef(worktree, slug)).resolves.toBeUndefined();
+  });
+
+  it('fails closed on a malformed manifest when reading a halt inventory source ref', async () => {
+    const root = await fixture();
+    await write(root, '.docs/f/manifest.json', '{ nope');
+
+    await expect(readSourceRef(root, slug)).rejects.toThrow('.docs/f/manifest.json');
   });
 
   it('uses manifest-selected intake bytes for daemon halt PR provenance', async () => {
