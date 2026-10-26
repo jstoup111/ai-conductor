@@ -7,7 +7,7 @@ import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
 import { HALT_CLASS_MARKER, HALT_MARKER } from './halt-marker.js';
-import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult } from './park-marker.js';
+import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult, type ParkToken } from './park-marker.js';
 import { clearHaltAtomically } from './rewind.js';
 import {
   checkDeclareOperatorRound,
@@ -182,7 +182,9 @@ async function dispatchStackLandDoneCommand(command: StackLandDoneDispatch, deps
     const cleared = await (deps.clearMatchingHalt ?? clearMatchingOperatorHalt)(worktree, marker.roundId);
     if (cleared === 'unrelated') print('stack land: declaration succeeded, but an unrelated needs-human HALT remains.');
     if (checked.stored.record.operator?.park !== undefined) {
-      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token);
+      // Route records are serialized, so their token crosses back into the
+      // opaque in-memory capability type only at this persistence boundary.
+      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token as ParkToken);
     }
     print(`stack land: declared ${marker.roundId} on child ${marker.host}. Next: daemon dispatch re-validates child ${marker.host} from acceptance_specs.`);
     return 0;
@@ -218,7 +220,9 @@ async function dispatchStackLandAbandonCommand(command: StackLandAbandonDispatch
     const cleared = await (deps.clearMatchingHalt ?? clearMatchingOperatorHalt)(worktree, marker.roundId);
     if (cleared === 'unrelated') print('stack land: abandon succeeded, but an unrelated needs-human HALT remains.');
     if (checked.stored.record.operator?.park !== undefined) {
-      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token);
+      // Route records are serialized, so their token crosses back into the
+      // opaque in-memory capability type only at this persistence boundary.
+      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token as ParkToken);
     }
     print(`stack land: abandoned ${marker.roundId} on child ${marker.host}.`);
     return 0;
@@ -282,7 +286,7 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
 
   try {
     const roundId = admission.roundId ?? await (deps.nextRound ?? nextRoundId)(worktree, command.slug);
-    if (typeof roundId !== 'string') return refused(print, roundId === 'round-limit' ? 'routing round limit is reached.' : 'cannot allocate a routing round.');
+    if (typeof roundId !== 'string') return refused(print, roundId.kind === 'round-limit' ? 'routing round limit is reached.' : 'cannot allocate a routing round.');
 
     const park: OwnedParkCreationResult = await (deps.createPark ?? createOwnedPark)(root, command.slug);
 

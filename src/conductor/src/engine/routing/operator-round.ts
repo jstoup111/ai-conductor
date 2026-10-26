@@ -591,8 +591,8 @@ async function switchToOperatorHost(
  */
 export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<OpenOperatorRoundResult> {
   const git = input.git ?? makeGitRunner(input.worktree);
-  let stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind === 'absent') {
+  let loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (loaded.kind === 'absent') {
     // Both values belong to the prepared record and must be observed before
     // the first mutation, preserving the precise state abandon will restore.
     const priorRegion = await readPriorRegion(input.worktree, input.host);
@@ -618,9 +618,10 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
       },
     }, { git });
     if (created.kind !== 'created') return { kind: 'refused', detail: `cannot create prepared operator round: ${created.kind}` };
-    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   }
-  if (stored.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable` };
+  if (loaded.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable` };
+  let stored = loaded;
   if (stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land' || stored.record.hosts[input.host] === undefined) {
     return { kind: 'refused', detail: `operator round ${input.roundId} does not match landing host ${input.host}` };
   }
@@ -633,8 +634,9 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
     }
     const admitted = await admitRound(input.worktree, input.slug, stored.record, input.host, { git });
     if (admitted.kind !== 'admitted') return { kind: 'refused', detail: `cannot admit operator round after marker transaction: ${admitted.detail}` };
-    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-    if (stored.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable after marker transaction` };
+    loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    if (loaded.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable after marker transaction` };
+    stored = loaded;
   }
 
   const hostState = stored.record.hosts[input.host];

@@ -437,8 +437,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     return { kind: 'refused', detail: journal.kind === 'unreadable' ? 'restack journal is unreadable' : 'restack journal is non-terminal' };
   }
 
-  let stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable` };
+  let loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (loaded.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable` };
+  let stored = loaded;
   if (stored.record.kind === 'operator' && stored.record.operator?.declaration === undefined) {
     return {
       kind: 'refused',
@@ -544,8 +545,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     default:
       return assertNever(stored.record.kind);
   }
-  stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
+  loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (loaded.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
+  stored = loaded;
   const recordWithBindings = { ...stored, record: bound.record };
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
   if (repairing.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
