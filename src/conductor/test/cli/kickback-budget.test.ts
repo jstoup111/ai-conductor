@@ -288,6 +288,9 @@ describe('kickback-budget inspect --child', () => {
   it('shows a feature-wide raise in the child inspect view', async () => {
     const fixture = await makeChildFeature({ version: 1, gates: { architecture_review_as_built: { ...baseEntry, laps: 0 } } });
     try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M' }));
+      await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps:\n    M: 3\n');
       await writeFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
         version: 1,
         gates: {
@@ -306,8 +309,15 @@ describe('kickback-budget inspect --child', () => {
       const entry = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8')).gates.architecture_review_as_built;
       const adjustmentId = entry.adjustments[0].id;
       const result = await inspect(fixture, '2');
+      expect(result.code).toBe(0);
       expect(result.output).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
+      expect(result.output).toContain('tier M allowance 4 (raised from 3)');
       expect(result.output).toContain(`Adjustment history: raise ${adjustmentId} (laps)`);
+      const json = await inspect(fixture, '2', 'json');
+      expect(json.code).toBe(0);
+      expect(JSON.parse(json.output).gates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ gate: 'architecture_review_as_built', tier: 'M', allowanceSource: 'raised' }),
+      ]));
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
