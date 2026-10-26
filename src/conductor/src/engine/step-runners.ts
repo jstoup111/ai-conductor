@@ -74,6 +74,7 @@ import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
+import { readRouteRecord } from './routing/route-record-store.js';
 import { assertNever } from './routing/route-types.js';
 import { PREREQUISITE_CLAIM_SCHEMA } from './routing/prerequisite-claim.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
@@ -5243,6 +5244,7 @@ export class DefaultStepRunner implements StepRunner {
     let activeChild: import('./child-context.js').ChildId | undefined;
     let activeChildIsLeaf = true;
     let activeSuiteChild: import('./full-suite-verifier.js').FullSuiteActiveChild | undefined;
+    let operatorWorkOrder: string | undefined;
     let inputs;
     try {
       let activeChildBase = this.buildReviewInputOptions?.childBase;
@@ -5253,6 +5255,13 @@ export class DefaultStepRunner implements StepRunner {
           activeChildBase = execution.childBase;
           activeChildIsLeaf = execution.isLeaf;
           activeSuiteChild = { child: execution.childBase.child, isLeaf: execution.isLeaf };
+        }
+        const routed = resolveExecutionChild(cursor, this.featureDesc);
+        if (routed.source === 'routed-host' && routed.roundId !== undefined) {
+          const record = await readRouteRecord(this.projectDir, this.featureDesc, routed.roundId, { git: this.gitRunner });
+          if (record.kind === 'record' && record.record.kind === 'operator') {
+            operatorWorkOrder = record.record.allocation[routed.target.child]?.retryHint;
+          }
         }
       }
       activeChild = activeChildBase?.child;
@@ -5277,6 +5286,7 @@ export class DefaultStepRunner implements StepRunner {
           ...(activeChildBase === undefined ? {} : { childBase: activeChildBase }),
           ...(activeChildBase === undefined ? {} : { securityScope: activeChildIsLeaf ? 'leaf' as const : 'non-leaf' as const }),
           ...(activeSuiteChild === undefined ? {} : { activeChild: activeSuiteChild }),
+          ...(operatorWorkOrder === undefined ? {} : { operatorWorkOrder }),
           lapMembers,
           materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
         }),

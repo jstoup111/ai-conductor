@@ -10483,6 +10483,19 @@ export class Conductor {
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
+        if (step.name === 'build') {
+          const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+          if (slug) {
+            const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+            if (execution.source === 'routed-host' && execution.roundId !== undefined) {
+              const route = await readRouteRecord(this.projectRoot, slug, execution.roundId);
+              const workOrder = route.kind === 'record' && route.record.kind === 'operator'
+                ? route.record.allocation[execution.target.child]?.retryHint
+                : undefined;
+              if (workOrder && !retryHint?.includes(workOrder)) retryHint = [retryHint, workOrder].filter(Boolean).join('\n\n');
+            }
+          }
+        }
         if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
