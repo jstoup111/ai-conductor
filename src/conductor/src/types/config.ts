@@ -1,6 +1,7 @@
 import type { ComplexityTier, EnforcementLevel, StepName, Phase } from './steps.js';
-import type { BUILD_REVIEW_RUBRIC_IDS } from '../engine/build-review-registry.js';
-import type { BuildReviewSeverity } from '../engine/build-review-domain.js';
+import type { BuildReviewSeverity } from './build-review.js';
+
+export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security', 'implementationQuality'] as const;
 
 /**
  * Claude's native reasoning effort levels — set per invocation via

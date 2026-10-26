@@ -6,7 +6,7 @@ import {
   PiProvider,
   type PiModelIdParseResult,
 } from './pi-provider.js';
-import type { LLMProvider } from './llm-provider.js';
+import type { DispatchGitGuard, LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
 import type { EffortLevel } from '../types/config.js';
 import type { ProviderId } from '../types/provider.js';
@@ -48,6 +48,7 @@ export const PROVIDER_CAPABILITY_OWNERS = {
 } as const satisfies Partial<Record<ProviderCapability, string>>;
 
 export interface ProviderFactoryOptions {
+  readonly dispatchGitGuard: DispatchGitGuard;
   readonly codexDoctorTimeoutMs?: number;
 }
 
@@ -98,7 +99,7 @@ interface BuiltInProviderDescriptorBase {
   readonly id: string;
   /** Human-readable name for diagnostics and operator-facing status. */
   readonly displayName: string;
-  readonly createAdapter: (options?: ProviderFactoryOptions) => LLMProvider;
+  readonly createAdapter: (options: ProviderFactoryOptions) => LLMProvider;
   readonly defaultExecutable: string;
   readonly executableOverrideEnv: string;
   readonly versionArgv: readonly string[];
@@ -160,7 +161,8 @@ export const BUILT_IN_PROVIDERS = [
   {
     id: 'claude',
     displayName: 'Claude',
-    createAdapter: (): LLMProvider => new ClaudeProvider(
+    createAdapter: (options): LLMProvider => new ClaudeProvider(
+      options.dispatchGitGuard,
       undefined,
       undefined,
       resolveProviderExecutable('claude'),
@@ -218,7 +220,8 @@ export const BUILT_IN_PROVIDERS = [
   {
     id: 'codex',
     displayName: 'Codex',
-    createAdapter: (options = {}): LLMProvider => new CodexProvider(
+    createAdapter: (options): LLMProvider => new CodexProvider(
+      options.dispatchGitGuard,
       undefined,
       resolveProviderExecutable('codex'),
       undefined,
@@ -274,7 +277,7 @@ export const BUILT_IN_PROVIDERS = [
   {
     id: 'pi',
     displayName: 'Pi',
-    createAdapter: (): LLMProvider => new PiProvider(resolveProviderExecutable('pi')),
+    createAdapter: (options): LLMProvider => new PiProvider(options.dispatchGitGuard, resolveProviderExecutable('pi')),
     defaultExecutable: 'pi',
     executableOverrideEnv: 'PI_EXECUTABLE',
     versionArgv: ['--version'],

@@ -521,11 +521,8 @@ export function detectStackLandCommand(argv: readonly string[]): StackLandDispat
   return { kind: 'stack-land', slug, child, carry, reason };
 }
 
-export interface HaltClearDispatch {
-  kind: 'halt-clear';
-  feature: string;
-  rationale?: string;
-}
+export type { HaltClearDispatch } from './types/cli.js';
+import type { HaltClearDispatch } from './types/cli.js';
 
 /** Parse the operator halt-clear command without starting the pipeline. */
 export function detectHaltClearCommand(argv: string[]): HaltClearDispatch | null {

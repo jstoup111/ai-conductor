@@ -1,7 +1,7 @@
 import { access, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { HaltClearDispatch } from '../cli.js';
+import type { HaltClearDispatch } from '../types/cli.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { StepName } from '../types/index.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';

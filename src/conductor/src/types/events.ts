@@ -13,29 +13,16 @@ import type {
 import type { ObservedInterval } from './provider.js';
 import type { ProviderId } from './provider.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
-import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
-import type { RefusalReason } from '../engine/park-reconciliation.js';
-import type {
-  GithubOperationName,
-  GithubOperationRefusalReason,
-  GithubOperationTarget,
-} from '../engine/github-operations.js';
-import type { GithubBotAuthRefusalReason } from '../engine/github-bot-auth-refusal.js';
-import type {
-  BuildReviewInfrastructureFailureReason,
-  BuildReviewJudgedResultRejection,
-} from '../engine/build-review-domain.js';
-import type { ChildId } from '../engine/child-context.js';
-import type {
-  CommitSha,
-  JournalState,
-  RefName,
-  RestackCause,
-  RestackOpId,
-  RestackRefusalReason,
-} from '../engine/restack/restack-types.js';
-import type { HostState, RoundId, RouteKind } from '../engine/routing/route-types.js';
-import type { ArtifactKind } from '../engine/feature-manifest.js';
+import type { GithubOperationName, GithubOperationRefusalReason, GithubOperationTarget, GithubBotAuthRefusalReason } from './github.js';
+import type { BuildReviewInfrastructureFailureReason, BuildReviewJudgedResultRejection } from './build-review.js';
+import type { ChildId, CommitSha, JournalState, RefName, RestackCause, RestackOpId, RestackRefusalReason } from './restack.js';
+type LandGateRejectionIdentifier = import('./land.js').LandGateRejectionIdentifier;
+type RefusalReason = import('./park.js').RefusalReason;
+type HaltDisposition = import('./halt.js').HaltDisposition;
+type InboundNeutralization = import('./intake.js').InboundNeutralization;
+type ManagedGhObservationCoverage = import('./managed-session.js').ManagedGhObservationCoverage;
+import type { HostState, RoundId, RouteKind } from './routing.js';
+import type { ArtifactKind } from './feature-manifest.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -614,7 +601,7 @@ type ConductorEventBody =
       slug: string;
       outcome: FeatureDispatchOutcome;
       tier?: ComplexityTier;
-      haltClass?: import('../engine/halt-marker.js').HaltDisposition;
+      haltClass?: HaltDisposition;
       step?: string;
     }
   | {
@@ -632,7 +619,7 @@ type ConductorEventBody =
   | { type: 'monitor_item_deferred'; project: string; feature: string }
   /** A foreground monitor's guided recovery session returned control. */
   | { type: 'monitor_session_ended'; project: string; feature: string }
-  | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
+  | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: InboundNeutralization[]; digest: string }
   | {
       type: 'intake_overlap_checked';
       repository: string;
@@ -1095,7 +1082,7 @@ type ConductorEventBody =
       actualProvider?: string;
       observedIntervals?: readonly ObservedInterval[];
       /** Bounded completeness of managed gh observation for this step outcome. */
-      managedGhObservationCoverage?: import('../execution/managed-session-preparation.js').ManagedGhObservationCoverage;
+      managedGhObservationCoverage?: ManagedGhObservationCoverage;
       /** Build-only tree witnesses; absent on legacy and non-build events. */
       treeBefore?: string | null;
       treeAfter?: string | null;

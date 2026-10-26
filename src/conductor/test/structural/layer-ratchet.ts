@@ -139,7 +139,7 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
   // D5's cycle rule deliberately remains value-edge-only. Type and dynamic
   // references are nevertheless upward edges and are checked above.
   const cycles = cycleMembership(valueEdges);
-  for (const edge of edges) {
+  for (const edge of valueEdges) {
     const cycle = cycles.get(edge.file);
     if (cycle !== undefined && cycles.get(edge.imported) === cycle) {
       violations.push({

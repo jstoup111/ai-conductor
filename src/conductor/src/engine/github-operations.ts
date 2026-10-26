@@ -2,6 +2,7 @@ import type {
   ConductorEvent,
   GithubOperationRefusalRemedy,
 } from '../types/events.js';
+import type { GithubOperationName as GithubOperationNameFromTypes } from '../types/github.js';
 import {
   resolveGithubTarget,
   type GithubTargetDiscovery,
@@ -303,9 +304,9 @@ export const GITHUB_OPERATION_REGISTRY = {
   'repository.create': { access: 'shared-write', targetKinds: ['repository'], payload: 'repository-create' },
   'remote-ref.push': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
   'remote-ref.delete': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
-} as const satisfies Readonly<Record<string, GithubOperationDefinition>>;
+} as const satisfies Readonly<Record<GithubOperationNameFromTypes, GithubOperationDefinition>>;
 
-export type GithubOperationName = keyof typeof GITHUB_OPERATION_REGISTRY;
+export type GithubOperationName = GithubOperationNameFromTypes;
 
 export type GithubOperationRefusalReason =
   | 'other-owner'

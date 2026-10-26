@@ -344,18 +344,18 @@ export function buildInteractiveVisualizers(
 ): VisualizerPlugin[] {
   const started = buildVisualizers(
     selectVisualizers(registry, config, context),
-    context.emitter,
+    context.emitter as ConductorEventEmitter,
     context.startContext,
   );
   const otel = wireOtelVisualizer(
     config,
     { ...context.startContext, pipelineDir: context.pipelineDir, metrics: false },
-    context.emitter,
+    context.emitter as ConductorEventEmitter,
   );
   const metrics = wireInteractiveOtelMetrics(
     config,
     { ...context.startContext, pipelineDir: context.pipelineDir },
-    context.emitter,
+    context.emitter as ConductorEventEmitter,
   );
   return [...started, ...(otel ? [otel] : []), ...(metrics ? [metrics] : [])];
 }

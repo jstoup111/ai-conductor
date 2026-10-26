@@ -3,6 +3,7 @@ import {
   type BuiltInProviderId,
 } from '../execution/provider-catalog.js';
 import { PluginRegistry } from './plugin-registry.js';
+import { ensureGitGuardForDispatch } from './git-guard.js';
 
 export interface BuiltInLlmProviderRegistrationOptions {
   readonly installed?: ReadonlySet<BuiltInProviderId>;
@@ -22,7 +23,7 @@ export function registerBuiltInLlmProviders(
     registry.register(
       'llm_provider',
       provider.id,
-      provider.createAdapter({ codexDoctorTimeoutMs }),
+      provider.createAdapter({ codexDoctorTimeoutMs, dispatchGitGuard: ensureGitGuardForDispatch }),
     );
   }
 }

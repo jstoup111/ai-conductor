@@ -2,6 +2,7 @@ import type { ObservedInterval } from './observed-interval.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import type { ProviderWith } from './provider-catalog.js';
 import type { ManagedSessionContext } from './managed-session-context.js';
+export type DispatchGitGuard = (cwd: string | undefined) => Promise<string | null>;
 
 export interface TokenUsage {
   /**

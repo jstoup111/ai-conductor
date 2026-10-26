@@ -13,6 +13,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
 import { withholdCost } from './token-usage.js';
@@ -40,7 +41,6 @@ import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schem
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
 import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function codexDisplayName(): string {
   return providerDescriptor('codex').displayName;
@@ -276,6 +276,7 @@ export class CodexProvider implements LLMProvider {
   private readonly cachedLoginSource: string;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
     executable = 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
@@ -342,7 +343,7 @@ export class CodexProvider implements LLMProvider {
     options = enforceFreshSessionOptions(options, 'codex');
     if (options.abortSignal?.aborted) return abortedInvocationResult();
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
     const repl = options.interactive === true;

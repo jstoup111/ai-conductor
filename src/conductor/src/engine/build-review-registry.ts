@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { BuildReviewRubricId } from '../types/config.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -31,9 +32,8 @@ export interface BuildReviewRubricDescriptor {
   >;
 }
 
-export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security', 'implementationQuality'] as const;
-
-type RegisteredBuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
+export { BUILD_REVIEW_RUBRIC_IDS } from '../types/config.js';
+type RegisteredBuildReviewRubricId = BuildReviewRubricId;
 
 /**
  * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always

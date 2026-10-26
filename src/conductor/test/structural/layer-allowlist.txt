@@ -199,11 +199,6 @@ engine/routing/routed-exit.ts -> engine/restack/restack-move.ts
 engine/routing/routed-exit.ts -> engine/routing/revalidation-queue.ts
 engine/routing/routed-exit.ts -> engine/routing/route-record-store.ts
 engine/routing/routed-exit.ts -> engine/stack-publication.ts
-engine/self-host/provider-scratch.ts -> engine/self-host/transcript-harvest.ts
-engine/self-host/provider-scratch.ts -> engine/self-host/transcript-retention.ts
-engine/self-host/provider-scratch.ts -> execution/provider-catalog.ts
-engine/self-host/transcript-harvest.ts -> engine/self-host/transcript-retention.ts
-engine/self-host/transcript-retention.ts -> execution/provider-catalog.ts
 engine/slice-topology.ts -> engine/artifacts.ts
 engine/slice-topology.ts -> engine/plan-slices.ts
 engine/slice-topology.ts -> engine/rebase.ts

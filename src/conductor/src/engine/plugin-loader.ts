@@ -235,7 +235,7 @@ export function registerBuiltins(
         env: (ctx.startContext as import('../types/plugin.js').VisualizerStartContext & { env?: NodeJS.ProcessEnv }).env,
         resolvedWarningsHandled: ctx.resolvedWarningsHandled,
       },
-      ctx.emitter,
+      ctx.emitter as import('./conductor-event-emitter.js').ConductorEventEmitter,
     );
   });
 

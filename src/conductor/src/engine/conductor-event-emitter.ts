@@ -1,4 +1,5 @@
 import type { ConductorEvent } from '../types/index.js';
+import type { ConductorEventBus } from '../types/plugin.js';
 
 /**
  * Handlers may be sync or async. `emit()` awaits async handlers before
@@ -13,7 +14,7 @@ export type EventHandler = (event: ConductorEvent) => void | Promise<void>;
 
 type HandlerMap = Map<ConductorEvent['type'], Set<EventHandler>>;
 
-export class ConductorEventEmitter {
+export class ConductorEventEmitter implements ConductorEventBus {
   private handlers: HandlerMap = new Map();
 
   /**

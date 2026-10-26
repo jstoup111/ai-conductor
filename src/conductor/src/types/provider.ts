@@ -10,3 +10,5 @@ export interface ObservedInterval { startedAtMs: number; durationMs: number; }
 /** Opaque external provider identity; only the catalog conversion can mint one. */
 declare const providerIdBrand: unique symbol;
 export type ProviderId = string & { readonly [providerIdBrand]: 'ProviderId' };
+export interface CodexProbeFailureFacts extends ProviderExitFacts { timeoutMs?: number; schemaVersion?: number; envelopeStatus?: 'ok' | 'warning' | 'fail' | 'unknown'; credentialCheck?: 'absent' | 'ok' | 'fail' | 'unknown'; parserRejection?: CodexProbeParserRejection; }
+export interface CodexProbeFailure { kind: CodexProbeFailureKind; facts: CodexProbeFailureFacts; }

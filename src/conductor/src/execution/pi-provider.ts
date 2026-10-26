@@ -10,6 +10,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
@@ -26,7 +27,6 @@ import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from './scratch-schema.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -488,6 +488,7 @@ export class PiProvider implements LLMProvider {
   readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly executable = 'pi',
     private readonly subprocessFactory: PiSubprocessFactory = execa,
     private readonly environment: PiEnvironment = defaultPiEnvironment,
@@ -520,7 +521,7 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
 
