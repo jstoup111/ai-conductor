@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-10-26T10:48:27.287Z
 Slug: build-review-re-raises-already-decided-findings-ev
 Class: needs-human
 Halting step: unknown
