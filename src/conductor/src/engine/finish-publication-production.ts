@@ -89,7 +89,7 @@ import {
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
 import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
