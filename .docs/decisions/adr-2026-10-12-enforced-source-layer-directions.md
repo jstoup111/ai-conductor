@@ -47,6 +47,10 @@ is reused here, not duplicated:
 - **Its D5** fixes the layering `types ← execution ← engine ← ui ← entry` and enforces it with a
   TypeScript-AST import-graph check. That check fails on any new value-import cycle or new upward
   value edge, using a keyed, shrink-only allowlist of one file per allowed edge.
+
+  > **Amended 2026-10-26:** the allowlist became one sorted `from -> to` line per edge in
+  > `src/conductor/test/structural/layer-allowlist.txt`; see the amendment under
+  > `adr-2026-10-07-conductor-decomposition-target-architecture` D5.
 - **Its D7** orders the roadmap. Slice 2 (#1988) builds that ratchet. Slice 3 (#3042 together with
   #1017) breaks the engine↔execution SCC and relocates the event emitter, which tightens the
   ratchet.

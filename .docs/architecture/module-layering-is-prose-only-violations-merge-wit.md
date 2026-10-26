@@ -1,6 +1,6 @@
 # Components: Import-graph layer ratchet (#1988)
 
-**Last updated:** 2026-10-24
+**Last updated:** 2026-10-26 (allowlist moved to one sorted file; amends `adr-2026-10-07-conductor-decomposition-target-architecture` D5)
 **Scope:** The import-graph ratchet from `adr-2026-10-07-conductor-decomposition-target-architecture`
 D5. It is roadmap slice 2: a default-tier structural check over `src/conductor/src/` with a per-edge
 shrink-only allowlist. Plan stem:
@@ -17,7 +17,7 @@ graph LR
   scanner["Import-graph scanner<br/>test/structural/layer-ratchet.ts<br/>TypeScript AST: static value imports<br/>and value re-exports"]
   graph_["Value-edge graph<br/>file to file, with layer and line"]
   scc["Cycle detector<br/>strongly-connected components<br/>over value edges"]
-  allow["test/structural/layer-allowlist/<br/>one empty file per allowed edge<br/>«from»+«to».edge, URI-encoded"]
+  allow["test/structural/layer-allowlist.txt<br/>one sorted line per allowed edge<br/>«from» -> «to»"]
   ratchet["test/structural/layer-ratchet.test.ts<br/>default Vitest tier"]
   ci(["CI conductor job<br/>fails before merge"])
 
@@ -44,7 +44,7 @@ graph TD
   listedUp -- no --> fail["Fail: names file, line, layer edge"]
   listedCyc -- yes --> ok
   listedCyc -- no --> failCyc["Fail: names file, line, the cycle it closes"]
-  stale["Allowlist entry whose edge is gone<br/>or no longer a violation"] --> failStale["Fail: stale entry, delete the file"]
+  stale["Allowlist entry whose edge is gone<br/>or no longer a violation"] --> failStale["Fail: stale entry, delete the line"]
 ```
 
 ## Legend
