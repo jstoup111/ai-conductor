@@ -208,7 +208,7 @@ import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type Activ
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
-import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
+import { assertNever, emptyUnsettledReceipt, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
@@ -6788,6 +6788,7 @@ export class Conductor {
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
+      let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
         // Receipt recovery is meaningful only for a routed stack.  Keep the
         // N=1 path byte-for-byte free of route-ref probes.
@@ -6834,7 +6835,11 @@ export class Conductor {
           const cursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
           if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
             await this.activateChildRegionState(state, cursor.position, cursor.isLeaf);
-            if (getStepStatus(state, 'build') !== 'pending') {
+            routedHostEntryStep = preflight.kind === 'navigate-leaf-to-build' ? preflight.entryStep : undefined;
+            // Operator admission already restaged its recorded region gates.
+            // A generic navigate-back here would incorrectly re-pend build
+            // for a landing, whose build is deliberately left complete.
+            if (routedHostEntryStep === undefined && getStepStatus(state, 'build') !== 'pending') {
               await this.navigateStateBack(state, 'build', steps);
             }
             routedLeafBuildResume = true;
@@ -7023,6 +7028,10 @@ export class Conductor {
         }
       }
       startIndex = resolvedIndex;
+      // An operator round has already selected and restaged the host region
+      // durably.  Its admission record, not the leaf's old resume state,
+      // decides the first region gate after a restart.
+      if (routedHostEntryStep !== undefined) startIndex = indexOf(routedHostEntryStep);
     }
 
     // Do this before any per-worktree reset or sidecar load. Those helpers

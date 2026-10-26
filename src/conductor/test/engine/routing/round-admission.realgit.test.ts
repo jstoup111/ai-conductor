@@ -150,6 +150,28 @@ describe('routed-round admission (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  // Covers: task:20
+  it('carries an operator host entry step through reconciliation', async () => {
+    const subject = await fixture();
+    try {
+      const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+      const created = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        kind: 'operator',
+        operator: {
+          origin: 'rewind', reason: 'recheck the suite', operator: 'operator@example.test', entryStep: 'test_suite',
+          carried: [], otherTips: { 'feat/daemon-demo': tip as never },
+          priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+        },
+      });
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await expect(admitRound(subject.repo, 'demo', created.record, c1)).resolves.toMatchObject({ kind: 'admitted' });
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
+        kind: 'navigate-leaf-to-build', roundId: 'r1', host: c1, entryStep: 'test_suite',
+      });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   it('refuses a fenced transaction when a restack journal appears before commit', async () => {
     const subject = await fixture();
     try {

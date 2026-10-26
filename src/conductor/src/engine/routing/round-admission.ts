@@ -10,7 +10,7 @@ import {
   type PersistOutboxEvent,
   type RouteRecordStoreDependencies,
 } from './route-record-store.js';
-import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type RouteRecord, type RoundId } from './route-types.js';
+import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { advanceRound } from './routed-exit.js';
@@ -76,7 +76,8 @@ export async function admitRound(
 export type ReconcileRoundsResult =
   | { readonly kind: 'none' }
   | { readonly kind: 'aborted'; readonly roundId: string }
-  | { readonly kind: 'navigate-leaf-to-build'; readonly roundId: string; readonly host: ChildId }
+  | { readonly kind: 'navigate-leaf-to-build'; readonly roundId: string; readonly host: ChildId; readonly entryStep?: undefined }
+  | { readonly kind: 'navigate-leaf-to-build'; readonly roundId: string; readonly host: ChildId; readonly entryStep: RegionGate }
   /** A crash occurred after the host's entry CAS and before it journaled its exit. */
   | { readonly kind: 'resume-exit'; readonly roundId: RoundId; readonly host: ChildId }
   | { readonly kind: 'navigate-host'; readonly roundId: RoundId; readonly host: ChildId }
@@ -149,7 +150,12 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     const builtHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'built');
     if (builtHost) return { kind: 'resume-exit', roundId: id, host: Number(builtHost[0]) as ChildId };
     const activeHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'admitted' || state === 'repairing');
-    if (activeHost) return { kind: 'navigate-leaf-to-build', roundId: id, host: Number(activeHost[0]) as ChildId };
+    if (activeHost) {
+      const navigation = { kind: 'navigate-leaf-to-build' as const, roundId: id, host: Number(activeHost[0]) as ChildId };
+      return stored.record.kind === 'operator'
+        ? { ...navigation, entryStep: stored.record.operator!.entryStep }
+        : navigation;
+    }
     if (stored.record.phase === 'open') {
       const advanced = await advanceRound(worktree, slug, stored, { git });
       switch (advanced.kind) {
