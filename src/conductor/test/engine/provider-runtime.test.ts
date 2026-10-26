@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:5, task:7
+// Covers: task:2, task:3, task:4, task:5, task:6, task:7
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -283,6 +283,34 @@ describe('ProviderRuntimeSet', () => {
 
     await expect(runtime.provider.invoke(options)).resolves.toBe(result);
     expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it('wraps each runtime set independently without replacing the registered provider', async () => {
+    const invoke = vi.fn(async () => ({
+      success: true,
+      output: 'declared result',
+      exitCode: 0,
+    }));
+    const declared = {
+      invoke,
+      systemPromptCapability: { deliversSystemPrompt: true } as const,
+    };
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'declared', declared);
+    registry.markInitialized();
+
+    const first = createProviderRuntimeSet(registry);
+    const second = createProviderRuntimeSet(registry);
+    const firstProvider = first.get('declared').provider;
+    const secondProvider = second.get('declared').provider;
+
+    await firstProvider.invoke({ prompt: '/first', systemPrompt: 'S' });
+    await secondProvider.invoke({ prompt: '/second', systemPrompt: 'S' });
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(registry.get('llm_provider', 'declared')).toBe(declared);
+    expect(firstProvider).not.toBe(declared);
+    expect(secondProvider).not.toBe(declared);
   });
 
   it.each([
