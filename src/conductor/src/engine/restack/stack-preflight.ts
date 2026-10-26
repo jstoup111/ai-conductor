@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -113,12 +112,18 @@ function unlandedClosedChildCommitsHalt(slug: string, children: readonly number[
  * interrupted stack cannot be made safe by losing its worktree metadata.
  */
 export async function runStackPreflight(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
-  // Unit fixtures and legacy N=1 callers can have neither a Git boundary nor
-  // child state.  They cannot contain a journal ref, so the flat path must not
-  // fail while attempting its Git-backed recovery probe.
-  if (!existsSync(join(options.worktree, '.git')) && !await hasDurableChildState(options.worktree, options.slug, { git: options.git })) {
-    return { kind: 'no-stack' };
-  }
+  // Establish whether the feature is stacked before touching routing state.
+  // A journal itself establishes durable child state, so this still recovers
+  // interrupted stacks while keeping N=1 features on their historical path.
+  const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
+  if (durable === 'git-error') return haltUnresolvableCursor(options, 'git-error', 'cannot inspect durable child state');
+  if (!durable) return { kind: 'no-stack' };
+
+  // Routing-off stacks retain the ordinary restack/recovery path, but must
+  // never inspect routing refs while doing so.
+  const config = await loadConfig(options.worktree);
+  const routingEnabled = config.ok && routingSettingOn(config.config);
+
   // Publication freezes new rewrites, not a resume which has no rewrite to
   // perform. A settled feature-repair journal may still be cleaned, but its
   // base-refresh follow-on must not move published member refs.
@@ -154,9 +159,11 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // The hook cannot see a --no-verify commit or a ref move made elsewhere.
   // Check an active operator host before any route admission, ref movement, or
   // the undeclared-round stop that Task 15 adds at this same boundary.
-  const marker = await readRepairMarker(options.worktree, options.slug, { git: options.git });
-  if (marker.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot read operator repair marker' };
-  if (marker.kind === 'marker') {
+  const marker = routingEnabled
+    ? await readRepairMarker(options.worktree, options.slug, { git: options.git })
+    : undefined;
+  if (marker?.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot read operator repair marker' };
+  if (marker?.kind === 'marker') {
     const stored = await readRouteRecord(options.worktree, options.slug, marker.marker.roundId, { git: options.git });
     if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot read operator round ${marker.marker.roundId}` };
     if (stored.record.kind === 'operator') {
@@ -190,12 +197,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     }
   }
 
-  const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
-  if (durable === 'git-error') return haltUnresolvableCursor(options, 'git-error', 'cannot inspect durable child state');
-  if (!durable) return { kind: recovery.kind === 'none' && secondRecovery.kind === 'none' ? 'no-stack' : 'recovered' };
-
-  const config = await loadConfig(options.worktree);
-  const receiptCursor = config.ok && routingSettingOn(config.config)
+  const receiptCursor = routingEnabled
     ? await resolveActiveChild(options.worktree, options.slug, { git: options.git })
     : undefined;
   if (config.ok && receiptCursor !== undefined && routingEligible(receiptCursor, config.config)) {
@@ -284,7 +286,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
 
   // A raw closed-child commit needs an operator landing to declare it done;
   // routing must never silently replay it into a routed feature repair.
-  if (marker.kind === 'absent' && config.ok && routingEligible(cursor, config.config)) {
+  if (marker?.kind === 'absent' && config.ok && routingEligible(cursor, config.config)) {
     await writeHaltMarker(
       options.worktree,
       unlandedClosedChildCommitsHalt(options.slug, cursor.repairChildren),
