@@ -8,9 +8,9 @@ import { replaceCommandState } from '../../src/engine/command-state.js';
 import type { FeatureDispatchLease } from '../../src/engine/feature-dispatch-lease.js';
 import {
   prepareInteractiveConductorRunWithLease,
-  resolveForegroundRunId,
   runInteractiveConductorWithLease,
-} from '../../src/index.js';
+} from '../../src/engine/interactive-run-lease.js';
+import { resolveForegroundRunId } from '../../src/index.js';
 
 const temporaryDirectories: string[] = [];
 
