@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
@@ -557,7 +558,7 @@ describe('live build-review effective resolver', () => {
   });
 
   // Covers: task:19
-  it('uses the current lap’s real changed-file ranges when every finding is otherwise out of delta', async () => {
+  it('uses the active child current-lap artifact and real changed-file ranges when every finding is otherwise out of delta', async () => {
     const raw = aggregate();
     const findingId = canonicalizeBuildReviewFindingIdentity({
       rubric: 'testQuality', contractVersion: currentContractVersion, concernKind: testQualityFinding.concernKind, anchor: testQualityFinding.anchor,
@@ -570,6 +571,7 @@ describe('live build-review effective resolver', () => {
       outOfDeltaSourceIds: [],
     };
     const changedFileCalls: unknown[] = [];
+    const readPaths: string[] = [];
     const readCurrentLapChangedFiles = async (input: unknown) => {
       changedFileCalls.push(input);
       return [{
@@ -582,13 +584,17 @@ describe('live build-review effective resolver', () => {
     };
     const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
       ...identityDeps,
+      child: parseChildId('1'),
       createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
-      readFile: async (path) => path.endsWith('/testQuality.json')
-        ? JSON.stringify({
+      readFile: async (path) => {
+        readPaths.push(path);
+        return path.endsWith('/testQuality.json')
+          ? JSON.stringify({
           version: 2, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: raw.results.testQuality,
           provenance: { kind: 'fresh' }, reviewScope,
         })
-        : '{}',
+          : '{}';
+      },
       readCurrentLapChangedFiles,
     } as unknown as BuildReviewEffectiveResolverDeps);
 
@@ -596,6 +602,11 @@ describe('live build-review effective resolver', () => {
       verdict: 'PASS', unresolvedFindingIds: [], outOfDeltaFindingIds: [findingId],
     } });
     expect(changedFileCalls).toEqual([{ projectRoot: worktree, mergeBase: 'base', headSha: 'head' }]);
+    expect(readPaths).toEqual([
+      join(worktree, '.pipeline', 'children', '1', 'build-review', lapId, 'testQuality.json'),
+      join(worktree, '.pipeline', 'children', '1', 'build-review', lapId, 'security.json'),
+      join(worktree, '.pipeline', 'children', '1', 'build-review', lapId, 'implementationQuality.json'),
+    ]);
   });
 
   it('applies digestless reduced coverage only to the current custom declaration and closed failure reason', async () => {

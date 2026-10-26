@@ -44,6 +44,7 @@ import { scopedRunFailure } from '../../src/engine/build-review-test-quality-pre
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 const { buildPrdAuditProjection } = vi.hoisted(() => ({
   buildPrdAuditProjection: vi.fn(),
@@ -4713,7 +4714,7 @@ TIER: M`,
     });
 
     // Covers: task:9
-    it('passes testQuality unresolved markers to the frontier as unknown risk', async () => {
+    it('keeps only current test-scope uncertainty in the frontier', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {
@@ -4736,6 +4737,10 @@ TIER: M`,
         effectiveBundleDigest: 'sha256:bundle-a',
         provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
         model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        testScope: {
+          analysisVersion: 'test-scope-v2',
+          bindingIdentity: `sha256:${createHash('sha256').update(JSON.stringify(['candidate-current'])).digest('hex')}`,
+        },
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
       await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'testQuality.json'), JSON.stringify({
@@ -4765,11 +4770,44 @@ TIER: M`,
         sourceSnapshot: {
           digest: 'sha256:current', mergeBase: 'base', headSha: 'current',
           diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
+          testScopeAnalysisVersion: 'test-scope-v2', testScopeEvidence: [{ id: 'candidate-current' }],
           testQuality: { unresolvedMarkers: [{ selector: 'src/example.ts', reference: 'task:unbound' }] },
         },
       }, config, 'M', 'plan.md')).rejects.toThrow('expected unknown frontier observation');
 
       expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }] });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.testQuality;
+        throw new Error('expected stale unknown to be ignored');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current-without-candidate', mergeBase: 'base', headSha: 'current-without-candidate',
+          diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
+          testScopeAnalysisVersion: 'test-scope-v2', testScopeEvidence: [{ id: 'candidate-current' }],
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected stale unknown to be ignored');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes.testQuality;
+        throw new Error('expected child-local frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:child-current', mergeBase: 'base', headSha: 'child-current',
+          diff: ['diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@', '-export const value = false;', '+export const value = true;'].join('\n'),
+          testScopeAnalysisVersion: 'test-scope-v2', testScopeEvidence: [{ id: 'candidate-current' }],
+        },
+      }, config, 'M', 'plan.md', undefined, undefined, parseChildId('1'))).rejects.toThrow('expected child-local frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'first-lap' });
     });
 
     // #3317: a branch that commits a root `node_modules` symlink must not make

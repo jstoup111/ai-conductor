@@ -672,6 +672,7 @@ export interface StepRunnerOptions {
     lapId: BuildReviewLapId,
     snapshotDigest: string,
     fs: import('./build-review-artifacts.js').BuildReviewArtifactFilesystem,
+    child?: import('./child-context.js').ChildId,
   ) => Promise<unknown>;
   /** Candidate-local installed-policy catalog. Tests supply a faithful host fake. */
   buildReviewPolicyCatalog?: (input: {
@@ -3279,7 +3280,7 @@ export class DefaultStepRunner implements StepRunner {
     // aggregate deliberately has no per-rubric settlement authority.
     const changedFiles = deriveChangedFileReferences(inputs.sourceSnapshot.diff);
     const priorArtifactsFor = async (rubric: string) => {
-      const root = join(this.projectDir, '.pipeline', 'build-review');
+      const root = join(effectivePipelineDir, 'build-review');
       let lapDirectories: readonly string[] = [];
       try { lapDirectories = await readdir(root); } catch { return []; }
       const artifacts = await Promise.all(lapDirectories.filter((name) => name.startsWith('lap-')).map(async (priorLapId) => {
@@ -3326,6 +3327,14 @@ export class DefaultStepRunner implements StepRunner {
         model: entry.policy.model,
         effort: entry.policy.effort,
         engineStamp: engineIdentity.engineStamp,
+        ...(entry.id !== 'testQuality' ? {} : {
+          testScope: {
+            analysisVersion: inputs.sourceSnapshot.testScopeAnalysisVersion ?? 'test-scope-v1',
+            bindingIdentity: `sha256:${createHash('sha256').update(JSON.stringify(
+              (inputs.sourceSnapshot.testScopeEvidence ?? []).map((evidence) => evidence.id).sort(),
+            )).digest('hex')}`,
+          },
+        }),
       });
       const artifacts = await priorArtifactsFor(entry.id);
       const sources = artifacts.flatMap((artifact) => judgedSourcesFor(entry.id, artifact));
@@ -3334,7 +3343,9 @@ export class DefaultStepRunner implements StepRunner {
         indeterminateCandidates: artifacts.flatMap((artifact) => {
           const result = builtInJudgedResultFor(artifact);
           return result?.rubric === 'testQuality'
-            ? result.scopeResolutions?.filter((candidate): candidate is import('./build-review-domain.js').BuildReviewCandidateScopeResolutionIndeterminate => candidate.status === 'indeterminate') ?? []
+            ? result.scopeResolutions?.filter((candidate): candidate is import('./build-review-domain.js').BuildReviewCandidateScopeResolutionIndeterminate =>
+              candidate.status === 'indeterminate' && (inputs.sourceSnapshot.testScopeEvidence ?? []).some((evidence) => evidence.id === candidate.candidateId),
+            ) ?? []
             : [];
         }),
       });
@@ -3584,7 +3595,7 @@ export class DefaultStepRunner implements StepRunner {
         customEntries.length,
         async (_id, entry) => {
           try {
-            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext, customReviewScopes[entry.id]);
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext, customReviewScopes[entry.id], child);
           } finally {
             lapGate?.arrive(entry.id);
           }
@@ -3631,6 +3642,7 @@ export class DefaultStepRunner implements StepRunner {
                   customPolicyLap,
                   readOnlyReviewCapabilityFor,
                   lapGate,
+                  child,
                 );
               } finally {
                 lapGate?.arrive(branch.rubric);
@@ -3641,7 +3653,7 @@ export class DefaultStepRunner implements StepRunner {
               mkdir: async (path) => { await mkdir(path, { recursive: true }); },
               writeFile,
               rename,
-            }),
+            }, child),
             writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
               readFile: async (path) => readFile(path, 'utf-8'),
               mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -3756,6 +3768,7 @@ export class DefaultStepRunner implements StepRunner {
             writeFile,
             rename,
           },
+          child,
         );
         const artifact = rawArtifact as import('./build-review-artifacts.js').BuildReviewBranchArtifact | undefined;
         if (rawArtifact !== undefined && (typeof rawArtifact !== 'object' || rawArtifact === null || !artifact)) {
@@ -4011,6 +4024,7 @@ export class DefaultStepRunner implements StepRunner {
     pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline'),
     executionContext?: ExecutionContext,
     reviewScope?: import('./build-review-artifacts.js').BuildReviewReviewScope,
+    child?: import('./child-context.js').ChildId,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -4039,7 +4053,7 @@ export class DefaultStepRunner implements StepRunner {
         }, {
           readFile: async (path) => readFile(path, 'utf-8'),
           mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,
-        });
+        }, child);
       } catch (error) {
         return { id: entry.id, success: false, output: `Installed build-review policy ${entry.skill} could not persist its branch artifact: ${error instanceof Error ? error.message : String(error)}` };
       }
@@ -4626,7 +4640,7 @@ export class DefaultStepRunner implements StepRunner {
         }, {
           readFile: async (path) => readFile(path, 'utf-8'),
           mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,
-        });
+        }, child);
       } catch (error) {
         return { id: entry.id, success: false, output: `Installed build-review policy ${entry.skill} could not persist its branch artifact: ${error instanceof Error ? error.message : String(error)}` };
       }
@@ -4819,6 +4833,7 @@ export class DefaultStepRunner implements StepRunner {
     customPolicyLap = false,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
     lapGate?: BuildReviewLapGate,
+    child?: import('./child-context.js').ChildId,
   ): Promise<unknown> {
     const resolvedSkillName = await resolveSkillName(this.skillNameRoot, branch.skillName);
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
@@ -4869,7 +4884,7 @@ export class DefaultStepRunner implements StepRunner {
     });
     // Offline eval input (#1612): the frozen prompt is otherwise lost, since
     // only its digest is cached. Best-effort — a failed write never fails review.
-    const promptPath = buildReviewRubricPromptPath(this.projectDir, projection.lapId, branch.rubric);
+    const promptPath = buildReviewRubricPromptPath(this.projectDir, projection.lapId, branch.rubric, child);
     await mkdir(dirname(promptPath), { recursive: true })
       .then(() => writeFile(promptPath, rubricPrompt, 'utf8'))
       .catch(() => undefined);
@@ -5263,7 +5278,7 @@ export class DefaultStepRunner implements StepRunner {
       );
       const detail = 'root: a structured result is required';
       const retainedResponsePath = await retainBuildReviewRejectedResponse({
-        pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+        pipelineDir: this.buildReviewPipelineDir(child), worktreeRoot: this.projectDir,
         lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
         structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
       });
@@ -5289,7 +5304,7 @@ export class DefaultStepRunner implements StepRunner {
       );
       const detail = 'root: a structured result is required';
       const retainedResponsePath = await retainBuildReviewRejectedResponse({
-        pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+        pipelineDir: this.buildReviewPipelineDir(child), worktreeRoot: this.projectDir,
         lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
         structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
       });
@@ -5310,7 +5325,7 @@ export class DefaultStepRunner implements StepRunner {
     );
     const detail = renderBuildReviewJudgedResultRejection(rejection);
     const retainedResponsePath = await retainBuildReviewRejectedResponse({
-      pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+      pipelineDir: this.buildReviewPipelineDir(child), worktreeRoot: this.projectDir,
       lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
       structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
     });

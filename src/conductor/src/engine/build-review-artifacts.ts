@@ -11,6 +11,7 @@ import {
 } from './build-review-domain.js';
 import { isRegisteredRubric } from './build-review-registry.js';
 import { MAX_POLICY_BUNDLE_BYTES } from './build-review-policy-bundle.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 const ARTIFACT_VERSION = 2 as const;
 const ARTIFACT_DIRECTORY = '.pipeline/build-review';
@@ -322,8 +323,9 @@ export function buildReviewBranchArtifactPath(
   projectRoot: string,
   lapId: BuildReviewLapId,
   rubric: BuildReviewArtifactRubric,
+  child?: ChildId,
 ): string {
-  return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.json`);
+  return pipelinePathFor(projectRoot, join('build-review', lapId, `${rubric}.json`), child);
 }
 
 /**
@@ -335,12 +337,13 @@ export function buildReviewRubricPromptPath(
   projectRoot: string,
   lapId: BuildReviewLapId,
   rubric: BuildReviewArtifactRubric,
+  child?: ChildId,
 ): string {
-  return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.prompt.txt`);
+  return pipelinePathFor(projectRoot, join('build-review', lapId, `${rubric}.prompt.txt`), child);
 }
 
-function artifactDirectory(projectRoot: string, lapId: BuildReviewLapId): string {
-  return join(projectRoot, ARTIFACT_DIRECTORY, lapId);
+function artifactDirectory(projectRoot: string, lapId: BuildReviewLapId, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, join('build-review', lapId), child);
 }
 
 /** Strictly parses an envelope and verifies provider output against engine identity. */
@@ -384,14 +387,15 @@ export async function writeBuildReviewBranchArtifact(
   projectRoot: string,
   artifact: Omit<BuildReviewBranchArtifact, 'version'>,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<BuildReviewBranchArtifact> {
   if (artifact.reviewScope && 'kind' in artifact.reviewScope) {
     throw new Error('build-review branch artifact cannot write an unreadable review scope');
   }
   const validated = parseBuildReviewBranchArtifact({ version: ARTIFACT_VERSION, ...artifact });
   if (!validated) throw new Error('build-review branch artifact must carry matching engine identity');
-  const path = buildReviewBranchArtifactPath(projectRoot, validated.lapId, validated.rubric);
-  await fs.mkdir(artifactDirectory(projectRoot, validated.lapId));
+  const path = buildReviewBranchArtifactPath(projectRoot, validated.lapId, validated.rubric, child);
+  await fs.mkdir(artifactDirectory(projectRoot, validated.lapId, child));
   await fs.writeFile(`${path}.tmp`, JSON.stringify(validated));
   await fs.rename(`${path}.tmp`, path);
   return validated;
@@ -404,6 +408,7 @@ export function readBuildReviewBranchArtifact(
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<(BuildReviewBranchArtifact & { readonly rubric: BuildReviewRubricId; readonly result: BuildReviewRubricResult }) | undefined>;
 export function readBuildReviewBranchArtifact(
   projectRoot: string,
@@ -411,6 +416,7 @@ export function readBuildReviewBranchArtifact(
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<BuildReviewBranchArtifact | undefined>;
 export async function readBuildReviewBranchArtifact(
   projectRoot: string,
@@ -418,9 +424,10 @@ export async function readBuildReviewBranchArtifact(
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<BuildReviewBranchArtifact | undefined> {
   try {
-    const artifact = parseBuildReviewBranchArtifact(JSON.parse(await fs.readFile(buildReviewBranchArtifactPath(projectRoot, lapId, rubric))));
+    const artifact = parseBuildReviewBranchArtifact(JSON.parse(await fs.readFile(buildReviewBranchArtifactPath(projectRoot, lapId, rubric, child))));
     return artifact && artifact.rubric === rubric && artifact.lapId === lapId && artifact.snapshotDigest === snapshotDigest
       ? artifact
       : undefined;

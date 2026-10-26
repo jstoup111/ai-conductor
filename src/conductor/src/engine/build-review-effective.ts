@@ -31,7 +31,7 @@ import { deriveChangedFileReferences, renderBuildReviewReducedCoverageEvidence, 
 import { projectBuildReviewCustomSuppressionSources } from './build-review-suppression-history.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { ResolvedBuildReviewConfig } from './resolved-config.js';
-import type { ChildId } from './child-context.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -288,7 +288,7 @@ async function readSettledBuildReviewSourceIds(
 async function readCurrentLapScopes(
   projectRoot: string,
   aggregate: BuildReviewAggregate,
-  deps: Pick<BuildReviewEffectiveResolverDeps, 'readCurrentLapChangedFiles' | 'readFile'>,
+  deps: Pick<BuildReviewEffectiveResolverDeps, 'readCurrentLapChangedFiles' | 'readFile' | 'child'>,
 ): Promise<Partial<Record<string, BuildReviewEffectiveScope>>> {
   const readCurrentLapChangedFiles = deps.readCurrentLapChangedFiles ?? (async ({
     projectRoot: scopeProjectRoot,
@@ -318,7 +318,7 @@ async function readCurrentLapScopes(
   const rubrics = [...Object.keys(aggregate.results), ...(aggregate.currentCustomRubrics ?? [])];
   const entries = await Promise.all(rubrics.map(async (rubric) => {
     try {
-      const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readBranchArtifact(join(projectRoot, '.pipeline', 'build-review', aggregate.lapId, `${rubric}.json`))));
+      const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readBranchArtifact(pipelinePathFor(projectRoot, join('build-review', aggregate.lapId, `${rubric}.json`), deps.child))));
       if (!artifact?.reviewScope || 'kind' in artifact.reviewScope) return undefined;
       const changedFiles = await changedFilesFor(artifact.reviewScope.mergeBase, artifact.reviewScope.headSha);
       return [rubric, {

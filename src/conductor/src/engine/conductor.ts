@@ -5600,9 +5600,11 @@ export class Conductor {
     }
 
     const priorLaps: Array<{ artifactPath: string; findings: Array<{ findingRef: string; finding: typeof findings[number] }> }> = [];
+    const artifactRoot = pipelinePathFor(this.projectRoot, 'build-review', this.activeRegionChild);
+    const artifactRootRelative = relative(this.projectRoot, artifactRoot);
     let lapIds: readonly string[] = [];
     try {
-      lapIds = await readdir(join(this.projectRoot, '.pipeline', 'build-review'));
+      lapIds = await readdir(artifactRoot);
     } catch {
       // No prior-lap directory is equivalent to no prior attempts.
     }
@@ -5610,7 +5612,7 @@ export class Conductor {
       if (lapId === aggregate.lapId) continue;
       let files: readonly string[] = [];
       try {
-        files = await readdir(join(this.projectRoot, '.pipeline', 'build-review', lapId));
+        files = await readdir(join(artifactRoot, lapId));
       } catch {
         continue;
       }
@@ -5618,11 +5620,11 @@ export class Conductor {
         if (!file.endsWith('.json')) continue;
         try {
           const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(
-            join(this.projectRoot, '.pipeline', 'build-review', lapId, file), 'utf-8',
+            join(artifactRoot, lapId, file), 'utf-8',
           )));
           if (artifact?.result.kind === 'judged' && artifact.result.rubric === 'testQuality') {
             priorLaps.push({
-              artifactPath: `.pipeline/build-review/${lapId}/${file}`,
+              artifactPath: join(artifactRootRelative, lapId, file),
               findings: (artifact.result.findings as readonly BuildReviewFinding[]).map((finding, index) => ({ findingRef: String(index), finding })),
             });
           }

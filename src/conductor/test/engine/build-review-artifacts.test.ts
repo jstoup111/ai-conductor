@@ -13,6 +13,7 @@ import {
   type BuildReviewArtifactFilesystem,
   type BuildReviewReviewScope,
 } from '../../src/engine/build-review-artifacts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
@@ -156,6 +157,18 @@ describe('build-review current-lap branch artifacts', () => {
       '/feature/.pipeline/build-review/lap-current/testQuality.json',
       '/feature/.pipeline/build-review/lap-next/testQuality.json',
     ]);
+  });
+
+  it('keeps a stacked child branch artifact disjoint from the feature root', async () => {
+    const fs = filesystem();
+    const child = parseChildId('1')!;
+    await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' },
+    }, fs, child);
+
+    expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/children/1/build-review/lap-current/testQuality.json']);
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs, child)).resolves.toMatchObject({ rubric: 'testQuality' });
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toBeUndefined();
   });
 
   it('stamps engine-owned identity and atomically writes only the addressed branch', async () => {
