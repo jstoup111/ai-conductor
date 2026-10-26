@@ -97,7 +97,8 @@ async function operatorRoundFixture(declared: boolean) {
 function routedConductor(
   root: string,
   enterHostRegion: NonNullable<ConstructorParameters<typeof Conductor>[0]['childRegionLifecycle']>['enterHostRegion'],
-  childEntry: () => Promise<unknown> = async () => ({ kind: 'completed' as const }),
+  childEntry: NonNullable<ConstructorParameters<typeof Conductor>[0]['childRegionLifecycle']>['enterChildRegion'] =
+    async () => ({ kind: 'completed' as const }),
 ) {
   const runner = { run: vi.fn(async () => ({ success: true })) };
   const enterChildRegion = vi.fn(childEntry as () => Promise<never>);
@@ -160,6 +161,16 @@ describe('routed host no-op guard placement', () => {
   // Covers: task:16
   it('halts needs-human without a provider dispatch when real operator round entry is undeclared', async () => {
     const root = await operatorRoundFixture(false);
+    const refusal = await enterHostRegion({
+      worktree: root, slug: 'demo', roundId, host: child,
+      emitter: new ConductorEventEmitter(), planPath: '.docs/plans/demo.md',
+    });
+
+    expect(refusal).toEqual({
+      kind: 'refused',
+      detail: 'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon',
+    });
+
     const { conductor, runner, enterChildRegion } = routedConductor(
       root,
       (input) => enterHostRegion({ ...input, planPath: '.docs/plans/demo.md' }),
