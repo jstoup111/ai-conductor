@@ -4,13 +4,6 @@ spec_hash: a859b292287a792876d1aa167a5bedf02305c5741d378396579d12cd45985a9d
 pr: https://github.com/jstoup111/ai-conductor/pull/3424
 shipped: 2026-10-26
 engine_version: 20261026T015452Z-d74b2ab722ef
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "Instead of adding an allowlist entry, the change removes one engine -> ui value edge from the baseline. It does not change runtime behavior, because TypeScript already elides a value import that is only used as a type, and it matches the feature's outcome that the exception set only shrinks. It is still an unplanned edit to production source."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
