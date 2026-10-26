@@ -789,7 +789,7 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       const view = renderKickbackBudgetView(
         entry,
         gate,
-        kickbackBudgetFallbackLimit(gate, budgetConfig),
+        kickbackBudgetFallbackLimit(gate, budgetConfig, undefined),
         undefined,
         undefined,
         child,

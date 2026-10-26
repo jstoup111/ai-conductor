@@ -629,6 +629,7 @@ export {
   prdAuditAppendCap,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
+  resolveRemediationLapAllowance,
   validationJoinRemediationRoundCap,
 } from './remediation-caps.js';
 export { prdAuditScopeProjection, routeTypedPrdAuditOverScope } from './prd-audit-routing.js';
@@ -4270,8 +4271,8 @@ export class Conductor {
       asBuiltEvidenceFile !== undefined &&
       (hintSource.source === 'architecture-review-as-built' || hintSource.source === 'validation-group');
     const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
-    const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
-    const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
+    const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config, MAX_KICKBACKS_PER_GATE, undefined);
+    const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config, MAX_KICKBACKS_PER_GATE, undefined);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: string; evidence: string }>();
     // Both appended and existing-task repairs retain the criteria that
     // authorized them. The pending receipt is the only durable context at a
@@ -7126,9 +7127,9 @@ export class Conductor {
     // planner can't actually close still halts for a human.
     let remediationRounds = 0;
     // PRD-audit is deliberately not coupled to the generic remediation
-    // counter. Its configured one-lap default is the sole allowance for a
-    // criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
-    const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config);
+    // counter. Its tier-aware remediation allowance is the sole allowance
+    // for a criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
+    const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config, MAX_KICKBACKS_PER_GATE, undefined);
     // Refusal rework is admitted before /remediate runs.  Unlike the old
     // process-local round counter this reads the durable gate and growth
     // records, so a daemon restart cannot buy another lap and an operator
@@ -9684,7 +9685,7 @@ export class Conductor {
                 gapMemberNamesForMerge.length > 0 &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                   ? await refusalReworkAllowanceAvailable()
-                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config))
+                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, undefined))
               ) {
                 mtMergeHandled = true;
                 const evidence: RemediationGateProvenance[] = [];
@@ -9843,7 +9844,7 @@ export class Conductor {
               !mtMergeHandled && this.daemon &&
               (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                 ? await refusalReworkAllowanceAvailable()
-                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config))
+                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, undefined))
             ) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
@@ -10219,6 +10220,7 @@ export class Conductor {
               this.projectRoot,
               this.config,
               settlementLedger,
+              undefined,
             );
             growthCap = budgets[0]?.growthCap;
             settlementGrowth = budgets[0]?.growth;
@@ -10290,7 +10292,7 @@ export class Conductor {
                       : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
                 ).join('; ')}`
               : '';
-            const fallbackLapCap = remediationLapCapForGate(gate, this.config);
+            const fallbackLapCap = remediationLapCapForGate(gate, this.config, MAX_KICKBACKS_PER_GATE, undefined);
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
               : withPendingGrowth({

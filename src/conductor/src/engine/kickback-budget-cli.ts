@@ -47,7 +47,7 @@ async function defaultsFor(worktree: string): Promise<Record<string, number>> {
   return Object.fromEntries(
     [...GATES].map((gate) => [
       gate,
-      gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config),
+      gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config, undefined),
     ]),
   );
 }
