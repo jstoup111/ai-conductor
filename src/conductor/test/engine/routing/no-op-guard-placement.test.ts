@@ -1,4 +1,4 @@
-// Covers: task:56, task:50
+// Covers: task:16, task:50, task:56
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,5 +88,27 @@ describe('routed host no-op guard placement', () => {
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
       'child BUILD region refused: routed host 1 entry halted: frozen block rem-prd-audit-T1 conflicts\n',
     );
+  });
+
+  // Covers: task:16
+  it('halts needs-human without a provider dispatch when operator round entry is undeclared', async () => {
+    const root = await fixture();
+    const { conductor, runner, enterChildRegion } = routedConductor(
+      root,
+      async () => ({
+        kind: 'refused',
+        detail: 'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon',
+      }) as never,
+    );
+
+    await conductor.run();
+
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(enterChildRegion).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      'child BUILD region refused: routed host 1 entry refused: ' +
+      'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon\n',
+    );
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 });

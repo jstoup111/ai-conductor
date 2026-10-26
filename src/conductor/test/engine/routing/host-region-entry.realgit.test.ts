@@ -1,4 +1,4 @@
-// Covers: task:7, task:48
+// Covers: task:7, task:16, task:48
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -446,7 +446,8 @@ describe('routed host region entry (real local Git)', () => {
     });
   });
 
-  it('enters an operator host without the build-completion or route-into-no-op guards', async () => {
+  // Covers: task:16
+  it('refuses an undeclared operator landing before it mutates the host region', async () => {
     const subject = await fixture();
     const stored = await readRouteRecord(subject.repo, 'demo', roundId);
     if (stored.kind !== 'record') throw new Error('missing route record');
@@ -459,6 +460,35 @@ describe('routed host region entry (real local Git)', () => {
         origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
         carried: [], otherTips: { 'feat/daemon-demo': tip },
         priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      },
+    };
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: operator }]))
+      .resolves.toEqual({ kind: 'updated' });
+
+    await expect(entered(subject)).resolves.toMatchObject({
+      kind: 'refused', detail: 'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon',
+    });
+    const afterRefusal = await readRouteRecord(subject.repo, 'demo', roundId);
+    expect(afterRefusal).toMatchObject({ kind: 'record', record: { hosts: { 1: 'admitted' } } });
+    if (afterRefusal.kind !== 'record') throw new Error('missing route record after refusal');
+    expect(afterRefusal.record.entry).toBeUndefined();
+    await expect(subject.git(['symbolic-ref', '--short', 'HEAD'])).resolves.toMatchObject({ stdout: 'feat/daemon-demo' });
+  });
+
+  it('enters a declared operator host without the build-completion or route-into-no-op guards', async () => {
+    const subject = await fixture();
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing route record');
+    const tip = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    if (!tip) throw new Error('invalid operator tip');
+    const operator: RouteRecord = {
+      ...stored.record,
+      kind: 'operator',
+      operator: {
+        origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/daemon-demo': tip },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+        declaration: { tip, at: '2026-10-25T00:00:00.000Z' },
       },
     };
     await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: operator }]))

@@ -439,6 +439,14 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
 
   let stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable` };
+  if (stored.record.kind === 'operator' && stored.record.operator?.declaration === undefined) {
+    return {
+      kind: 'refused',
+      detail:
+        `operator-round-undeclared: landing ${input.roundId} on child ${input.host} is awaiting ` +
+        'ai-conductor stack land --done or ai-conductor stack land --abandon',
+    };
+  }
   const hostState = stored.record.hosts[input.host];
   if (hostState !== 'admitted' && hostState !== 'repairing') {
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} is not admitted` };
