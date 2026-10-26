@@ -1,17 +1,24 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { StackLandDispatch } from '../cli.js';
+import type { StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../cli.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
 import { HALT_CLASS_MARKER, HALT_MARKER } from './halt-marker.js';
-import { createOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult } from './park-marker.js';
+import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult } from './park-marker.js';
+import { clearHaltAtomically } from './rewind.js';
 import {
+  checkDeclareOperatorRound,
   checkOpenOperatorRound,
+  declareOperatorRound,
   openOperatorRound,
+  parseOperatorHaltReason,
+  checkOperatorTips,
   type CheckOpenOperatorRoundResult,
+  type CheckDeclareOperatorRoundResult,
+  type DeclareOperatorRoundResult,
   type OpenOperatorRoundResult,
 } from './routing/operator-round.js';
 import { nextRoundId, readRepairMarker, readRouteRecord } from './routing/route-record-store.js';
@@ -31,6 +38,10 @@ export interface StackLandCliDeps {
   readonly readRepairMarker?: typeof readRepairMarker;
   readonly readRouteRecord?: typeof readRouteRecord;
   readonly clearHalt?: (worktree: string) => Promise<void>;
+  readonly checkDeclare?: typeof checkDeclareOperatorRound;
+  readonly declareRound?: typeof declareOperatorRound;
+  readonly releasePark?: typeof releaseOwnedPark;
+  readonly clearMatchingHalt?: (worktree: string, roundId: RoundId) => Promise<'cleared' | 'absent' | 'unrelated'>;
   readonly emitter?: ConductorEventEmitter;
 }
 
@@ -63,7 +74,7 @@ async function clearUnlandedClosedChildCommitsHalt(worktree: string): Promise<vo
   });
 }
 
-function parsedChildren(command: StackLandDispatch): { readonly host: ChildId; readonly carry: readonly ChildId[] } | undefined {
+function parsedChildren(command: StackLandOpenDispatch): { readonly host: ChildId; readonly carry: readonly ChildId[] } | undefined {
   const host = parseChildId(command.child);
   const carry = command.carry.map(parseChildId);
   if (host === undefined || carry.some((child) => child === undefined)) return undefined;
@@ -107,11 +118,83 @@ async function resumableAdmission(
   return { host, carried: operator.carried, roundId: marker.marker.roundId };
 }
 
+async function clearMatchingOperatorHalt(worktree: string, roundId: RoundId): Promise<'cleared' | 'absent' | 'unrelated'> {
+  let body: string;
+  try {
+    body = await readFile(join(worktree, HALT_MARKER), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    throw error;
+  }
+  const match = body.split(/\r?\n/).map(parseOperatorHaltReason).find((reason) => reason?.roundId === roundId &&
+    (reason.reason === 'operator-round-undeclared' || reason.reason === 'operator-round-branch-moved'));
+  if (match === undefined) return 'unrelated';
+  await clearHaltAtomically(worktree);
+  return 'cleared';
+}
+
+async function clearResolvedBranchMovedHalt(worktree: string, slug: string, roundId: RoundId): Promise<void> {
+  let body: string;
+  try {
+    body = await readFile(join(worktree, HALT_MARKER), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const matches = body.split(/\r?\n/).map(parseOperatorHaltReason)
+    .some((reason) => reason?.roundId === roundId && reason.reason === 'operator-round-branch-moved');
+  if (!matches) return;
+  const stored = await readRouteRecord(worktree, slug, roundId);
+  if (stored.kind !== 'record') return;
+  const tips = await checkOperatorTips({ worktree, slug, record: stored.record });
+  if (tips.kind === 'clear') await clearHaltAtomically(worktree);
+}
+
+async function readRoundFromMarker(worktree: string, slug: string): Promise<{ readonly roundId: RoundId; readonly host: ChildId } | undefined> {
+  const marker = await readRepairMarker(worktree, slug);
+  return marker.kind === 'marker' ? marker.marker : undefined;
+}
+
+async function dispatchStackLandDoneCommand(command: StackLandDoneDispatch, deps: StackLandCliDeps): Promise<number> {
+  const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const cwd = deps.cwd ?? process.cwd();
+  const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
+  const worktree = await (deps.resolveWorktree ?? ((slug) => resolveCliFeatureWorktree(slug, { cwd, resolveMainRoot: deps.resolveMainRoot })))(command.slug);
+  if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
+  const marker = await readRoundFromMarker(worktree, command.slug);
+  if (marker === undefined) return refused(print, 'no open operator landing is available to declare.');
+  const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack land --done');
+  if (acquired.kind !== 'acquired') return refused(print, leaseRefusal(acquired));
+  try {
+    const checked: CheckDeclareOperatorRoundResult = await (deps.checkDeclare ?? checkDeclareOperatorRound)({
+      worktree, slug: command.slug, roundId: marker.roundId, host: marker.host,
+    });
+    if (checked.kind === 'refused') return refused(print, checked.detail);
+    const declared: DeclareOperatorRoundResult = await (deps.declareRound ?? declareOperatorRound)({
+      worktree, slug: command.slug, roundId: marker.roundId, host: marker.host, checked,
+    });
+    if (declared.kind === 'refused') return refused(print, declared.detail);
+    const cleared = await (deps.clearMatchingHalt ?? clearMatchingOperatorHalt)(worktree, marker.roundId);
+    if (cleared === 'unrelated') print('stack land: declaration succeeded, but an unrelated needs-human HALT remains.');
+    if (checked.stored.record.operator?.park !== undefined) {
+      await (deps.releasePark ?? releaseOwnedPark)(root, command.slug, checked.stored.record.operator.park.token);
+    }
+    print(`stack land: declared ${marker.roundId} on child ${marker.host}. Next: daemon dispatch re-validates child ${marker.host} from acceptance_specs.`);
+    return 0;
+  } catch (error) {
+    return refused(print, error instanceof Error ? error.message : String(error));
+  } finally {
+    const released = await acquired.lease.release();
+    if (!released.ok) print(`stack land: refused — ${released.message}`);
+  }
+}
+
 /**
  * Open an operator-owned landing. The read-only admission predicate runs
  * before a lease or park exists so ordinary refusals leave no operator state.
  */
 export async function dispatchStackLandCommand(command: StackLandDispatch, deps: StackLandCliDeps = {}): Promise<number> {
+  if (command.kind === 'stack-land-done') return dispatchStackLandDoneCommand(command, deps);
   const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
   const parsed = parsedChildren(command);
   if (parsed === undefined) return refused(print, 'invalid child or --carry value.');
@@ -175,6 +258,7 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
     if (result.kind === 'refused') return refused(print, result.detail);
 
     await (deps.clearHalt ?? clearUnlandedClosedChildCommitsHalt)(worktree);
+    await clearResolvedBranchMovedHalt(worktree, command.slug, roundId);
     print(`stack land: opened ${roundId} on child ${admission.host}.`);
     return 0;
   } catch (error) {

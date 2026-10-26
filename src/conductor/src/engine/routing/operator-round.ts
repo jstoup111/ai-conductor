@@ -37,6 +37,27 @@ export type CheckOperatorTipsResult =
   | { readonly kind: 'moved'; readonly branches: ReadonlyArray<{ readonly branch: string; readonly recorded: CommitSha; readonly current: string }> }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
+export interface CheckDeclareOperatorRoundInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly git?: GitRunner;
+}
+
+export type CheckDeclareOperatorRoundResult =
+  | { readonly kind: 'accepted'; readonly stored: import('./route-record-store.js').StoredRouteRecord; readonly tip: CommitSha }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+export interface DeclareOperatorRoundInput extends CheckDeclareOperatorRoundInput {
+  readonly checked: Extract<CheckDeclareOperatorRoundResult, { readonly kind: 'accepted' }>;
+  readonly at?: string;
+}
+
+export type DeclareOperatorRoundResult =
+  | { readonly kind: 'declared' }
+  | { readonly kind: 'refused'; readonly detail: string };
+
 /** The single durable reason-line contract for every operator-owned HALT. */
 export function formatOperatorHaltReason(reason: string, roundId: RoundId): string {
   return `Operator-Halt: ${reason} ${roundId}`;
@@ -98,6 +119,86 @@ export async function checkOperatorTips(input: CheckOperatorTipsInput): Promise<
     moved.push({ branch, recorded: expectation.recorded, current });
   }
   return moved.length === 0 ? { kind: 'clear' } : { kind: 'moved', branches: moved };
+}
+
+/**
+ * Proves that an operator landing still owns a real change before its durable
+ * declaration.  The caller holds the feature lease across this check and the
+ * following record transaction.
+ */
+export async function checkDeclareOperatorRound(
+  input: CheckDeclareOperatorRoundInput,
+): Promise<CheckDeclareOperatorRoundResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable for declaration` };
+  }
+  if (stored.record.operator.declaration !== undefined) {
+    return { kind: 'refused', detail: `operator round ${input.roundId} is already declared` };
+  }
+  if (stored.record.hosts[input.host] !== 'repairing') {
+    return { kind: 'refused', detail: `operator round ${input.roundId} host ${input.host} is not repairing` };
+  }
+  const marker = await readRepairMarker(input.worktree, input.slug, { git });
+  if (marker.kind !== 'marker' || marker.marker.roundId !== input.roundId || marker.marker.host !== input.host) {
+    return { kind: 'refused', detail: `operator round ${input.roundId} repair marker is unavailable for declaration` };
+  }
+  const branch = childBranchFor(input.slug, input.host);
+  if (!branch.ok) return { kind: 'refused', detail: branch.reason };
+  try {
+    const current = await git(['symbolic-ref', '--short', 'HEAD']);
+    if (current.exitCode !== 0 || current.stdout.trim() !== branch.branch) {
+      return { kind: 'refused', detail: `declaration must run on ${branch.branch}` };
+    }
+    const status = await git(['status', '--porcelain']);
+    if (status.exitCode !== 0 || status.stdout.trim() !== '') {
+      return { kind: 'refused', detail: 'the dirty worktree must be committed or stashed before declaring the landing' };
+    }
+  } catch {
+    return { kind: 'refused', detail: `cannot inspect ${branch.branch} before declaration` };
+  }
+
+  const journal = await readRestackJournal(input.worktree, input.slug, { git });
+  if (!routingFenceOpen(journal)) return { kind: 'refused', detail: 'the restack journal is not terminal' };
+  const closure = await closureAt(git, input.slug, input.host);
+  const tip = await resolveCommitRef(git, `refs/heads/${branch.branch}`);
+  if (closure === undefined || tip === undefined) {
+    return { kind: 'refused', detail: `cannot resolve ${branch.branch} and its closure before declaration` };
+  }
+  try {
+    const commits = await git(['rev-list', `${closure}..${tip}`]);
+    if (commits.exitCode !== 0 || commits.stdout.trim() === '' || await isHaltRecordOnlyDescendant(git, closure, tip, input.slug)) {
+      return { kind: 'refused', detail: 'the empty landing has no reviewer change; make one or run ai-conductor stack land --abandon' };
+    }
+  } catch {
+    return { kind: 'refused', detail: `cannot inspect landing commits on ${branch.branch}` };
+  }
+  const tips = await checkOperatorTips({ worktree: input.worktree, slug: input.slug, record: stored.record, git });
+  if (tips.kind === 'unavailable') return { kind: 'refused', detail: tips.detail };
+  if (tips.kind === 'moved') {
+    const details = tips.branches.map(({ branch: name, recorded, current }) => `${name} (recorded ${recorded}, current ${current})`).join(', ');
+    return { kind: 'refused', detail: `operator round branch moved: ${details}` };
+  }
+  return { kind: 'accepted', stored, tip };
+}
+
+/** Records the declaration and durable work order after its preconditions pass. */
+export async function declareOperatorRound(input: DeclareOperatorRoundInput): Promise<DeclareOperatorRoundResult> {
+  const allocation = input.checked.stored.record.allocation[input.host];
+  const operator = input.checked.stored.record.operator;
+  if (allocation === undefined || operator === undefined) return { kind: 'refused', detail: `operator round ${input.roundId} has no host allocation` };
+  const record: RouteRecord = {
+    ...input.checked.stored.record,
+    allocation: { ...input.checked.stored.record.allocation, [input.host]: { ...allocation, retryHint: operator.reason } },
+    operator: { ...operator, declaration: { tip: input.checked.tip, at: input.at ?? new Date().toISOString() } },
+  };
+  const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+    { kind: 'update-record', previous: input.checked.stored, record },
+  ], { git: input.git });
+  return wrote.kind === 'updated'
+    ? { kind: 'declared' }
+    : { kind: 'refused', detail: `cannot declare operator round: ${wrote.kind}` };
 }
 
 export interface CheckOpenOperatorRoundInput {

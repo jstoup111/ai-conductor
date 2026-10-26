@@ -445,7 +445,7 @@ export interface KickbackBudgetDispatch {
 }
 
 /** Parsed open-path arguments for an operator stack landing. */
-export interface StackLandDispatch {
+export interface StackLandOpenDispatch {
   kind: 'stack-land';
   slug: string;
   child: string;
@@ -453,9 +453,21 @@ export interface StackLandDispatch {
   reason: string;
 }
 
-/** Parse only `stack land`'s open grammar; --done and --abandon have later owners. */
+/** Parsed declaration of an already-open operator stack landing. */
+export interface StackLandDoneDispatch {
+  kind: 'stack-land-done';
+  slug: string;
+}
+
+export type StackLandDispatch = StackLandOpenDispatch | StackLandDoneDispatch;
+
+/** Parse the open and declaration grammars; --abandon remains a later owner. */
 export function detectStackLandCommand(argv: readonly string[]): StackLandDispatch | null {
   if (argv[2] !== 'stack' || argv[3] !== 'land') return null;
+  if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--done') {
+    const slug = argv[5];
+    return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-done', slug };
+  }
   const values = new Map<string, string>();
   const carry: string[] = [];
   for (let index = 4; index < argv.length; index += 2) {
