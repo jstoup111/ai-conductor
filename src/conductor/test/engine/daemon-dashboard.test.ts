@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:1, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
 import type { GatedItem } from '../../src/engine/daemon-backlog.js';
+import type { BlockedSpecItem } from '../../src/engine/daemon-backlog.js';
 import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
 import { writeFullSuiteEvidence, type FullSuiteEvidence } from '../../src/engine/full-suite-evidence.js';
 
@@ -652,6 +653,78 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect((state.gated ?? []).some((g) => g.kind === 'spec' && g.slug === 'only-gated')).toBe(
       true,
     );
+  });
+
+  it('copies blocked discovery entries into the inherited state', async () => {
+    const blocked: BlockedSpecItem = {
+      slug: 'stories-pending',
+      reason: 'stories-not-approved',
+      remedy: 'approve the stories',
+    };
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => ({ items: [], waiting: [], blocked: [blocked], gated: [] }),
+    });
+
+    expect(state.blocked).toEqual([blocked]);
+  });
+
+  it('renders blocked slugs ahead of eligible and gated slugs', () => {
+    const blocked: BlockedSpecItem[] = [
+      { slug: 'blocked-eligible', reason: 'stories-not-approved', remedy: 'approve stories' },
+      { slug: 'blocked-gated', reason: 'stories-not-approved', remedy: 'approve stories' },
+    ];
+    const state = {
+      halted: [],
+      inProgress: [],
+      eligible: [{ slug: 'blocked-eligible' }],
+      processed: [],
+      processedCount: 0,
+      blocked,
+      gated: [{
+        kind: 'spec' as const,
+        slug: 'blocked-gated',
+        reason: 'other-owner' as const,
+        remedy: 'ask the owner',
+      }],
+    } as InheritedState & { blocked: BlockedSpecItem[] };
+
+    const output = renderDashboard(state);
+
+    expect(output).toContain([
+      'BLOCKED (2)',
+      '  • blocked-eligible — stories-not-approved — approve stories',
+      '  • blocked-gated — stories-not-approved — approve stories',
+      'GATED (0)',
+      'ELIGIBLE (0)',
+    ].join('\n'));
+  });
+
+  it('keeps blocked slugs in higher-precedence halted and parked sections', () => {
+    const blocked: BlockedSpecItem[] = [
+      { slug: 'blocked-halted', reason: 'stories-not-approved', remedy: 'approve stories' },
+      { slug: 'blocked-parked', reason: 'stories-not-approved', remedy: 'approve stories' },
+    ];
+    const state = {
+      halted: [{ slug: 'blocked-halted', reason: 'needs operator' }],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      blocked,
+      parked: ['blocked-parked'],
+    } as InheritedState & { blocked: BlockedSpecItem[] };
+
+    const output = renderDashboard(state);
+
+    expect(output).toContain([
+      'PARKED (1)',
+      '  • blocked-parked — operator-parked; remedy: run conduct daemon unpark for this row',
+      'HALTED (1)',
+      "  • blocked-halted — reason: needs operator; remedy: clear this row's .pipeline/HALT to resume",
+    ].join('\n'));
   });
 
   it('eligible carries the backlog tier; processed carries the persisted PR url', async () => {

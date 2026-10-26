@@ -6,7 +6,7 @@ import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
-import type { GatedItem } from './daemon-backlog.js';
+import type { BlockedSpecItem, GatedItem } from './daemon-backlog.js';
 import {
   classifyHeartbeatAge,
   formatHeartbeatAge,
@@ -217,6 +217,8 @@ export interface InheritedState {
    * HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE.
    */
   waiting?: WaitingEntry[];
+  /** Specs held back by actionable content failures. */
+  blocked?: BlockedSpecItem[];
   /**
    * Priority resolution result from the resolver, if available. Used by the
    * dashboard to render band annotations (banded mode) or fallback marker
@@ -265,7 +267,12 @@ export interface ScanInheritedStateDeps {
    */
   discover: () => Promise<
     | BacklogItem[]
-    | { items: BacklogItem[]; waiting: WaitingEntry[]; gated?: GatedItem[] }
+    | {
+      items: BacklogItem[];
+      waiting: WaitingEntry[];
+      blocked?: BlockedSpecItem[];
+      gated?: GatedItem[];
+    }
   >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
@@ -901,12 +908,14 @@ export async function scanInheritedState(
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
   let waiting: WaitingEntry[] = [];
+  let blocked: BlockedSpecItem[] = [];
   let gated: GatedItem[] = [];
   let priorityResolution: PriorityResolution | undefined;
   try {
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
     waiting = Array.isArray(result) ? [] : result.waiting;
+    blocked = Array.isArray(result) ? [] : (result.blocked ?? []);
     const rawGated = Array.isArray(result) ? [] : (result.gated ?? []);
     const inProgressSlugs = new Set(inProgress.map((p) => p.slug));
     // GATED precedence: HALTED > PROCESSED > IN-PROGRESS > GATED — a `kind:
@@ -951,6 +960,7 @@ export async function scanInheritedState(
     processed,
     processedCount: processed.length,
     waiting,
+    blocked,
     gated,
     priorityResolution,
     retainedWorktrees,
@@ -1194,6 +1204,24 @@ export function renderDashboard(
     }
   }
 
+  const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
+  const inProgressSet = new Set(inProgress.map((p) => p.slug));
+  const blocked = (state.blocked ?? []).filter(
+    (entry) =>
+      !parkedSet.has(entry.slug) &&
+      !haltedSet.has(entry.slug) &&
+      !inProgressSet.has(entry.slug) &&
+      !retainedWorktreeSet.has(entry.slug) &&
+      !processedSlugsSet.has(entry.slug),
+  );
+  const blockedSlugs = new Set(blocked.map((entry) => entry.slug));
+  if (blocked.length > 0) {
+    lines.push(`BLOCKED (${blocked.length})`);
+    for (const entry of blocked) {
+      lines.push(`  • ${entry.slug} — ${entry.reason} — ${entry.remedy}`);
+    }
+  }
+
   // GATED (FR-7/FR-11): specs (and repo-scoped conditions) held back by the
   // OWNERSHIP gate. Precedence HALTED > IN-PROGRESS > RETAINED > GATED >
   // WAITING > ELIGIBLE > PROCESSED — a `kind: 'spec'` slug already excluded upstream from
@@ -1203,14 +1231,16 @@ export function renderDashboard(
   // empty, matching the WAITING empty convention (and the ELIGIBLE
   // discovery-failure fallback, which likewise degrades to an empty list
   // rather than rendering a distinct failure line).
-  const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
+  // BLOCKED outranks this group and every lower-precedence bucket.
   const gated = (state.gated ?? []).filter(
     (g) =>
       g.kind !== 'spec' ||
       (!parkedSet.has(g.slug) &&
         !haltedSet.has(g.slug) &&
+        !inProgressSet.has(g.slug) &&
         !retainedWorktreeSet.has(g.slug) &&
-        !processedSlugsSet.has(g.slug)),
+        !processedSlugsSet.has(g.slug) &&
+        !blockedSlugs.has(g.slug)),
   );
   const gatedSlugs = new Set(
     gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug),
@@ -1227,6 +1257,9 @@ export function renderDashboard(
       !parkedSet.has(w.slug) &&
       !haltedSet.has(w.slug) &&
       !retainedWorktreeSet.has(w.slug) &&
+      !inProgressSet.has(w.slug) &&
+      !processedSlugsSet.has(w.slug) &&
+      !blockedSlugs.has(w.slug) &&
       !gatedSlugs.has(w.slug),
   );
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
@@ -1244,9 +1277,12 @@ export function renderDashboard(
   const eligible = state.eligible.filter(
     (e) =>
       !waitingSlugs.has(e.slug) &&
+      !blockedSlugs.has(e.slug) &&
       !gatedSlugs.has(e.slug) &&
       !parkedSet.has(e.slug) &&
       !haltedSet.has(e.slug) &&
+      !inProgressSet.has(e.slug) &&
+      !processedSlugsSet.has(e.slug) &&
       !retainedWorktreeSet.has(e.slug),
   );
   lines.push(`ELIGIBLE (${eligible.length})`);
