@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -17,6 +18,11 @@ vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) =
   ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
   coordinateBuildReviewRubrics: vi.fn(),
 }));
+
+vi.mock('../../src/engine/build-review-review-frontier.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-review-review-frontier.js')>();
+  return { ...actual, settledBuildReviewHunks: vi.fn(actual.settledBuildReviewHunks) };
+});
 
 const IMPLEMENTATION_QUALITY = 'implementationQuality' as const;
 const DIFF = [
@@ -73,6 +79,7 @@ describe('build_review lap scope runner', () => {
       unappliedLiveSourceIds: new Set(), appliedLiveSourceIds: new Set(),
     });
     vi.mocked(coordinateBuildReviewRubrics).mockReset();
+    vi.mocked(settledBuildReviewHunks).mockClear();
   });
 
   afterEach(async () => {
@@ -184,7 +191,7 @@ describe('build_review lap scope runner', () => {
     });
   });
 
-  it('reuses the current-lap scope unchanged for a disposition-only rejoin', async () => {
+  it('rewrites the current-lap hunk evidence unchanged for a disposition-only rejoin', async () => {
     installJudgedDispatch();
     const head = '7'.repeat(40);
     await run(head);
@@ -194,7 +201,33 @@ describe('build_review lap scope runner', () => {
 
     const replayScope = (await artifact(head)).reviewScope;
     expect(replayScope).toEqual(firstScope);
-    expect(replayScope).toMatchObject({ sequence: 1, mode: 'full', reason: 'first-lap' });
+    expect(replayScope).toMatchObject({
+      sequence: 1, mode: 'full', reason: 'first-lap',
+      reviewedHunks: firstScope.reviewedHunks,
+      deltaHunks: firstScope.deltaHunks,
+    });
+  });
+
+  it('rewrites the current-lap hunk evidence unchanged after a mechanical-fault rejoin', async () => {
+    const head = 'b'.repeat(40);
+    installJudgedDispatch();
+    await run(head);
+    const firstScope = (await artifact(head)).reviewScope;
+
+    installInfrastructureFailure();
+    await expect((runner as never as { runRubricBuildReviewInner: (...args: unknown[]) => Promise<unknown> })
+      .runRubricBuildReviewInner({ sourceSnapshot: {
+        digest: `sha256:${head}`, mergeBase: 'a'.repeat(40), headSha: head, diff: DIFF,
+      } }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: false, currentLapMechanicalFault: true });
+
+    installJudgedDispatch();
+    await run(head);
+
+    expect((await artifact(head)).reviewScope).toMatchObject({
+      sequence: firstScope.sequence,
+      reviewedHunks: firstScope.reviewedHunks,
+      deltaHunks: firstScope.deltaHunks,
+    });
   });
 
   it('does not persist a scope or settle hunks when a custom dispatch ends in infrastructure failure', async () => {
@@ -208,7 +241,11 @@ describe('build_review lap scope runner', () => {
     await expect(readFile(artifactPath(failedHead), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
     installJudgedDispatch();
+    vi.mocked(settledBuildReviewHunks).mockClear();
     await run('9'.repeat(40));
+    expect(vi.mocked(settledBuildReviewHunks)).toHaveBeenCalledOnce();
+    expect(vi.mocked(settledBuildReviewHunks).mock.calls[0]![0].laps).toEqual([]);
+    expect(vi.mocked(settledBuildReviewHunks).mock.results[0]!.value).toEqual([]);
     expect((await artifact('9'.repeat(40))).reviewScope).toMatchObject({
       mode: 'full', reason: 'first-lap', sequence: 1,
     });
