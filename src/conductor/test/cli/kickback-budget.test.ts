@@ -1,5 +1,5 @@
 // Covers: task:rem-prd-audit-R20
-// Covers: task:8, task:11, task:27, task:28, task:31.2, task:33
+// Covers: task:8, task:9, task:11, task:27, task:28, task:31.2, task:33
 // Covers: task:1, task:2, task:3, task:4
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
