@@ -840,9 +840,21 @@ export class Conductor {
         return false;
       }
       const route = await readRouteRecord(this.projectRoot, slug, execution.roundId!);
-      if (route.kind !== 'record' || route.record.kind !== 'revalidate' || route.record.phase !== 'open') {
+      if (route.kind !== 'record') {
         await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
         return false;
+      }
+      switch (route.record.kind) {
+        case 'revalidate':
+          if (route.record.phase === 'open') break;
+          await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
+          return false;
+        case 'audit':
+        case 'operator':
+          await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
+          return false;
+        default:
+          return assertNever(route.record.kind);
       }
     }
 
@@ -11152,9 +11164,22 @@ export class Conductor {
               const cursor = await this.resolveActiveChild(this.projectRoot, routedClaimSlug);
               routedClaimExecution = resolveExecutionChild(cursor, routedClaimSlug);
             }
-            routedPrerequisiteClaim = routedClaimExecution?.source === 'routed-host' && routedClaimExecution.roundId !== undefined
-              ? { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId }
-              : undefined;
+            if (routedClaimExecution?.source === 'routed-host' && routedClaimExecution.roundId !== undefined && routedClaimSlug !== undefined) {
+              const route = await readRouteRecord(this.projectRoot, routedClaimSlug, routedClaimExecution.roundId);
+              if (route.kind === 'record') {
+                switch (route.record.kind) {
+                  case 'audit':
+                    routedPrerequisiteClaim = { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
+                    break;
+                  case 'revalidate':
+                  case 'operator':
+                    routedPrerequisiteClaim = undefined;
+                    break;
+                  default:
+                    assertNever(route.record.kind);
+                }
+              }
+            }
             result =
               missingWorktree ??
               (step.name === 'complexity'

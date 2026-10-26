@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:20, task:29, task:rem-as-built-1-r2, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
+// Covers: task:2, task:4, task:5, task:7, task:20, task:29, task:rem-as-built-1-r2, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,11 @@ import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import { loadSliceTopology } from '../../src/engine/slice-topology.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
+import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
+import { admitRound } from '../../src/engine/routing/round-admission.js';
+import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -450,5 +455,43 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', leafMovePending: true,
     });
+  });
+
+  it('uses the pinned closure as the routed-repair base for an operator host', async () => {
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    await writeTopology(repository, [1, 2], true);
+    await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await recordPositions(repository, [1, 2]);
+    const closure = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['branch', 'feat/c1/demo', closure]);
+    await git(['update-ref', closureRefFor('demo', host), closure]);
+    const created = await createRouteRecord(repository, 'demo', {
+      roundId, sealedAuthored: 0, kind: 'audit', items: [],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    if ((await admitRound(repository, 'demo', created.record, host)).kind !== 'admitted') throw new Error('cannot admit route');
+    const stored = await readRouteRecord(repository, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing route record');
+    const pinnedBase = parseCommitSha(closure);
+    const tree = parseCommitSha((await git(['rev-parse', `${closure}^{tree}`])).trim());
+    if (!pinnedBase || !tree) throw new Error('invalid operator route pin');
+    const operator: RouteRecord = {
+      ...stored.record,
+      kind: 'operator',
+      hosts: { [host]: 'repairing' },
+      entry: { host, pinnedBase, tree },
+      operator: {
+        origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/daemon-demo': pinnedBase },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      },
+    };
+    await expect(writeRoutingTransaction(repository, 'demo', [
+      { kind: 'update-record', previous: stored, record: operator },
+    ])).resolves.toEqual({ kind: 'updated' });
+
+    await expect(resolveChildBase(repository, 'demo', host)).resolves.toEqual({ kind: 'routed-repair', child: host, sha: closure });
   });
 });

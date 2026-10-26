@@ -12,7 +12,7 @@ import {
   type StoredRouteRecord,
 } from './route-record-store.js';
 import { admitRound } from './round-admission.js';
-import { parseRoundId } from './route-types.js';
+import { assertNever, parseRoundId } from './route-types.js';
 import type { RevalidationQueueEntry, RevalidationQueueRecord, RoundId } from './route-types.js';
 
 export interface MergeQueueGenerationOptions {
@@ -115,14 +115,30 @@ export async function acknowledgeQueueEntry(
   // A revalidate round with no more queue work deliberately stays open for
   // returnToLeaf. Audit rounds, however, retain their recorded host sequence;
   // acknowledging one queued host must never close away a later pending host.
-  const leavesRoundOpen = stored.record.kind === 'revalidate'
-    && queueWithEvent.entries.length === 0
-    && !otherRoundOpen;
+  const leavesRoundOpen = (() => {
+    switch (stored.record.kind) {
+      case 'revalidate':
+        return queueWithEvent.entries.length === 0 && !otherRoundOpen;
+      case 'audit':
+      case 'operator':
+        return false;
+      default:
+        return assertNever(stored.record.kind);
+    }
+  })();
   const done = transitionHost(stored, host, 'done', { credit: false });
   if (done.kind !== 'updated') return { kind: 'stale' };
-  const record = stored.record.kind === 'audit' || leavesRoundOpen
-    ? done.record
-    : { ...done.record, phase: 'closed' as const };
+  const record = (() => {
+    switch (stored.record.kind) {
+      case 'audit':
+      case 'operator':
+        return done.record;
+      case 'revalidate':
+        return leavesRoundOpen ? done.record : { ...done.record, phase: 'closed' as const };
+      default:
+        return assertNever(stored.record.kind);
+    }
+  })();
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'verify-ref', ref: `refs/conductor/${slug}/closed/c${host}`, value: entry.closureSha },
     { kind: 'update-record', previous: stored, record },

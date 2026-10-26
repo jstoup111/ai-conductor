@@ -273,6 +273,23 @@ async function restageHostRegion(
       const result = await state.applyBatch({ name: `restage revalidate host ${host} region`, mutations });
       return 'message' in result ? { kind: 'refused', detail: `cannot restage revalidate host ${host}: ${result.message}` } : { kind: 'restaged' };
     }
+    case 'operator': {
+      const operator = record.operator;
+      if (operator === undefined) return { kind: 'refused', detail: `operator host ${host} has no operator context` };
+      const state = createRoutedConductStateStore(worktree, host);
+      const current = await state.read();
+      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      const orderedSteps = ['acceptance_specs', 'build', 'test_suite', 'build_review'] as const;
+      const restageSteps = operator.origin === 'land'
+        ? (['acceptance_specs', 'test_suite', 'build_review'] as const)
+        : orderedSteps.slice(orderedSteps.indexOf(operator.entryStep));
+      const mutations = restageSteps
+        .filter((step) => current.value[step] !== 'pending')
+        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage operator host ${host} ${step}` } as StateMutation<ConductState>));
+      if (mutations.length === 0) return { kind: 'restaged' };
+      const result = await state.applyBatch({ name: `restage operator host ${host} region`, mutations });
+      return 'message' in result ? { kind: 'refused', detail: `cannot restage operator host ${host}: ${result.message}` } : { kind: 'restaged' };
+    }
   }
   return assertNever(record.kind);
 }
@@ -377,11 +394,22 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
     const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
     const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === input.host) : undefined;
-    if (stored.record.kind === 'revalidate' && (!queued || queue.kind !== 'queue')) {
-      return { kind: 'refused', detail: `revalidate host ${input.host} has no queued entry to pin` };
-    }
-    if (queued && queue.kind === 'queue') {
-      revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+    switch (stored.record.kind) {
+      case 'revalidate':
+        if (!queued || queue.kind !== 'queue') {
+          return { kind: 'refused', detail: `revalidate host ${input.host} has no queued entry to pin` };
+        }
+        revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+        break;
+      case 'audit':
+        if (queued && queue.kind === 'queue') {
+          revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+        }
+        break;
+      case 'operator':
+        break;
+      default:
+        return assertNever(stored.record.kind);
     }
     const next = {
       ...stored.record,
@@ -457,22 +485,30 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   // task still dispatches and an N=1 route keeps its established planner-side
   // guard.  Do not transition to repairing: no provider may run for a
   // derived no-op round.
-  if (stored.record.kind === 'audit') {
-    const completion = await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
-      ...input.completionContext,
-      projectRoot: input.worktree,
-      planPath,
-      featureDesc: input.slug,
-      activeChild: input.host,
-    });
-    if (completion.done) {
-      return {
-        kind: 'derived-already-complete',
-        detail:
-          `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
-          'every routed task is already evidence-complete',
-      };
+  switch (stored.record.kind) {
+    case 'audit': {
+      const completion = await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
+        ...input.completionContext,
+        projectRoot: input.worktree,
+        planPath,
+        featureDesc: input.slug,
+        activeChild: input.host,
+      });
+      if (completion.done) {
+        return {
+          kind: 'derived-already-complete',
+          detail:
+            `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
+            'every routed task is already evidence-complete',
+        };
+      }
+      break;
     }
+    case 'revalidate':
+    case 'operator':
+      break;
+    default:
+      return assertNever(stored.record.kind);
   }
   stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };

@@ -10,7 +10,7 @@ export { hasDurableChildState } from './slice-topology.js';
 import { resolveThroughMap } from './rebase-translate.js';
 import { readRepairMarker, readRevalidationQueue, readRouteRecord } from './routing/route-record-store.js';
 import type { RoundId } from './routing/route-types.js';
-import { routingSettingOn } from './routing/route-types.js';
+import { assertNever, routingSettingOn } from './routing/route-types.js';
 
 type ActiveChildTarget = {
   child: ChildId;
@@ -169,20 +169,30 @@ export async function resolveChildBase(
       const marker = await readRepairMarker(worktree, slug, { git });
       if (marker.kind === 'marker' && marker.marker.host === child) {
         const route = await readRouteRecord(worktree, slug, marker.marker.roundId, { git });
-        if (route.kind === 'record' && route.record.kind === 'revalidate') {
-          const queue = await readRevalidationQueue(worktree, slug, { git });
-          const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === child) : undefined;
-          const head = await resolveGitRef(git, 'HEAD');
-          if (entry !== undefined && head === entry.closureSha) {
-            return { kind: 'revalidation', child, sha: entry.replay.newParent };
+        if (route.kind === 'record') {
+          switch (route.record.kind) {
+            case 'revalidate': {
+              const queue = await readRevalidationQueue(worktree, slug, { git });
+              const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === child) : undefined;
+              const head = await resolveGitRef(git, 'HEAD');
+              if (entry !== undefined && head === entry.closureSha) {
+                return { kind: 'revalidation', child, sha: entry.replay.newParent };
+              }
+              if (route.record.entry?.host === child && route.record.hosts[child] === 'repairing') {
+                return { kind: 'revalidation-fix', child, sha: route.record.entry.pinnedBase };
+              }
+              if (entry !== undefined) return { kind: 'revalidation', child, sha: entry.replay.newParent };
+              break;
+            }
+            case 'audit':
+            case 'operator':
+              if (route.record.hosts[child] === 'repairing' && route.record.entry?.host === child) {
+                return { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase };
+              }
+              break;
+            default:
+              return assertNever(route.record.kind);
           }
-          if (route.record.entry?.host === child && route.record.hosts[child] === 'repairing') {
-            return { kind: 'revalidation-fix', child, sha: route.record.entry.pinnedBase };
-          }
-          if (entry !== undefined) return { kind: 'revalidation', child, sha: entry.replay.newParent };
-        }
-        if (route.kind === 'record' && route.record.hosts[child] === 'repairing' && route.record.entry?.host === child) {
-          return { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase };
         }
       }
     }
