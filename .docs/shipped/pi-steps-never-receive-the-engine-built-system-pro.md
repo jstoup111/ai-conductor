@@ -4,13 +4,6 @@ spec_hash: a63071b7f388f957eb288cff66c01bc880b3faf493dd2df7da6f6247994ec13b
 pr: https://github.com/jstoup111/ai-conductor/pull/3441
 shipped: 2026-10-26
 engine_version: 20261026T015452Z-d74b2ab722ef
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "The change belongs to no story or plan task. It hardens an unrelated golden-rendering coordinator test against TMPDIR mutation by concurrent tests, likely including this feature's AI_CONDUCTOR_TEST_TMP_ROOT manipulation in pi-provider tests. It is test-only and changes no shipped behavior."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
@@ -30,7 +23,8 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","754cfde4-0bd4-4e9a-8528-1e4aa32cee0c","lifecycle-step","finish"]
+active_ms: 23907699
+reason: provider-evidence-incomplete
 
 ## Build Review
 laps_to_pass: 1
