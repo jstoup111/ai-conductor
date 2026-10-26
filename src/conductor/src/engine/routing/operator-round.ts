@@ -21,7 +21,7 @@ import { pinHostEntry, restageHostRegion } from './host-region-entry.js';
 import { grantRoutedRepairCredit, routedSealedAuthored } from './round-receipt.js';
 import { createRouteRecord, readRepairMarker, readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor, redRefFor, rejectedPinRefFor } from './routing-refs.js';
-import { parseRoundId, routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId, type RouteRecord } from './route-types.js';
+import { parseRoundId, routingSettingOn, type CarriedOperatorChild, type OperatorRoundOrigin, type OperatorRouteSection, type RegionGate, type RoundId, type RouteRecord } from './route-types.js';
 import { operatorRoundEvent, withOutboxEvent } from './routing-events.js';
 import type { ConductState, StateMutation } from '../../types/state.js';
 
@@ -514,6 +514,11 @@ export interface OpenOperatorRoundInput {
   readonly reason: string;
   readonly operator: string;
   readonly carried: readonly CarriedOperatorChild[];
+  /** Landings default to acceptance verification; a closed-child rewind starts at its requested gate. */
+  readonly origin?: OperatorRoundOrigin;
+  readonly entryStep?: RegionGate;
+  /** A rewind is already an operator declaration when it opens its round. */
+  readonly declared?: boolean;
   readonly park?: { readonly token: string };
   readonly emitter: ChildLifecycleEventEmitter;
   readonly git?: GitRunner;
@@ -526,6 +531,8 @@ export type OpenOperatorRoundResult =
 async function readPriorRegion(
   worktree: string,
   host: ChildId,
+  origin: OperatorRoundOrigin,
+  entryStep: RegionGate,
 ): Promise<OperatorRouteSection['priorRegion'] | undefined> {
   const state = await createRoutedConductStateStore(worktree, host).read();
   if (!state.ok) return undefined;
@@ -538,7 +545,12 @@ async function readPriorRegion(
       // that exist are part of the byte-preserving abandon snapshot.
     }
   }
-  return { statuses: Object.fromEntries(CHILD_REGION_STEPS.map((step) => [step, state.value[step]])) as OperatorRouteSection['priorRegion']['statuses'], verdicts };
+  const entryIndex = CHILD_REGION_STEPS.indexOf(entryStep);
+  const statuses = Object.fromEntries(CHILD_REGION_STEPS.map((step, index) => [
+    step,
+    state.value[step] ?? (origin === 'rewind' ? (index < entryIndex ? 'done' : 'pending') : undefined),
+  ])) as OperatorRouteSection['priorRegion']['statuses'];
+  return { statuses, verdicts };
 }
 
 async function readOtherFeatureTips(
@@ -593,16 +605,25 @@ async function switchToOperatorHost(
  */
 export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<OpenOperatorRoundResult> {
   const git = input.git ?? makeGitRunner(input.worktree);
+  const origin = input.origin ?? 'land';
+  const entryStep = input.entryStep ?? 'acceptance_specs';
   let loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (loaded.kind === 'absent') {
     // Both values belong to the prepared record and must be observed before
     // the first mutation, preserving the precise state abandon will restore.
-    const priorRegion = await readPriorRegion(input.worktree, input.host);
+    const priorRegion = await readPriorRegion(input.worktree, input.host, origin, entryStep);
     const otherTips = await readOtherFeatureTips(git, input.slug, input.host);
     if (priorRegion === undefined || otherTips === undefined) {
       return { kind: 'refused', detail: `cannot prepare operator round ${input.roundId}: host state or feature tips are unavailable` };
     }
     const sealedAuthored = await routedSealedAuthored(input.worktree, input.slug, { cursor: { kind: 'active' }, config: undefined }, git);
+    const hostBranch = childBranchFor(input.slug, input.host);
+    const declaredTip = input.declared && hostBranch.ok
+      ? await resolveCommitRef(git, `refs/heads/${hostBranch.branch}`)
+      : undefined;
+    if (input.declared && declaredTip === undefined) {
+      return { kind: 'refused', detail: `cannot resolve host branch before declaring operator round ${input.roundId}` };
+    }
     const created = await createRouteRecord(input.worktree, input.slug, {
       roundId: input.roundId,
       sealedAuthored: sealedAuthored ?? 0,
@@ -610,14 +631,15 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
       items: [],
       allocation: { [input.host]: { remTaskIds: [], blockBodies: [] } },
       operator: {
-        origin: 'land',
+        origin,
         reason: input.reason,
         operator: input.operator,
-        entryStep: 'acceptance_specs',
+        entryStep,
         ...(input.park === undefined ? {} : { park: input.park }),
         carried: input.carried,
         otherTips,
         priorRegion,
+        ...(declaredTip === undefined ? {} : { declaration: { tip: declaredTip, at: new Date().toISOString() } }),
       },
     }, { git });
     if (created.kind !== 'created') return { kind: 'refused', detail: `cannot create prepared operator round: ${created.kind}` };
@@ -625,7 +647,7 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
   }
   if (loaded.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable` };
   let stored = loaded;
-  if (stored.record.kind !== 'operator' || stored.record.operator?.origin !== 'land' || stored.record.hosts[input.host] === undefined) {
+  if (stored.record.kind !== 'operator' || stored.record.operator?.origin !== origin || stored.record.operator.entryStep !== entryStep || stored.record.hosts[input.host] === undefined) {
     return { kind: 'refused', detail: `operator round ${input.roundId} does not match landing host ${input.host}` };
   }
 
