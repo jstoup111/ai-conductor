@@ -40,9 +40,10 @@ import { writeScratchSchema } from './scratch-schema.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
+import { CODEX_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 function codexDisplayName(): string {
-  return 'Codex';
+  return CODEX_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {

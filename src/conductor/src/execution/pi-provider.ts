@@ -26,6 +26,7 @@ import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from './scratch-schema.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
+import { PI_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -212,9 +213,8 @@ type PiJsonEvent = {
   };
 };
 
-/** Resolve lazily because the catalog constructs this adapter. */
 function piDisplayName(): string {
-  return 'Pi';
+  return PI_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {

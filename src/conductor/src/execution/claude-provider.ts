@@ -40,9 +40,10 @@ import {
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
+import { CLAUDE_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 function claudeDisplayName(): string {
-  return 'Claude';
+  return CLAUDE_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
