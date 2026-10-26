@@ -15,6 +15,9 @@ import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { advanceRound } from './routed-exit.js';
 import { readRevalidationQueue } from './route-record-store.js';
+import { childBranchFor } from '../feature-branch-identity.js';
+import { switchToChild } from '../child-lifecycle.js';
+import { ConductorEventEmitter } from '../../ui/events.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
 
@@ -101,6 +104,39 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     if (!id) return { kind: 'unavailable', detail: 'routing ref has an invalid round id' };
     const stored = await readRouteRecord(worktree, slug, id, { git });
     if (stored.kind !== 'record') return { kind: 'unavailable', detail: `routing record ${id} is unreadable` };
+    const abandonHost = Object.entries(stored.record.hosts)
+      .find(([, state]) => state === 'abandoning' || state === 'abandoned');
+    if (abandonHost !== undefined) {
+      if (stored.record.kind !== 'operator' || stored.record.operator?.abandon === undefined) {
+        return { kind: 'unavailable', detail: `operator abandon state is unavailable for routing round ${id}` };
+      }
+      const host = Number(abandonHost[0]) as ChildId;
+      let current = stored;
+      if (abandonHost[1] === 'abandoning') {
+        const branch = childBranchFor(slug, host);
+        if (!branch.ok) return { kind: 'unavailable', detail: branch.reason };
+        const checkedOut = await git(['symbolic-ref', '--short', 'HEAD']);
+        if (checkedOut.exitCode !== 0) return { kind: 'unavailable', detail: `cannot determine operator abandon host ${host} branch` };
+        if (checkedOut.stdout.trim() !== branch.branch) {
+          const switched = await switchToChild(worktree, { child: host, position: host, branch: branch.branch }, new ConductorEventEmitter(), undefined, { git });
+          if (switched.kind !== 'completed') return { kind: 'unavailable', detail: 'reason' in switched ? switched.reason : `cannot switch to operator abandon host ${host}` };
+        }
+        // Keep the stage writer in its owning module. The dynamic edge avoids
+        // making operator-round's existing admission dependency cyclic at
+        // module initialization time.
+        const { abandonOperatorRound } = await import('./operator-round.js');
+        const abandoned = await abandonOperatorRound({ worktree, slug, roundId: id, host, git });
+        if (abandoned.kind !== 'abandoned') return { kind: 'unavailable', detail: abandoned.detail };
+        const reread = await readRouteRecord(worktree, slug, id, { git });
+        if (reread.kind !== 'record') return { kind: 'unavailable', detail: `cannot reread abandoned operator round ${id}` };
+        current = reread;
+      }
+      const returned = await (await import('./routed-exit.js')).returnToLeaf(worktree, slug, current, { git, abandon: true });
+      if (returned.kind === 'unavailable') return returned;
+      return returned.kind === 'leaf-returned'
+        ? { kind: 'leaf-returned', roundId: id }
+        : { kind: 'deferred' };
+    }
     if (Object.values(stored.record.hosts).includes('reroute-moved')) {
       const synced = await completeRerouteSync({ worktree, slug, roundId: id, git });
       if (synced.kind === 'refused') return { kind: 'unavailable', detail: synced.detail };

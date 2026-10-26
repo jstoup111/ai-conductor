@@ -173,7 +173,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
         await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
         return { kind: 'halted' };
       }
-      if (stored.record.operator?.declaration === undefined) {
+      // An abandon has already durably chosen its host reset; it must reach
+      // round reconciliation even though it has no landing declaration.
+      if (stored.record.operator?.declaration === undefined && stored.record.hosts[marker.marker.host] !== 'abandoning') {
         const reason = formatOperatorHaltReason('operator-round-undeclared', stored.record.roundId);
         const body = `${reason}\noperator round ${stored.record.roundId} landing on child ${marker.marker.host} is awaiting ` +
           'ai-conductor stack land --done or ai-conductor stack land --abandon\n';

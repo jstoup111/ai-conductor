@@ -195,7 +195,7 @@ export async function returnToLeaf(
   worktree: string,
   slug: string,
   stored: StoredRouteRecord,
-  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter } = {},
+  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean } = {},
 ): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
@@ -225,8 +225,13 @@ export async function returnToLeaf(
     if (reread.kind !== 'record') return { kind: 'unavailable', detail: 'cannot reread leaf return record' };
     currentStored = reread;
   }
-  const restageFailure = await restageLeafGates(worktree);
-  if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
+  // An operator abandon restores the host's prior region and deliberately
+  // discards its landing. Returning from that path is bookkeeping only: the
+  // leaf's prior whole-feature validation remains authoritative.
+  if (!options.abandon) {
+    const restageFailure = await restageLeafGates(worktree);
+    if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
+  }
   const closed = { ...currentStored.record, phase: 'closed' as const };
   const closedWrite = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: currentStored, record: closed }], { git });
   if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
