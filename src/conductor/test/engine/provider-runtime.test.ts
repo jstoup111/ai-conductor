@@ -214,6 +214,7 @@ describe('ProviderRuntimeSet', () => {
       });
       const piEnvironment: PiEnvironment = {
         stat: vi.fn(),
+        access: async () => {},
         env: {},
         homeDir: () => homeDir,
         cwd: () => homeDir,

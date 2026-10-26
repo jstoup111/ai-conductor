@@ -34,6 +34,7 @@ const RATE_CARD: RateCard = {
 
 const piEnvironment: PiEnvironment = {
   stat: async () => ({ isFile: () => true, isDirectory: () => false }),
+  access: async () => {},
   env: {},
   homeDir: () => '/home/test-agent',
   cwd: () => '/workspace',

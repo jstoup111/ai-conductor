@@ -1486,6 +1486,7 @@ describe('executeProviderCandidates', () => {
         isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
         isDirectory: () => false,
       }),
+      access: async () => {},
     };
     const pi = new PiProvider('/resolved/pi', piSpawn, environment);
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({

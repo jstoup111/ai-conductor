@@ -26,6 +26,7 @@ const invokeOptions: InvokeOptions = {
 
 const environment: PiEnvironment = {
   stat: vi.fn(async () => ({ isFile: () => true, isDirectory: () => false })),
+  access: async () => {},
   env: {},
   homeDir: () => '/home/agent',
   cwd: () => '/workspace/project',

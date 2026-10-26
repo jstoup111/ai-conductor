@@ -1,6 +1,7 @@
 // Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:10, task:13, task:15, task:16, task:17, task:18
 // Covers: task:4
 import { mkdir, mkdtemp, readFile, readdir, rm, stat as fileStat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,6 +80,7 @@ function fakePiEnvironment(options: {
   homeDir?: string;
   cwd?: string;
   stat?: PiEnvironment['stat'];
+  access?: PiEnvironment['access'];
 } = {}): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
   const files = new Set(options.files ?? []);
   const directories = new Set(options.directories ?? []);
@@ -94,6 +96,7 @@ function fakePiEnvironment(options: {
   return {
     environment: {
       stat,
+      access: options.access ?? (async () => {}),
       env: options.env ?? {},
       homeDir: () => options.homeDir ?? '/home/agent',
       cwd: () => options.cwd ?? '/workspace/project',
@@ -409,6 +412,45 @@ describe('PiProvider', () => {
       if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
       else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
       await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:11
+  it('refuses Pi before spawn when its regular system-prompt file is unreadable', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-system-prompt-unreadable-'));
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
+    let preparedPath: string | undefined;
+    const readabilityCheck = vi.fn(async (path: string) => {
+      preparedPath = path;
+      throw new Error('EACCES');
+    });
+    try {
+      ({ environment } = fakePiEnvironment({
+        files: [harnessPath],
+        access: readabilityCheck,
+      }));
+      provider = new PiProvider('/resolved/pi', spawn, environment);
+
+      const result = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
+
+      expect({
+        spawned: spawn.mock.calls.length,
+        success: result.success,
+        output: result.output,
+        disposed: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
+      }).toEqual({
+        spawned: 0,
+        success: false,
+        output: expect.stringMatching(/Pi.*is not a readable regular file/),
+        disposed: [],
+      });
+      expect(result.output).toContain(preparedPath!);
+      expect(readabilityCheck).toHaveBeenCalledWith(preparedPath, constants.R_OK);
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(tempRoot, { recursive: true, force: true });
     }
   });
 

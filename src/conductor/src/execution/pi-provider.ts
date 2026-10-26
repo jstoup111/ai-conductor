@@ -1,4 +1,5 @@
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
@@ -42,6 +43,7 @@ export type PiSubprocessFactory = (
 /** Filesystem and process environment Pi uses to locate installed skills. */
 export interface PiEnvironment {
   readonly stat: (path: string) => Promise<{ isFile: () => boolean; isDirectory: () => boolean }>;
+  readonly access: (path: string, mode: number) => Promise<void>;
   readonly env: NodeJS.ProcessEnv;
   readonly homeDir: () => string;
   readonly cwd: () => string;
@@ -58,6 +60,7 @@ export type PiSkillResolution = {
 
 const defaultPiEnvironment: PiEnvironment = {
   stat,
+  access,
   env: process.env,
   homeDir: homedir,
   cwd: process.cwd,
@@ -66,6 +69,16 @@ const defaultPiEnvironment: PiEnvironment = {
 async function isFile(path: string, environment: PiEnvironment): Promise<boolean> {
   try {
     return (await environment.stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function isReadableRegularFile(path: string, environment: PiEnvironment): Promise<boolean> {
+  if (!await isFile(path, environment)) return false;
+  try {
+    await environment.access(path, constants.R_OK);
+    return true;
   } catch {
     return false;
   }
@@ -561,7 +574,7 @@ export class PiProvider implements LLMProvider {
           exitCode: 1,
         };
       }
-      if (!await isFile(systemPromptFile.path, this.environment)) {
+      if (!await isReadableRegularFile(systemPromptFile.path, this.environment)) {
         await systemPromptFile.dispose();
         return {
           success: false,

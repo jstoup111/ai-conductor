@@ -141,6 +141,7 @@ const harnesses = {
         stat: async (path) => path === '/unused-home/.agents/skills/HARNESS.md'
           ? { isFile: () => true, isDirectory: () => false }
           : stat(path),
+        access: async () => {},
         env: {},
         homeDir: () => '/unused-home',
         cwd: () => '/unused-cwd',
