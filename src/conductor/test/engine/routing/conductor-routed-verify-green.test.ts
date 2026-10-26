@@ -345,7 +345,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     const { root } = await routedFixture();
     // completionCtx only derives the routed expectation with a resolvable HEAD.
     const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
-    git('init', '-q');
+    git('init', '-q', '-b', 'main');
     git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'base');
     const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
     const contextFor = (host: ReturnType<typeof parseChildId> & {}) =>
