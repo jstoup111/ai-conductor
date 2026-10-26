@@ -146,7 +146,8 @@ test_suite:
     # Vitest strips types without checking them, so a repair that does not
     # compile would otherwise pass this gate and cost a build_review lap
     # (bb94f63b0f, 2026-10-18: TS2322 passed test_suite, caught by review).
-    - command: npm run typecheck --silent
+    # typecheck:test covers test/ too, matching CI (#3411).
+    - command: npm run typecheck --silent && npm run typecheck:test --silent
       working_directory: src/conductor
     - command: npm test
       working_directory: src/conductor

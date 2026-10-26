@@ -12,8 +12,7 @@ const integrityCommand = 'test/test_harness_integrity.sh';
 
 function expectVerificationEntries(testSuite: TestSuiteConfig | undefined): void {
   expect(testSuite?.commands, `missing ${integrityCommand} verification entry`).toEqual([
-    { command: 'npm run typecheck --silent', working_directory: 'src/conductor' },
-    { command: 'npm run typecheck:test --silent', working_directory: 'src/conductor' },
+    { command: 'npm run typecheck --silent && npm run typecheck:test --silent', working_directory: 'src/conductor' },
     { command: 'npm test', working_directory: 'src/conductor' },
     { command: integrityCommand, working_directory: '.' },
   ]);
