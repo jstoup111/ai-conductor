@@ -246,12 +246,10 @@ execution/codex-provider.ts -> execution/provider-catalog.ts
 execution/codex-provider.ts -> execution/provider-diagnostics.ts
 execution/daemon-session.ts -> engine/worktree.ts
 execution/managed-session-context.ts -> engine/worktree.ts
-execution/managed-session-preparation.ts -> engine/provider-setup-failure.ts
 execution/pi-provider.ts -> engine/self-host/provider-scratch.ts
 execution/pi-provider.ts -> execution/pi-self-host-auth.ts
 execution/pi-provider.ts -> execution/provider-catalog.ts
 execution/pi-provider.ts -> execution/provider-diagnostics.ts
-execution/pi-self-host-auth.ts -> engine/provider-setup-failure.ts
 execution/pi-self-host-auth.ts -> engine/tracker-client.ts
 execution/pi-self-host-auth.ts -> execution/pi-provider.ts
 execution/pi-self-host-auth.ts -> execution/provider-catalog.ts

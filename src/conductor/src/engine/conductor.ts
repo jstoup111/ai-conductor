@@ -111,7 +111,7 @@ import type {
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ProviderExecutionContext, ProviderCandidate } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
-import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../execution/provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
   CODEX_DISPLAY_NAME,

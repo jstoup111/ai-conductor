@@ -1,4 +1,4 @@
-// Covers: task:5, task:6, task:13, task:14, task:15
+// Covers: task:3, task:5, task:6, task:13, task:14, task:15
 import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,7 @@ import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
-import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 import { PRD_AUDIT_JUDGMENT_SCHEMA } from '../../src/engine/prd-audit-contract.js';
 import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from '../../src/engine/prd-audit-verdict-store.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';

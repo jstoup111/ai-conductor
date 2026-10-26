@@ -43,7 +43,7 @@ import {
   providerExecutionEventCallbacks,
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
-import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
 import type { ManagedGhObservationCoverage } from '../../src/execution/managed-session-preparation.js';
 import * as managedSessionPreparation from '../../src/execution/managed-session-preparation.js';

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { RubricOutputJsonSchema } from './build-review-contract.js';
-import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from '../execution/provider-setup-failure.js';
 import type {
   BuildReviewPolicyIncompatibility,
   BuildReviewPolicyIncompatibilityKind,

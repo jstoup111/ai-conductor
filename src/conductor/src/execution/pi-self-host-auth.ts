@@ -5,7 +5,7 @@ import { parsePiModelId } from './pi-provider.js';
 import { PI_PROVIDER, providerDescriptor } from './provider-catalog.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { assertRealExecAllowed } from '../engine/tracker-client.js';
-import { ProviderSetupUnavailableError } from '../engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import type { SelfHostAuthPreparation } from './llm-provider.js';
 
 export interface PiSelfHostAuthFs {

@@ -1,7 +1,7 @@
 import { access, chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { validateManagedSessionProducerPath, type ManagedSessionContext } from './managed-session-context.js';
-import { ProviderSetupUnavailableError } from '../engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import { GH_OBSERVER_EXECUTABLE_NAME, renderGhObserverAsset } from './gh-observer-assets.js';
 import { GH_OBSERVER_REAL_EXECUTABLE_ENV } from './gh-observer-passthrough.js';
 

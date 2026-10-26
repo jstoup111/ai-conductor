@@ -46,7 +46,7 @@ import {
   normalizeProviderSetupUnavailable,
   type ProviderSetupUnavailable,
   type ProviderSetupExhaustion,
-} from './provider-setup-failure.js';
+} from '../execution/provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
 import {
   transcriptCaptureSource,
