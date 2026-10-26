@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import {
   CLI_PROVIDER_DISPATCHING_COMMANDS,
   bootDispatchingCliProviders,
@@ -124,6 +125,7 @@ describe('runDaemonMode provider discovery at boot', () => {
       processed: [],
       stoppedReason: 'backlog_drained',
     });
+    const start = vi.spyOn(TerminalSubscriber.prototype, 'start');
     const { runDaemonMode } = await import('../../src/daemon-cli.js');
 
     await runDaemonMode({
@@ -148,6 +150,9 @@ describe('runDaemonMode provider discovery at boot', () => {
       'discover:codex',
       'discover:pi',
       'registerBuiltins',
+    ]);
+    expect(start).toHaveBeenCalledWith([
+      expect.objectContaining({ name: 'daemon-log' }),
     ]);
     expect(records.filter((record) => record.type === 'provider_discovery')).toEqual([
       expect.objectContaining({

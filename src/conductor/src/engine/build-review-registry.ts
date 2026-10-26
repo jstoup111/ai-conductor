@@ -51,10 +51,10 @@ export const BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED: Readonly<Record<RegisteredBuil
   implementationQuality: true,
 });
 
-type BuildReviewRubricRegistryCatalogMember = {
-  readonly id: RegisteredBuildReviewRubricId;
-  readonly descriptor: BuildReviewRubricDescriptor;
-};
+type BuildReviewRubricRegistryCatalog = Readonly<Record<
+  RegisteredBuildReviewRubricId,
+  BuildReviewRubricDescriptor
+>>;
 
 /**
  * The live registry boundary validates every descriptor before publishing its
@@ -62,15 +62,13 @@ type BuildReviewRubricRegistryCatalogMember = {
  * registry consumers while rejecting malformed catalog entries at startup.
  */
 export function createBuildReviewRubricRegistry(
-  members: readonly BuildReviewRubricRegistryCatalogMember[],
-): Readonly<Record<RegisteredBuildReviewRubricId, BuildReviewRubricDescriptor>> {
-  const validated = resolveBuildReviewContractCatalog(members.map(({ id, descriptor }) => ({
+  catalog: BuildReviewRubricRegistryCatalog,
+): BuildReviewRubricRegistryCatalog {
+  resolveBuildReviewContractCatalog(Object.entries(catalog).map(([id, descriptor]) => ({
     id,
     contract: descriptor.contract,
   })));
-  return Object.freeze(Object.fromEntries(validated.map(({ id }, index) => [id, members[index]!.descriptor]))) as Readonly<
-    Record<RegisteredBuildReviewRubricId, BuildReviewRubricDescriptor>
-  >;
+  return Object.freeze({ ...catalog });
 }
 
 /**
@@ -79,10 +77,8 @@ export function createBuildReviewRubricRegistry(
  * Rubrics are explicitly not lifecycle steps: their identifiers remain
  * registry identifiers throughout this auxiliary catalog.
  */
-const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMember[] = [
-  {
-    id: 'testQuality',
-    descriptor: Object.freeze({
+const BUILD_REVIEW_RUBRIC_CATALOG = {
+  testQuality: Object.freeze({
     skillName: 'build-review-test-quality',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
@@ -98,11 +94,8 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
     }),
-    }),
-  },
-  {
-    id: 'security',
-    descriptor: Object.freeze({
+  }),
+  security: Object.freeze({
     skillName: 'build-review-security',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
@@ -118,11 +111,8 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
     }),
-    }),
-  },
-  {
-    id: 'implementationQuality',
-    descriptor: Object.freeze({
+  }),
+  implementationQuality: Object.freeze({
     skillName: 'build-review-implementation-quality',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
@@ -138,9 +128,8 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
     }),
-    }),
-  },
-];
+  }),
+} as const satisfies BuildReviewRubricRegistryCatalog;
 
 export const BUILD_REVIEW_RUBRIC_REGISTRY = createBuildReviewRubricRegistry(
   BUILD_REVIEW_RUBRIC_CATALOG,

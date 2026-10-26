@@ -104,6 +104,8 @@ import {
   renderFeatureManifest,
   type FeatureManifestEntry,
 } from '../feature-manifest.js';
+import type { LandGateIdentifier, LandGateRejectionIdentifier } from '../../types/land.js';
+export type { LandGateIdentifier, LandGateRejectionIdentifier };
 
 const execFile = promisify(execFileCb);
 
@@ -156,39 +158,6 @@ export interface LandDependencyContext {
 }
 
 /** Closed identifiers for every rejection produced by the land gate. */
-export type LandGateIdentifier =
-  | 'worktree-missing'
-  | 'worktree-dirty'
-  | 'owner-identity-unresolved'
-  | 'draft-amendment-note'
-  | 'required-artifacts-missing'
-  | 'plan-protected-targets'
-  | 'plan-done-when'
-  | 'plan-task-count'
-  | 'plan-slices'
-  | 'stacked-delivery'
-  | 'plan-stories-reference'
-  | 'stories-not-approved'
-  | 'stories-unreadable'
-  | 'tier-artifacts-missing'
-  | 'architecture-mermaid-missing'
-  | 'artifact-stem-mismatch'
-  | 'applicability-invalid'
-  | 'adr-not-approved'
-  | 'adr-uncitable-decision'
-  | 'adr-assumption-ledger'
-  | 'adr-filename'
-  | 'coherence'
-  | 'plan-review'
-  | 'mermaid-render'
-  | 'mermaid-tool-missing'
-  | 'artifact-empty'
-  | 'artifact-draft-status'
-  | 'artifact-stub'
-  | 'dependency-proposals-undecided'
-  | 'dependency-check-unavailable'
-  | 'dependency-decisions-invalid';
-
 export class LandGateError extends Error {
   constructor(
     public readonly gate: LandGateIdentifier,
@@ -207,8 +176,6 @@ export function landGateError(
 ): LandGateError {
   return new LandGateError(gate, message, dependency);
 }
-
-export type LandGateRejectionIdentifier = LandGateIdentifier | 'unclassified';
 
 const REASON_LIMIT = 1000;
 const TRUNCATION_MARKER = '… [truncated]';

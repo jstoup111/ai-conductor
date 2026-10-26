@@ -16,7 +16,7 @@ import {
 import {
   BUILT_IN_PROVIDERS,
   type BuiltInProviderDescriptor,
-} from '../execution/provider-catalog.js';
+} from '../engine/provider-catalog.js';
 import {
   STEP_RATIONALE,
   MODEL_FREE_ENGINE_STEPS,

@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import type {
+  BuildReviewInfrastructureFailureReason,
+  BuildReviewJudgedResultRejection,
+  BuildReviewSeverity,
+} from '../types/build-review.js';
+export type {
+  BuildReviewInfrastructureFailureReason,
+  BuildReviewJudgedResultRejection,
+  BuildReviewSeverity,
+};
 import type { RubricOutputJsonSchema } from './build-review-contract.js';
 import type { ProviderSetupExhaustion } from '../execution/provider-setup-failure.js';
 import type {
@@ -16,12 +26,10 @@ import type {
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
 
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
-export type BuildReviewSeverity = 'critical' | 'major' | 'minor' | 'nit';
 export const BUILD_REVIEW_SEVERITIES = Object.freeze(['critical', 'major', 'minor', 'nit'] as const);
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3' | 'v4';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v4' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope' | 'leaf-only';
-export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported' | 'review-input-mutated' | 'read-only-review-unavailable';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
   'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'native-schema-unsupported': 'native-schema-unsupported', 'read-only-review-unavailable': 'read-only-review-unavailable', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
@@ -993,11 +1001,6 @@ export interface BuildReviewJudgedResultRejectionProblem {
   readonly required: string;
   /** Compatibility rendering for existing human-facing diagnostics. */
   readonly detail: string;
-}
-export interface BuildReviewJudgedResultRejection {
-  readonly kind: 'explained' | 'unexplained';
-  readonly problems: readonly BuildReviewJudgedResultRejectionProblem[];
-  readonly omittedProblemCount?: number;
 }
 function rejectionProblem(field: string, required: string, detail = `${field} ${required}`): BuildReviewJudgedResultRejectionProblem {
   return Object.freeze({ field, required, detail });

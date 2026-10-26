@@ -1,4 +1,4 @@
-import type { StackOwnersDispatch } from '../cli.js';
+import type { StackOwnersDispatch } from '../types/cli.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';

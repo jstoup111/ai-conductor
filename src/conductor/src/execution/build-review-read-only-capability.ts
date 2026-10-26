@@ -2,21 +2,14 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
-
-// This shared capability module cannot import the catalog: the catalog creates
-// the Codex adapter, which imports this module for its policy builder.
-const CLAUDE_PROVIDER = 'claude';
-const CODEX_PROVIDER = 'codex';
-const PI_PROVIDER = 'pi';
-
-function providerExecutable(provider: string): string {
-  const overrides: Record<string, string | undefined> = {
-    claude: process.env.CLAUDE_EXECUTABLE,
-    codex: process.env.CODEX_EXECUTABLE,
-    pi: process.env.PI_EXECUTABLE,
-  };
-  return overrides[provider] ?? provider;
-}
+import {
+  CLAUDE_PROVIDER,
+  CLAUDE_DISPLAY_NAME,
+  CODEX_PROVIDER,
+  PI_DISPLAY_NAME,
+  PI_PROVIDER,
+  providerExecutable,
+} from './provider-catalog-identities.js';
 
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
@@ -199,7 +192,7 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
 
   const missing = CLAUDE_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
   if (missing !== undefined) {
-    return unavailable(options, `Claude help does not list ${missing}`);
+    return unavailable(options, `${CLAUDE_DISPLAY_NAME} help does not list ${missing}`);
   }
   // Dispatch admits a Claude review without an observation-destination proof
   // only when its launch policy reaches no observed command (#3022); status
@@ -224,13 +217,13 @@ async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<R
   catch (error) {
     // Pi has no sandbox helper: a missing binary is the provider executable itself.
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-      return unavailable(options, `Pi executable ${executable} is unavailable`);
+      return unavailable(options, `${PI_DISPLAY_NAME} executable ${executable} is unavailable`);
     }
     return unavailable(options, processFailureReason(error, PI_PROVIDER));
   }
   if (result.exitCode !== 0) return unavailable(options, exitedReason(PI_PROVIDER, result.exitCode, result.stderr));
   const missing = PI_READ_ONLY_FLAGS.find((flag) => !piHelpListsFlag(result.stdout, flag));
-  if (missing) return unavailable(options, `Pi help does not list ${missing}`);
+  if (missing) return unavailable(options, `${PI_DISPLAY_NAME} help does not list ${missing}`);
   try { await (options.materializePiExtension ?? materializePiHarnessExtension)(); }
   catch (error) { return unavailable(options, error instanceof Error ? error.message : String(error)); }
   return { provider: options.provider, platform: options.platform, status: 'available' };

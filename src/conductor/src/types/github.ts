@@ -8,8 +8,10 @@ export type GithubOperationName =
 
 export type GithubOperationRefusalReason = 'other-owner' | 'unresolved-actor' | 'missing-provenance' | 'conflicting-provenance' | 'provenance-unreadable' | 'provenance-timeout' | 'invalid-target' | 'invalid-payload' | 'stack-tip-mismatch' | 'unsupported-operation' | 'explicit-authorization-required';
 export type GithubBotAuthRefusalReason = 'token-unavailable' | 'auth-refused' | 'unsupported-remote-transport';
-export type GithubOperationTarget =
-  | { readonly repository: string; readonly kind: 'repository' }
-  | { readonly repository: string; readonly kind: 'issue' | 'pull-request' | 'stack'; readonly number: number }
-  | { readonly repository: string; readonly kind: 'label-definition'; readonly name: string }
-  | { readonly repository: string; readonly kind: 'remote-ref'; readonly ref: string };
+export interface GithubRepositoryTarget { readonly repository: string; readonly kind: 'repository'; }
+export interface GithubIssueTarget { readonly repository: string; readonly kind: 'issue'; readonly number: number; }
+export interface GithubPullRequestTarget { readonly repository: string; readonly kind: 'pull-request'; readonly number: number; }
+export interface GithubStackTarget { readonly repository: string; readonly kind: 'stack'; readonly number: number; }
+export interface GithubLabelDefinitionTarget { readonly repository: string; readonly kind: 'label-definition'; readonly name: string; }
+export interface GithubRemoteRefTarget { readonly repository: string; readonly kind: 'remote-ref'; readonly ref: string; }
+export type GithubOperationTarget = GithubRepositoryTarget | GithubIssueTarget | GithubPullRequestTarget | GithubStackTarget | GithubLabelDefinitionTarget | GithubRemoteRefTarget;

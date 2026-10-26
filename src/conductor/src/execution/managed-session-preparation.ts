@@ -4,13 +4,10 @@ import { validateManagedSessionProducerPath, type ManagedSessionContext } from '
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import { GH_OBSERVER_EXECUTABLE_NAME, renderGhObserverAsset } from './gh-observer-assets.js';
 import { GH_OBSERVER_REAL_EXECUTABLE_ENV } from './gh-observer-passthrough.js';
+import type { ManagedGhObservationCoverage } from '../types/managed-session.js';
+export type { ManagedGhObservationCoverage };
 
 /** Coverage is intentionally bounded: an empty event set is never remote-write proof. */
-export interface ManagedGhObservationCoverage {
-  readonly boundary: 'managed-path-resolved-gh';
-  readonly completeness: 'unknown';
-}
-
 export interface PreparedManagedGhObservation {
   readonly wrapperDirectory: string;
   readonly realExecutable: string;

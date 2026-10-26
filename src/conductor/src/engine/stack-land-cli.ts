@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../cli.js';
+import type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../types/cli.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { noOpChildLifecycleEvents, type ChildLifecycleEventEmitter } from './child-lifecycle.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';

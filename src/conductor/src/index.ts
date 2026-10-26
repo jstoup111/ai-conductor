@@ -148,6 +148,7 @@ import {
 } from './engine/version-report.js';
 import { detectUpdateCommand, dispatchUpdateCommand } from './engine/update-cli.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
+import type { UIRenderer } from './ui/types.js';
 import type {
   VisualizerFactory,
   VisualizerFactoryContext,
@@ -1869,7 +1870,6 @@ async function dispatchCliCommand(): Promise<void> {
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],
   );
-  subscriber.start();
   const preludeProvider = providerExecution.configuredProviders[0];
   if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
   const preludeProducerRoot = join(pipelineDir, 'session-events', preludeDispatchId);
@@ -1896,6 +1896,10 @@ async function dispatchCliCommand(): Promise<void> {
           },
         })),
   };
+
+  // Select UI subscriber based on config (default: 'terminal').
+  const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
+  subscriber.start([renderer]);
 
   await emitDeprecatedConfigKeyEvents(mergedResult, events);
   // Every foreground mode can reach build_review.  The daemon performs this

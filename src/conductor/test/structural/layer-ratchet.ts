@@ -343,6 +343,13 @@ function layerFor(file: string): Layer | undefined {
   return LAYERS.has(firstSegment as Layer) ? firstSegment as Layer : undefined;
 }
 
+/** Whether an allowlist pair crosses a forbidden layer direction. */
+export function isForbiddenLayerEdge(fromFile: string, toFile: string): boolean {
+  const from = layerFor(fromFile);
+  const to = layerFor(toFile);
+  return from !== undefined && to !== undefined && isForbiddenEdge(from, to);
+}
+
 function isForbiddenEdge(from: Layer, to: Layer): boolean {
   if (to === 'tools') return from !== 'tools';
   if (from === 'tools') return to !== 'engine' && to !== 'types';

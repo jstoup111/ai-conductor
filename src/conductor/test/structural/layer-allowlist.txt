@@ -49,7 +49,6 @@ engine/child-lifecycle.ts -> engine/child-cursor.ts
 engine/child-lifecycle.ts -> engine/rebase.ts
 engine/child-lifecycle.ts -> engine/slice-topology.ts
 engine/config.ts -> engine/pr-body-regions.ts
-engine/daemon-command.ts -> cli-defaults.ts
 engine/done-when-test-reference.ts -> engine/plan-task-parse.ts
 engine/filesystem-conduct-state-store.ts -> engine/state.ts
 engine/full-suite-commands.ts -> engine/full-suite-executor.ts
@@ -74,7 +73,6 @@ engine/halt-marker.ts -> engine/restack/restack-journal.ts
 engine/halt-marker.ts -> engine/restack/restack-recovery.ts
 engine/halt-record.ts -> engine/guarded-engine-commit.ts
 engine/halt-record.ts -> engine/remote-git-operations.ts
-engine/kickback-budget-cli.ts -> cli.ts
 engine/kickback-budget-view.ts -> engine/kickback-ledger.ts
 engine/kickback-ledger.ts -> engine/artifacts.ts
 engine/kickback-ledger.ts -> engine/as-built-contract.ts
@@ -235,9 +233,7 @@ execution/codex-provider.ts -> execution/provider-diagnostics.ts
 execution/pi-provider.ts -> execution/pi-self-host-auth.ts
 execution/pi-provider.ts -> execution/provider-diagnostics.ts
 execution/pi-self-host-auth.ts -> execution/pi-provider.ts
-execution/provider-catalog.ts -> engine/self-host/transcript-format.ts
 execution/provider-catalog.ts -> execution/claude-provider.ts
 execution/provider-catalog.ts -> execution/codex-provider.ts
 execution/provider-catalog.ts -> execution/pi-provider.ts
 execution/provider-diagnostics.ts -> execution/provider-catalog.ts
-tools/generate-model-table.ts -> execution/provider-catalog.ts

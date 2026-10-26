@@ -4,7 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, parseAllowlistEntry, readAllowlistEntries } from './layer-ratchet.js';
+import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, isForbiddenLayerEdge, parseAllowlistEntry, readAllowlistEntries } from './layer-ratchet.js';
 
 const structuralDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = join(structuralDirectory, '../../src');
@@ -520,5 +520,16 @@ describe('structural: layer ratchet', () => {
     expect(result.scannedFileCount).toBeGreaterThan(0);
     expect(entries.length).toBeGreaterThan(0);
     expect(result.violations, formatRatchetViolations(result.violations)).toEqual([]);
+  });
+
+  // Covers: task:15
+  it('contains no upward-edge entries in the committed allowlist', async () => {
+    const entries = readAllowlistEntries(await readFile(allowlistFile, 'utf8'));
+    const upwardEntries = entries.filter((entry) => {
+      const pair = parseAllowlistEntry(entry);
+      return pair !== undefined && isForbiddenLayerEdge(pair.from, pair.to);
+    });
+
+    expect(upwardEntries).toEqual([]);
   });
 });

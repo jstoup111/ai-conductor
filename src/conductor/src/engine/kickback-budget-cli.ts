@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { KICKBACK_BUDGET_GATES, type KickbackBudgetDispatch } from '../cli.js';
+import { KICKBACK_BUDGET_GATES, type KickbackBudgetDispatch } from './kickback-budget-command.js';
 import { appendCloseoutEvent, appendKickbackBudgetAuthorizationEvent, readKickbackBudgetAuthorizationEvents } from './closeout-events.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';

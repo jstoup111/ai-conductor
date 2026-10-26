@@ -12,20 +12,15 @@ import { CONDUCTOR_DECOMPOSED_MODULES } from '../structural/conductor-shape-guar
 const testRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(testRoot, '../..');
 const sourceRoot = join(conductorRoot, 'src');
-const catalogModule = 'execution/provider-catalog.ts';
+const catalogModules = new Set([
+  'execution/provider-catalog.ts',
+  'execution/provider-catalog-identities.ts',
+]);
 const ADAPTER_MODULES_BY_PROVIDER_ID = {
   claude: ['execution/claude-provider.ts'],
   codex: ['execution/codex-provider.ts'],
   pi: ['execution/pi-provider.ts', 'execution/pi-harness-extension.ts'],
 } as const satisfies Readonly<Record<(typeof BUILT_IN_PROVIDERS)[number]['id'], readonly string[]>>;
-
-// These provider-owned helpers are imported while the catalog constructs an
-// adapter. Importing catalog-owned identities there would reintroduce the
-// execution import cycle their extraction removed.
-const PROVIDER_LITERAL_CYCLE_BREAK_MODULES = new Set([
-  'execution/build-review-read-only-capability.ts',
-  'execution/pi-self-host-auth.ts',
-]);
 
 interface ProviderLiteralFinding {
   readonly file: string;
@@ -93,7 +88,7 @@ function findProviderLiterals(
   source: ts.SourceFile,
   adapterModules = declaredAdapterModules(),
 ): readonly ProviderLiteralFinding[] {
-  if (module === catalogModule || PROVIDER_LITERAL_CYCLE_BREAK_MODULES.has(module)) return [];
+  if (catalogModules.has(module)) return [];
 
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
@@ -210,7 +205,7 @@ function findProviderShapeBranches(
 }
 
 async function productionProviderShapeBranchFindings(): Promise<readonly ProviderShapeBranchFinding[]> {
-  const excluded = new Set([catalogModule, ...declaredAdapterModules()]);
+  const excluded = new Set([...catalogModules, ...declaredAdapterModules()]);
   const files = (await sourceFiles(sourceRoot)).filter((path) => !excluded.has(relative(sourceRoot, path)));
   const findings = await Promise.all(files.map(async (path) => {
     const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
@@ -289,9 +284,6 @@ describe('structural: built-in provider literals', () => {
       for (const adapterModule of adapterModules) {
         expect(modules).toContain(adapterModule);
       }
-    }
-    for (const module of PROVIDER_LITERAL_CYCLE_BREAK_MODULES) {
-      expect(modules).toContain(module);
     }
   });
 
