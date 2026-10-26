@@ -135,12 +135,8 @@ export async function resolveFeatureRemoteMutation(input: {
             const content = await source.readFile(path);
             return content === null ? [] : [{ path, content }];
           }
-          try {
-            const { stdout: content } = await input.git(['show', `${ref}:${path}`]);
-            return [{ path, content }];
-          } catch {
-            return [];
-          }
+          const { stdout: content } = await input.git(['show', `${ref}:${path}`]);
+          return [{ path, content }];
         },
       },
     },

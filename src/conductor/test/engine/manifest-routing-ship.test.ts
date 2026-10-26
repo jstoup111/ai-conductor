@@ -8,8 +8,10 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildPrdAuditProjection } from '../../src/engine/prd-audit-projection.js';
+import { resolveFeatureRemoteMutation } from '../../src/engine/remote-git-operations.js';
 import { resolveRunSourceRef } from '../../src/engine/run-provenance.js';
 import { createShipDraftPublicationDependencies } from '../../src/engine/ship-draft-pr.js';
+import { readMutationProvenance } from '../../src/engine/owner-gate/mutation-provenance.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
@@ -124,5 +126,44 @@ describe('SHIP manifest routing', () => {
       marker: '.docs/f/intake.md',
       records: [{ path: '.docs/f/intake.md', content: 'Owner: agent\nSource-Ref: org/repo#12\n' }],
     });
+  });
+
+  it('preserves legacy committed-intake read failures for both remote mutation contexts', async () => {
+    const projectRoot = await root();
+    await write(projectRoot, '.docs/intake/f.md', 'Owner: agent\nSource-Ref: org/repo#12\n');
+    await commitFixture(projectRoot, 'feature/f');
+    const cases = [
+      { error: new Error('git show failed'), reason: 'provenance-unreadable' },
+      { error: Object.assign(new Error('git show timed out'), { code: 'ETIMEDOUT' }), reason: 'provenance-timeout' },
+    ] as const;
+
+    const results = await Promise.all(cases.flatMap(async ({ error, reason }) => {
+      const git = async (args: string[]) => {
+        if (args.join(' ') === 'remote get-url --push origin') return { stdout: 'https://github.com/org/repo.git\n' };
+        if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+        if (args[0] === 'config') return { stdout: 'https://github.com/org/repo.git\n' };
+        if (args[0] === 'show') throw error;
+        throw new Error(`unexpected injected git read: ${args.join(' ')}`);
+      };
+      const remote = await resolveFeatureRemoteMutation({
+        cwd: projectRoot, slug: 'f', branch: 'feature/f', git, gh: async () => ({ stdout: '' }),
+      });
+      const ship = await createShipDraftPublicationDependencies({
+        cwd: projectRoot, branch: 'feature/f', baseBranch: 'main', featureDesc: 'f', git, gh: async () => ({ stdout: '' }),
+      });
+      if (remote === undefined || ship === undefined) throw new Error('expected mutation contexts');
+
+      return [
+        await readMutationProvenance(remote.provenance, remote.dependencies.provenanceDiscovery),
+        await readMutationProvenance(ship.remoteMutation.provenance, ship.remoteMutation.dependencies.provenanceDiscovery),
+      ].map((result) => ({ reason, result }));
+    }));
+
+    expect(results.flat()).toEqual([
+      { reason: 'provenance-unreadable', result: { kind: 'refused', reason: 'provenance-unreadable' } },
+      { reason: 'provenance-unreadable', result: { kind: 'refused', reason: 'provenance-unreadable' } },
+      { reason: 'provenance-timeout', result: { kind: 'refused', reason: 'provenance-timeout' } },
+      { reason: 'provenance-timeout', result: { kind: 'refused', reason: 'provenance-timeout' } },
+    ]);
   });
 });
