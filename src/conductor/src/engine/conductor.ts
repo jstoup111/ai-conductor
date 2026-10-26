@@ -844,17 +844,19 @@ export class Conductor {
         await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
         return false;
       }
-      switch (route.record.kind) {
-        case 'revalidate':
-          if (route.record.phase === 'open') break;
-          await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
-          return false;
-        case 'audit':
-        case 'operator':
-          await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
-          return false;
-        default:
-          return assertNever(route.record.kind);
+      const revalidationOpen = (() => {
+        switch (route.record.kind) {
+          case 'revalidate':
+            return route.record.phase === 'open';
+          case 'audit':
+          case 'operator':
+            return false;
+        }
+        return assertNever(route.record.kind);
+      })();
+      if (!revalidationOpen) {
+        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
+        return false;
       }
     }
 
@@ -11189,17 +11191,16 @@ export class Conductor {
             if (routedClaimExecution?.source === 'routed-host' && routedClaimExecution.roundId !== undefined && routedClaimSlug !== undefined) {
               const route = await readRouteRecord(this.projectRoot, routedClaimSlug, routedClaimExecution.roundId);
               if (route.kind === 'record') {
-                switch (route.record.kind) {
-                  case 'audit':
-                    routedPrerequisiteClaim = { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
-                    break;
-                  case 'revalidate':
-                  case 'operator':
-                    routedPrerequisiteClaim = undefined;
-                    break;
-                  default:
-                    assertNever(route.record.kind);
-                }
+                routedPrerequisiteClaim = (() => {
+                  switch (route.record.kind) {
+                    case 'audit':
+                      return { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
+                    case 'revalidate':
+                    case 'operator':
+                      return undefined;
+                  }
+                  return assertNever(route.record.kind);
+                })();
               }
             }
             result =

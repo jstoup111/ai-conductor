@@ -5,7 +5,7 @@ import type { ConductorEventEmitter } from '../../ui/events.js';
 import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { switchToChild } from '../child-lifecycle.js';
 import { createRoutedConductStateStore } from '../conduct-state-store.js';
-import { childBranchFor } from '../feature-branch-identity.js';
+import { childBranchFor, parseFeatureBranch } from '../feature-branch-identity.js';
 import { loadConfig } from '../config.js';
 import { verdictPathFor } from '../gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
@@ -561,7 +561,8 @@ async function readOtherFeatureTips(
       const [branch, rawTip] = line.split(' ');
       const tip = rawTip === undefined ? undefined : parseCommitSha(rawTip);
       if (!branch || !tip || branch === hostBranch.branch) continue;
-      if (branch === `feat/daemon-${slug}` || branch.startsWith('feat/c') && branch.endsWith(`/${slug}`)) {
+      const identity = parseFeatureBranch(branch);
+      if ((identity.kind === 'leaf' || identity.kind === 'child') && identity.slug === slug) {
         tips[branch] = tip;
       }
     }

@@ -170,29 +170,25 @@ export async function resolveChildBase(
       if (marker.kind === 'marker' && marker.marker.host === child) {
         const route = await readRouteRecord(worktree, slug, marker.marker.roundId, { git });
         if (route.kind === 'record') {
-          switch (route.record.kind) {
-            case 'revalidate': {
-              const queue = await readRevalidationQueue(worktree, slug, { git });
-              const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === child) : undefined;
-              const head = await resolveGitRef(git, 'HEAD');
-              if (entry !== undefined && head === entry.closureSha) {
-                return { kind: 'revalidation', child, sha: entry.replay.newParent };
+          const routedBase = await (async (): Promise<ChildBaseResolution | undefined> => {
+            switch (route.record.kind) {
+              case 'revalidate': {
+                const queue = await readRevalidationQueue(worktree, slug, { git });
+                const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === child) : undefined;
+                const head = await resolveGitRef(git, 'HEAD');
+                if (entry !== undefined && head === entry.closureSha) return { kind: 'revalidation', child, sha: entry.replay.newParent };
+                if (route.record.entry?.host === child && route.record.hosts[child] === 'repairing') return { kind: 'revalidation-fix', child, sha: route.record.entry.pinnedBase };
+                return entry === undefined ? undefined : { kind: 'revalidation', child, sha: entry.replay.newParent };
               }
-              if (route.record.entry?.host === child && route.record.hosts[child] === 'repairing') {
-                return { kind: 'revalidation-fix', child, sha: route.record.entry.pinnedBase };
-              }
-              if (entry !== undefined) return { kind: 'revalidation', child, sha: entry.replay.newParent };
-              break;
+              case 'audit':
+              case 'operator':
+                return route.record.hosts[child] === 'repairing' && route.record.entry?.host === child
+                  ? { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase }
+                  : undefined;
             }
-            case 'audit':
-            case 'operator':
-              if (route.record.hosts[child] === 'repairing' && route.record.entry?.host === child) {
-                return { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase };
-              }
-              break;
-            default:
-              return assertNever(route.record.kind);
-          }
+            return assertNever(route.record.kind);
+          })();
+          if (routedBase !== undefined) return routedBase;
         }
       }
     }

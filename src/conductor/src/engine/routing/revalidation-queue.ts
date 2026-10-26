@@ -122,9 +122,8 @@ export async function acknowledgeQueueEntry(
       case 'audit':
       case 'operator':
         return false;
-      default:
-        return assertNever(stored.record.kind);
     }
+    return assertNever(stored.record.kind);
   })();
   const done = transitionHost(stored, host, 'done', { credit: false });
   if (done.kind !== 'updated') return { kind: 'stale' };
@@ -135,9 +134,8 @@ export async function acknowledgeQueueEntry(
         return done.record;
       case 'revalidate':
         return leavesRoundOpen ? done.record : { ...done.record, phase: 'closed' as const };
-      default:
-        return assertNever(stored.record.kind);
     }
+    return assertNever(stored.record.kind);
   })();
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'verify-ref', ref: `refs/conductor/${slug}/closed/c${host}`, value: entry.closureSha },

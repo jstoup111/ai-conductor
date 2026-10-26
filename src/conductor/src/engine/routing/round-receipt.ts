@@ -292,9 +292,8 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
           return { kind: 'acknowledged' } as const;
         case 'audit':
           break;
-        default:
-          return assertNever(stored.record.kind);
       }
+      if (stored.record.kind !== 'audit') return assertNever(stored.record.kind);
       const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
       if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       const receipt = stored.record.receipt;

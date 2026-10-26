@@ -315,26 +315,23 @@ export async function pinHostEntry(
   let current = stored;
   let pinnedBase = current.record.entry?.host === host ? current.record.entry.pinnedBase : undefined;
   if (current.record.entry?.host !== host) {
-    let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
     const queue = await readRevalidationQueue(worktree, slug, { git });
     const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
-    switch (current.record.kind) {
-      case 'revalidate':
-        if (!queued || queue.kind !== 'queue') {
-          return { kind: 'refused', detail: `revalidate host ${host} has no queued entry to pin` };
-        }
-        revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
-        break;
-      case 'audit':
-        if (queued && queue.kind === 'queue') {
-          revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
-        }
-        break;
-      case 'operator':
-        break;
-      default:
-        return assertNever(current.record.kind);
-    }
+    const pinContext = (() => {
+      switch (current.record.kind) {
+        case 'revalidate':
+          return !queued || queue.kind !== 'queue'
+            ? { kind: 'refused' as const }
+            : { kind: 'ready' as const, revalidation: { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha } };
+        case 'audit':
+          return { kind: 'ready' as const, revalidation: queued && queue.kind === 'queue' ? { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha } : undefined };
+        case 'operator':
+          return { kind: 'ready' as const, revalidation: undefined };
+      }
+      return assertNever(current.record.kind);
+    })();
+    if (pinContext.kind === 'refused') return { kind: 'refused', detail: `revalidate host ${host} has no queued entry to pin` };
+    const { revalidation } = pinContext;
     const next = {
       ...current.record,
       entry: { host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
@@ -522,30 +519,29 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   // task still dispatches and an N=1 route keeps its established planner-side
   // guard.  Do not transition to repairing: no provider may run for a
   // derived no-op round.
-  switch (stored.record.kind) {
-    case 'audit': {
-      const completion = await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
-        ...input.completionContext,
-        projectRoot: input.worktree,
-        planPath,
-        featureDesc: input.slug,
-        activeChild: input.host,
-      });
-      if (completion.done) {
-        return {
-          kind: 'derived-already-complete',
-          detail:
-            `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
-            'every routed task is already evidence-complete',
-        };
-      }
-      break;
+  const auditAlreadyComplete = await (async (): Promise<boolean> => {
+    switch (stored.record.kind) {
+      case 'audit':
+        return (await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
+          ...input.completionContext,
+          projectRoot: input.worktree,
+          planPath,
+          featureDesc: input.slug,
+          activeChild: input.host,
+        })).done;
+      case 'revalidate':
+      case 'operator':
+        return false;
     }
-    case 'revalidate':
-    case 'operator':
-      break;
-    default:
-      return assertNever(stored.record.kind);
+    return assertNever(stored.record.kind);
+  })();
+  if (auditAlreadyComplete) {
+    return {
+      kind: 'derived-already-complete',
+      detail:
+        `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
+        'every routed task is already evidence-complete',
+    };
   }
   loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (loaded.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
