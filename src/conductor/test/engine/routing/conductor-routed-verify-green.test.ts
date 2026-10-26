@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   reconcileRounds: undefined as undefined | (() => Promise<unknown>),
   consumeLowestQueued: undefined as undefined | (() => Promise<unknown>),
   operatorRevalidation: false,
-  revalidationRouteKind: 'operator' as 'operator' | 'revalidate',
+  revalidationRecord: undefined as undefined | import('../../../src/engine/routing/route-types.js').RouteRecord,
   observedRevalidationRecordKind: undefined as undefined | string,
 }));
 
@@ -35,20 +35,10 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
     readRouteRecord: (...args: Parameters<typeof actual.readRouteRecord>) =>
       mocks.operatorRevalidation
         ? (() => {
-            mocks.observedRevalidationRecordKind = mocks.revalidationRouteKind;
+            if (mocks.revalidationRecord === undefined) throw new Error('missing parsed revalidation record');
+            mocks.observedRevalidationRecordKind = mocks.revalidationRecord.kind;
             return Promise.resolve({
-              kind: 'record', slug: 'demo', blob: 'a'.repeat(40), record: {
-                roundId: 'r1', kind: mocks.revalidationRouteKind, phase: 'open', items: [],
-                allocation: { 1: { remTaskIds: [], blockBodies: [] } }, hosts: { 1: 'repairing' }, currentHostIndex: 0,
-                receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} }, outbox: [],
-                ...(mocks.revalidationRouteKind === 'operator' ? {
-                  operator: {
-                    origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
-                    carried: [], otherTips: { 'feat/c1/demo': 'a'.repeat(40) },
-                    priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
-                  },
-                } : {}),
-              },
+              kind: 'record', slug: 'demo', blob: 'a'.repeat(40), record: mocks.revalidationRecord,
             } as never);
           })()
         : actual.readRouteRecord(...args),
@@ -74,13 +64,50 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
 import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
 const roots: string[] = [];
+
+/**
+ * Make the source guard consume the same parsed durable record shape that a
+ * route ref would provide.  The records differ only in the discriminant and
+ * the operator-only context required by the operator route grammar.
+ */
+function parsedOpenRevalidatingRecord(kind: 'operator' | 'revalidate'): RouteRecord {
+  const record = {
+    roundId: 'r1',
+    kind,
+    phase: 'open',
+    items: [],
+    allocation: { 1: { remTaskIds: [], blockBodies: [] } },
+    sealedAuthored: 0,
+    hosts: { 1: 'admitted' },
+    currentHostIndex: 0,
+    receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} },
+    ...(kind === 'operator' ? {
+      operator: {
+        origin: 'land',
+        reason: 'reviewer request',
+        operator: 'operator@example.test',
+        entryStep: 'acceptance_specs',
+        carried: [],
+        otherTips: { 'feat/c1/demo': 'a'.repeat(40) },
+        priorRegion: {
+          statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
+          verdicts: {},
+        },
+      },
+    } : {}),
+    outbox: [],
+  };
+  const parsed = parseRouteRecord(JSON.stringify(record));
+  if (parsed === undefined) throw new Error(`expected parsed open ${kind} route record`);
+  return parsed;
+}
 
 afterEach(async () => {
   mocks.verifyGreenAcceptance.mockReset();
@@ -89,7 +116,7 @@ afterEach(async () => {
   mocks.reconcileRounds = undefined;
   mocks.consumeLowestQueued = undefined;
   mocks.operatorRevalidation = false;
-  mocks.revalidationRouteKind = 'operator';
+  mocks.revalidationRecord = undefined;
   mocks.observedRevalidationRecordKind = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -136,23 +163,31 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
 }
 
 describe('Conductor routed acceptance verify-green path', () => {
-  it('refuses a parsed operator record at the revalidating-source exclusion while an open revalidate record enters', async () => {
+  it('refuses a parsed operator record at the revalidating-source exclusion while an otherwise-identical open revalidate record enters', async () => {
     const { root } = await routedFixture();
     mocks.operatorRevalidation = true;
+    const operatorRecord = parsedOpenRevalidatingRecord('operator');
+    const revalidateRecord = parsedOpenRevalidatingRecord('revalidate');
+    const { kind: _operatorKind, operator: _operatorContext, ...operatorRevalidationFields } = operatorRecord;
+    const { kind: _revalidateKind, ...revalidateFields } = revalidateRecord;
+    expect(operatorRecord).toMatchObject({ kind: 'operator', phase: 'open', hosts: { 1: 'admitted' } });
+    expect(revalidateFields).toEqual(operatorRevalidationFields);
+    mocks.revalidationRecord = operatorRecord;
     const enterHostRegion = vi.fn(async () => ({ kind: 'entered', pinnedBase: 'a'.repeat(40) }) as never);
+    const operatorRunner = { run: vi.fn(async () => ({ success: true })) };
     const conductor = new Conductor({
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
       featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
-      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(async () => ({ success: true })) }, acceptanceRedExec: vi.fn(),
+      events: new ConductorEventEmitter(), stepRunner: operatorRunner, acceptanceRedExec: vi.fn(),
       childRegionLifecycle: {
         resolveActiveChild: async () => ({
           kind: 'repair-pending', child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
           branch: 'feat/daemon-demo', repairChildren: [child], revalidating: { child, generation: 1 },
         }),
         enterHostRegion,
-        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        enterChildRegion: async () => ({ kind: 'refused', reason: 'stop after host entry' }) as never,
       },
     });
 
@@ -160,10 +195,11 @@ describe('Conductor routed acceptance verify-green path', () => {
 
     expect(mocks.observedRevalidationRecordKind).toBe('operator');
     expect(enterHostRegion).not.toHaveBeenCalled();
+    expect(operatorRunner.run).not.toHaveBeenCalled();
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('no open revalidate round');
 
     const { root: contrast } = await routedFixture();
-    mocks.revalidationRouteKind = 'revalidate';
+    mocks.revalidationRecord = revalidateRecord;
     const openRevalidateEntry = vi.fn(async () => ({ kind: 'entered', pinnedBase: 'a'.repeat(40) }) as never);
     const revalidatingConductor = new Conductor({
       projectRoot: contrast,
