@@ -1018,3 +1018,138 @@ Slice 3: 27 (9, 20) ── 28;  29 ── 30;  31 (10, 17, 27, 29)
 - The repair for task rem-as-built-rem-child-lease-release-on-worktree-failure is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r3
+### Task rem-as-built-rem-as-built-r3: src/conductor/test/engine/routing/operator-round-open.realgit.test.ts: RED test opening an operator round on a route with a nonzero routedSealedAuthored denominator, asserting the record's sealedAuthored equals routedSealedAuthored and round-receipt accounting snapshot/reconstruction accepts it
+**Gate:** as-built
+**Rationale:** Verified 99% by the audit. Plan Task 6 sets sealedAuthored from routedSealedAuthored, and ADR D1 governs. operator-round.ts:633 hardcodes 0, which breaks the round-receipt.ts denominator checks. The approved design already specifies the fix, so this is conforming implementation drift (Tasks 6/9).
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 1
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r3 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r4: src/conductor/src/engine/routing/operator-round.ts (~:633): set sealedAuthored from routedSealedAuthored instead of the hardcoded 0
+**Gate:** as-built
+**Rationale:** Verified 99% by the audit. Plan Task 6 sets sealedAuthored from routedSealedAuthored, and ADR D1 governs. operator-round.ts:633 hardcodes 0, which breaks the round-receipt.ts denominator checks. The approved design already specifies the fix, so this is conforming implementation drift (Tasks 6/9).
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 1
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r4 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r7: src/conductor/test/engine/park-marker-ownership.test.ts: RED test injecting a remove-and-recreate of .daemon/parked/<slug> between releaseOwnedPark's ownership read and its delete, asserting the re-created marker survives
+**Gate:** as-built
+**Rationale:** 95% (inferred race from verified source). Under Task 4/D3, releaseOwnedPark must leave a marker re-created by another park in place. The read-check-unlink sequence at park-marker.ts:179-185 has a TOCTOU window. The fix is local to the shared seam, and Task 4 admits it; consumers (Tasks 5, 11, 24) inherit the fix.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 3
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r7 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r8: src/conductor/src/engine/park-marker.ts releaseOwnedPark: make release atomic (e.g. rename the marker to a unique claim path, verify the token on the claimed file, unlink on match or rename back on mismatch) so a concurrently re-created marker is never deleted
+**Gate:** as-built
+**Rationale:** 95% (inferred race from verified source). Under Task 4/D3, releaseOwnedPark must leave a marker re-created by another park in place. The read-check-unlink sequence at park-marker.ts:179-185 has a TOCTOU window. The fix is local to the shared seam, and Task 4 admits it; consumers (Tasks 5, 11, 24) inherit the fix.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 3
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r8 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r9: src/conductor/src/engine/build-review-projections.ts (~:439): carry operatorWorkOrder into the projections serialized by step-runners.ts into the build_review prompt; add a test in build-review-inputs/projections tests asserting the rendered grader prompt for an operator host contains the round's reason
+**Gate:** as-built
+**Rationale:** Verified 98%. D9 and Task 21/20 require build_review to be graded with the landing reason among its inputs. operatorWorkOrder reaches BuildReviewInputs and its digest, but build-review-projections.ts:439 drops it, so it is missing from the prompt serialized at step-runners.ts:4641. This is implementation drift admitted by Task 21.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 9
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 9 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r9 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r10: src/conductor/src/engine/stack-land-cli.ts (~:65-67, call at ~:299): clear an unlanded-closed-child-commits HALT only when its named children are covered by the admitted host+carried set, and clear through clearHaltAtomically instead of separate HALT/HALT.class unlinks; extend stack-land-cli.test.ts with the child-1-only vs --carry 2 HALT cases asserting byte-identical HALT on mismatch and atomic removal on match
+**Gate:** as-built
+**Rationale:** Verified 100%. Task 10's Done-when (removing the unlanded HALT only when it names exactly the host and carried set) and Task 19's use of clearHaltAtomically define the behavior. stack-land-cli.ts:65-67 does a prefix-only match and two separate unlinks. This is conforming implementation drift.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 10
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r10 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r11: src/conductor/src/engine/stack-land-cli.ts --abandon path (~:196-214): take createOwnedPark under the lease before abandonOperatorRound and release only that owned token at completion; extend stack-land-abandon.test.ts asserting .daemon/parked/<slug> is present across an injected mid-abandon crash for a declared landing whose original park was released
+**Gate:** as-built
+**Rationale:** Verified 99%. Task 24 step 3 requires the --abandon path to run under the lease and an owned park. stack-land-cli.ts:196-214 takes no owned park. This is implementation drift admitted by Task 24 and D13.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 13
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r11 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r12: src/conductor/src/engine/routing/operator-round.ts abandon predicate (~:232, ~:249): drop the rewind-origin exclusion and accept a clean checkout not yet on the host (switching to the host as the first recorded stage); add stack-land-abandon.test.ts cases for a rewind-origin open round and an admitted landing interrupted before the host switch, each exiting 0 and completing the abandon
+**Gate:** as-built
+**Rationale:** Verified 97%. Task 24 restricts the abandon predicate to the round's own authority, and D13 covers open operator-round recovery, including a landing interrupted before the host switch. The extra rewind-origin exclusion (operator-round.ts:232) and the on-host requirement (:249) narrow the approved behavior. This is implementation drift; Tasks 22-24 admit the fix.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 13
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r12 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r13: Rename operator_round.phase to action in src/conductor/src/types/events.ts (~:2318) and src/conductor/src/engine/routing/routing-events.ts (~:36), updating producers round-admission.ts (~:53) and operator-round.ts (~:213, ~:857), the dashboard/status consumer and operator-round-events.test.ts assertions on action
+**Gate:** as-built
+**Rationale:** Verified 100%. ADR D16 names the field 'action' (opened/declared/abandoned), but types/events.ts:2318 and routing-events.ts:36 use 'phase'. This is a schema rename to the approved shape, admitted by Task 25.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 16
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 16 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r13 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r14: src/conductor/src/engine/restack/stack-preflight.ts: move the durable-child and routing-setting eligibility checks (~:193, ~:198) ahead of the repairing read (~:157); add a stack-preflight test asserting a flat and a routing-off feature read no repairing/routes/revalidate ref
+**Gate:** as-built
+**Rationale:** Verified 99%. Tasks 8, 10, 12 and 31 require flat and routing-off features to abstain before any routes/repairing/revalidate read or lease write. stack-preflight.ts:157, stack-commit-guard-cli.ts:97 and stack-land-cli.ts:159/194 read routing state first. This is conforming parity drift under D17.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 17
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 17 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r14 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r15: src/conductor/src/engine/stack-commit-guard-cli.ts (~:97): abstain on routing off (stacked_prs.route_whole_feature_fixes false) before any routing read; extend stack-commit-guard.test.ts for the routing-off case
+**Gate:** as-built
+**Rationale:** Verified 99%. Tasks 8, 10, 12 and 31 require flat and routing-off features to abstain before any routes/repairing/revalidate read or lease write. stack-preflight.ts:157, stack-commit-guard-cli.ts:97 and stack-land-cli.ts:159/194 read routing state first. This is conforming parity drift under D17.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 17
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 17 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r15 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r16: src/conductor/src/engine/stack-land-cli.ts (~:159, ~:194): run the flat/routing-off refusal before reading the repairing marker or acquiring the lease on both open and --done/--abandon paths; extend stack-land-cli.test.ts asserting no ref read and no .daemon/leases/ write for those refusals
+**Gate:** as-built
+**Rationale:** Verified 99%. Tasks 8, 10, 12 and 31 require flat and routing-off features to abstain before any routes/repairing/revalidate read or lease write. stack-preflight.ts:157, stack-commit-guard-cli.ts:97 and stack-land-cli.ts:159/194 read routing state first. This is conforming parity drift under D17.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 17
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 17 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r16 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r17: docs/reference/cli.md (~:1538): replace the closed-child rewind refusal and direct-commit advice with stack land (open/--done/--abandon, --carry), stack owners and rewind --child/--reason, including lease and owned-park behavior
+**Gate:** as-built
+**Rationale:** Verified 100%. ADR D18 requires the guidance to change with the mechanism. The plan's obligation table assigns these doc edits outside plan tasks, so no planning omission exists, and the docs are not sealed .docs artifacts. This is clear documentation drift against approved architecture, which belongs in BUILD.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 18
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 18 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r17 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r18: docs/reference/configuration.md (~:1606, ~:1683): replace direct-commit/automatic feature-repair guidance for stacked_prs.route_whole_feature_fixes with the operator-landing flow and the routing-off behavior
+**Gate:** as-built
+**Rationale:** Verified 100%. ADR D18 requires the guidance to change with the mechanism. The plan's obligation table assigns these doc edits outside plan tasks, so no planning omission exists, and the docs are not sealed .docs artifacts. This is clear documentation drift against approved architecture, which belongs in BUILD.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 18
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 18 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r18 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-as-built-rem-as-built-r19: docs/runbooks/stalled-or-stuck-feature.md (~:1273): add recovery sections for unlanded-closed-child-commits, operator-round-undeclared and operator tip HALTs, live lease owners (feature-lease-held) and owned parks, naming the stack land --done/--abandon commands
+**Gate:** as-built
+**Rationale:** Verified 100%. ADR D18 requires the guidance to change with the mechanism. The plan's obligation table assigns these doc edits outside plan tasks, so no planning omission exists, and the docs are not sealed .docs artifacts. This is clear documentation drift against approved architecture, which belongs in BUILD.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 18
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 18 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r19 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
