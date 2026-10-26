@@ -467,6 +467,32 @@ export interface StackLandAbandonDispatch {
 
 export type StackLandDispatch = StackLandOpenDispatch | StackLandDoneDispatch | StackLandAbandonDispatch;
 
+export interface StackOwnersDispatch {
+  kind: 'stack-owners';
+  slug: string;
+  paths: readonly string[];
+  diff?: string;
+}
+
+/** Parse the read-only ownership evidence grammar. */
+export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'owners') return null;
+  const paths: string[] = [];
+  let slug: string | undefined;
+  let diff: string | undefined;
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (value === undefined || !['--slug', '--path', '--diff'].includes(flag ?? '')) return null;
+    if (flag === '--path') { paths.push(value); continue; }
+    if (flag === '--slug' && slug === undefined) { slug = value; continue; }
+    if (flag === '--diff' && diff === undefined) { diff = value; continue; }
+    return null;
+  }
+  if (!slug || slug.includes('/') || slug === '.' || slug === '..' || (paths.length === 0) === (diff === undefined)) return null;
+  return { kind: 'stack-owners', slug, paths, ...(diff === undefined ? {} : { diff }) };
+}
+
 /** Parse the open, declaration, and abandon grammars. */
 export function detectStackLandCommand(argv: readonly string[]): StackLandDispatch | null {
   if (argv[2] !== 'stack' || argv[3] !== 'land') return null;
@@ -935,6 +961,12 @@ export function createProgram(): Command {
     .requiredOption('--child <n>', 'Closed child to host the landing')
     .option('--carry <n>', 'Closed child with post-closure commits to carry')
     .requiredOption('--reason <text>', 'Reason for the landing');
+  stack
+    .command('owners')
+    .description('Report which stack children introduced paths')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .option('--path <path>', 'Path to inspect (repeatable)')
+    .option('--diff <range>', 'Git range whose changed paths to inspect');
 
   const buildReview = program
     .command('build-review')

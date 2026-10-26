@@ -89,6 +89,7 @@ import {
   detectHaltClearCommand,
   detectKickbackBudgetCommand,
   detectStackLandCommand,
+  detectStackOwnersCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -103,6 +104,7 @@ import {
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchStackLandCommand } from './engine/stack-land-cli.js';
+import { dispatchStackOwnersCommand } from './engine/stack-owners-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
 import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
@@ -981,6 +983,12 @@ async function dispatchCliCommand(): Promise<void> {
   const stackLandCmd = detectStackLandCommand(process.argv);
   if (stackLandCmd) {
     process.exitCode = await dispatchStackLandCommand(stackLandCmd);
+    return;
+  }
+
+  const stackOwnersCmd = detectStackOwnersCommand(process.argv);
+  if (stackOwnersCmd) {
+    process.exitCode = await dispatchStackOwnersCommand(stackOwnersCmd);
     return;
   }
 
