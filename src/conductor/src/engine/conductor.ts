@@ -610,6 +610,7 @@ import {
   readPlanGrowthBudget,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
+  resolveRemediationLapAllowance,
   validationJoinRemediationRoundCap,
 } from './remediation-caps.js';
 import type { RemediationGateAppendBudget } from './remediation-caps.js';
@@ -629,6 +630,7 @@ export {
   prdAuditAppendCap,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
+  resolveRemediationLapAllowance,
   validationJoinRemediationRoundCap,
 } from './remediation-caps.js';
 export { prdAuditScopeProjection, routeTypedPrdAuditOverScope } from './prd-audit-routing.js';
@@ -3905,6 +3907,7 @@ export class Conductor {
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
     blocker: RefusalReworkAllowanceBlocker,
+    tier: ConductState['complexity_tier'],
   ): Promise<string> {
     if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused);
     const refusedBlock = renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, []));
@@ -3926,7 +3929,16 @@ export class Conductor {
     }
     const reason = this.withActiveChild(
       `Refusal rework halted: prd_audit ${blocker.allowance} allowance exhausted.\n` +
-      `${renderKickbackBudgetView(entry, 'prd_audit', blocker.fallbackLapCap, blocker.growth)}\n${findings}\n\n` +
+      `${renderKickbackBudgetView(
+        entry,
+        'prd_audit',
+        blocker.fallbackLapCap,
+        blocker.growth,
+        undefined,
+        undefined,
+        0,
+        resolveRemediationLapAllowance('prd_audit', this.config, tier),
+      )}\n${findings}\n\n` +
       `${refusedBlock}\n\n` +
       renderKickbackRecoveryHint({ slug, gate: 'prd_audit', allowance: blocker.allowance }),
     );
@@ -4270,8 +4282,12 @@ export class Conductor {
       asBuiltEvidenceFile !== undefined &&
       (hintSource.source === 'architecture-review-as-built' || hintSource.source === 'validation-group');
     const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
-    const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
-    const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
+    const prdAuditLapCap = remediationLapCapForGate(
+      'prd_audit', this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+    );
+    const asBuiltLapCap = remediationLapCapForGate(
+      'architecture_review_as_built', this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+    );
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: string; evidence: string }>();
     // Both appended and existing-task repairs retain the criteria that
     // authorized them. The pending receipt is the only durable context at a
@@ -7126,9 +7142,11 @@ export class Conductor {
     // planner can't actually close still halts for a human.
     let remediationRounds = 0;
     // PRD-audit is deliberately not coupled to the generic remediation
-    // counter. Its configured one-lap default is the sole allowance for a
-    // criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
-    const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config);
+    // counter. Its tier-aware remediation allowance is the sole allowance
+    // for a criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
+    const prdAuditRemediationLapCap = (): number => remediationLapCapForGate(
+      'prd_audit', this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+    );
     // Refusal rework is admitted before /remediate runs.  Unlike the old
     // process-local round counter this reads the durable gate and growth
     // records, so a daemon restart cannot buy another lap and an operator
@@ -7142,15 +7160,16 @@ export class Conductor {
           isUnreadableKickbackGrowth(ledger)
         ) return { kind: 'unreadable' };
         const entry = ledger.gates.prd_audit;
-        const lapCap = entry?.effectiveLapCap ?? prdAuditRemediationLapCap;
+        const fallbackLapCap = prdAuditRemediationLapCap();
+        const lapCap = entry?.effectiveLapCap ?? fallbackLapCap;
         if ((entry?.laps ?? 0) >= lapCap) {
-          return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap: prdAuditRemediationLapCap };
+          return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap };
         }
         const { growth, cap: growthCap, capSource, authoredSource } = await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true });
         if (growth.remaining > 0) return undefined;
         return {
           kind: 'exhausted', allowance: 'growth', consumed: growth.added, limit: growthCap,
-          fallbackLapCap: prdAuditRemediationLapCap,
+          fallbackLapCap,
           growth: { ...growth, cap: growthCap, capSource, authoredSource },
         };
       } catch {
@@ -9222,6 +9241,7 @@ export class Conductor {
                   prdAuditRoute.route.detail,
                   prdAuditRoute.route.refused,
                   blocker,
+                  state.complexity_tier,
                 )
                 : await this.writeRefusalReworkHalt(
                   prdAuditRoute.route.detail,
@@ -9491,7 +9511,7 @@ export class Conductor {
                 prdAuditUnsatisfied &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                   ? await refusalReworkAllowanceAvailable()
-                  : remediationRounds < prdAuditRemediationLapCap)
+                  : remediationRounds < prdAuditRemediationLapCap())
               ) {
                 // Preserve the pre-existing PRD-audit append attempt before
                 // the terminal design/invalid as-built refusal. Its planner
@@ -9684,7 +9704,7 @@ export class Conductor {
                 gapMemberNamesForMerge.length > 0 &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                   ? await refusalReworkAllowanceAvailable()
-                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config))
+                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, state.complexity_tier))
               ) {
                 mtMergeHandled = true;
                 const evidence: RemediationGateProvenance[] = [];
@@ -9843,7 +9863,7 @@ export class Conductor {
               !mtMergeHandled && this.daemon &&
               (prdAuditRoute?.kind === 'over-scope-refusal-rework'
                 ? await refusalReworkAllowanceAvailable()
-                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config))
+                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config, state.complexity_tier))
             ) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
@@ -10219,6 +10239,7 @@ export class Conductor {
               this.projectRoot,
               this.config,
               settlementLedger,
+              state.complexity_tier,
             );
             growthCap = budgets[0]?.growthCap;
             settlementGrowth = budgets[0]?.growth;
@@ -10290,7 +10311,12 @@ export class Conductor {
                       : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
                 ).join('; ')}`
               : '';
-            const fallbackLapCap = remediationLapCapForGate(gate, this.config);
+            const fallbackLapCap = remediationLapCapForGate(
+              gate, this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
+            );
+            const remediationAllowance = gate === 'prd_audit' || gate === 'architecture_review_as_built'
+              ? resolveRemediationLapAllowance(gate, this.config, state.complexity_tier)
+              : undefined;
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
               : withPendingGrowth({
@@ -10307,6 +10333,10 @@ export class Conductor {
                   gate,
                   fallbackLapCap,
                   growthView,
+                  undefined,
+                  undefined,
+                  0,
+                  remediationAllowance,
                 )
               : `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
 
@@ -12436,6 +12466,7 @@ export class Conductor {
                       refusalRoute.detail,
                       refusalRoute.refused,
                       refusalAllowanceBlocker,
+                      state.complexity_tier,
                     );
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(refusedReason);
@@ -14389,7 +14420,7 @@ export class Conductor {
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
               let remediationPlannerFault: string | undefined;
-              if (remediationRounds < prdAuditRemediationLapCap) {
+              if (remediationRounds < prdAuditRemediationLapCap()) {
                 const outcome = await this.planRemediation(
                   state,
                   steps,
@@ -14454,7 +14485,7 @@ export class Conductor {
                 state.feature_desc,
                 makeGitRunner(this.projectRoot),
               );
-              if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
+              if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap()) {
                 prdAuditSelfHeals++;
                 await emitTracked({
                   type: 'kickback',
@@ -14503,7 +14534,7 @@ export class Conductor {
                 cls.kind === 'invalid-evidence'
                   ? `prd-audit halted: current typed output is unavailable — ${lastError ?? cls.summary}`
                   : cls.kind === 'impl-only'
-                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
+                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap()}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches

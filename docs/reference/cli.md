@@ -1368,6 +1368,14 @@ the cap. `consumed` and `laps` count only charged laps. Human output adds
 `Pending charge: <n> lap(s) (charged when build dispatches)` while a charge is pending; JSON reports
 `pendingLaps` (`0` when none) on both remediation gates.
 
+Each remediation gate's budget line also names its resolved
+[tier-aware allowance](configuration.md#tier-aware-remediation-lap-caps), for example
+`Kickback budget (prd_audit): 1/5 consumed; 4 remaining — tier M allowance 5 (configured)`. The source
+is `default`, `configured`, or `raised from <resolved>` after a `raise`; a feature with no recorded tier
+prints `tier unrecorded, treated as M;`. JSON adds `tier` (`S`, `M`, `L`, or `null`) and
+`allowanceSource` (`default`, `configured`, or `raised`) to those gates. `build_review` carries neither.
+`kickback-cap` halts and `daemon status` print the same line.
+
 Plan growth follows the same rule: the plan-growth `remaining` also subtracts a pending repair's growth
 (floored at `0`). Human output prints, directly after the `Plan growth:` line,
 `Pending growth: <total> (<gate> <n>, ...); would reach <projected>/<cap> when build dispatches`,

@@ -1390,7 +1390,7 @@ describe('engine/daemon-observe-cli', () => {
         );
       });
 
-      // Covers: task:4
+      // Covers: task:4, task:9
       it('renders an as-built remediation lap without cap evidence', async () => {
         const repo = join(root, 'repo-remediation-lap');
         const featureRoot = await writeActivePlan(repo, 'laps-feature', 19);
@@ -1408,7 +1408,7 @@ describe('engine/daemon-observe-cli', () => {
         await runDaemonStatus({ registryPath: await registry([record('repo-remediation-lap', repo)]), out: (line) => out.push(line) });
 
         expect(out.find((line) => line.includes('KICKBACK BUDGET [laps-feature]:') && line.includes('architecture_review_as_built'))).toContain(
-          'Kickback budget (architecture_review_as_built): 1/1 consumed; 0 remaining',
+          'Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining — tier unrecorded, treated as M; allowance 3 (default)',
         );
       });
 
@@ -1422,20 +1422,21 @@ describe('engine/daemon-observe-cli', () => {
         await runDaemonStatus({ registryPath: await registry([record('repo-fresh-remediation', repo)]), out: (line) => out.push(line) });
 
         const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [fresh-feature]:'));
-        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/1 consumed; 1 remaining'))).toHaveLength(1);
-        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/1 consumed; 1 remaining'))).toHaveLength(1);
+        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
+        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
       });
 
-      // Covers: task:4
-      it('uses the configured as-built lap cap consistently in status and inspect', async () => {
-        const repo = join(root, 'repo-configured-remediation');
-        const featureRoot = await writeActivePlan(repo, 'config-feature', 19);
-        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 3\n', 'utf8');
+      // Covers: task:9
+      it('uses the default tier-S prd-audit allowance consistently in status and inspect', async () => {
+        const repo = join(root, 'repo-tier-s-remediation');
+        const featureRoot = await writeActivePlan(repo, 'tier-s-feature', 19);
+        await writeFile(join(featureRoot, '.pipeline', 'conduct-state.json'), JSON.stringify({
+          build: 'in_progress', complexity_tier: 'S',
+        }), 'utf8');
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
           JSON.stringify({ version: 1, gates: {
-            architecture_review_as_built: {
+            prd_audit: {
               count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
             },
           } }),
@@ -1443,26 +1444,30 @@ describe('engine/daemon-observe-cli', () => {
         );
         const status: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-configured-remediation', repo)]), out: (line) => status.push(line) });
+        await runDaemonStatus({ registryPath: await registry([record('repo-tier-s-remediation', repo)]), out: (line) => status.push(line) });
         const inspect: string[] = [];
         expect(await dispatchKickbackBudgetCommand(
-          { kind: 'kickback-budget', action: 'inspect', feature: 'config-feature', format: 'human' },
+          { kind: 'kickback-budget', action: 'inspect', feature: 'tier-s-feature', format: 'human' },
           { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
         )).toBe(0);
 
-        expect(status.find((line) => line.includes('KICKBACK BUDGET [config-feature]:') && line.includes('architecture_review_as_built'))).toContain(
-          'Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining',
+        expect(status.find((line) => line.includes('KICKBACK BUDGET [tier-s-feature]:') && line.includes('prd_audit'))).toContain(
+          'Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)',
         );
-        expect(inspect[0]).toContain('Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining');
+        expect(inspect.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (prd_audit):'))).toContain(
+          'Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)',
+        );
       });
 
-      // Covers: task:5
-      it('reports malformed pending-repair growth and remediation budgets as unavailable', async () => {
+      // Covers: task:9
+      it('reports a malformed remediation-gate entry as unavailable without a tier allowance', async () => {
         const repo = join(root, 'repo-broken-remediation');
         const featureRoot = await writeActivePlan(repo, 'broken-feature', 19);
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
-          JSON.stringify({ version: 1, gates: {}, pendingRepair: { receiptId: 'broken' } }),
+          JSON.stringify({ version: 1, gates: {
+            prd_audit: { laps: 'not-a-number' },
+          } }),
           'utf8',
         );
         const out: string[] = [];
@@ -1470,11 +1475,59 @@ describe('engine/daemon-observe-cli', () => {
         const { code } = await runDaemonStatus({ registryPath: await registry([record('repo-broken-remediation', repo)]), out: (line) => out.push(line) });
 
         expect(code).toBe(0);
-        expect(out).toContain('  PLAN GROWTH [broken-feature]: unavailable (plan growth is unreadable)');
         const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [broken-feature]:'));
         expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: prd_audit: budget unavailable (durable entry failed validation)');
-        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: architecture_review_as_built: budget unavailable (durable entry failed validation)');
-        expect(budgets.join('\n')).not.toContain('consumed;');
+        const prdBudget = budgets.find((line) => line.includes('prd_audit: budget unavailable'));
+        expect(prdBudget).not.toContain('tier');
+        expect(prdBudget).not.toContain('allowance');
+      });
+
+      // Covers: task:9
+      it('keeps build-review cap-evidence output free of remediation allowance metadata', async () => {
+        const repo = join(root, 'repo-build-review-cap-evidence');
+        const featureRoot = await writeActivePlan(repo, 'build-review-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            build_review: {
+              count: 4, cumulative: 4, treeHash: null, lastReason: 'review cap', priorVerdict: false,
+              resolvedBefore: 0, effectiveLimit: 6, adjustmentsKnown: true,
+              capEvidence: {
+                gate: 'build_review', consumed: 4, limit: 6, latestReason: 'review cap', haltGeneration: 'halt-1',
+              },
+            },
+          } }),
+          'utf8',
+        );
+        const status: string[] = [];
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-build-review-cap-evidence', repo)]),
+          out: (line) => status.push(line),
+        });
+
+        const inspect: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'human' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+        )).toBe(0);
+        const inspectJson: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'json' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspectJson.push(line) },
+        )).toBe(0);
+
+        const expected = 'Kickback budget (build_review): 4/6 consumed; 2 remaining';
+        const statusLine = status.find((line) => line.includes('KICKBACK BUDGET [build-review-feature]:') && line.includes('build_review'));
+        const inspectLine = inspect.join('\n').split('\n\n').find((block) => block.startsWith('Kickback budget (build_review):'));
+        expect(statusLine).toContain(expected);
+        expect(inspectLine).toContain(expected);
+        expect(statusLine).not.toMatch(/— tier|allowance \d/);
+        expect(inspectLine).not.toMatch(/— tier|allowance \d/);
+        const buildReview = (JSON.parse(inspectJson[0]) as { gates: Array<Record<string, unknown>> }).gates
+          .find((gate) => gate.gate === 'build_review');
+        expect(buildReview).toMatchObject({ gate: 'build_review', consumed: 4, limit: 6, remaining: 2 });
+        expect(buildReview).not.toHaveProperty('tier');
+        expect(buildReview).not.toHaveProperty('allowanceSource');
       });
 
       // Covers: task:5

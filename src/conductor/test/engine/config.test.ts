@@ -3136,12 +3136,11 @@ steps:
   });
 
   describe('prd_audit and architecture_review_as_built config fields', () => {
-    it('resolves the remediation caps and plan-gap policy defaults', () => {
+    it('materializes the other prd-audit defaults without a remediation lap default', () => {
       expect(validateConfig({})).toMatchObject({
         ok: true,
         config: {
           prd_audit: {
-            max_remediation_laps: 1,
             max_appended_tasks: 5,
             max_appended_ratio: 0.25,
             halt_on_any_plan_gap: false,
@@ -3151,17 +3150,43 @@ steps:
     });
 
     it.each([
-      ['max_remediation_laps', 0],
-      ['max_appended_tasks', 0],
-    ])('rejects prd_audit.%s when it is zero', (key, value) => {
-      expect(validateConfig({ prd_audit: { [key]: value } })).toEqual({
+      ['prd_audit', 0],
+      ['prd_audit', '3'],
+      ['architecture_review_as_built', 0],
+      ['architecture_review_as_built', '3'],
+    ] as const)('rejects an invalid %s remediation lap integer without coercion', (gate, value) => {
+      const result = validateConfig({ [gate]: { max_remediation_laps: value } });
+
+      expect(result).toEqual({
         ok: false,
         error: {
           type: 'validation_error',
-          message: `prd_audit.${key} must be a positive integer`,
+          message: `${gate}.max_remediation_laps must be a positive integer or a map of S, M, L to positive integers`,
         },
       });
     });
+
+    it('keeps max_appended_tasks positive-integer validation', () => {
+      expect(validateConfig({ prd_audit: { max_appended_tasks: 0 } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'prd_audit.max_appended_tasks must be a positive integer',
+        },
+      });
+    });
+
+    it.each(['prd_audit', 'architecture_review_as_built'] as const)(
+      'accepts a remediation lap integer or S/M/L map for %s',
+      (gate) => {
+        for (const max_remediation_laps of [5, {}, { L: 6 }]) {
+          expect(validateConfig({ [gate]: { max_remediation_laps } })).toMatchObject({
+            ok: true,
+            config: { [gate]: { max_remediation_laps } },
+          });
+        }
+      },
+    );
 
     it.each([0, -0.1, 1.1])('rejects an out-of-range remediation ratio', (value) => {
       expect(validateConfig({ prd_audit: { max_appended_ratio: value } })).toEqual({
@@ -3190,13 +3215,12 @@ steps:
       });
     });
 
-    it('resolves as-built remediation defaults and preserves configured overrides', () => {
+    it('materializes as-built remediation defaults without a remediation lap default and preserves configured overrides', () => {
       expect(validateConfig({})).toMatchObject({
         ok: true,
         config: {
           architecture_review_as_built: {
             remediation: { enabled: true },
-            max_remediation_laps: 1,
           },
         },
       });
@@ -3220,19 +3244,43 @@ steps:
     });
 
     it.each([
-      [
-        { remediation: { enabled: 'yes' } },
-        'architecture_review_as_built.remediation.enabled must be a boolean',
-      ],
-      [
-        { max_remediation_laps: 1.5 },
-        'architecture_review_as_built.max_remediation_laps must be a positive integer',
-      ],
-    ])('rejects invalid as-built remediation config %#', (architecture_review_as_built, message) => {
-      expect(validateConfig({ architecture_review_as_built })).toEqual({
+      ['prd_audit', { XL: 3 }, 'prd_audit.max_remediation_laps.XL is an unknown tier'],
+      ['prd_audit', { M: 2.5 }, 'prd_audit.max_remediation_laps.M must be a positive integer'],
+      ['architecture_review_as_built', { XL: 3 }, 'architecture_review_as_built.max_remediation_laps.XL is an unknown tier'],
+      ['architecture_review_as_built', { M: 2.5 }, 'architecture_review_as_built.max_remediation_laps.M must be a positive integer'],
+    ] as const)('rejects an invalid remediation lap map for %s', (gate, max_remediation_laps, message) => {
+      expect(validateConfig({ [gate]: { max_remediation_laps } })).toEqual({
         ok: false,
         error: { type: 'validation_error', message },
       });
+    });
+
+    it('rejects an invalid as-built remediation switch', () => {
+      expect(validateConfig({ architecture_review_as_built: { remediation: { enabled: 'yes' } } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'architecture_review_as_built.remediation.enabled must be a boolean',
+        },
+      });
+    });
+
+    it('leaves remediation lap caps absent while materializing sibling defaults', () => {
+      const result = validateConfig({
+        prd_audit: { max_appended_tasks: 5 },
+        architecture_review_as_built: { remediation: { enabled: true } },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          prd_audit: { max_appended_tasks: 5, max_appended_ratio: 0.25 },
+          architecture_review_as_built: { remediation: { enabled: true } },
+        },
+      });
+      if (!result.ok) return;
+      expect(result.config.prd_audit).not.toHaveProperty('max_remediation_laps');
+      expect(result.config.architecture_review_as_built).not.toHaveProperty('max_remediation_laps');
     });
 
     it('rejects an unknown as-built check name', () => {

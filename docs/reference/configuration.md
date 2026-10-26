@@ -1852,7 +1852,7 @@ trivially passes.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `prd_audit.max_remediation_laps` | positive integer | `1` | Caps the number of remediation laps a `prd_audit` FAIL can trigger for a feature |
+| `prd_audit.max_remediation_laps` | positive integer, or map of `S`\|`M`\|`L` to positive integers | `S` 2, `M` 3, `L` 4 | Caps the number of remediation laps a `prd_audit` FAIL can trigger for a feature; see [tier-aware lap caps](#tier-aware-remediation-lap-caps) |
 | `prd_audit.max_appended_tasks` | positive integer | `5` | Fixed cap on tasks appended by a `prd_audit` remediation lap |
 | `prd_audit.max_appended_ratio` | finite number in `(0, 1]` | `0.25` | Cap on appended tasks as a fraction of the authored task count |
 | `prd_audit.halt_on_any_plan_gap` | boolean | `false` | When `true`, every `PLAN_GAP` finding halts for the operator, not only happy-path ones |
@@ -1863,6 +1863,23 @@ max_appended_ratio))`. `FIXABLE` findings beyond that cap, or a `FIXABLE` findin
 tasks. A merged spec whose plan predates `prd_audit`'s remediation caps (pre-existing appended
 remediation tasks) counts those tasks toward the authored baseline rather than the cap, so an old feature
 does not retroactively exceed a cap it was never measured against.
+
+### Tier-aware remediation lap caps
+
+`prd_audit.max_remediation_laps` and `architecture_review_as_built.max_remediation_laps` each resolve
+independently from the feature's recorded complexity tier:
+
+| Setting | Resolved allowance |
+| --- | --- |
+| Unset | Tier default: `S` 2, `M` 3, `L` 4 |
+| Positive integer, for example `5` | That integer for every tier |
+| Tier map, for example `{ L: 6 }` | The listed tier's value; unlisted tiers keep their default (`{}` keeps every default) |
+
+A feature with no recorded tier resolves as `M`. User and project tier maps merge per tier (user
+`{ S: 1 }` plus project `{ L: 5 }` resolves `S` 1, `M` 3, `L` 5); a project integer replaces a user map.
+A value of `0`, a non-integer, a string, or a tier other than `S`, `M`, `L` is a configuration error
+naming the offending path. A [`kickback-budget raise`](cli.md#ai-conductor-kickback-budget) overrides
+the resolved allowance for that feature.
 
 ## plan_review
 
@@ -1886,7 +1903,7 @@ one of `APPROVED`, `PLAN_GAP`, or `BLOCKED`.
 | --- | --- | --- | --- |
 | `architecture_review_as_built.checks.<name>.tiers` | array of `S`\|`M`\|`L` | see below | Restricts the named check to the listed complexity tiers; an explicit list always overrides the artifact-presence default |
 | `architecture_review_as_built.remediation.enabled` | boolean | `true` | Enables daemon-mode bounded remediation for an all-`REMEDIABLE` `BLOCKED` report; `false` keeps that report on the needs-human halt path |
-| `architecture_review_as_built.max_remediation_laps` | positive integer | `1` | Caps as-built remediation laps for the feature; exhaustion halts before another plan append |
+| `architecture_review_as_built.max_remediation_laps` | positive integer, or map of `S`\|`M`\|`L` to positive integers | `S` 2, `M` 3, `L` 4 | Caps as-built remediation laps for the feature; exhaustion halts before another plan append; see [tier-aware lap caps](#tier-aware-remediation-lap-caps) |
 
 `<name>` is one of `reachability`, `planGap`, `adrCompliance`, `diagramDrift`. Without an explicit
 `tiers` override:
@@ -1903,8 +1920,9 @@ The outcome is judged against the sealed story criteria under `.docs/stories/`, 
 `.docs/intake/` capture: the gap is recorded in the verdict and the shipped record and ships when those
 criteria are satisfied, and halts only when a sealed story criterion is unmet.
 
-`remediation` accepts only the `enabled` boolean. `max_remediation_laps` must be an integer greater
-than zero; unknown keys and invalid values are configuration errors.
+`remediation` accepts only the `enabled` boolean. `max_remediation_laps` follows the
+[tier-aware lap cap](#tier-aware-remediation-lap-caps) rules; unknown keys and invalid values are
+configuration errors.
 
 ## ci_watch
 

@@ -48,6 +48,7 @@
     "recordActivePlanPath",
     "recordApprovals",
     "remediationLapCapForGate",
+    "resolveRemediationLapAllowance",
     "renderExhaustedMechanicalBuildReviewHalt",
     "renderReadOnlyReviewUnavailableBuildReviewHalt",
     "resolveExistingTaskBindingsForAdmission",

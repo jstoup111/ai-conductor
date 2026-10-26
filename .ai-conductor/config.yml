@@ -263,26 +263,12 @@ stacked_prs:
 # appended tasks against a 19-task plan (the case that prompted this review)
 # remains far outside it and still halts for an operator.
 prd_audit:
-  # TEMPORARY (operator, 2026-09-04): 8 / 0.5 raised to 10 / 0.6 with the
-  # lap grant below — a-coverage's second as-built lap needs 5 tasks with
-  # 4 of 8 spent. Revert with the lap grant.
-  max_appended_tasks: 10
+  max_appended_tasks: 8
   # Operator, 2026-09-06: 0.6 raised to 0.8. On a 4-task plan the ratio term
   # resolved to 3 while an ordinary as-built round asked for 4, so small plans
   # halted kickback-cap on a one-task overrun (sweep-stale-vitest). Note the
   # authored count also includes the "Task Dependency Graph" heading.
   max_appended_ratio: 0.8
-  # TEMPORARY (operator, 2026-09-04): second lap granted to clear the
-  # bin-setup S4.2 and a-coverage AB-1/AB-2 halts; revert to the default 1
-  # once both features pass (see #2147 for the per-feature grant design).
-  max_remediation_laps: 2
-
-# TEMPORARY (operator, 2026-09-04, laps raised 2026-09-05): third lap granted —
-# AB-1 converged to the conductor-consumption half only. Worktree-local
-# recovery, not feature scope; revert with the grant above.
-architecture_review_as_built:
-  max_remediation_laps: 3
-
 steps:
   explore:
     llm_provider: claude

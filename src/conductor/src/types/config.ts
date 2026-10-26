@@ -553,6 +553,22 @@ export interface HarnessConfig {
   /** Exact template region bytes keyed by the declared custom step that owns them. */
   pr_template_region_owners?: Record<string, string>;
   complexity?: Record<string, never>;
+  /**
+   * PRD-audit remediation limits. A positive integer applies to every tier;
+   * a tier map selectively overrides the S/M/L defaults.
+   */
+  prd_audit?: {
+    max_remediation_laps?: number | Partial<Record<ComplexityTier, number>>;
+    max_appended_tasks?: number;
+    max_appended_ratio?: number;
+    halt_on_any_plan_gap?: boolean;
+  };
+  /** As-built remediation policy and its optional tier-aware lap limits. */
+  architecture_review_as_built?: {
+    checks?: Record<string, { tiers?: ComplexityTier[] }>;
+    remediation?: { enabled?: boolean };
+    max_remediation_laps?: number | Partial<Record<ComplexityTier, number>>;
+  };
   /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
   conductor?: ConductorConfig;
   /** Preferred markdown viewer — user-level default, project can override. */

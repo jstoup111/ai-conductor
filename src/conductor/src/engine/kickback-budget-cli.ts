@@ -16,7 +16,8 @@ import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
-import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance, type RemediationLapAllowance } from './remediation-caps.js';
+import { readState } from './state.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
@@ -41,15 +42,30 @@ async function executionChildFor(worktree: string): Promise<ChildId | undefined>
   const execution = resolveExecutionChild(cursor, 'kickback-budget');
   return 'target' in execution ? execution.target.child : undefined;
 }
-async function defaultsFor(worktree: string): Promise<Record<string, number>> {
+interface BudgetDefaults {
+  limits: Record<string, number>;
+  allowances: Partial<Record<string, RemediationLapAllowance>>;
+}
+
+async function defaultsFor(worktree: string): Promise<BudgetDefaults> {
   const loaded = await loadConfig(worktree);
   const config = loaded.ok ? loaded.config : {} as HarnessConfig;
-  return Object.fromEntries(
-    [...GATES].map((gate) => [
+  const state = await readState(join(worktree, '.pipeline', 'conduct-state.json'));
+  const tier = state.ok ? state.value.complexity_tier : undefined;
+  const allowances = Object.fromEntries(
+    ['prd_audit', 'architecture_review_as_built'].map((gate) => [
       gate,
-      gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config),
+      resolveRemediationLapAllowance(gate as 'prd_audit' | 'architecture_review_as_built', config, tier),
     ]),
-  );
+  ) as Partial<Record<string, RemediationLapAllowance>>;
+  return {
+    allowances,
+    limits: Object.fromEntries(
+    [...GATES].map((gate) => [
+      gate, gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config, tier),
+    ]),
+    ),
+  };
 }
 
 /** Resolve the shared plan-growth accounting view without consulting halt prose. */
@@ -103,7 +119,7 @@ async function reconcilePendingAdjustments(worktree: string, slug: string, child
   let eventText = '';
   try { eventText = await readKickbackBudgetAuthorizationEvents(worktree); }
   catch { throw new Error('authorization event ledger is unreadable'); }
-  const defaults = await defaultsFor(worktree);
+  const { limits: defaults } = await defaultsFor(worktree);
   for (const [gate, entry] of Object.entries(ledger.gates)) {
     const pending = entry.pendingAdjustment;
     if (!pending || isUnreadableKickbackGate(ledger, gate)) continue;
@@ -191,7 +207,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(flatLedger) || isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const ledgerFor = (gate: string) => WHOLE_FEATURE_GATES.has(gate) ? flatLedger : childLedger;
-    const defaults = await defaultsFor(worktree);
+    const { limits: defaults, allowances } = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
     const planGrowth = await planGrowthViewFor(worktree, flatLedger);
@@ -215,12 +231,12 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
         ? flatLedger.pendingRepair?.charges[gate]?.laps ?? 0
         : 0;
     const views = readable.map((gate) => kickbackBudgetView(
-      ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
+      ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate), allowances[gate],
     ));
     const human = [
         ...views.map((view) => renderKickbackBudgetView(
           ledgerFor(view.gate).gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
-          undefined, pendingLaps(view.gate),
+          undefined, pendingLaps(view.gate), allowances[view.gate],
         )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
       ].join('\n\n');
@@ -310,7 +326,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   let committed = false;
   let liveHaltGeneration = '';
   try {
-    const defaults = await defaultsFor(worktree);
+    const { limits: defaults } = await defaultsFor(worktree);
     const remediation = gate !== 'build_review' && gate !== 'restack';
     // D3: machine-scoped identity through the approved user-config → GitHub
     // chain. `GITHUB_ACTOR` is an environment variable any pipeline process can
