@@ -40,7 +40,6 @@ engine/build-review-dispositions.ts -> engine/config.ts
 engine/build-review-inputs.ts -> engine/build-review-materialization.ts
 engine/build-review-materialization.ts -> engine/build-review-inputs.ts
 engine/build-review-projections.ts -> engine/build-review-registry.ts
-engine/build-review-read-only-capability.ts -> execution/provider-catalog.ts
 engine/build-review-registry.ts -> engine/build-review-projections.ts
 engine/child-cursor.ts -> engine/rebase-translate.ts
 engine/child-cursor.ts -> engine/rebase.ts
@@ -238,7 +237,6 @@ engine/tracker-client.ts -> engine/github-operation-approval.ts
 engine/tracker-client.ts -> engine/owner-gate/mutation-policy.ts
 execution/claude-provider.ts -> execution/provider-catalog.ts
 execution/claude-provider.ts -> execution/provider-diagnostics.ts
-execution/codex-provider.ts -> engine/build-review-read-only-capability.ts
 execution/codex-provider.ts -> engine/self-host/provider-scratch.ts
 execution/codex-provider.ts -> execution/provider-catalog.ts
 execution/codex-provider.ts -> execution/provider-diagnostics.ts

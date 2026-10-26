@@ -1,0 +1,278 @@
+import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import { CLAUDE_PROVIDER, CODEX_PROVIDER, PI_PROVIDER, providerDescriptor, resolveProviderExecutable } from './provider-catalog.js';
+import { materializePiHarnessExtension } from './pi-harness-extension.js';
+import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
+
+/** Process boundary for the provider-owned read-only review capability probe. */
+export type ReadOnlyReviewCapabilityProcess = (
+  executable: string,
+  args: readonly string[],
+) => Promise<{
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}>;
+
+export type ReadOnlyReviewCapability =
+  | { readonly provider: string; readonly platform: string; readonly status: 'available' }
+  | { readonly provider: string; readonly platform: string; readonly status: 'unavailable'; readonly reason: string };
+
+export interface ProbeReadOnlyReviewCapabilityOptions {
+  readonly provider: string;
+  readonly platform: string;
+  readonly runProcess: ReadOnlyReviewCapabilityProcess;
+  /** A pipeline-excluded directory used only by the Codex probe write. */
+  readonly scratchDir: string;
+  /** Injected by tests; production uses the engine-owned asset materializer. */
+  readonly materializePiExtension?: typeof materializePiHarnessExtension;
+}
+
+/**
+ * The native policy proof used for a managed review child.  Availability of a
+ * review profile alone is deliberately insufficient: the child also needs one
+ * engine-provisioned place to append observation records.
+ */
+export interface ProbeManagedObservationDestinationOptions {
+  readonly provider: string;
+  readonly producerRoot: string;
+  readonly protectedPaths: readonly string[];
+  /** The prepared candidate executable, when self-host selection changed it. */
+  readonly executable?: string;
+  /** Prepared args preceding the provider subcommand; a contained candidate's launcher lives here. */
+  readonly executableArgs?: readonly string[];
+  readonly runProcess: ReadOnlyReviewCapabilityProcess;
+}
+
+export type ManagedObservationDestinationProof = {
+  readonly producerWrite: 'allowed';
+  readonly protectedWrites: 'refused';
+} | {
+  readonly producerWrite: 'refused' | 'unproven';
+  readonly protectedWrites: 'refused' | 'unproven';
+};
+
+/** Named Codex permissions profile carrying the sole producer-root exception. */
+export const CODEX_MANAGED_REVIEW_PERMISSION_PROFILE = 'conductor-managed-review';
+
+/**
+ * Both Codex entrypoints use this permission profile. Keep the read-only
+ * base and sole producer-root exception in one builder so admission proves
+ * the exact policy the provider launch receives.
+ *
+ * The shared config overrides are accepted by both `codex exec` and
+ * `codex sandbox`. Without a producer root, keep the plain
+ * `sandbox_mode="read-only"` native review profile byte-for-byte.
+ *
+ * Verified on the real CLI (codex-cli 0.159.2): the producer root is writable
+ * and the worktree is refused under both entrypoints, as the toolchain smoke
+ * test `codex-read-only-review-policy.smoke.test.ts` proves. A Codex sandbox
+ * cannot start inside another sandbox, so a probe failing from within a
+ * contained build is not evidence that this policy is unsupported.
+ */
+export function buildCodexReadOnlyProducerRootPolicyArgs(
+  producerRoot: string | undefined,
+): readonly string[] {
+  if (producerRoot === undefined) {
+    return ['--config', 'sandbox_mode="read-only"'];
+  }
+  const profile = CODEX_MANAGED_REVIEW_PERMISSION_PROFILE;
+  const definition = [
+    '--config',
+    `permissions.${profile}={extends=":read-only", filesystem={${JSON.stringify(producerRoot)}="write"}}`,
+  ];
+  return [...definition, '--config', `default_permissions="${profile}"`];
+}
+
+const CODEX_PROBE_OBSERVATIONS = new Set([
+  'sandbox-started',
+  'probe-write-refused',
+  'probe-write-succeeded',
+  'probe-parent-missing',
+]);
+
+const CODEX_READ_ONLY_PROBE = [
+  'printf "sandbox-started\\n"',
+  'if [ ! -d "$2" ]; then printf "probe-parent-missing\\n"; elif printf x > "$1" 2>/dev/null; then printf "probe-write-succeeded\\n"; else printf "probe-write-refused\\n"; fi',
+].join('; ');
+
+const CLAUDE_READ_ONLY_FLAGS = [
+  '--restricted',
+  '--tools',
+  '--allowedTools',
+  '--disallowedTools',
+  '--strict-mcp-config',
+] as const;
+
+const OBSERVATION_PROBE_MARKERS = new Set([
+  'producer-write-allowed',
+  'producer-write-refused',
+  'protected-writes-refused',
+  'protected-write-succeeded',
+  'probe-parent-missing',
+]);
+
+const OBSERVATION_DESTINATION_PROBE = [
+  'if [ ! -d "$1" ]; then printf "probe-parent-missing\\n"; exit 0; fi',
+  'for protected in "${@:2}"; do if [ ! -d "$protected" ]; then printf "probe-parent-missing\\n"; exit 0; fi; done',
+  'if printf x > "$1/.policy-write-probe" 2>/dev/null; then printf "producer-write-allowed\\n"; else printf "producer-write-refused\\n"; fi',
+  'for protected in "${@:2}"; do if printf x > "$protected/.policy-write-probe" 2>/dev/null; then printf "protected-write-succeeded\\n"; exit 0; fi; done',
+  'rm -f "$1/.policy-write-probe"; printf "protected-writes-refused\\n"',
+].join('; ');
+
+function unavailable(
+  options: ProbeReadOnlyReviewCapabilityOptions,
+  reason: string,
+): ReadOnlyReviewCapability {
+  return { provider: options.provider, platform: options.platform, status: 'unavailable', reason };
+}
+
+function processFailureReason(error: unknown, executable: string): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+    return `${executable} sandbox helper is unavailable`;
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return `${executable} sandbox helper could not start`;
+}
+
+function exitedReason(provider: string, exitCode: number, stderr: string): string {
+  return `${provider} ${provider === CODEX_PROVIDER ? 'sandbox' : 'help'} exited ${exitCode}${stderr.trim() ? `: ${stderr.trim()}` : ''}`;
+}
+
+async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
+  // A refused write only proves the sandbox when the probe's parent exists;
+  // otherwise an ordinary missing-path failure would read as a denial (D5.5).
+  try {
+    await mkdir(options.scratchDir, { recursive: true });
+  } catch (error) {
+    return unavailable(options, `probe directory could not be created: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
+  try {
+    result = await options.runProcess(resolveProviderExecutable(CODEX_PROVIDER), [
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(undefined), '--', '/bin/sh', '-c', CODEX_READ_ONLY_PROBE,
+      'read-only-review-probe', `${options.scratchDir}/write-probe`, options.scratchDir,
+    ]);
+  } catch (error) {
+    return unavailable(options, processFailureReason(error, CODEX_PROVIDER));
+  }
+  if (result.exitCode !== 0) return unavailable(options, exitedReason(CODEX_PROVIDER, result.exitCode, result.stderr));
+
+  const observations = result.stdout.trim() === '' ? [] : result.stdout.trim().split(/\s+/);
+  if (
+    observations.length !== 2
+    || new Set(observations).size !== observations.length
+    || observations.some((observation) => !CODEX_PROBE_OBSERVATIONS.has(observation))
+  ) {
+    return unavailable(options, 'probe produced unrecognized output');
+  }
+  const observed = new Set(observations);
+  if (!observed.has('sandbox-started')) return unavailable(options, 'probe did not prove the sandbox started');
+  if (observed.has('probe-parent-missing')) return unavailable(options, 'probe directory does not exist');
+  if (observed.has('probe-write-succeeded')) return unavailable(options, 'probe write was not refused');
+  if (!observed.has('probe-write-refused')) return unavailable(options, 'probe produced unrecognized output');
+  return { provider: options.provider, platform: options.platform, status: 'available' };
+}
+
+async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
+  let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
+  try {
+    result = await options.runProcess(resolveProviderExecutable(CLAUDE_PROVIDER), ['--help']);
+  } catch (error) {
+    return unavailable(options, processFailureReason(error, CLAUDE_PROVIDER));
+  }
+  if (result.exitCode !== 0) return unavailable(options, exitedReason(CLAUDE_PROVIDER, result.exitCode, result.stderr));
+
+  const missing = CLAUDE_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
+  if (missing !== undefined) {
+    return unavailable(options, `${providerDescriptor(CLAUDE_PROVIDER).displayName} help does not list ${missing}`);
+  }
+  // Dispatch admits a Claude review without an observation-destination proof
+  // only when its launch policy reaches no observed command (#3022); status
+  // must report the same verdict dispatch will reach.
+  if (claudeLaunchObservedCommandReach(claudeReadOnlyReviewPolicyArgs()) !== 'none') {
+    return unavailable(options, 'read-only review policy can reach an observed command, and narrow observation access cannot be proven');
+  }
+  return { provider: options.provider, platform: options.platform, status: 'available' };
+}
+
+const PI_READ_ONLY_FLAGS = ['--tools', '--no-extensions', '--extension', '--no-approve'] as const;
+
+/** Matches a flag as a help token, permitting the punctuation that separates aliases. */
+function piHelpListsFlag(help: string, flag: string): boolean {
+  return new RegExp(`(?:^|\\s)${flag}(?=$|[\\s,;:=])`).test(help);
+}
+
+async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
+  let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
+  const executable = resolveProviderExecutable(PI_PROVIDER);
+  try { result = await options.runProcess(executable, ['--help']); }
+  catch (error) {
+    // Pi has no sandbox helper: a missing binary is the provider executable itself.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} executable ${executable} is unavailable`);
+    }
+    return unavailable(options, processFailureReason(error, PI_PROVIDER));
+  }
+  if (result.exitCode !== 0) return unavailable(options, exitedReason(PI_PROVIDER, result.exitCode, result.stderr));
+  const missing = PI_READ_ONLY_FLAGS.find((flag) => !piHelpListsFlag(result.stdout, flag));
+  if (missing) return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} help does not list ${missing}`);
+  try { await (options.materializePiExtension ?? materializePiHarnessExtension)(); }
+  catch (error) { return unavailable(options, error instanceof Error ? error.message : String(error)); }
+  return { provider: options.provider, platform: options.platform, status: 'available' };
+}
+
+/**
+ * Establishes availability using the selected provider's own read-only mechanism.
+ * This probe never sends a model prompt or invokes a provider adapter.
+ */
+export async function probeReadOnlyReviewCapability(
+  options: ProbeReadOnlyReviewCapabilityOptions,
+): Promise<ReadOnlyReviewCapability> {
+  if (options.provider === CODEX_PROVIDER) return probeCodex(options);
+  if (options.provider === CLAUDE_PROVIDER) return probeClaude(options);
+  if (options.provider === PI_PROVIDER) return probePi(options);
+  return unavailable(options, 'provider has no read-only review mode');
+}
+
+/**
+ * Prove the exact policy used for managed observation.  Codex's policy is
+ * read-only first, with one later, narrower producer-root exception.  The
+ * ordering matters because the worktree itself is intentionally protected and
+ * therefore is an ancestor of the producer root.
+ */
+export async function probeManagedObservationDestination(
+  options: ProbeManagedObservationDestinationOptions,
+): Promise<ManagedObservationDestinationProof> {
+  if (options.provider !== CODEX_PROVIDER) {
+    return { producerWrite: 'unproven', protectedWrites: 'unproven' };
+  }
+  let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
+  try {
+    // Do not turn unprovisioned pipeline directories into false policy
+    // failures; only existing protected surfaces can demonstrate refusal.
+    const protectedPaths = options.protectedPaths.filter(existsSync);
+    result = await options.runProcess(options.executable ?? resolveProviderExecutable(CODEX_PROVIDER), [
+      ...(options.executableArgs ?? []), 'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot), '--',
+      '/bin/bash', '-c', OBSERVATION_DESTINATION_PROBE, 'managed-observation-policy',
+      options.producerRoot, ...protectedPaths,
+    ]);
+  } catch {
+    return { producerWrite: 'unproven', protectedWrites: 'unproven' };
+  }
+  if (result.exitCode !== 0) return { producerWrite: 'unproven', protectedWrites: 'unproven' };
+  const observations = result.stdout.trim() === '' ? [] : result.stdout.trim().split(/\s+/);
+  if (
+    observations.length !== 2
+    || new Set(observations).size !== observations.length
+    || observations.some((observation) => !OBSERVATION_PROBE_MARKERS.has(observation))
+  ) return { producerWrite: 'unproven', protectedWrites: 'unproven' };
+  const observed = new Set(observations);
+  if (observed.has('producer-write-allowed') && observed.has('protected-writes-refused')) {
+    return { producerWrite: 'allowed', protectedWrites: 'refused' };
+  }
+  if (observed.has('producer-write-refused') && observed.has('protected-writes-refused')) {
+    return { producerWrite: 'refused', protectedWrites: 'refused' };
+  }
+  return { producerWrite: 'unproven', protectedWrites: 'unproven' };
+}

@@ -39,7 +39,7 @@ import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
-import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
+import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
 import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function codexDisplayName(): string {
