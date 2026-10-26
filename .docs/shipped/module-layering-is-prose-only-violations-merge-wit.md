@@ -1,6 +1,6 @@
 ---
 slug: module-layering-is-prose-only-violations-merge-wit
-spec_hash: a859b292287a792876d1aa167a5bedf02305c5741d378396579d12cd45985a9d
+spec_hash: b75ee670bfa46f50eabe37e00da18e96a590b2edd649fa0f7d42fc08f42e92d3
 pr: https://github.com/jstoup111/ai-conductor/pull/3424
 shipped: 2026-10-26
 engine_version: 20261026T015452Z-d74b2ab722ef
