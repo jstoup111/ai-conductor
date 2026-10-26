@@ -300,6 +300,14 @@ function halted(detail: string): RequestRoutedExitResult {
   return { kind: 'halted', detail };
 }
 
+function unlandedClosedChildCommitsHalt(slug: string, host: ChildId, child: ChildId): string {
+  return [
+    `unlanded-closed-child-commits: child ${child}`,
+    `ai-conductor stack land --slug ${slug} --child ${host} --carry ${child} --reason "<why>"`,
+    '',
+  ].join('\n');
+}
+
 /**
  * Leaves a routed BUILD region.  The route record owns the small entry CAS;
  * the restack journal owns the later route/marker mutation, so a rollback can
@@ -401,6 +409,17 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     const child = cursor.foreignRoundChildren[0]!;
     await writeHaltMarker(input.worktree, `routing foreign-round commit: child ${child}\n`, 'needs-human', input.events);
     return halted(`routed exit host ${input.host}: foreign round on child ${child}`);
+  }
+  const declaredOrigins = new Set(cursor.coOrigins ?? []);
+  const uncarried = cursor.repairChildren.find((child) => child !== input.host && !declaredOrigins.has(child));
+  if (uncarried !== undefined) {
+    await writeHaltMarker(
+      input.worktree,
+      unlandedClosedChildCommitsHalt(input.slug, input.host, uncarried),
+      'needs-human',
+      input.events,
+    );
+    return halted(`routed exit host ${input.host}: unlanded closed-child commits on child ${uncarried}`);
   }
   const origins = [...new Set([input.host, ...(cursor.coOrigins ?? [])])].sort((left, right) => left - right) as ChildId[];
   const restack = await runRestack({

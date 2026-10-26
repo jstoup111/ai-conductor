@@ -297,6 +297,13 @@ export async function resolveActiveChild(
   const coOrigins: ChildId[] = [];
   const foreignRoundChildren: ChildId[] = [];
   const foreignRounds: Record<number, string> = {};
+  const carriedOperatorChildren = new Set<ChildId>();
+  if (repair.kind === 'marker') {
+    const route = await readRouteRecord(worktree, slug, repair.marker.roundId, { git });
+    if (route.kind === 'record' && route.record.kind === 'operator' && route.record.phase === 'open') {
+      for (const carried of route.record.operator!.carried) carriedOperatorChildren.add(carried.child);
+    }
+  }
   const lastClosed = closed.reduce<ClosedChild | undefined>((last, closure) => (
     last === undefined || positions.indexOf(closure.child) > positions.indexOf(last.child) ? closure : last
   ), undefined);
@@ -334,8 +341,12 @@ export async function resolveActiveChild(
       if (needsRepair) {
         repairChildren.push(closure.child);
         if (repair.kind === 'marker' && closure.child !== repair.marker.host) {
-          if (allUnstamped) coOrigins.push(closure.child);
-          else { foreignRoundChildren.push(closure.child); foreignRounds[closure.child] = foreignStamp ?? repair.marker.roundId; }
+          if (allUnstamped) {
+            if (carriedOperatorChildren.has(closure.child)) coOrigins.push(closure.child);
+          } else {
+            foreignRoundChildren.push(closure.child);
+            foreignRounds[closure.child] = foreignStamp ?? repair.marker.roundId;
+          }
         }
       }
     }
