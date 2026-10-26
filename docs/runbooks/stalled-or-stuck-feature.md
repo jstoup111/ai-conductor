@@ -1320,6 +1320,59 @@ events and no new restack HALT.
 For routed-round faults, silent preflight stops, and resolver escalations such as halt-record-only
 replay commits, see [Stacked feature manual recovery](stacked-feature-manual-recovery.md).
 
+### A closed stacked child needs an operator landing
+
+**Symptom:** A `needs-human` HALT begins `unlanded-closed-child-commits`, or an operator-round
+HALT begins `Operator-Halt: operator-round-undeclared <round>` or
+`Operator-Halt: operator-round-branch-moved <round>`. The dashboard may instead retain the
+feature with reason `feature-lease-held` while another writer is active.
+
+**Diagnosis:** A closed child has commits that the automatic restack is not allowed to close over,
+or an opened landing is awaiting a declaration. The branch-moved form names each branch whose tip
+no longer matches the operator round's recorded tip; no restack ran. `feature-lease-held` is not a
+HALT: a live daemon or operator command owns the feature dispatch lease and the daemon safely
+skipped that dispatch.
+
+**Recovery:** Do not remove these HALTs by hand. The command that resolves the condition clears
+only its matching HALT atomically; unrelated HALTs remain in place.
+
+- For `unlanded-closed-child-commits`, run the exact `stack land` command printed in the HALT.
+  Its `--child` is the landing host and every printed `--carry` is required. It opens the round,
+  takes the feature lease, and clears the HALT only when the admitted host and carried children
+  cover every child named in it. Make and commit the reviewed change on the host branch, then
+  declare it from that feature worktree:
+
+  ```bash
+  cd .worktrees/<slug>
+  ai-conductor stack land --slug <slug> --done
+  ```
+
+- For `operator-round-undeclared`, either commit the intended reviewer change on the host branch
+  and run `ai-conductor stack land --slug <slug> --done`, or discard the landing through
+  `ai-conductor stack land --slug <slug> --abandon`. Both commands must run from the host branch
+  with a clean worktree. `--done` refuses an empty or halt-record-only landing; use `--abandon`
+  when there is no change to declare.
+- For `operator-round-branch-moved`, first restore every branch named by the HALT to its recorded
+  tip, preserving any independent work elsewhere before doing so. Then run `--done` for an
+  undeclared landing, or re-run the original `stack land --slug <slug> --child <k> ... --reason
+  "<why>"` command to resume a declared or undeclared round. If the landing should not continue,
+  `ai-conductor stack land --slug <slug> --abandon` is the safe escape route: it does not require
+  unaffected or carried branch tips to be repaired first.
+- For `feature-lease-held`, read the reported owner purpose and pid, then wait for that live
+  command or daemon dispatch to finish. Do not delete `.daemon/leases/<slug>` or start a competing
+  landing. A stale lease is recovered by the next acquiring command; an unreadable owner remains a
+  refusal rather than a condition to remove manually.
+
+`stack land` creates an operator park only if none exists and records a token proving it owns that
+park. `--done` and `--abandon` release only that owned marker. A pre-existing park, or one recreated
+by another operator, remains parked; unpark it explicitly with `ai-conductor daemon unpark <slug>`
+only after the landing is resolved and the feature should resume.
+
+**Verification:** `--done` prints that daemon dispatch will re-validate the host from
+`acceptance_specs`; `--abandon` reports the abandoned round. Run `ai-conductor daemon status` and
+confirm that no matching operator HALT remains. A deliberately retained park stays visible until it
+is unparked.
+
 ### The completed rebase halted for missing feature content
 
 **Symptom:** `.pipeline/HALT` is `needs-human` and begins `rebase completed — parked for human
