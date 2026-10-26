@@ -169,6 +169,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
   });
 
+  // Covers: task:7
   it('charges an unconfigured tier-L as-built fourth lap and halts the fifth at BUILD dispatch', async () => {
     const pendingRepair: PendingRepair = {
       receiptId: 'tier-l-as-built', taskIds: ['rem-1'],

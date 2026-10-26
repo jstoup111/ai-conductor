@@ -1265,6 +1265,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.calls).toContain('build');
   });
 
+  // Covers: task:7
   it('names the current tier-S default allowance when refusal rework is spent', async () => {
     const fixture = await runRefusalReworkRun({
       reports: [overScopeReport('S2.1', 'outside-visible')],

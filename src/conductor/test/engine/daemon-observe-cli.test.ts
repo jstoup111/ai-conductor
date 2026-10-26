@@ -1390,7 +1390,7 @@ describe('engine/daemon-observe-cli', () => {
         );
       });
 
-      // Covers: task:4
+      // Covers: task:4, task:9
       it('renders an as-built remediation lap without cap evidence', async () => {
         const repo = join(root, 'repo-remediation-lap');
         const featureRoot = await writeActivePlan(repo, 'laps-feature', 19);
