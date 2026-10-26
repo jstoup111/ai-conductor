@@ -23,6 +23,8 @@ marker remains in place and no journal was created, so neither the route nor any
 **Recovery:** after reviewing the repeated repair, authorize one more restack with
 `ai-conductor kickback-budget raise --gate restack` and resume the feature. Slices merged before
 the routing flag flip route without re-validation; do not reopen them merely to clear this halt.
+Which child to name, and what to do when the resume stops silently, is covered in
+[Stacked feature manual recovery](stacked-feature-manual-recovery.md#2-restack-cascade-cap).
 
 ## Symptom
 
@@ -1315,6 +1317,9 @@ settle within the rebase resolution attempt budget.
 **Verification:** the feature's next dispatch records `restack_recovered` or `restack_applied`
 events and no new restack HALT.
 
+For routed-round faults, silent preflight stops, and resolver escalations such as halt-record-only
+replay commits, see [Stacked feature manual recovery](stacked-feature-manual-recovery.md).
+
 ### The completed rebase halted for missing feature content
 
 **Symptom:** `.pipeline/HALT` is `needs-human` and begins `rebase completed — parked for human
@@ -1721,6 +1726,9 @@ carries no `resolve with` command; this section does not cover it.
 until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds one
 `remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
 repeating this halt.
+
+On a stacked child, `build-review findings` and `accept` do not yet read the child's state; see
+[Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
 
 ### build_review halted on a recurrence limit
 
