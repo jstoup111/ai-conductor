@@ -16,8 +16,9 @@ import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingEligible, routingSettingOn } from '../routing/route-types.js';
-import { drainRoutingOutboxes } from '../routing/route-record-store.js';
+import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
 import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
+import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
 import { requestRoutedExit } from '../routing/routed-exit.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
@@ -136,6 +137,33 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   const secondRecovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
   if (secondRecovery.kind === 'live-owner' || secondRecovery.kind === 'halted') return { kind: 'halted' };
   if (secondRecovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', secondRecovery.detail);
+
+  // The hook cannot see a --no-verify commit or a ref move made elsewhere.
+  // Check an active operator host before any route admission, ref movement, or
+  // the undeclared-round stop that Task 15 adds at this same boundary.
+  const marker = await readRepairMarker(options.worktree, options.slug, { git: options.git });
+  if (marker.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot read operator repair marker' };
+  if (marker.kind === 'marker') {
+    const stored = await readRouteRecord(options.worktree, options.slug, marker.marker.roundId, { git: options.git });
+    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot read operator round ${marker.marker.roundId}` };
+    if (stored.record.kind === 'operator') {
+      const tips = await checkOperatorTips({
+        worktree: options.worktree,
+        slug: options.slug,
+        record: stored.record,
+        ...(options.git === undefined ? {} : { git: options.git }),
+      });
+      if (tips.kind === 'unavailable') return { kind: 'unavailable', detail: tips.detail };
+      if (tips.kind === 'moved') {
+        const reason = formatOperatorHaltReason('operator-round-branch-moved', stored.record.roundId);
+        const details = tips.branches.map(({ branch, recorded, current }) => `${branch} (recorded ${recorded}, current ${current})`).join(', ');
+        const body = `${reason}\noperator round ${stored.record.roundId} branch moved: ${details}\n`;
+        await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
+        await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
+        return { kind: 'halted' };
+      }
+    }
+  }
 
   const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
   if (durable === 'git-error') return haltUnresolvableCursor(options, 'git-error', 'cannot inspect durable child state');

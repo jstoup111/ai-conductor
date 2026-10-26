@@ -12,6 +12,7 @@ import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { loadSliceTopology, type SliceTopology } from '../slice-topology.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
+import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { writeGitHooksAndWire } from '../worktree-prepare.js';
 import { routedRoundOpen } from './round-admission.js';
@@ -20,7 +21,82 @@ import { pinHostEntry, restageHostRegion } from './host-region-entry.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { createRouteRecord, readRepairMarker, readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor, redRefFor } from './routing-refs.js';
-import { routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId } from './route-types.js';
+import { parseRoundId, routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId, type RouteRecord } from './route-types.js';
+
+export interface CheckOperatorTipsInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly record: RouteRecord;
+  readonly git?: GitRunner;
+}
+
+export type CheckOperatorTipsResult =
+  | { readonly kind: 'clear' }
+  | { readonly kind: 'moved'; readonly branches: ReadonlyArray<{ readonly branch: string; readonly recorded: CommitSha; readonly current: string }> }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
+/** The single durable reason-line contract for every operator-owned HALT. */
+export function formatOperatorHaltReason(reason: string, roundId: RoundId): string {
+  return `Operator-Halt: ${reason} ${roundId}`;
+}
+
+/** Parse only a complete operator reason line, never a free-form explanation. */
+export function parseOperatorHaltReason(line: string): { readonly reason: string; readonly roundId: RoundId } | undefined {
+  const match = /^Operator-Halt: ([a-z0-9-]+) (r[1-9][0-9]*)$/.exec(line.trim());
+  const roundId = match === null ? undefined : parseRoundId(match[2]!);
+  return match === null || roundId === undefined ? undefined : { reason: match[1]!, roundId };
+}
+
+/**
+ * Detect branch changes that the pre-commit hook could not observe.  Exit
+ * restacks are deliberately outside this boundary: the active host has moved
+ * on to `built`/`restacked` before they rewrite its descendants.
+ */
+export async function checkOperatorTips(input: CheckOperatorTipsInput): Promise<CheckOperatorTipsResult> {
+  if (input.record.kind !== 'operator' || input.record.operator === undefined) return { kind: 'clear' };
+  const active = Object.entries(input.record.hosts).find(([, state]) => state === 'admitted' || state === 'repairing');
+  if (active === undefined) return { kind: 'clear' };
+
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const expected = new Map<string, { readonly recorded: CommitSha; readonly permitHaltRecords: boolean }>();
+  for (const [branch, recorded] of Object.entries(input.record.operator.otherTips)) {
+    expected.set(branch, { recorded, permitHaltRecords: true });
+  }
+  for (const carried of input.record.operator.carried) {
+    const branch = childBranchFor(input.slug, carried.child);
+    if (!branch.ok) return { kind: 'unavailable', detail: `cannot resolve carried child ${carried.child} branch` };
+    // A carried child is an explicit work item, so even a halt-only extension
+    // is not allowed to change its recorded carried tip.
+    expected.set(branch.branch, { recorded: carried.tip, permitHaltRecords: false });
+  }
+
+  const moved: Array<{ branch: string; recorded: CommitSha; current: string }> = [];
+  for (const [branch, expectation] of [...expected.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    let current: CommitSha | undefined;
+    try {
+      const resolved = await git(['rev-parse', '-q', '--verify', `refs/heads/${branch}`]);
+      if (resolved.exitCode === 1) {
+        moved.push({ branch, recorded: expectation.recorded, current: '<missing>' });
+        continue;
+      }
+      current = resolved.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
+    } catch {
+      current = undefined;
+    }
+    if (current === undefined) return { kind: 'unavailable', detail: `cannot resolve recorded branch ${branch}` };
+    if (current === expectation.recorded) continue;
+    if (expectation.permitHaltRecords) {
+      try {
+        const descendant = await git(['merge-base', '--is-ancestor', expectation.recorded, current]);
+        if (descendant.exitCode === 0 && await isHaltRecordOnlyDescendant(git, expectation.recorded, current, input.slug)) continue;
+      } catch {
+        return { kind: 'unavailable', detail: `cannot compare recorded branch ${branch}` };
+      }
+    }
+    moved.push({ branch, recorded: expectation.recorded, current });
+  }
+  return moved.length === 0 ? { kind: 'clear' } : { kind: 'moved', branches: moved };
+}
 
 export interface CheckOpenOperatorRoundInput {
   readonly worktree: string;
