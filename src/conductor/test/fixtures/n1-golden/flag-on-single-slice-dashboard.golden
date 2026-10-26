@@ -1,9 +1,10 @@
 <!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
 ── inherited state ──────────────────────────────────────────
-PARKED (0)
+NEEDS YOU: 1 halted
 HALTED (1)
   • n1-golden [S] @build_review — reason: test halt; remedy: clear this row's .pipeline/HALT to resume
-IN-PROGRESS (0)
 GATED (0)
+IN-PROGRESS (0)
 ELIGIBLE (0)
-─────────────────────────────────────────────────────────────
+PARKED (0)
+── inherited state ──────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
   inFlightSteps,
   scanInheritedState,
   renderDashboard,
+  resolveRowBudget,
   type InheritedState,
 } from '../../src/engine/daemon-dashboard.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
@@ -74,6 +75,50 @@ describe('engine/daemon-dashboard — inFlightSteps (Task 5)', () => {
       event('step_started', 'test_suite', 10),
       event('step_completed', 'test_suite', 20),
     ])).toEqual([]);
+  });
+});
+
+describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
+  const base = (): InheritedState => ({ halted: [], inProgress: [], eligible: [], processed: [], processedCount: 0, gated: [] });
+
+  it('marks failed discovery unavailable and renders unknown partition lines', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dashboard-discovery-'));
+    try {
+      const state = await scanInheritedState({ worktreeBase: join(root, 'worktrees'), processedDir: join(root, 'processed'), discover: async () => { throw new Error('no discovery'); } });
+      expect(state.discovery).toBe('unavailable');
+      const output = renderDashboard(state);
+      expect(output).toContain('NEEDS YOU: no known items · discovery state unknown');
+      for (const group of ['BLOCKED', 'GATED', 'WAITING', 'ELIGIBLE']) expect(output).toContain(`${group}: unknown — discovery did not complete`);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('uses actionable display order, attention first, and compact budget rules', () => {
+    const state = base();
+    state.halted = [{ slug: 'halted', reason: 'x' }];
+    state.blocked = [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'approve stories' }];
+    state.gated = [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'other', remedy: 'wait' }];
+    state.inProgress = [{ slug: 'running', step: 'build', tier: 'M' }];
+    state.waiting = [{ slug: 'waiting', verdict: { kind: 'blocked', blockers: [{ repo: 'r', number: 1 }] } }];
+    state.eligible = [{ slug: 'eligible', tier: 'S' }];
+    state.parked = Array.from({ length: 3 }, (_, i) => ({ slug: `parked-${i}`, annotation: i === 0 ? 'orphan' as const : undefined }));
+    state.retainedWorktrees = [{ slug: 'retained', reason: 'pr-closed-unmerged' }];
+    state.neverStarted = ['never']; state.processed = [{ slug: 'processed' }]; state.processedCount = 1;
+    const output = renderDashboard(state, { mode: 'compact', rowBudget: 120 });
+    expect(output.split('\n')[1]).toBe('NEEDS YOU: 1 halted · 1 blocked · 1 gated · 1 parked need review · 1 retained need action');
+    const headers = ['HALTED', 'BLOCKED', 'GATED', 'IN-PROGRESS', 'WAITING', 'ELIGIBLE', 'PARKED', 'RETAINED WORKTREES', 'NEVER-STARTED', 'PROCESSED'];
+    expect(headers.map((header) => output.indexOf(header))).toEqual([...headers.map((header) => output.indexOf(header))].sort((a, b) => a - b));
+    expect(output).toContain('PARKED (3) — 1 need review');
+    expect(output).toContain('PROCESSED (1)');
+  });
+
+  it('clips compact details but never a slug, and resolves a safe row budget', () => {
+    const longSlug = 's'.repeat(50); const reason = 'x'.repeat(280);
+    const output = renderDashboard({ ...base(), halted: [{ slug: longSlug, reason, tier: 'M', step: 'build' }] }, { mode: 'compact', rowBudget: 40 });
+    expect(output).toContain(`  • ${longSlug} [M] @build`);
+    expect(output.split('\n').find((line) => line.startsWith('      '))?.endsWith('…')).toBe(true);
+    expect(resolveRowBudget({ isTTY: false, columns: 200 })).toBe(80);
+    expect(resolveRowBudget({ isTTY: true, columns: 20 })).toBe(40);
+    expect(resolveRowBudget({ isTTY: true, columns: 120 })).toBe(120);
   });
 });
 
@@ -693,13 +738,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 
     const output = renderDashboard(state);
 
-    expect(output).toContain([
-      'BLOCKED (2)',
-      '  • blocked-eligible — stories-not-approved — approve stories',
-      '  • blocked-gated — stories-not-approved — approve stories',
-      'GATED (0)',
-      'ELIGIBLE (0)',
-    ].join('\n'));
+    for (const line of ['BLOCKED (2)', '  • blocked-eligible — stories-not-approved — approve stories', '  • blocked-gated — stories-not-approved — approve stories', 'GATED (0)', 'ELIGIBLE (0)']) expect(output).toContain(line);
   });
 
   it('keeps blocked slugs in higher-precedence halted and parked sections', () => {
@@ -719,12 +758,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 
     const output = renderDashboard(state);
 
-    expect(output).toContain([
-      'PARKED (1)',
-      '  • blocked-parked — operator-parked; remedy: run conduct daemon unpark for this row',
-      'HALTED (1)',
-      "  • blocked-halted — reason: needs operator; remedy: clear this row's .pipeline/HALT to resume",
-    ].join('\n'));
+    for (const line of ['PARKED (1)', '  • blocked-parked — operator-parked; remedy: run conduct daemon unpark for this row', 'HALTED (1)', "  • blocked-halted — reason: needs operator; remedy: clear this row's .pipeline/HALT to resume"]) expect(output).toContain(line);
   });
 
   it('eligible carries the backlog tier; processed carries the persisted PR url', async () => {
@@ -938,7 +972,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       ...state,
       parked: (await isOperatorParked(root, slug)) ? [slug] : [],
     });
-    const lowerPrecedenceSections = out.slice(out.indexOf('HALTED'));
+    const lowerPrecedenceSections = out.slice(out.indexOf('HALTED'), out.indexOf('PARKED'));
 
     expect(state.neverStarted).toEqual([slug]);
     expect(state.retainedWorktrees).toEqual([]);
@@ -957,7 +991,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       discover: async () => [item(slug)],
     });
     const out = renderDashboard(state);
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PARKED'));
 
     expect(out).toContain('HALTED (1)\n  • never-started-halted — reason: needs operator');
     expect(eligibleSection).not.toContain(slug);
@@ -1078,7 +1112,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       prStateProbe: async (queriedPrUrl) => ({ prUrl: queriedPrUrl, state: 'open' }),
     });
     const out = renderDashboard(state);
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PARKED'));
 
     expect(state.retainedWorktrees).toEqual([
       { slug, reason: 'pr-open-awaiting-main', prUrl },
@@ -1104,7 +1138,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       },
     });
     const out = renderDashboard(state);
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PARKED'));
 
     expect(state.retainedWorktrees).toEqual([
       { slug, reason: 'pr-state-unknown', prUrl },
@@ -1175,12 +1209,13 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
 
     expect(out).toBe([
       '── inherited state ──────────────────────────────────────────',
-      'PARKED (0)',
+      'NEEDS YOU: 1 halted',
       'HALTED (1)',
       "  • held-by-halt — reason: needs human DECIDE; remedy: clear this row's .pipeline/HALT to resume",
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
-      '─────────────────────────────────────────────────────────────',
+      'PARKED (0)',
+      '── inherited state ──────────────────────────────────────────',
     ].join('\n'));
   });
 
@@ -1196,12 +1231,13 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
 
     expect(out).toBe([
       '── inherited state ──────────────────────────────────────────',
-      'PARKED (1)',
-      '  • held-by-halt — operator-parked; remedy: run conduct daemon unpark for this row',
+      'NEEDS YOU: nothing',
       'HALTED (0)',
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
-      '─────────────────────────────────────────────────────────────',
+      'PARKED (1)',
+      '  • held-by-halt — operator-parked; remedy: run conduct daemon unpark for this row',
+      '── inherited state ──────────────────────────────────────────',
     ].join('\n'));
   });
 
@@ -1262,11 +1298,12 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
 
     expect(out).toBe([
       '── inherited state ──────────────────────────────────────────',
-      'PARKED (0)',
+      'NEEDS YOU: nothing',
       'HALTED (0)',
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
-      '─────────────────────────────────────────────────────────────',
+      'PARKED (0)',
+      '── inherited state ──────────────────────────────────────────',
     ].join('\n'));
   });
 
