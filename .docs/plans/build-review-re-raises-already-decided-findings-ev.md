@@ -792,3 +792,32 @@ Slice 2
 - The repair for task rem-as-built-rem-5 is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r4
+
+### Task rem-prd-audit-6-r1: step-runners.ts: resolve the installed custom policy bundle digest before scope decision (move bundle capture ahead of the :4327 scope-empty return) and feed it to effectiveBundleDigest in place of 'pending-candidate-policy'; add test that changing custom bundle content between L1 and L2 yields full review on L2
+**Gate:** prd-audit
+**Rationale:** Verified: step-runners.ts:3657 hardcodes effectiveBundleDigest 'pending-candidate-policy' for custom rubrics, so the policy identity ignores the custom bundle's content. Built-ins already pass the resolved digest. ADR decision 1 still governs, so this is conforming implementation drift inside Task 6 (the runner decides each rubric's scope), not an architecture question.
+**Criterion:** S1.12
+**Parent task:** 6
+**Done when:**
+- [test] S1.12 is satisfied by this task.
+- The repair for task rem-prd-audit-6-r1 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r5
+### Task rem-as-built-6-r2: step-runners.ts / build-review-policy-resolver.ts / build-review-materialization.ts: project custom reviewer input scope to {mode, deltaHunks} only, excluding predecessor, reviewedHunks and out-of-delta history; add test asserting the serialized custom reviewer input carries no predecessor or reviewed-hunk fields
+**Gate:** as-built
+**Rationale:** ADR decision 4 already requires the reviewer projection to carry only mode and deltaHunks. The code forwards the full durable reviewScope through step-runners.ts:4368, the policy resolver at :26, and serialization at step-runners.ts:4628 and materialization.ts:42. This is a clear projection fix inside Task 6's scope recording and announcement work.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 4
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 4 is satisfied by this task.
+- The repair for task rem-as-built-6-r2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r5
+### Task rem-as-built-6-r3: step-runners.ts:5412: pass the built-in peer rubric's projected reviewScope (mode + deltaHunks) to renderBuildReviewFrozenInputScope; add test that a delta-lap built-in peer prompt names its actual delta hunks and a full-lap prompt does not instruct delta-only judgement
+**Gate:** as-built
+**Rationale:** Verified at step-runners.ts:5412: the built-in peer prompt calls renderBuildReviewFrozenInputScope without reviewScope. The renderer then substitutes a full scope with empty deltaHunks while telling the reviewer to judge only those hunks. ADR decision 9 is clear, so the fix is to pass the rubric's projected scope. This is implementation work in Task 6.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 9
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 9 is satisfied by this task.
+- The repair for task rem-as-built-6-r3 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r5
