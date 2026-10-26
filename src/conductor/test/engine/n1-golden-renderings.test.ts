@@ -69,6 +69,10 @@ describe('N=1 golden renderings', () => {
     // The child includes this file, but skips this coordinator, so this test
     // directly proves all three Task 17 members pass without recursing.
     if (RECORD || process.env[N1_GOLDEN_SUITE_CHILD] === '1') return;
+    // A concurrent test may mutate TMPDIR after global setup. Preserve the
+    // run-root marker rather than forwarding that mutable value, otherwise
+    // this nested Vitest run can create shell fixtures in the real /tmp.
+    const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
     const result = await execFile(process.execPath, [
       'scripts/run-vitest.mjs',
       'run',
@@ -79,7 +83,15 @@ describe('N=1 golden renderings', () => {
       'test/engine/n1-golden-routing-guard.test.ts',
     ], {
       cwd: join(import.meta.dirname, '..', '..'),
-      env: { ...process.env, [N1_GOLDEN_SUITE_CHILD]: '1' },
+      env: {
+        ...process.env,
+        [N1_GOLDEN_SUITE_CHILD]: '1',
+        ...(runTmpRoot === undefined ? {} : {
+          TMPDIR: runTmpRoot,
+          TMP: runTmpRoot,
+          TEMP: runTmpRoot,
+        }),
+      },
     });
     // The child owns a separate run root and may report that it reclaimed a
     // stale root from an interrupted earlier invocation. That guard notice is
