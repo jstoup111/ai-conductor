@@ -1,6 +1,6 @@
-// Covers: task:4
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+// Covers: task:4, task:rem-as-built-rem-as-built-r7
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,25 @@ import {
   releaseOwnedPark,
   writeOperatorPark,
 } from '../../src/engine/park-marker';
+
+const releaseRace = vi.hoisted(() => ({
+  recreateMarker: undefined as undefined | (() => Promise<void>),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    async rm(...args: Parameters<typeof actual.rm>) {
+      const recreateMarker = releaseRace.recreateMarker;
+      if (recreateMarker) {
+        releaseRace.recreateMarker = undefined;
+        await recreateMarker();
+      }
+      return actual.rm(...args);
+    },
+  };
+});
 
 let repositoryRoot: string;
 
@@ -77,6 +96,20 @@ describe('owned park markers (Task 4)', () => {
     await releaseOwnedPark(repositoryRoot, 'demo', recreated.token);
 
     await expect(readFile(markerPath(), 'utf8')).resolves.toBe(daemonParkMarker);
+    await expect(isOperatorParked(repositoryRoot, 'demo')).resolves.toBe(true);
+  });
+
+  it('preserves a marker recreated after ownership is read and before its delete', async () => {
+    const owned = await createOwnedPark(repositoryRoot, 'demo');
+    if (!owned.created) throw new Error('expected owned park');
+
+    releaseRace.recreateMarker = async () => {
+      await unlink(markerPath());
+      await writeOperatorPark(repositoryRoot, 'demo');
+    };
+
+    await releaseOwnedPark(repositoryRoot, 'demo', owned.token);
+
     await expect(isOperatorParked(repositoryRoot, 'demo')).resolves.toBe(true);
   });
 
