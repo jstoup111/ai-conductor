@@ -1,6 +1,6 @@
-// Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:13, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:10, task:13, task:15, task:16, task:17, task:18
 // Covers: task:4
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -256,6 +256,54 @@ describe('PiProvider', () => {
       }),
     );
     expect(spawn.mock.calls[0]?.[1]).not.toContain('claude-opus-4-5:xhigh');
+  });
+
+  // Covers: task:10
+  it.each([
+    ['no system prompt', {}],
+    ['an empty system prompt', { systemPrompt: '' }],
+  ])('does not create a system-prompt file for %s', async (_caseName, systemPromptOptions) => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-no-system-prompt-'));
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
+    try {
+      await expect(provider.invoke({ ...invokeOptions, ...systemPromptOptions })).resolves.toMatchObject({ success: true });
+
+      const args = spawn.mock.calls[0]![1];
+      const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      expect({
+        appendPrompts: appendIndices.map((index) => args[index + 1]),
+        tempEntries: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
+      }).toEqual({ appendPrompts: [harnessPath], tempEntries: [] });
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:10
+  it.each([
+    ['no system prompt', {}],
+    ['an empty system prompt', { systemPrompt: '' }],
+  ])('spawns without trying to create a system-prompt file for %s when the temp root is invalid', async (_caseName, systemPromptOptions) => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-invalid-temp-root-'));
+    const blockingFile = join(fixtureRoot, 'not-a-directory');
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    await writeFile(blockingFile, 'file blocks mkdtemp parent');
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = join(blockingFile, 'child');
+    try {
+      const result = await provider.invoke({ ...invokeOptions, ...systemPromptOptions });
+
+      expect({
+        spawned: spawn.mock.calls.length,
+        systemPromptPreparationFailed: result.output.includes('could not prepare the system prompt for delivery'),
+      }).toEqual({ spawned: 1, systemPromptPreparationFailed: false });
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:8
