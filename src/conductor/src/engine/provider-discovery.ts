@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   BUILT_IN_PROVIDERS,
+  toProviderId,
   type BuiltInProviderId,
   type BuiltInProviderDescriptor,
 } from '../execution/provider-catalog.js';
@@ -160,7 +161,11 @@ export async function discoverInstalledProviders(
       ? []
       : [{ id: probe.id, reason: probe.reason }]),
   };
-  const event: ProviderDiscoveryEvent = { type: 'provider_discovery', ...discovery };
+  const event: ProviderDiscoveryEvent = {
+    type: 'provider_discovery',
+    installed: discovery.installed.map(toProviderId),
+    missing: discovery.missing.map((missing) => ({ ...missing, id: toProviderId(missing.id) })),
+  };
   await options.events?.emit(event);
   return discovery;
 }

@@ -82,6 +82,7 @@ const LAYER_RANK: Readonly<Record<Exclude<Layer, 'tools'>, number>> = {
 
 export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): LayerRatchetResult {
   const edges: LayerRatchetEdge[] = [];
+  const valueEdges: LayerRatchetEdge[] = [];
   const violations: LayerRatchetViolation[] = [];
 
   // Strictly ascending order keeps the file free of duplicates and makes concurrent
@@ -99,15 +100,22 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
     if (layerFor(file) === undefined) violations.push({ kind: 'unclassifiable-file', file });
 
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    // Preserve the original value-only graph for D5's cycle rule.
     for (const statement of sourceFile.statements) {
       const specifier = valueSpecifier(statement);
-      if (specifier === undefined) continue;
-      if (!specifier.startsWith('.')) continue;
-
+      if (specifier === undefined || !specifier.startsWith('.')) continue;
       const imported = resolveSpecifier(file, specifier, files);
-      const line = sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).line + 1;
+      if (imported !== undefined && !valueEdges.some((edge) => edge.file === file && edge.imported === imported)) {
+        valueEdges.push({ file, imported, line: sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).line + 1 });
+      }
+    }
+    for (const reference of moduleReferences(sourceFile)) {
+      if (!reference.specifier.startsWith('.')) continue;
+
+      const imported = resolveSpecifier(file, reference.specifier, files);
+      const line = sourceFile.getLineAndCharacterOfPosition(reference.node.getStart(sourceFile)).line + 1;
       if (imported === undefined) {
-        violations.push({ kind: 'unresolved-specifier', file, line, specifier });
+        violations.push({ kind: 'unresolved-specifier', file, line, specifier: reference.specifier });
       } else if (!edges.some((edge) => edge.file === file && edge.imported === imported)) {
         edges.push({ file, imported, line });
       }
@@ -128,7 +136,9 @@ export function checkLayerRatchet({ files, allowlist }: LayerRatchetInput): Laye
     }
   }
 
-  const cycles = cycleMembership(edges);
+  // D5's cycle rule deliberately remains value-edge-only. Type and dynamic
+  // references are nevertheless upward edges and are checked above.
+  const cycles = cycleMembership(valueEdges);
   for (const edge of edges) {
     const cycle = cycles.get(edge.file);
     if (cycle !== undefined && cycles.get(edge.imported) === cycle) {
@@ -286,19 +296,27 @@ function cycleMembership(edges: readonly LayerRatchetEdge[]): ReadonlyMap<string
   return membership;
 }
 
+function moduleReferences(sourceFile: ts.SourceFile): readonly { node: ts.Node; specifier: string }[] {
+  const references: { node: ts.Node; specifier: string }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      references.push({ node, specifier: node.moduleSpecifier.text });
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+      references.push({ node, specifier: node.moduleSpecifier.text });
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      references.push({ node, specifier: node.argument.literal.text });
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
+      references.push({ node, specifier: node.arguments[0].text });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return references;
+}
+
 function valueSpecifier(statement: ts.Statement): string | undefined {
-  if (ts.isImportDeclaration(statement)) {
-    if (!isValueImport(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) return undefined;
-    return statement.moduleSpecifier.text;
-  }
-  if (ts.isExportDeclaration(statement)) {
-    if (
-      !isValueExport(statement)
-      || statement.moduleSpecifier === undefined
-      || !ts.isStringLiteral(statement.moduleSpecifier)
-    ) return undefined;
-    return statement.moduleSpecifier.text;
-  }
+  if (ts.isImportDeclaration(statement)) return isValueImport(statement) && ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
+  if (ts.isExportDeclaration(statement)) return isValueExport(statement) && statement.moduleSpecifier !== undefined && ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
   return undefined;
 }
 

@@ -9,9 +9,9 @@ import type {
   ProviderExitFacts,
   ProviderStreamObservation,
   TokenUsage,
-} from '../execution/llm-provider.js';
-import type { BuiltInProviderId, ProviderWith } from '../execution/provider-catalog.js';
-import type { ObservedInterval } from '../execution/observed-interval.js';
+} from './provider.js';
+import type { ObservedInterval } from './provider.js';
+import type { ProviderId } from './provider.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
 import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
 import type { RefusalReason } from '../engine/park-reconciliation.js';
@@ -265,7 +265,7 @@ export type CredentialParkProgressDegradation =
 
 type CredentialParkProgressEventBase = {
   type: 'credentials_park_progress';
-  provider: ProviderWith<'readiness'>['id'];
+  provider: ProviderId;
   source: AuthenticationSource;
   elapsedSeconds: number;
 };
@@ -380,9 +380,9 @@ export type ProviderDiscoveryFailureReason =
 /** The installed and unavailable built-in providers observed during one boot. */
 export interface ProviderDiscoveryEvent {
   type: 'provider_discovery';
-  installed: BuiltInProviderId[];
+  installed: ProviderId[];
   missing: Array<{
-    id: BuiltInProviderId;
+    id: ProviderId;
     reason: ProviderDiscoveryFailureReason;
   }>;
 }

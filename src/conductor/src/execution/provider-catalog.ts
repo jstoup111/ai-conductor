@@ -9,6 +9,7 @@ import {
 import type { LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
 import type { EffortLevel } from '../types/config.js';
+import type { ProviderId } from '../types/provider.js';
 import {
   extractClaudeFinalAssistantMessage,
   extractCodexFinalAssistantMessage,
@@ -412,4 +413,9 @@ export function requireProviderCapability<Capability extends ProviderCapability>
 export function resolveProviderExecutable(id: BuiltInProviderId): string {
   const descriptor = providerDescriptor(id);
   return process.env[descriptor.executableOverrideEnv] ?? descriptor.defaultExecutable;
+}
+
+/** The catalog is the sole conversion boundary from known built-ins to event ids. */
+export function toProviderId(id: BuiltInProviderId): ProviderId {
+  return id as ProviderId;
 }

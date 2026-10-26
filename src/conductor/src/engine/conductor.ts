@@ -119,6 +119,7 @@ import {
   providerDisplayName,
   requireProviderCapability,
   supportsProviderCapability,
+  toProviderId,
 } from '../execution/provider-catalog.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
@@ -3058,7 +3059,7 @@ export class Conductor {
             if (probeFailed) {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: authentication.provider,
+                provider: toProviderId(authentication.provider),
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
@@ -3073,7 +3074,7 @@ export class Conductor {
             } else if (current.state !== 'probe-failed') {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: authentication.provider,
+                provider: toProviderId(authentication.provider),
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
