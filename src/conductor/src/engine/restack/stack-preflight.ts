@@ -162,6 +162,14 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
         await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
         return { kind: 'halted' };
       }
+      if (stored.record.operator?.declaration === undefined) {
+        const reason = formatOperatorHaltReason('operator-round-undeclared', stored.record.roundId);
+        const body = `${reason}\noperator round ${stored.record.roundId} landing on child ${marker.marker.host} is awaiting ` +
+          'ai-conductor stack land --done or ai-conductor stack land --abandon\n';
+        await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
+        await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
+        return { kind: 'halted' };
+      }
     }
   }
 
