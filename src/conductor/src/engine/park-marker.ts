@@ -12,12 +12,25 @@
 import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
 
 /** Directory (relative to project root) that holds per-slug park markers. */
 export const OPERATOR_PARKED_SUBDIR = 'parked';
+
+declare const parkTokenBrand: unique symbol;
+
+/** Opaque capability granted only to the caller that created an owned park. */
+export type ParkToken = string & { readonly [parkTokenBrand]: 'ParkToken' };
+
+/** Result of attempting to create a temporary, caller-owned operator park. */
+export type OwnedParkCreationResult =
+  | { readonly created: true; readonly token: ParkToken }
+  | { readonly created: false };
+
+const OWNED_PARK_TOKEN_PREFIX = 'owned-park-token: ';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main repository root resolution (Task 1)
@@ -118,6 +131,58 @@ export function __resetResolveCacheForTests(): void {
 
 function parkedMarkerPath(root: string, slug: string): string {
   return join(root, '.daemon', OPERATOR_PARKED_SUBDIR, slug);
+}
+
+function ownedParkBody(token: ParkToken): string {
+  return `${new Date().toISOString()}\nparked by operator\n${OWNED_PARK_TOKEN_PREFIX}${token}\n`;
+}
+
+function carriesOwnedParkToken(body: string, token: ParkToken): boolean {
+  return body.split(/\r?\n/).some((line) => line === `${OWNED_PARK_TOKEN_PREFIX}${token}`);
+}
+
+/**
+ * Create an operator park whose caller receives the sole capability to later
+ * release it. Existing parks remain untouched and confer no ownership.
+ */
+export async function createOwnedPark(root: string, slug: string): Promise<OwnedParkCreationResult> {
+  const mainRoot = await resolveMainRepoRoot(root);
+  const dir = join(mainRoot, '.daemon', OPERATOR_PARKED_SUBDIR);
+  const token = randomUUID() as ParkToken;
+  await mkdir(dir, { recursive: true });
+
+  let handle;
+  try {
+    handle = await open(parkedMarkerPath(mainRoot, slug), 'wx');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return { created: false };
+    throw err;
+  }
+  try {
+    await handle.writeFile(ownedParkBody(token), 'utf-8');
+  } finally {
+    await handle.close();
+  }
+  return { created: true, token };
+}
+
+/**
+ * Release a park only if the marker still contains the creation token issued
+ * to this caller. A pre-existing or subsequently recreated marker is left in
+ * place, preserving the later owner's emergency stop.
+ */
+export async function releaseOwnedPark(root: string, slug: string, token: ParkToken): Promise<void> {
+  const mainRoot = await resolveMainRepoRoot(root);
+  const markerPath = parkedMarkerPath(mainRoot, slug);
+  let body: string;
+  try {
+    body = await readFile(markerPath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  if (!carriesOwnedParkToken(body, token)) return;
+  await rm(markerPath, { force: true });
 }
 
 /**
