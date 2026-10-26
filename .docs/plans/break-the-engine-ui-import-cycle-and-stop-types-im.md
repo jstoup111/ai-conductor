@@ -705,3 +705,39 @@ Tasks 2, 3, 4, 5, 9, 13 ─▶ Task 14 ─▶ Task 15
 **Done when:**
 - Task 13 is satisfied by this task.
 - The repair for task rem-as-built-R13e is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R10a: In src/conductor/src/execution/llm-provider.ts, replace the local AuthenticationReadinessState declaration with an import and re-export from src/types/provider.ts. Grep execution/ and engine/ for any other independent redeclaration of a provider.ts type, then run npm run typecheck
+**Gate:** prd-audit
+**Rationale:** Verified (99%, observed): src/conductor/src/execution/llm-provider.ts:36-40 still declares AuthenticationReadinessState, and src/conductor/src/types/provider.ts:8 declares it too. Task 10's done-when already requires llm-provider.ts to declare none of the moved types. This is implementation drift against approved architecture, so it is a one-site BUILD fix with no design decision needed.
+**Criterion:** S5.2
+**Parent task:** 10
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R10a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R12a: Add src/conductor/test/types/github-operation-name-binding.test.ts, following rubric-id-binding.test.ts and compile-type-fixture.ts. Use @ts-expect-error to assert that a Record<GithubOperationName, GithubOperationDefinition> registry is a compile error when it has an operation absent from the types/ union, and when it is missing a union member. Also assert that GITHUB_OPERATION_REGISTRY's keys match the union, then run the test and typecheck
+**Gate:** prd-audit
+**Rationale:** Verified (99%, observed): test/types/ contains rubric-id-binding, plugin-kind and unrelated tests, but no github-operation-name-binding.test.ts. The registry-side satisfies binding is already in place. Task 12's [test] done-when requires @ts-expect-error proofs for an extra operation and a missing union member. This is a missing test inside an approved task, so it is BUILD work, modeled on the existing rubric-id-binding test and compile-type-fixture helper.
+**Criterion:** S5.3
+**Parent task:** 12
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R12a is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R13f: In src/conductor/test/engine/provider-id-literals.test.ts, restore main's adapter branch to check display names against BUILT_IN_PROVIDERS rather than foreignProviders. Restore the original 'reports a declared adapter display name embedded in user-facing text' and 'keeps an adapter's own provider id exempt but reports its display name' tests and expectations, and keep the catalogModules set
+**Gate:** as-built
+**Rationale:** Verified (99%, observed via git diff main): provider-id-literals.test.ts:140 was relaxed from BUILT_IN_PROVIDERS to foreignProviders. Two assertions were also inverted: 'reports a declared adapter display name embedded in user-facing text' and 'keeps an adapter's own provider id exempt but reports its display name'. R13e only partly reverted this. The repair restores main's adapter display-name detection and both original assertions. It keeps the permitted catalogModules set, which includes provider-catalog-identities.ts. Any adapter production literal this resurfaces, such as Pi or Codex display text, must source its display name from the catalog. Task 13's no-new-exemptions requirement covers that work, and it preserves completed Task 13 coverage.
+**Parent task:** rem-as-built-R13e
+**Governing clause:** Task rem-as-built-R13e
+**Done when:**
+- Task rem-as-built-R13e is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R13f is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R13g: Fix every production finding the restored guard reports in execution/*-provider.ts adapters by deriving the adapter's display name from the provider catalog identity instead of a string literal. Then confirm provider-id-literals.test.ts passes with no new exemptions
+**Gate:** as-built
+**Rationale:** Verified (99%, observed via git diff main): provider-id-literals.test.ts:140 was relaxed from BUILT_IN_PROVIDERS to foreignProviders. Two assertions were also inverted: 'reports a declared adapter display name embedded in user-facing text' and 'keeps an adapter's own provider id exempt but reports its display name'. R13e only partly reverted this. The repair restores main's adapter display-name detection and both original assertions. It keeps the permitted catalogModules set, which includes provider-catalog-identities.ts. Any adapter production literal this resurfaces, such as Pi or Codex display text, must source its display name from the catalog. Task 13's no-new-exemptions requirement covers that work, and it preserves completed Task 13 coverage.
+**Parent task:** rem-as-built-R13e
+**Governing clause:** Task rem-as-built-R13e
+**Done when:**
+- Task rem-as-built-R13e is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R13g is committed and its targeted tests pass.
