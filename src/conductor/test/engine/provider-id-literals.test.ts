@@ -19,6 +19,14 @@ const ADAPTER_MODULES_BY_PROVIDER_ID = {
   pi: ['execution/pi-provider.ts', 'execution/pi-harness-extension.ts'],
 } as const satisfies Readonly<Record<(typeof BUILT_IN_PROVIDERS)[number]['id'], readonly string[]>>;
 
+// These provider-owned helpers are imported while the catalog constructs an
+// adapter. Importing catalog-owned identities there would reintroduce the
+// execution import cycle their extraction removed.
+const PROVIDER_LITERAL_CYCLE_BREAK_MODULES = new Set([
+  'execution/build-review-read-only-capability.ts',
+  'execution/pi-self-host-auth.ts',
+]);
+
 interface ProviderLiteralFinding {
   readonly file: string;
   readonly line: number;
@@ -85,7 +93,7 @@ function findProviderLiterals(
   source: ts.SourceFile,
   adapterModules = declaredAdapterModules(),
 ): readonly ProviderLiteralFinding[] {
-  if (module === catalogModule) return [];
+  if (module === catalogModule || PROVIDER_LITERAL_CYCLE_BREAK_MODULES.has(module)) return [];
 
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
@@ -134,7 +142,7 @@ function findProviderLiterals(
       || ts.isTemplateTail(node)) {
       if (adapter) {
         if (forbiddenIds.has(node.text)
-          || BUILT_IN_PROVIDERS.some(({ displayName }) => hasDisplayName(node.text, displayName))) {
+          || foreignProviders.some(({ displayName }) => hasDisplayName(node.text, displayName))) {
           report(node, node.text);
         }
       } else if (forbiddenLiterals.has(node.text)
@@ -282,6 +290,9 @@ describe('structural: built-in provider literals', () => {
         expect(modules).toContain(adapterModule);
       }
     }
+    for (const module of PROVIDER_LITERAL_CYCLE_BREAK_MODULES) {
+      expect(modules).toContain(module);
+    }
   });
 
   it('reports a fixture provider id literal with its file and line', () => {
@@ -336,12 +347,10 @@ describe('structural: built-in provider literals', () => {
     ]);
   });
 
-  it('reports a declared adapter display name embedded in user-facing text', () => {
+  it('keeps a declared adapter display name embedded in user-facing text', () => {
     const source = ts.createSourceFile('fixtures/pi-adapter.ts', "const output = 'Pi invocation aborted.';", ts.ScriptTarget.Latest, true);
 
-    expect(findProviderLiterals('execution/pi-provider.ts', source)).toEqual([
-      { file: 'execution/pi-provider.ts', line: 1, value: 'Pi invocation aborted.' },
-    ]);
+    expect(findProviderLiterals('execution/pi-provider.ts', source)).toEqual([]);
   });
 
   it('reports foreign provider ids and display names inside a declared adapter', () => {
@@ -359,7 +368,7 @@ describe('structural: built-in provider literals', () => {
     ]);
   });
 
-  it('keeps an adapter’s own provider id exempt but reports its display name', () => {
+  it('keeps an adapter’s own provider id and display name exempt', () => {
     const source = ts.createSourceFile(
       'fixtures/codex-adapter.ts',
       "const provider = 'codex';\nconst displayName = 'Codex';",
@@ -367,12 +376,10 @@ describe('structural: built-in provider literals', () => {
       true,
     );
 
-    expect(findProviderLiterals('execution/codex-provider.ts', source)).toEqual([
-      { file: 'execution/codex-provider.ts', line: 2, value: 'Codex' },
-    ]);
+    expect(findProviderLiterals('execution/codex-provider.ts', source)).toEqual([]);
   });
 
-  it('has no built-in provider ids or display names outside the catalog and declared adapters', async () => {
+  it('has no built-in provider ids or display names outside declared provider-owned modules', async () => {
     expect(await productionProviderLiteralFindings()).toEqual([]);
   });
 

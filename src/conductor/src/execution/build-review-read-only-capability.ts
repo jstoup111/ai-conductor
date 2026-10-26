@@ -3,6 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
 
+// This shared capability module cannot import the catalog: the catalog creates
+// the Codex adapter, which imports this module for its policy builder.
 const CLAUDE_PROVIDER = 'claude';
 const CODEX_PROVIDER = 'codex';
 const PI_PROVIDER = 'pi';
