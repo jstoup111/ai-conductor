@@ -297,7 +297,6 @@ describe('engine/artifacts — manifest kind contracts', () => {
         { pattern: '.docs/decisions/adr-*.md', scope: 'repository' },
       ],
       worktree: [],
-      coverage_binding: [{ pattern: '.pipeline/coverage-binding.json', scope: 'run' }],
       acceptance_specs: [
         'spec/acceptance/**/*', 'spec/requests/**/*', 'spec/system/**/*', 'test/acceptance/**/*',
         'test/**/*', 'tests/**/*', '__tests__/**/*', '*.test.js', '*.test.ts', '*.test.jsx',
