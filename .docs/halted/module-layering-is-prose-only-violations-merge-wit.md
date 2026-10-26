@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-26T00:22:35.573Z
 Slug: module-layering-is-prose-only-violations-merge-wit
 Class: needs-human
 Halting step: unknown
