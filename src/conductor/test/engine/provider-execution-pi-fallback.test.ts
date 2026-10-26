@@ -41,6 +41,7 @@ function fakeProvider(result: InvokeResult): LLMProvider {
   return {
     supportsSessionResume: false,
     lifecycleCapability: { synchronousSpawnPermit: true },
+    systemPromptCapability: { deliversSystemPrompt: true },
     invoke: vi.fn(async () => result),
   };
 }
@@ -445,6 +446,7 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
         success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
       })),
@@ -478,6 +480,7 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
         success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
       })),
