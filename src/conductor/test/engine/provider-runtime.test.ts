@@ -109,10 +109,10 @@ async function expectTransparentMethod<T extends object, A extends readonly unkn
 ): Promise<void> {
   const targetMethod = target[method] as unknown as (...received: A) => Promise<R>;
   const guardedMethod = guarded[method] as unknown as (...received: A) => Promise<R>;
-  await expect(settled(() => targetMethod.apply(target, args))).resolves.toEqual(
-    await settled(() => guardedMethod.apply(guarded, args)),
+  await expect(settled(() => Reflect.apply(targetMethod, target, args))).resolves.toEqual(
+    await settled(() => Reflect.apply(guardedMethod, guarded, args)),
   );
-  await expect(settled(() => targetMethod.apply(target, args))).resolves.toEqual(
+  await expect(settled(() => Reflect.apply(targetMethod, target, args))).resolves.toEqual(
     await settled(() => guardedMethod.call(guarded, ...args)),
   );
 }
@@ -169,14 +169,14 @@ describe('ProviderRuntimeSet', () => {
 
     expect(() => createProviderRuntimeSet(registry)).not.toThrow();
     const runtimes = createProviderRuntimeSet(registry);
-    const frozenRuntime = runtimes.get('frozen').provider;
-    const namespaceRuntime = runtimes.get('namespace').provider;
+    const frozenRuntime = runtimes.get('frozen').provider as LLMProvider & { label?: string };
+    const namespaceRuntime = runtimes.get('namespace').provider as LLMProvider & { label?: string };
 
     expect(frozenRuntime.label).toBe('frozen');
     expect(namespaceRuntime.label).toBe('namespace');
     expect(runtimes.get('partial').provider.readiness).toBeUndefined();
-    await frozenRuntime.invoke({ prompt: '/x' });
-    await namespaceRuntime.invoke({ prompt: '/x' });
+    await frozenRuntime.invoke({ prompt: '/x', sessionId: 'frozen', resume: false });
+    await namespaceRuntime.invoke({ prompt: '/x', sessionId: 'namespace', resume: false });
     expect(frozenInvoke).toHaveBeenCalledOnce();
     expect(namespaceInvoke).toHaveBeenCalledOnce();
   });
@@ -267,7 +267,7 @@ describe('ProviderRuntimeSet', () => {
 
   it('passes a declared provider its system-prompt options unchanged', async () => {
     const result = { success: true, output: 'declared result', exitCode: 0 };
-    const options: InvokeOptions = { prompt: '/x', systemPrompt: 'S' };
+    const options: InvokeOptions = { prompt: '/x', systemPrompt: 'S', sessionId: 'declared', resume: false };
     const invoke = vi.fn(async (received: InvokeOptions) => {
       expect(received).toBe(options);
       return result;
@@ -304,8 +304,8 @@ describe('ProviderRuntimeSet', () => {
     const firstProvider = first.get('declared').provider;
     const secondProvider = second.get('declared').provider;
 
-    await firstProvider.invoke({ prompt: '/first', systemPrompt: 'S' });
-    await secondProvider.invoke({ prompt: '/second', systemPrompt: 'S' });
+    await firstProvider.invoke({ prompt: '/first', systemPrompt: 'S', sessionId: 'first', resume: false });
+    await secondProvider.invoke({ prompt: '/second', systemPrompt: 'S', sessionId: 'second', resume: false });
 
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(registry.get('llm_provider', 'declared')).toBe(declared);
@@ -316,12 +316,12 @@ describe('ProviderRuntimeSet', () => {
   it.each([
     {
       name: 'without a system prompt',
-      options: { prompt: '/x' },
+      options: { prompt: '/x', sessionId: 'no-system-prompt', resume: false },
       output: 'no-system-prompt result',
     },
     {
       name: 'with an empty system prompt',
-      options: { prompt: '/x', systemPrompt: '' },
+      options: { prompt: '/x', systemPrompt: '', sessionId: 'empty-system-prompt', resume: false },
       output: 'empty-system-prompt result',
     },
   ] satisfies Array<{ name: string; options: InvokeOptions; output: string }>)('passes an undeclared provider through $name', async ({ options, output }) => {
@@ -366,7 +366,7 @@ describe('ProviderRuntimeSet', () => {
     expect(createRuntimeSet).toBeTypeOf('function');
     const result = await createRuntimeSet!(registry)
       .get('recorder')
-      .provider.invoke({ prompt: '/x', systemPrompt: 'S' });
+      .provider.invoke({ prompt: '/x', systemPrompt: 'S', sessionId: 'recorder', resume: false });
 
     expect(invoke).not.toHaveBeenCalled();
     expect(result).toEqual({

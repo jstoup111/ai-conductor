@@ -88,10 +88,10 @@ const harnesses = {
   claude: {
     async invoke(systemPrompt: string): Promise<DeliveryCapture> {
       let capture: DeliveryCapture | undefined;
-      const provider = new ClaudeProvider(undefined, async (_file, args, options) => {
+      const provider = new ClaudeProvider(undefined, (async (_file, args, options) => {
         capture = await captureDelivery(args, options, ['--append-system-prompt-file']);
         return completedClaudeResult() as never;
-      }, 'claude');
+      }) as never, 'claude');
 
       await provider.invoke(invokeOptions(systemPrompt));
       return capture!;
@@ -113,10 +113,10 @@ const harnesses = {
         }),
         'codex',
         undefined,
-        async (_file, args, options) => {
+        (async (_file, args, options) => {
           capture = await captureDelivery(args, options, []);
           return completedCodexResult() as never;
-        },
+        }) as never,
       );
 
       await provider.invoke(invokeOptions(systemPrompt));
