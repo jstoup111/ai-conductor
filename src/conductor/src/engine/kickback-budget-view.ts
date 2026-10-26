@@ -1,5 +1,6 @@
 import { projectPendingGrowth, type KickbackGateEntry, type PendingRepair, type PlanGrowth } from './kickback-ledger.js';
 import type { ChildId } from './child-context.js';
+import type { RemediationLapAllowance, RemediationLapTier } from './remediation-caps.js';
 
 export interface KickbackPlanGrowthView extends PlanGrowth {
   cap: number | null;
@@ -33,6 +34,9 @@ export interface KickbackBudgetView {
   mechanicalFaults?: number;
   planGrowth?: KickbackPlanGrowthView;
   resumeAuthorization?: KickbackResumeAuthorizationView;
+  /** Present only for remediation gates when their resolved allowance is available. */
+  tier?: RemediationLapTier | null;
+  allowanceSource?: 'default' | 'configured' | 'raised';
 }
 
 export function renderKickbackRecoveryHint({
@@ -81,6 +85,7 @@ export function kickbackBudgetView(
   planGrowth?: KickbackPlanGrowthView,
   liveHaltGeneration?: string,
   pendingLaps = 0,
+  allowance?: RemediationLapAllowance,
 ): KickbackBudgetView {
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
   const restack = gate === 'restack';
@@ -120,6 +125,12 @@ export function kickbackBudgetView(
       : restack ? {} : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
     ...(planGrowth === undefined ? {} : { planGrowth }),
     ...(resumeAuthorization === undefined ? {} : { resumeAuthorization }),
+    ...(remediation && allowance !== undefined
+      ? {
+          tier: allowance.tier ?? null,
+          allowanceSource: entry?.effectiveLapCap === undefined ? allowance.source : 'raised' as const,
+        }
+      : {}),
   };
 }
 
@@ -131,8 +142,9 @@ export function renderKickbackBudgetView(
   liveHaltGeneration?: string,
   child?: ChildId,
   pendingLaps = 0,
+  allowance?: RemediationLapAllowance,
 ): string {
-  const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth, liveHaltGeneration, pendingLaps);
+  const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth, liveHaltGeneration, pendingLaps, allowance);
   const history = view.adjustments === 'unavailable' ? 'unavailable' : (view.adjustments ?? []);
   const authorization = view.resumeAuthorization;
   const authorizationLine = authorization === undefined
@@ -146,7 +158,11 @@ export function renderKickbackBudgetView(
           : `Resume authorization: stale (bound to halt generation ${authorization.boundHaltGeneration}; live halt generation ${authorization.liveHaltGeneration}); the daemon will not consume it`;
   return [
     ...(child === undefined ? [] : [`Child: ${child}`]),
-    `Kickback budget (${gate}): ${view.consumed}/${view.limit} consumed; ${view.remaining} remaining`,
+    `Kickback budget (${gate}): ${view.consumed}/${view.limit} consumed; ${view.remaining} remaining${
+      view.allowanceSource === undefined
+        ? ''
+        : ` — tier ${view.tier === null ? 'unrecorded, treated as M; ' : `${view.tier} `}allowance ${view.limit} (${view.allowanceSource === 'raised' ? `raised from ${allowance?.limit}` : view.allowanceSource})`
+    }`,
     ...(view.pendingLaps && view.pendingLaps > 0
       ? [`Pending charge: ${view.pendingLaps} ${view.pendingLaps === 1 ? 'lap' : 'laps'} (charged when build dispatches)`]
       : []),

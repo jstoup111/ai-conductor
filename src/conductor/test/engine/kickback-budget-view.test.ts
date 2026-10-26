@@ -53,6 +53,62 @@ describe('kickback budget view', () => {
     expect(rendered).toContain('Mechanical faults: 1');
   });
 
+  // Covers: task:6
+  it.each([
+    ['prd_audit', { tier: 'L' as const, limit: 4, source: 'default' as const }, 'tier L allowance 4 (default)'],
+    ['architecture_review_as_built', { tier: 'M' as const, limit: 5, source: 'configured' as const }, 'tier M allowance 5 (configured)'],
+    ['prd_audit', { tier: undefined, limit: 3, source: 'default' as const }, 'tier unrecorded, treated as M; allowance 3 (default)'],
+  ])('renders remediation allowance suffixes for %s', (gate, allowance, suffix) => {
+    const rendered = renderKickbackBudgetView(
+      { ...baseEntry, laps: 1, adjustmentsKnown: true },
+      gate,
+      allowance.limit,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      allowance,
+    );
+
+    expect(rendered).toContain(`Kickback budget (${gate}): 1/${allowance.limit} consumed; ${allowance.limit - 1} remaining — ${suffix}`);
+    expect(kickbackBudgetView(
+      { ...baseEntry, laps: 1, adjustmentsKnown: true }, gate, allowance.limit, undefined, undefined, 0, allowance,
+    )).toMatchObject({ tier: allowance.tier ?? null, allowanceSource: allowance.source });
+  });
+
+  // Covers: task:6
+  it('reports raised remediation allowances from their resolved allowance', () => {
+    const allowance = { tier: 'S' as const, limit: 2, source: 'default' as const };
+    const entry = { ...baseEntry, laps: 2, effectiveLapCap: 4, adjustmentsKnown: true };
+
+    expect(renderKickbackBudgetView(entry, 'prd_audit', allowance.limit, undefined, undefined, undefined, 0, allowance)).toContain(
+      'Kickback budget (prd_audit): 2/4 consumed; 2 remaining — tier S allowance 4 (raised from 2)',
+    );
+    expect(kickbackBudgetView(entry, 'prd_audit', allowance.limit, undefined, undefined, 0, allowance)).toMatchObject({
+      tier: 'S', allowanceSource: 'raised',
+    });
+  });
+
+  // Covers: task:6
+  it('keeps build_review rendering and JSON free of remediation allowance metadata', () => {
+    const view = kickbackBudgetView(
+      { ...baseEntry, cumulative: 4, effectiveLimit: 6, adjustmentsKnown: true },
+      'build_review',
+      5,
+      undefined,
+      undefined,
+      0,
+      { tier: 'L', limit: 4, source: 'default' },
+    );
+
+    expect(renderKickbackBudgetView(
+      { ...baseEntry, cumulative: 4, effectiveLimit: 6, adjustmentsKnown: true },
+      'build_review', 5, undefined, undefined, undefined, 0, { tier: 'L', limit: 4, source: 'default' },
+    )).toContain('Kickback budget (build_review): 4/6 consumed; 2 remaining');
+    expect(view).not.toHaveProperty('tier');
+    expect(view).not.toHaveProperty('allowanceSource');
+  });
+
   it('reports a legacy entry with no recovery history as unavailable', () => {
     const legacy = { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 };
     expect(kickbackBudgetView(legacy, 'build_review', 5).adjustments).toBe('unavailable');
