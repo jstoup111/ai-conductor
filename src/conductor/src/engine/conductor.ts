@@ -15343,7 +15343,9 @@ export class Conductor {
                 // requestRoutedExit supplies the durable diagnostic (including
                 // a restack HALT where appropriate); do not replace it with a
                 // generic conductor refusal.
-                const existingHalt = await readHaltMarkerContent(this.projectRoot);
+                // `.pipeline/HALT` itself, not the user-input marker
+                // `readHaltMarkerContent` reads.
+                const existingHalt = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
                 if (existingHalt?.trim()) {
                   const body = existingHalt.trim();
                   const prUrl = await this.surfaceRemediationPr(body);

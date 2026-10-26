@@ -186,6 +186,28 @@ describe('runRestack pre-move checks (real local Git)', () => {
     expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(oldLeaf);
   });
 
+  it.each([
+    { recorded: ['rem-1'], expected: 'applied' },
+    { recorded: [], expected: 'halted' },
+  ])('restacks over a committed plan append of task rem-1 only when the engine recorded it (recorded: $recorded)', async ({ recorded, expected }) => {
+    const subject = await fixture();
+    await subject.git(['add', '-A', '.docs']);
+    await subject.git(['commit', '-qm', 'land plan', '--allow-empty']);
+    await createProtectedArtifactSeal({
+      projectRoot: subject.repo,
+      baselineCommit: (await subject.git(['rev-parse', 'HEAD'])).stdout.trim(),
+    });
+    const planPath = join(subject.repo, '.docs', 'plans', 'demo.md');
+    const plan = await readFile(planPath, 'utf8');
+    await writeFile(planPath, `${plan}${plan.endsWith('\n') ? '' : '\n'}\n### Task rem-1: Repair the routed finding\n\nSource: build_review.\n`);
+    await subject.git(['commit', '-qam', 'chore(plan): append routed remediation for r1']);
+    await writeFile(join(subject.repo, '.pipeline', 'engine-state.json'), JSON.stringify({ appendedRemediationTaskIds: recorded }));
+
+    const result = await restack(subject);
+
+    expect(result.kind).toBe(expected);
+  });
+
   it('does not treat a modified ignored file as tracked dirty work', async () => {
     const subject = await fixture();
     await mkdir(join(subject.repo, 'build'), { recursive: true });
