@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:9, task:16
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,17 @@ function open(subject: Awaited<ReturnType<typeof fixture>>, git: GitRunner = sub
 }
 
 describe('open operator round (real local Git)', () => {
+  // Covers: task:16
+  it('opens an undeclared landing without the dispatch-side region-entry refusal', async () => {
+    const subject = await fixture();
+
+    await expect(open(subject)).resolves.toMatchObject({ kind: 'opened', pinnedBase: subject.closure });
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    expect(stored).toMatchObject({ kind: 'record', record: { kind: 'operator', hosts: { 1: 'repairing' } } });
+    if (stored.kind !== 'record') throw new Error('missing opened operator round');
+    expect(stored.record.operator?.declaration).toBeUndefined();
+  });
+
   it('opens the land round on its closed host and restages only its region', async () => {
     const subject = await fixture();
 
