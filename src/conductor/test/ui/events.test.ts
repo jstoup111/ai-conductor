@@ -1,4 +1,3 @@
-// Covers: task:1
 import { describe, it, expect, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent, RecoveryOption } from '../../src/types/index.js';
