@@ -7,8 +7,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
+import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
+import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
+import { admitRound } from '../../../src/engine/routing/round-admission.js';
+import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
-import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { type RouteRecord, parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const child = parseChildId(1)!;
@@ -31,9 +38,69 @@ async function fixture() {
   return root;
 }
 
-function routedConductor(root: string, enterHostRegion: NonNullable<ConstructorParameters<typeof Conductor>[0]['childRegionLifecycle']>['enterHostRegion']) {
+async function operatorRoundFixture(declared: boolean) {
+  const root = await mkdtemp(join(tmpdir(), 'operator-round-entry-'));
+  roots.push(root);
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'operator-round@example.test']);
+  await git(['config', 'user.name', 'Operator round']);
+  await writeFile(join(root, '.gitignore'), '.pipeline/\n');
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task T1: Existing work\n');
+  await git(['add', '.gitignore', '.docs/plans/demo.md']);
+  await git(['commit', '-qm', 'base']);
+  await git(['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'child.txt'), 'closed child\n');
+  await git(['add', 'child.txt']);
+  await git(['commit', '-qm', 'closed child']);
+  const closure = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim());
+  if (!closure) throw new Error('invalid child closure');
+  await git(['update-ref', closureRefFor('demo', child), closure]);
+  await git(['checkout', '-qb', leafBranchFor('demo')]);
+  await writeFile(join(root, 'leaf.txt'), 'leaf\n');
+  await git(['add', 'leaf.txt']);
+  await git(['commit', '-qm', 'leaf']);
+  await mkdir(join(root, '.pipeline', 'children', String(child)), { recursive: true });
+  const parentState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+  await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({ ...parentState, feature_desc: 'demo' }));
+  await writeFile(join(root, '.pipeline', 'children', String(child), 'conduct-state.json'), JSON.stringify({
+    acceptance_specs: 'done', build: 'pending', test_suite: 'skipped', build_review: 'skipped',
+  }));
+  const created = await createRouteRecord(root, 'demo', {
+    roundId, sealedAuthored: 1, kind: 'audit',
+    items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
+    allocation: { [child]: { remTaskIds: ['rem-task-1'], blockBodies: ['### Task rem-task-1: Repair\n'] } },
+  });
+  if (created.kind !== 'created') throw new Error(`create route record: ${created.kind}`);
+  const admitted = await admitRound(root, 'demo', created.record, child, { git });
+  if (admitted.kind !== 'admitted') throw new Error(`admit route record: ${admitted.detail}`);
+  const stored = await readRouteRecord(root, 'demo', roundId, { git });
+  if (stored.kind !== 'record') throw new Error('missing admitted route record');
+  const leafTip = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim());
+  if (!leafTip) throw new Error('invalid leaf tip');
+  const operator: RouteRecord = {
+    ...stored.record,
+    kind: 'operator',
+    operator: {
+      origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'build',
+      carried: [], otherTips: { 'feat/daemon-demo': leafTip },
+      priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      ...(declared ? { declaration: { tip: leafTip, at: '2026-10-25T00:00:00.000Z' } } : {}),
+    },
+  };
+  await expect(writeRoutingTransaction(root, 'demo', [{ kind: 'update-record', previous: stored, record: operator }]))
+    .resolves.toEqual({ kind: 'updated' });
+  return root;
+}
+
+function routedConductor(
+  root: string,
+  enterHostRegion: NonNullable<ConstructorParameters<typeof Conductor>[0]['childRegionLifecycle']>['enterHostRegion'],
+  childEntry: () => Promise<unknown> = async () => ({ kind: 'completed' as const }),
+) {
   const runner = { run: vi.fn(async () => ({ success: true })) };
-  const enterChildRegion = vi.fn(async () => ({ kind: 'completed' as const }));
+  const enterChildRegion = vi.fn(childEntry);
   const conductor = new Conductor({
     projectRoot: root,
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
@@ -91,14 +158,14 @@ describe('routed host no-op guard placement', () => {
   });
 
   // Covers: task:16
-  it('halts needs-human without a provider dispatch when operator round entry is undeclared', async () => {
-    const root = await fixture();
+  it('halts needs-human without a provider dispatch when real operator round entry is undeclared', async () => {
+    const root = await operatorRoundFixture(false);
     const { conductor, runner, enterChildRegion } = routedConductor(
       root,
-      async () => ({
-        kind: 'refused',
-        detail: 'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon',
-      }) as never,
+      (input) => enterHostRegion({ ...input, planPath: '.docs/plans/demo.md' }),
+      // If the real task-16 check regresses, fail at the immediate child
+      // lifecycle boundary rather than letting this bounded fixture advance.
+      async () => ({ kind: 'refused', reason: 'stop after host entry' }),
     );
 
     await conductor.run();
@@ -110,5 +177,16 @@ describe('routed host no-op guard placement', () => {
       'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon\n',
     );
     await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('enters a declared operator round through the real host-region check', async () => {
+    const root = await operatorRoundFixture(true);
+    const entered = await enterHostRegion({
+      worktree: root, slug: 'demo', roundId, host: child,
+      emitter: new ConductorEventEmitter(), planPath: '.docs/plans/demo.md',
+    });
+
+    expect(entered).toMatchObject({ kind: 'entered' });
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
