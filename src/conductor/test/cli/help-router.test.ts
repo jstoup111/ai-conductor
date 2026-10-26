@@ -45,6 +45,15 @@ afterEach(async () => {
 });
 
 describe('per-command help router', () => {
+  // Covers: task:28
+  it('renders the closed-child rewind options through the CLI entry', async () => {
+    const result = await runCli(['rewind', '--help']);
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(result.stdout).toContain('--child');
+    expect(result.stdout).toContain('--reason');
+  }, 30_000);
+
   // Covers: task:5
   it('routes help wherever it appears before an option terminator and ignores positionals', () => {
     const expected = commandHelp(['register']);

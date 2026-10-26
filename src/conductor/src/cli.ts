@@ -1055,7 +1055,9 @@ export function createProgram(): Command {
   program
     .command('rewind')
     .description('Return a halted feature to an earlier step')
-    .requiredOption('--to <step>', 'Earlier step to resume from');
+    .requiredOption('--to <step>', 'Earlier step to resume from')
+    .option('--child <n>', 'Closed child to rewind')
+    .option('--reason <text>', 'Reason for rewinding a closed child');
 
   registerCommands(program);
 

@@ -134,13 +134,20 @@ export function detectRewindCommand(argv: string[]): RewindDispatch | null {
   for (let index = 3; index < argv.length; index += 2) {
     const flag = argv[index];
     const value = argv[index + 1];
-    if (!flag || value === undefined || !['--to', '--child'].includes(flag) || values.has(flag)) return null;
+    if (!flag || value === undefined || !['--to', '--child', '--reason'].includes(flag) || values.has(flag)) return null;
     values.set(flag, value);
   }
   const target = values.get('--to');
   if (!target || target.startsWith('--')) return null;
   const child = values.get('--child');
-  return { kind: 'rewind', target, ...(child === undefined ? {} : { child }) };
+  const reason = values.get('--reason');
+  if (reason !== undefined && (reason.trim() === '' || reason.startsWith('--'))) return null;
+  return {
+    kind: 'rewind',
+    target,
+    ...(child === undefined ? {} : { child }),
+    ...(reason === undefined ? {} : { reason }),
+  };
 }
 
 export function inPlaceHaltRecoveryHint(state: ConductState, target: string, slug: string): string | undefined {
