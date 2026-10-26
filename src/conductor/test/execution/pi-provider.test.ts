@@ -1108,6 +1108,40 @@ describe('PiProvider read-only review argv', () => {
     expect(asset.startsWith('/')).toBe(true);
   });
 
+  // Covers: task:9
+  it('appends the system prompt after HARNESS.md without changing read-only restrictions', async () => {
+    await invokeReadOnly();
+    const baselineArgs = spawn.mock.calls[0]![1];
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const systemPromptPath = args[appendIndices[1]! + 1]!;
+      delivered = await readFile(systemPromptPath, 'utf8');
+      await rm(dirname(systemPromptPath), { recursive: true, force: true });
+      return { stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'), stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await invokeReadOnly({ systemPrompt: 'S' });
+
+    const args = spawn.mock.calls[1]![1];
+    const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+    expect({
+      harnessFirst: appendIndices[0]! < appendIndices[1]!,
+      harness: args[appendIndices[0]! + 1],
+      delivered,
+      noExtensions: args.includes('--no-extensions'),
+      tools: toolsValue(args),
+      conductGitRead: args.includes('--conduct-git-read'),
+    }).toEqual({
+      harnessFirst: true,
+      harness: '/home/agent/.agents/skills/HARNESS.md',
+      delivered: 'S',
+      noExtensions: baselineArgs.includes('--no-extensions'),
+      tools: toolsValue(baselineArgs),
+      conductGitRead: baselineArgs.includes('--conduct-git-read'),
+    });
+  });
+
   it('adds submit_result to the tools when a native schema is requested', async () => {
     await invokeReadOnly({ nativeSchema: { type: 'object' }, nativeSchemaScratchHome: scratchHome, nativeSchemaScratchRoot: worktree });
 
