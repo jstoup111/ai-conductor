@@ -71,7 +71,6 @@ export async function consumeLowestQueued(
     kind: 'revalidate',
     items: [],
     allocation: { [entry.child]: { remTaskIds: [], blockBodies: [] } },
-    sealedAuthored: 0,
   }, { git });
   if (created.kind !== 'created') return { kind: created.kind === 'cas-failed' ? 'busy' : 'unavailable' };
   const admitted = await admitRound(worktree, slug, created.record, entry.child, { git });

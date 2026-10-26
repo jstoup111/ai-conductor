@@ -153,6 +153,7 @@ grants extra laps or growth, and a crash never double-charges or refunds.
 - Given that settled round, when a later BUILD dispatch for the round's current host occurs, then only an acknowledgement is recorded, and the ledger's laps and growth are unchanged.
 - Given one round admitting a `prd_audit` FIXABLE and an as-built REMEDIABLE, when host 1 dispatches, then one lap is charged to each gate and their growth once, in one settlement.
 - Given a stacked feature's first ledger record, when growth is read, then `authored` is stored as 12 from the sealed plan, and it stays 12 after rem blocks exist only on child 1's plan.
+- Given a stacked feature with an audit round sealed at 12 authored tasks and a revalidate round, when growth is read, then `authored` is 12: a revalidate round seals no denominator, and one recorded as `0` before this rule is ignored rather than refused.
 - Given rem blocks pending only on child 1's plan, when growth is read before settlement, then the pending-task exclusion takes those ids from the frozen allocation.
 - Given a worktree recreated after settlement, when the feature resumes, then settled laps, growth and taskless counters are rebuilt from the round receipts, and the ledger has no `pendingRepair` field.
 - Given a worktree recreated while an as-built round is open, when as-built runs again, then its prior-findings input includes the pending findings read from the route record.

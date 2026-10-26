@@ -343,7 +343,9 @@ export async function readRoutedGrowthSnapshot(
   for (const item of records) {
     if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
     if (!item.record.receipt.settlementId) for (const allocation of Object.values(item.record.allocation)) for (const taskId of allocation.remTaskIds) ids.add(taskId);
-    if (item.record.sealedAuthored === undefined) continue;
+    // A revalidate round authors no remediation tasks and has no denominator;
+    // rounds written before #3389's placeholder was removed still carry 0.
+    if (item.record.sealedAuthored === undefined || item.record.kind === 'revalidate') continue;
     if (sealedAuthored !== undefined && sealedAuthored !== item.record.sealedAuthored) {
       throw new Error('route receipts disagree on sealed authored denominator');
     }

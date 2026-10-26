@@ -69,11 +69,17 @@ export type RoutingTransactionOp =
   | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
-/** Every newly admitted route seals its authored-task denominator. */
+/**
+ * Every newly admitted audit route seals its authored-task denominator. A
+ * revalidate route authors no remediation tasks, so it seals none.
+ */
 export type CreateRouteRecordInput = Pick<
   RouteRecord,
-  'roundId' | 'kind' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
-> & { readonly sealedAuthored: number; readonly receipt?: RouteRecord['receipt'] };
+  'roundId' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
+> & { readonly receipt?: RouteRecord['receipt'] } & (
+  | { readonly kind: 'audit'; readonly sealedAuthored: number }
+  | { readonly kind: 'revalidate'; readonly sealedAuthored?: never }
+);
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
 export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
 
