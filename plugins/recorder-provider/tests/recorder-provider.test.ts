@@ -60,6 +60,20 @@ describe('RecorderProvider', () => {
     expect(provider).not.toHaveProperty('invokeInteractive');
   });
 
+  // Covers: task:15
+  it('declares system-prompt delivery and records the supplied system prompt', async () => {
+    const provider = new RecorderProvider({ recordingPath });
+    const systemPrompt = 'System instruction S';
+
+    expect(provider.systemPromptCapability).toEqual({ deliversSystemPrompt: true });
+
+    await provider.invoke({ ...makeOptions(), systemPrompt });
+
+    const content = await readFile(recordingPath, 'utf-8');
+    const record = JSON.parse(content.trim());
+    expect(record.options.systemPrompt).toBe(systemPrompt);
+  });
+
   // -------------------------------------------------------------------------
   // T4: Parent directory creation
   // -------------------------------------------------------------------------
