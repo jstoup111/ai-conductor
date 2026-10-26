@@ -23,7 +23,7 @@ import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { withholdCost } from './token-usage.js';
-import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { writeScratchSchema } from './scratch-schema.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';

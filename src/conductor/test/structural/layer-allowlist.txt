@@ -237,10 +237,8 @@ engine/tracker-client.ts -> engine/github-operation-approval.ts
 engine/tracker-client.ts -> engine/owner-gate/mutation-policy.ts
 execution/claude-provider.ts -> execution/provider-catalog.ts
 execution/claude-provider.ts -> execution/provider-diagnostics.ts
-execution/codex-provider.ts -> engine/self-host/provider-scratch.ts
 execution/codex-provider.ts -> execution/provider-catalog.ts
 execution/codex-provider.ts -> execution/provider-diagnostics.ts
-execution/pi-provider.ts -> engine/self-host/provider-scratch.ts
 execution/pi-provider.ts -> execution/pi-self-host-auth.ts
 execution/pi-provider.ts -> execution/provider-catalog.ts
 execution/pi-provider.ts -> execution/provider-diagnostics.ts

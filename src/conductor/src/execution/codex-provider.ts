@@ -35,7 +35,7 @@ import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { writeScratchSchema } from './scratch-schema.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
