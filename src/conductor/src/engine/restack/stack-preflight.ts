@@ -108,8 +108,8 @@ function unlandedClosedChildCommitsHalt(slug: string, children: readonly number[
 
 /**
  * Make the durable stack coherent before an entry point judges the active
- * child.  The journal is always probed first, even for a flat feature: an
- * interrupted stack cannot be made safe by losing its worktree metadata.
+ * child. Durable-state detection includes the journal, so an interrupted
+ * stack cannot be flattened by lost worktree metadata.
  */
 export async function runStackPreflight(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
   // Establish whether the feature is stacked before touching routing state.
