@@ -1,4 +1,4 @@
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../cli.js';
@@ -6,7 +6,7 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
-import { HALT_CLASS_MARKER, HALT_MARKER } from './halt-marker.js';
+import { HALT_MARKER } from './halt-marker.js';
 import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot, type OwnedParkCreationResult, type ParkToken } from './park-marker.js';
 import { clearHaltAtomically } from './rewind.js';
 import {
@@ -64,7 +64,11 @@ function leaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResult, { reado
   }
 }
 
-async function clearUnlandedClosedChildCommitsHalt(worktree: string): Promise<void> {
+async function clearUnlandedClosedChildCommitsHalt(
+  worktree: string,
+  host: ChildId,
+  carried: readonly CarriedOperatorChild[],
+): Promise<void> {
   const halt = join(worktree, HALT_MARKER);
   let body: string;
   try {
@@ -73,11 +77,17 @@ async function clearUnlandedClosedChildCommitsHalt(worktree: string): Promise<vo
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
   }
-  if (!body.startsWith('unlanded-closed-child-commits:')) return;
-  await unlink(halt);
-  await unlink(join(worktree, HALT_CLASS_MARKER)).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error;
-  });
+  const match = /^unlanded-closed-child-commits: (child|children) ([1-9]\d*(?:, [1-9]\d*)*)\r?(?:\n|$)/.exec(body);
+  if (match === null) return;
+  const named = match[1] === 'child' ? [match[2]] : match[2].split(', ');
+  if ((match[1] === 'child' && named.length !== 1) || (match[1] === 'children' && named.length < 2)) return;
+  const children = named.map(parseChildId);
+  if (children.some((child) => child === undefined)) return;
+  const namedChildren = children as readonly ChildId[];
+  if (new Set(namedChildren).size !== namedChildren.length) return;
+  const admittedChildren = new Set<ChildId>([host, ...carried.map((child) => child.child)]);
+  if (!namedChildren.every((child) => admittedChildren.has(child))) return;
+  await clearHaltAtomically(worktree);
 }
 
 function parsedChildren(command: StackLandOpenDispatch): { readonly host: ChildId; readonly carry: readonly ChildId[] } | undefined {
@@ -303,7 +313,11 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
     });
     if (result.kind === 'refused') return refused(print, result.detail);
 
-    await (deps.clearHalt ?? clearUnlandedClosedChildCommitsHalt)(worktree);
+    if (deps.clearHalt !== undefined) {
+      await deps.clearHalt(worktree);
+    } else {
+      await clearUnlandedClosedChildCommitsHalt(worktree, admission.host, admission.carried);
+    }
     await clearResolvedBranchMovedHalt(worktree, command.slug, roundId);
     print(`stack land: opened ${roundId} on child ${admission.host}.`);
     return 0;

@@ -1,5 +1,8 @@
-// Covers: task:10
-import { describe, expect, it, vi } from 'vitest';
+// Covers: task:10, task:rem-as-built-rem-as-built-r10
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { detectStackLandCommand, type StackLandDispatch } from '../../src/cli.js';
 import { dispatchStackLandCommand } from '../../src/engine/stack-land-cli.js';
@@ -9,6 +12,12 @@ import { dispatchCliEntry } from '../../src/index.js';
 const command: StackLandDispatch = {
   kind: 'stack-land', slug: 'demo', child: '1', carry: [], reason: 'reviewer requested rename',
 };
+
+const haltRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(haltRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function accepted(carry: readonly { child: number; tip: string }[] = []) {
   return {
@@ -75,6 +84,38 @@ describe('stack land CLI open path', () => {
     }));
     expect(deps.clearHalt).toHaveBeenCalledWith('/worktree');
     expect(deps.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears an unlanded HALT only when the landing admits every named child', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'stack-land-halt-'));
+    haltRoots.push(worktree);
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    const halt = join(worktree, '.pipeline', 'HALT');
+    const haltClass = join(worktree, '.pipeline', 'HALT.class');
+    const body = [
+      'unlanded-closed-child-commits: children 1, 2',
+      'ai-conductor stack land --slug demo --child 1 --carry 2 --reason "<why>"',
+      '',
+    ].join('\n');
+    await writeFile(halt, body);
+    await writeFile(haltClass, 'needs-human\n');
+
+    const childOnly = dependencies({
+      resolveWorktree: vi.fn().mockResolvedValue(worktree),
+      clearHalt: undefined,
+    });
+    await expect(dispatchStackLandCommand(command, childOnly as never)).resolves.toBe(0);
+    await expect(readFile(halt, 'utf8')).resolves.toBe(body);
+    await expect(readFile(haltClass, 'utf8')).resolves.toBe('needs-human\n');
+
+    const carried = dependencies({
+      resolveWorktree: vi.fn().mockResolvedValue(worktree),
+      checkOpen: vi.fn().mockResolvedValue(accepted([{ child: 2, tip: 'b'.repeat(40) }])),
+      clearHalt: undefined,
+    });
+    await expect(dispatchStackLandCommand({ ...command, carry: ['2'] }, carried as never)).resolves.toBe(0);
+    await expect(readFile(halt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(haltClass, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('records an owned-park token only when this command created the park', async () => {
