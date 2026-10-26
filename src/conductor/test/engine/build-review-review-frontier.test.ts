@@ -263,39 +263,100 @@ describe("build-review review frontier", () => {
   });
 
   // Covers: task:9
-  it("keeps every live act source unsettled, including an open applied action", () => {
+  it.each([
+    {
+      name: "open act case",
+      resolution: "open" as const,
+      effect: { kind: "none" as const },
+      expectedUnapplied: true,
+    },
+    {
+      name: "failed act case",
+      resolution: "resolved" as const,
+      effect: { id: "effect-failed", kind: "action" as const, status: "failed" as const, diagnostic: "failed" },
+      expectedUnapplied: true,
+    },
+    {
+      name: "reserved act case",
+      resolution: "resolved" as const,
+      effect: { id: "effect-reserved", kind: "action" as const, status: "reserved" as const },
+      expectedUnapplied: true,
+    },
+    {
+      name: "open act case with an applied action effect",
+      resolution: "open" as const,
+      effect: { id: "effect-applied", kind: "action" as const, status: "applied" as const, workOrderId: "order" },
+      expectedUnapplied: false,
+    },
+  ])("Task 9: keeps H in R's delta for a $name", ({ resolution, effect, expectedUnapplied }) => {
     const finding = {
       concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
       anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:hunk-a", display: "line" } },
     };
-    const sourceIds = ["open", "failed", "reserved", "open-applied"];
-    const records = sourceIds.map((sourceId, index) => ({
-      id: `case-${sourceId}`, domain: "build_review" as const, disposition: "act" as const,
+    const records = [{
+      id: "case-live", domain: "build_review" as const, disposition: "act" as const,
       priority: "high" as const, rationale: "must repair", confidence: "high" as const,
-      resolution: "open" as const,
-      sources: [{ sourceId, outcome: "acted" as const, recordedAt: `2026-10-25T00:00:0${index}Z` }],
-      effect: index === 1
-        ? { id: "effect-failed", kind: "action" as const, status: "failed" as const, diagnostic: "failed" }
-        : index === 2
-          ? { id: "effect-reserved", kind: "action" as const, status: "reserved" as const }
-          : index === 3
-            ? { id: "effect-applied", kind: "action" as const, status: "applied" as const, workOrderId: "order" }
-            : { kind: "none" as const },
-    })) satisfies readonly RemediationCaseRecord[];
+      resolution,
+      sources: [{ sourceId: "live", outcome: "acted" as const, recordedAt: "2026-10-25T00:00:00Z" }],
+      effect,
+    }] satisfies readonly RemediationCaseRecord[];
     const live = buildReviewLiveActSourceIds(records);
-    const lap = { reviewScope: scope(), findings: sourceIds.map((sourceId) => ({ sourceId, finding })) };
+    const lap = { reviewScope: scope(), findings: [{ sourceId: "live", finding }] };
 
-    expect(live.unappliedLiveSourceIds).toEqual(new Set(["open", "failed", "reserved"]));
-    expect(live.appliedLiveSourceIds).toEqual(new Set(["open-applied"]));
-    expect(settledBuildReviewHunks({
+    expect(live.unappliedLiveSourceIds.has("live")).toBe(expectedUnapplied);
+    expect(live.appliedLiveSourceIds.has("live")).toBe(!expectedUnapplied);
+    const settled = settledBuildReviewHunks({
       changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap],
       unappliedLiveSourceIds: live.unappliedLiveSourceIds,
       appliedLiveSourceIds: live.appliedLiveSourceIds,
-    })).toEqual([]);
+    });
+    expect(settled).toEqual([]);
+    expect(decide({ priorLaps: [{ lapId: lapId("lap-l1"), reviewScope: lap.reviewScope }], settledHunks: settled }))
+      .toMatchObject({ mode: "delta", deltaHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }] });
   });
 
   // Covers: task:9
-  it("keeps file-level unapplied sources in delta and makes an absent path a full lap", () => {
+  it("Task 9: keeps H in R's delta when L1 blocks it and eligible L2 is clean", () => {
+    const finding = {
+      concernKind: "duplication", summary: "still blocks", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:hunk-a", display: "line" } },
+    };
+    const l1 = { reviewScope: scope(), findings: [{ sourceId: "blocking", finding }] };
+    const l2 = {
+      reviewScope: scope({ mode: "delta", reason: "delta", sequence: 2, predecessorLapId: lapId("lap-l1") }),
+      findings: [],
+    };
+    const settled = settledBuildReviewHunks({
+      changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [l1, l2],
+    });
+
+    expect(settled).toEqual([]);
+    expect(decide({
+      priorLaps: [{ lapId: lapId("lap-l1"), reviewScope: l1.reviewScope }, { lapId: lapId("lap-l2"), reviewScope: l2.reviewScope }],
+      settledHunks: settled,
+    })).toMatchObject({ mode: "delta", deltaHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }] });
+  });
+
+  // Covers: task:9
+  it("Task 9: returns F to the next delta when its severity threshold is lowered or removed", () => {
+    const finding = {
+      concernKind: "duplication", summary: "previously advisory", evidenceLocations: [],
+      anchor: { rubric: "implementationQuality" as const, locus: { path: "src/example.ts", contentHash: "sha256:hunk-a", display: "line" } },
+    };
+    const lap = { reviewScope: scope(), findings: [{ sourceId: "threshold-advisory", finding }] };
+    const input = { changedFiles: changedFiles(), mergeBase: "base-a", policyIdentity: "sha256:policy-a", laps: [lap] };
+
+    expect(settledBuildReviewHunks({ ...input, nonBlockingSourceIds: new Set(["threshold-advisory"]) })).toEqual([
+      { path: "src/example.ts", contentHash: "sha256:hunk-a" },
+    ]);
+    const afterThresholdChange = settledBuildReviewHunks(input);
+    expect(afterThresholdChange).toEqual([]);
+    expect(decide({ priorLaps: [{ lapId: lapId("lap-l1"), reviewScope: lap.reviewScope }], settledHunks: afterThresholdChange }))
+      .toMatchObject({ mode: "delta", deltaHunks: [{ path: "src/example.ts", contentHash: "sha256:hunk-a" }] });
+  });
+
+  // Covers: task:9
+  it("Task 9: keeps every P hunk in delta for an unapplied file-level source and makes an absent P a full lap", () => {
     const missing = {
       concernKind: "duplication", summary: "duplicate", evidenceLocations: [],
       anchor: { rubric: "implementationQuality" as const, locus: { path: "src/gone.ts", contentHash: "sha256:gone", display: "line" } },
@@ -314,7 +375,7 @@ describe("build-review review frontier", () => {
   });
 
   // Covers: task:9
-  it("keeps only changed and unapplied-risk hunks in L2 when an applied-open anchor was rewritten", () => {
+  it("Task 9: lets an applied-open source with no current anchor add no hunk or full lap", () => {
     const files: readonly ChangedFileReference[] = [{
       path: "src/example.ts",
       changeKind: "modified",
@@ -398,7 +459,7 @@ describe("build-review review frontier", () => {
   });
 
   // Covers: task:9
-  it("keeps testQuality unresolved markers and indeterminate candidates unsettled", () => {
+  it("Task 9: keeps H unsettled for testQuality unresolved markers and indeterminate candidates", () => {
     const unknown = buildReviewTestScopeUnknownSources({
       unresolvedMarkers: [{ selector: "src/example.ts", reference: "task:missing" }],
       indeterminateCandidates: [{
