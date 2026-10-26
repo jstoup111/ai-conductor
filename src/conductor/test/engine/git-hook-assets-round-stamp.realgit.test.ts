@@ -8,7 +8,9 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
+import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCallback);
@@ -57,6 +59,16 @@ function withoutGuardValve(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 async function writeRepairMarker(root: string, host: number, roundId: string): Promise<void> {
+  const parsedRoundId = parseRoundId(roundId);
+  if (parsedRoundId === undefined) throw new Error(`invalid round id: ${roundId}`);
+  const route = await createRouteRecord(root, 'demo', {
+    roundId: parsedRoundId,
+    sealedAuthored: 0,
+    kind: 'audit',
+    items: [],
+    allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+  });
+  if (route.kind !== 'created') throw new Error(`could not create route: ${route.kind}`);
   const markerPath = join(root, '.pipeline', 'repair-marker.json');
   await writeFile(markerPath, JSON.stringify({ host, roundId }));
   const blob = await git(root, ['hash-object', '-w', markerPath]);
@@ -112,13 +124,13 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await expect(commit(root, 'member.txt', 'feat: permitted child task')).resolves.toContain('Task: T1');
   });
 
-  it('adds one Task and Round trailer only for the marker host branch', async () => {
+  it('adds one Task and Round trailer for the marker host and refuses a non-host commit', async () => {
     const root = await routedFixture();
     await writeRepairMarker(root, 1, 'r1');
 
     await expect(commit(root, 'host.txt', 'feat: host repair')).resolves.toContain('Task: T1\nRound: r1');
     await git(root, ['checkout', '-q', 'feat/daemon-demo']);
-    await expect(commit(root, 'leaf.txt', 'feat: leaf change')).resolves.not.toMatch(/^Round:/m);
+    await expect(commit(root, 'leaf.txt', 'feat: leaf change')).rejects.toThrow(/stack-commit-guard/);
     await git(root, ['checkout', '-q', 'feat/c1/demo']);
     const duplicate = await commit(root, 'duplicate.txt', 'feat: same round\n\nRound: r1');
     expect(duplicate.match(/^Round:/gm)).toHaveLength(1);

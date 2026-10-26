@@ -35,7 +35,7 @@ describe('guardDaemonSessionInvocation', () => {
   it('exports exactly the sanctioned worker subcommands and permits each one', () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).toEqual([
       'scoped-run', 'task', 'overlap-scan', 'plan-protected-targets', 'manual-test-record',
-      'derive-feedback', 'scope-check', 'task-membership-check', 'round-stamp', 'github-operation',
+      'derive-feedback', 'scope-check', 'task-membership-check', 'round-stamp', 'stack-commit-guard', 'github-operation',
     ]);
     for (const subcommand of SESSION_SANCTIONED_SUBCOMMANDS) {
       expect(guardDaemonSessionInvocation(argvFor(subcommand), markedEnv())).toEqual({ allowed: true });
@@ -53,6 +53,7 @@ describe('guardDaemonSessionInvocation', () => {
     ['scope-check', true],
     ['task-membership-check', true],
     ['round-stamp', true],
+    ['stack-commit-guard', true],
     ['github-operation', true],
     ['daemon', false],
     ['config', false],
@@ -131,6 +132,8 @@ describe('guardDaemonSessionInvocation', () => {
       argvFor('task-membership-check', '/worktree/.git/COMMIT_EDITMSG'),
       // prepare-commit-msg stamps the routed round onto the session's own commit.
       argvFor('round-stamp', '/worktree/.git/COMMIT_EDITMSG'),
+      // The pre-commit hook invokes this guard before any phase-marker check.
+      argvFor('stack-commit-guard'),
       // FINISH publication prompts submit PR prose through the guarded operation.
       argvFor('github-operation', '--request-file', '/tmp/pr-prose-request.json'),
     ]) {
@@ -138,6 +141,13 @@ describe('guardDaemonSessionInvocation', () => {
     }
     // The sanctioned set is worker commands only — orchestration verbs stay blocked.
     expect(guardDaemonSessionInvocation(argvFor('test-suite'), markedEnv()).allowed).toBe(false);
+  });
+
+  // Covers: task:13
+  it('sanctions only the stack commit guard, never operator landing commands', () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).toContain('stack-commit-guard');
+    expect(guardDaemonSessionInvocation(argvFor('stack', 'land'), markedEnv()).allowed).toBe(false);
+    expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
   });
 
   it('never grants build-review operator authority to a daemon session', () => {

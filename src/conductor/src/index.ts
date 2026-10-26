@@ -223,6 +223,10 @@ import {
   runRoundStamp,
 } from './engine/round-stamp-cli.js';
 import {
+  detectStackCommitGuardCommand,
+  runStackCommitGuard,
+} from './engine/stack-commit-guard-cli.js';
+import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
 } from './engine/test-suite-cli.js';
@@ -1238,6 +1242,11 @@ async function dispatchCliCommand(): Promise<void> {
       projectRoot,
       commitMessagePath: roundStampCmd.commitMessagePath,
     }));
+  }
+
+  if (detectStackCommitGuardCommand(process.argv)) {
+    const projectRoot = process.env.CONDUCT_STACK_GUARD_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runStackCommitGuard({ projectRoot }));
   }
 
   // Evidence subcommand (`evidence judge <slug>`, Task 19) runs NON-INTERACTIVELY and exits —

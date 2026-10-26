@@ -24,6 +24,11 @@ export interface StackCommitGuardDependencies {
   readonly print?: (message: string) => void;
 }
 
+/** Recognize the hook-only `ai-conductor stack-commit-guard` command. */
+export function detectStackCommitGuardCommand(argv: readonly string[]): boolean {
+  return argv[2] === 'stack-commit-guard';
+}
+
 async function currentBranch(projectRoot: string): Promise<string | undefined> {
   try {
     const result = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {

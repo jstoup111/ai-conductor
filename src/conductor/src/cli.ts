@@ -799,6 +799,7 @@ export function createProgram(): Command {
     'scope-check',
     'task-membership-check',
     'round-stamp',
+    'stack-commit-guard',
   ]) {
     program.command(command, { hidden: true });
   }
