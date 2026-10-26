@@ -4,6 +4,8 @@ import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import { makeProductionGh, runTrackerUrlRead } from './tracker-client.js';
 
+export { isFeatureSlug } from '../execution/feature-slug.js';
+
 const execFile = promisify(execFileCb);
 
 /**
@@ -42,11 +44,6 @@ export function slugify(name: string): string {
     .replace(/-{2,}/g, '-')
     .replace(/-$/g, '')
     .slice(0, 50);
-}
-
-/** Canonical grammar for daemon feature directory and branch slugs. */
-export function isFeatureSlug(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(value);
 }
 
 export interface WorktreeInfo {

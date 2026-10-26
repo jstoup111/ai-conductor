@@ -1,4 +1,4 @@
-// Covers: task:20
+// Covers: task:20, task:4
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -7,10 +7,12 @@ import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import {
   slugify,
+  isFeatureSlug as isEngineFeatureSlug,
   WorktreeLifecycleQueue,
   WorktreeManager,
   checkPrMerged,
 } from '../../src/engine/worktree.js';
+import { isFeatureSlug as isExecutionFeatureSlug } from '../../src/execution/feature-slug.js';
 import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 
 const execFile = promisify(execFileCb);
@@ -21,6 +23,16 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 describe('engine/worktree', () => {
+  it('keeps feature-slug acceptance identical through engine and execution imports', () => {
+    const slugs: readonly [unknown, boolean][] = [
+      ['feature-123', true], ['a', true], ['0-start', true],
+      ['', false], ['-leading', false], ['Uppercase', false], ['contains_space', false], [42, false], [null, false],
+    ];
+
+    expect(slugs.map(([slug, expected]) => [isEngineFeatureSlug(slug), isExecutionFeatureSlug(slug), expected]))
+      .toEqual(slugs.map(([, expected]) => [expected, expected, expected]));
+  });
+
   describe('slugify', () => {
     it('returns lowercase with spaces as hyphens', () => {
       expect(slugify('URL shortener service')).toBe('url-shortener-service');

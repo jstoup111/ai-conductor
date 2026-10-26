@@ -242,8 +242,6 @@ execution/codex-provider.ts -> engine/build-review-read-only-capability.ts
 execution/codex-provider.ts -> engine/self-host/provider-scratch.ts
 execution/codex-provider.ts -> execution/provider-catalog.ts
 execution/codex-provider.ts -> execution/provider-diagnostics.ts
-execution/daemon-session.ts -> engine/worktree.ts
-execution/managed-session-context.ts -> engine/worktree.ts
 execution/pi-provider.ts -> engine/self-host/provider-scratch.ts
 execution/pi-provider.ts -> execution/pi-self-host-auth.ts
 execution/pi-provider.ts -> execution/provider-catalog.ts
@@ -257,5 +255,4 @@ execution/provider-catalog.ts -> execution/claude-provider.ts
 execution/provider-catalog.ts -> execution/codex-provider.ts
 execution/provider-catalog.ts -> execution/pi-provider.ts
 execution/provider-diagnostics.ts -> execution/provider-catalog.ts
-execution/session-event-producer.ts -> engine/worktree.ts
 tools/generate-model-table.ts -> execution/provider-catalog.ts
