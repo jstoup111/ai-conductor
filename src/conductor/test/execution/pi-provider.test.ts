@@ -1,6 +1,6 @@
 // Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:10, task:13, task:15, task:16, task:17, task:18
 // Covers: task:4
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat as fileStat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -78,12 +78,15 @@ function fakePiEnvironment(options: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   cwd?: string;
+  stat?: PiEnvironment['stat'];
 } = {}): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
   const files = new Set(options.files ?? []);
   const directories = new Set(options.directories ?? []);
   const stat = vi.fn(async (path: string) => {
+    if (options.stat) return options.stat(path);
     if (files.has(path)) return { isFile: () => true, isDirectory: () => false };
     if (directories.has(path)) return { isFile: () => false, isDirectory: () => true };
+    if (path.includes('ai-conductor-pi-system-prompt-')) return fileStat(path);
     const error = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
     error.code = 'ENOENT';
     throw error;
@@ -367,6 +370,165 @@ describe('PiProvider', () => {
       inArgv: args.some((value) => value.includes(systemPrompt)),
       inStdin: String(options.input).includes(systemPrompt),
     }).toEqual({ input: invokeOptions.prompt, delivered: systemPrompt, inArgv: false, inStdin: false });
+  });
+
+  // Covers: task:11
+  it('refuses Pi before spawn when its system-prompt file cannot be prepared or verified', async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-system-prompt-refusal-'));
+    const blockingFile = join(fixtureRoot, 'not-a-directory');
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    await writeFile(blockingFile, 'blocks mkdtemp');
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = join(blockingFile, 'child');
+    try {
+      const preparationFailure = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
+      expect({ spawned: spawn.mock.calls.length, output: preparationFailure.output }).toEqual({
+        spawned: 0,
+        output: expect.stringMatching(/Pi could not prepare the system prompt for delivery/),
+      });
+
+      process.env.AI_CONDUCTOR_TEST_TMP_ROOT = fixtureRoot;
+      let preparedPath: string | undefined;
+      ({ environment } = fakePiEnvironment({
+        stat: async (path) => {
+          if (path === harnessPath) return { isFile: () => true, isDirectory: () => false };
+          if (path.includes('ai-conductor-pi-system-prompt-')) {
+            preparedPath = path;
+            return { isFile: () => false, isDirectory: () => false };
+          }
+          throw new Error(`ENOENT: ${path}`);
+        },
+      }));
+      provider = new PiProvider('/resolved/pi', spawn, environment);
+      const verificationFailure = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
+      expect({
+        spawned: spawn.mock.calls.length,
+        namesPath: verificationFailure.output.includes(preparedPath!),
+        output: verificationFailure.output,
+      }).toEqual({ spawned: 0, namesPath: true, output: expect.stringMatching(/Pi.*is not a readable regular file/) });
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:12
+  it.each([
+    ['a 300 KiB prompt', 'x'.repeat(300 * 1024)],
+    ['a multi-byte UTF-8 prompt', 'é → 🚀'.repeat(4096)],
+    ['the 128 KiB argument boundary', 'x'.repeat(128 * 1024)],
+    ['a multi-line prompt', 'first line\nsecond line\nthird line'],
+  ])('delivers %s through the appended file only', async (_caseName, systemPrompt) => {
+    let delivered: Buffer | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      delivered = await readFile(args[indices[1]! + 1]!);
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, systemPrompt });
+
+    const args = spawn.mock.calls[0]![1];
+    expect({
+      containsText: args.some((value) => value.includes(systemPrompt)),
+      containsSlice: args.some((value) => value.includes(systemPrompt.slice(0, 64))),
+      everyArgUnderLimit: args.every((value) => Buffer.byteLength(value) < 131_072),
+      noPromptLineIsArg: systemPrompt.split('\n').every((line) => !args.includes(line)),
+      bytes: delivered,
+    }).toEqual({
+      containsText: false,
+      containsSlice: false,
+      everyArgUnderLimit: true,
+      noPromptLineIsArg: true,
+      bytes: Buffer.from(systemPrompt, 'utf8'),
+    });
+  });
+
+  // Covers: task:13
+  it('uses distinct private files and removes them after success, failure, abort, and ENOENT', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-system-prompt-cleanup-'));
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
+    const paths: string[] = [];
+    try {
+      for (const result of [
+        { stdout: assistantEnd, stderr: '', exitCode: 0 },
+        { stdout: '', stderr: '', exitCode: 1 },
+        { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
+      ]) {
+        spawn.mockImplementationOnce(async (_file, args) => {
+          const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+          const path = args[indices[1]! + 1]!;
+          paths.push(path);
+          expect((await fileStat(path)).mode & 0o777).toBe(0o600);
+          return result as ExecaResult;
+        });
+        await provider.invoke({ ...invokeOptions, systemPrompt: `prompt-${paths.length}` });
+      }
+
+      const controller = new AbortController();
+      let resolveProcess: (result: ExecaResult) => void;
+      const process = Object.assign(new Promise<ExecaResult>((resolve) => { resolveProcess = resolve; }), {
+        kill: vi.fn(() => resolveProcess({ stdout: '', stderr: '', exitCode: 1 } as ExecaResult)),
+      });
+      spawn.mockImplementationOnce((_file, args) => {
+        const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+        paths.push(args[indices[1]! + 1]!);
+        return process as ReturnType<PiSubprocessFactory>;
+      });
+      const aborted = provider.invoke({ ...invokeOptions, systemPrompt: 'abort', abortSignal: controller.signal });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(4));
+      controller.abort();
+      await expect(aborted).resolves.toMatchObject({ output: 'Pi invocation aborted.' });
+
+      expect(await Promise.all(paths.flatMap((path) => [
+        fileStat(path).then(() => true, () => false),
+        fileStat(dirname(path)).then(() => true, () => false),
+      ]))).toEqual(Array(paths.length * 2).fill(false));
+
+      const preSpawnController = new AbortController();
+      let preSpawnPath: string | undefined;
+      ({ environment } = fakePiEnvironment({
+        stat: async (path) => {
+          if (path === harnessPath) return { isFile: () => true, isDirectory: () => false };
+          if (path.includes('ai-conductor-pi-system-prompt-')) {
+            preSpawnPath = path;
+            preSpawnController.abort();
+            return { isFile: () => true, isDirectory: () => false };
+          }
+          throw new Error(`ENOENT: ${path}`);
+        },
+      }));
+      provider = new PiProvider('/resolved/pi', spawn, environment);
+      const callsBeforePreSpawnAbort = spawn.mock.calls.length;
+      await expect(provider.invoke({ ...invokeOptions, systemPrompt: 'pre-spawn abort', abortSignal: preSpawnController.signal }))
+        .resolves.toMatchObject({ output: 'Pi invocation aborted.' });
+      expect({
+        spawned: spawn.mock.calls.length - callsBeforePreSpawnAbort,
+        fileExists: await fileStat(preSpawnPath!).then(() => true, () => false),
+        tempEntries: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
+      }).toEqual({ spawned: 0, fileExists: false, tempEntries: [] });
+
+      const concurrentPaths: string[] = [];
+      const concurrentContents: string[] = [];
+      spawn.mockImplementation(async (_file, args) => {
+        const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+        const path = args[indices[1]! + 1]!;
+        concurrentPaths.push(path);
+        concurrentContents.push(await readFile(path, 'utf8'));
+        return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+      });
+      await Promise.all([provider.invoke({ ...invokeOptions, systemPrompt: 'A' }), provider.invoke({ ...invokeOptions, systemPrompt: 'B' })]);
+      expect({ paths: concurrentPaths, contents: concurrentContents }).toEqual({
+        paths: expect.arrayContaining([expect.any(String), expect.any(String)]),
+        contents: expect.arrayContaining(['A', 'B']),
+      });
+      expect(new Set(concurrentPaths).size).toBe(2);
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:8

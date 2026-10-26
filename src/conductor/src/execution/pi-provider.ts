@@ -550,10 +550,28 @@ export class PiProvider implements LLMProvider {
     // ADR D18: -na keeps project-local Pi files untrusted unless the operator
     // opts in; a read-only review (D17) always keeps -na.
     const args = ['-p', ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    let systemPromptFile: Awaited<ReturnType<typeof writePiSystemPromptFile>> | undefined;
     if (typeof options.systemPrompt === 'string' && options.systemPrompt.length > 0) {
-      const systemPromptFile = await writePiSystemPromptFile(options.systemPrompt);
+      try {
+        systemPromptFile = await writePiSystemPromptFile(options.systemPrompt);
+      } catch (error) {
+        return {
+          success: false,
+          output: `${piDisplayName()} could not prepare the system prompt for delivery: ${error instanceof Error ? error.message : String(error)}`,
+          exitCode: 1,
+        };
+      }
+      if (!await isFile(systemPromptFile.path, this.environment)) {
+        await systemPromptFile.dispose();
+        return {
+          success: false,
+          output: `${piDisplayName()} system-prompt file ${systemPromptFile.path} is not a readable regular file.`,
+          exitCode: 1,
+        };
+      }
       args.push('--append-system-prompt', systemPromptFile.path);
     }
+    try {
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);
@@ -722,6 +740,9 @@ export class PiProvider implements LLMProvider {
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
       gitGuardInstalled: guardDir !== null,
     };
+    } finally {
+      await systemPromptFile?.dispose();
+    }
   }
 
 }
