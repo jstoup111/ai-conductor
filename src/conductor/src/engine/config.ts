@@ -86,13 +86,11 @@ const AS_BUILT_CHECK_NAMES = new Set([
   'diagramDrift',
 ]);
 const PRD_AUDIT_DEFAULTS = {
-  max_remediation_laps: 1,
   max_appended_tasks: 5,
   max_appended_ratio: 0.25,
   halt_on_any_plan_gap: false,
 } as const;
 const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
-  max_remediation_laps: 1,
   remediation: { enabled: true },
 } as const;
 /** Built-in ids (now including shipped `security`) are reserved from custom declarations. */
@@ -2000,17 +1998,22 @@ function validatePrdAuditBlock(raw: unknown): ConfigError | null {
     }
   }
 
-  for (const key of ['max_remediation_laps', 'max_appended_tasks'] as const) {
-    const value = obj[key];
-    if (
-      value !== undefined &&
-      (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
-    ) {
-      return {
-        type: 'validation_error',
-        message: `prd_audit.${key} must be a positive integer`,
-      };
-    }
+  const remediationLapError = validateRemediationLapCap(
+    obj.max_remediation_laps,
+    'prd_audit.max_remediation_laps',
+  );
+  if (remediationLapError) return remediationLapError;
+
+  if (
+    obj.max_appended_tasks !== undefined &&
+    (typeof obj.max_appended_tasks !== 'number' ||
+      !Number.isInteger(obj.max_appended_tasks) ||
+      obj.max_appended_tasks <= 0)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'prd_audit.max_appended_tasks must be a positive integer',
+    };
   }
 
   const ratio = obj.max_appended_ratio;
@@ -2066,17 +2069,16 @@ function validatePlanReviewBlock(raw: unknown): ConfigError | null {
 }
 
 function resolvePrdAuditBlock(raw: unknown): {
-  max_remediation_laps: number;
+  max_remediation_laps?: unknown;
   max_appended_tasks: number;
   max_appended_ratio: number;
   halt_on_any_plan_gap: boolean;
 } {
   const obj = isPlainObject(raw) ? raw : {};
   return {
-    max_remediation_laps:
-      typeof obj.max_remediation_laps === 'number'
-        ? obj.max_remediation_laps
-        : PRD_AUDIT_DEFAULTS.max_remediation_laps,
+    ...(obj.max_remediation_laps === undefined
+      ? {}
+      : { max_remediation_laps: obj.max_remediation_laps }),
     max_appended_tasks:
       typeof obj.max_appended_tasks === 'number'
         ? obj.max_appended_tasks
@@ -2111,16 +2113,11 @@ function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | nul
     }
   }
 
-  if (obj.max_remediation_laps !== undefined && (
-    typeof obj.max_remediation_laps !== 'number' ||
-    !Number.isInteger(obj.max_remediation_laps) ||
-    obj.max_remediation_laps <= 0
-  )) {
-    return {
-      type: 'validation_error',
-      message: 'architecture_review_as_built.max_remediation_laps must be a positive integer',
-    };
-  }
+  const remediationLapError = validateRemediationLapCap(
+    obj.max_remediation_laps,
+    'architecture_review_as_built.max_remediation_laps',
+  );
+  if (remediationLapError) return remediationLapError;
 
   if (obj.remediation !== undefined) {
     if (!isPlainObject(obj.remediation)) {
@@ -2196,11 +2193,38 @@ function resolveArchitectureReviewAsBuiltBlock(raw: unknown): Record<string, unk
           ? remediation.enabled
           : ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS.remediation.enabled,
     },
-    max_remediation_laps:
-      typeof obj.max_remediation_laps === 'number'
-        ? obj.max_remediation_laps
-        : ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS.max_remediation_laps,
+    ...(obj.max_remediation_laps === undefined
+      ? {}
+      : { max_remediation_laps: obj.max_remediation_laps }),
   };
+}
+
+function validateRemediationLapCap(raw: unknown, path: string): ConfigError | null {
+  if (raw === undefined || typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
+    return null;
+  }
+  if (!isPlainObject(raw)) {
+    return {
+      type: 'validation_error',
+      message: `${path} must be a positive integer or a map of S, M, L to positive integers`,
+    };
+  }
+
+  for (const [tier, value] of Object.entries(raw)) {
+    if (!VALID_COMPLEXITY_TIERS.has(tier)) {
+      return {
+        type: 'validation_error',
+        message: `${path}.${tier} is an unknown tier`,
+      };
+    }
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      return {
+        type: 'validation_error',
+        message: `${path}.${tier} must be a positive integer`,
+      };
+    }
+  }
+  return null;
 }
 
 function validateConductorBlock(raw: unknown): ConfigError | null {
