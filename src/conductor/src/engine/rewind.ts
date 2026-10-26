@@ -419,21 +419,19 @@ export async function dispatchRewindCommand(
   cwd = process.cwd(),
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
-  const cursor = await resolveActiveChildForCurrentFeature(cwd);
-  if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
-    const detail = cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
-    console.error(`rewind: active child resolution refused (${detail})`);
-    return 1;
-  }
-  if (command.child !== undefined && cursor.kind === 'no-child') {
-    console.error('rewind: --child is available only for a stacked feature.');
-    return 1;
-  }
   const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
   const slug = head?.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
-  const execution = resolveExecutionChild(cursor, slug ?? 'rewind');
-  const executionChild = 'target' in execution ? execution.target.child : undefined;
-  const requestedChild = command.child ?? (executionChild === undefined ? undefined : String(executionChild));
+  let requestedChild = command.child;
+  if (requestedChild === undefined) {
+    const cursor = await resolveActiveChildForCurrentFeature(cwd);
+    if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
+      const detail = cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+      console.error(`rewind: active child resolution refused (${detail})`);
+      return 1;
+    }
+    const execution = resolveExecutionChild(cursor, slug ?? 'rewind');
+    requestedChild = 'target' in execution ? String(execution.target.child) : undefined;
+  }
   if (requestedChild !== undefined) {
     const child = parseChildId(requestedChild);
     if (child === undefined) {
@@ -441,7 +439,7 @@ export async function dispatchRewindCommand(
       return 1;
     }
     const closed = slug === undefined ? false : (await makeGitRunner(cwd)(['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/closed/c${child}`])).exitCode === 0;
-    if (command.child !== undefined && executionChild !== child && closed) {
+    if (command.child !== undefined && closed) {
       if (slug === undefined) {
         console.error('rewind: cannot identify the feature for a closed child rewind.');
         return 1;

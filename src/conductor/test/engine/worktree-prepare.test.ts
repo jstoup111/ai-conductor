@@ -19,6 +19,7 @@ import {
   readSetupMarker,
   writeSetupMarker,
   runDispatchStart,
+  OPERATOR_ONLY_SKILLS,
 } from '../../src/engine/worktree-prepare.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent } from '../../src/types/events.js';
@@ -730,9 +731,12 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
   ])('keys operator-only skill suppression by its frontmatter name: %s', async (_caseName, existingOverrides) => {
     const skillNameRoot = await mkdtemp(join(tmpdir(), 'wt-prepare-skill-names-'));
     try {
-      const skillPath = join(skillNameRoot, 'skills', 'daemon-triage');
-      await mkdir(skillPath, { recursive: true });
-      await writeFile(join(skillPath, 'SKILL.md'), '---\nname: ac-daemon-triage\n---\n', 'utf-8');
+      const frontmatterNames = Object.fromEntries(OPERATOR_ONLY_SKILLS.map((skill) => [skill, `ac-${skill}`]));
+      await Promise.all(OPERATOR_ONLY_SKILLS.map(async (skill) => {
+        const skillPath = join(skillNameRoot, 'skills', skill);
+        await mkdir(skillPath, { recursive: true });
+        await writeFile(join(skillPath, 'SKILL.md'), `---\nname: ${frontmatterNames[skill]}\n---\n`, 'utf-8');
+      }));
       await mkdir(join(dir, '.claude'), { recursive: true });
       await writeFile(join(dir, '.claude', 'settings.local.json'), JSON.stringify({
         skillOverrides: existingOverrides,
@@ -741,8 +745,10 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       await prepareWorktree(dir, undefined, { skillNameRoot });
 
       const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.local.json'), 'utf-8'));
-      expect(settings.skillOverrides['ac-daemon-triage']).toBe('off');
-      expect(settings.skillOverrides).not.toHaveProperty('daemon-triage');
+      for (const skill of OPERATOR_ONLY_SKILLS) {
+        expect(settings.skillOverrides[frontmatterNames[skill]]).toBe('off');
+        expect(settings.skillOverrides).not.toHaveProperty(skill);
+      }
       if ('another-skill' in existingOverrides) {
         expect(settings.skillOverrides['another-skill']).toBe('on');
       }
