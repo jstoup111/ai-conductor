@@ -1,16 +1,14 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-26T12:12:32.452Z
+Status: halted
 Slug: decide-artifacts-are-too-repetitive-for-people-to-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-decide-artifacts-are-too-repetitive-for-people-to-
 Child: 3
-Head SHA: d77dec100707cd6bb607c9b51ee32e65e3c487c7
-Halted at: 2026-10-26T11:45:28.430Z
+Head SHA: 72d876a0359a025663df14f2796e235cb28592c6
+Halted at: 2026-10-26T15:17:40.697Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
