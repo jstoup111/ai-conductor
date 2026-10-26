@@ -53,6 +53,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked feature repairs now carry fixes up the stack and revalidate affected children automatically. ([implementation PR #3389](https://github.com/jstoup111/ai-conductor/pull/3389)).
 - Composer panes display the active feature and DECIDE phase in herdr or tmux. ([implementation PR #3413](https://github.com/jstoup111/ai-conductor/pull/3413)).
 - Plan reviews refuse oversized prompts with an actionable size override. ([implementation PR #3425](https://github.com/jstoup111/ai-conductor/pull/3425)).
+- Operators can configure remediation lap caps by complexity tier. ([implementation PR #3443](https://github.com/jstoup111/ai-conductor/pull/3443)).
 
 ### Changed
 
