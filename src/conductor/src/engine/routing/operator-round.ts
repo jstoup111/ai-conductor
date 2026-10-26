@@ -1,5 +1,5 @@
-import { access, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
@@ -13,6 +13,7 @@ import { loadSliceTopology, type SliceTopology } from '../slice-topology.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
+import { syncRestackedWorktree } from '../restack/restack-sync.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { writeGitHooksAndWire } from '../worktree-prepare.js';
 import { routedRoundOpen } from './round-admission.js';
@@ -20,8 +21,9 @@ import { admitRound } from './round-admission.js';
 import { pinHostEntry, restageHostRegion } from './host-region-entry.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { createRouteRecord, readRepairMarker, readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
-import { closureRefFor, redRefFor } from './routing-refs.js';
+import { closureRefFor, redRefFor, rejectedPinRefFor } from './routing-refs.js';
 import { parseRoundId, routingSettingOn, type CarriedOperatorChild, type OperatorRouteSection, type RoundId, type RouteRecord } from './route-types.js';
+import type { ConductState, StateMutation } from '../../types/state.js';
 
 export interface CheckOperatorTipsInput {
   readonly worktree: string;
@@ -484,4 +486,172 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
   const credit = await grantRoutedRepairCredit({ projectRoot: input.worktree, child: input.host, roundId: input.roundId });
   if (credit.kind === 'refused') return { kind: 'refused', detail: `cannot grant operator repair credit: ${credit.detail}` };
   return { kind: 'opened', pinnedBase: pinned.pinnedBase };
+}
+
+export interface AbandonOperatorRoundInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly git?: GitRunner;
+}
+
+export type AbandonOperatorRoundResult =
+  | { readonly kind: 'abandoned' }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+async function resolveCommitRef(
+  git: GitRunner,
+  ref: string,
+): Promise<CommitSha | undefined> {
+  try {
+    const result = await git(['rev-parse', '-q', '--verify', ref]);
+    return result.exitCode === 0 ? parseCommitSha(result.stdout.trim()) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function restoreOperatorPriorRegion(
+  worktree: string,
+  host: ChildId,
+  priorRegion: OperatorRouteSection['priorRegion'],
+): Promise<{ readonly kind: 'restored' } | { readonly kind: 'refused'; readonly detail: string }> {
+  const state = createRoutedConductStateStore(worktree, host);
+  const current = await state.read();
+  if (!current.ok) return { kind: 'refused', detail: `cannot read abandoned host ${host} region state: ${current.error.message}` };
+  const mutations = CHILD_REGION_STEPS
+    .filter((step) => current.value[step] !== priorRegion.statuses[step])
+    .map((step) => ({
+      field: step,
+      expected: current.value[step],
+      next: priorRegion.statuses[step],
+      intent: `restore abandoned operator host ${host} ${step}`,
+    } as StateMutation<ConductState>));
+  if (mutations.length > 0) {
+    const restored = await state.applyBatch({
+      name: `restore abandoned operator host ${host} region`,
+      mutations,
+    });
+    if ('message' in restored) return { kind: 'refused', detail: `cannot restore abandoned host ${host} region: ${restored.message}` };
+  }
+
+  try {
+    for (const step of CHILD_REGION_STEPS) {
+      const path = verdictPathFor(worktree, step, host);
+      const bytes = priorRegion.verdicts[step];
+      if (bytes === undefined) {
+        await rm(path, { force: true });
+      } else {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, bytes);
+      }
+    }
+  } catch (error) {
+    return { kind: 'refused', detail: `cannot restore abandoned host ${host} verdicts: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  return { kind: 'restored' };
+}
+
+async function onOperatorHostBranch(
+  git: GitRunner,
+  slug: string,
+  host: ChildId,
+): Promise<boolean> {
+  const branch = childBranchFor(slug, host);
+  if (!branch.ok) return false;
+  try {
+    const current = await git(['symbolic-ref', '--short', 'HEAD']);
+    return current.exitCode === 0 && current.stdout.trim() === branch.branch;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reverts an operator landing without advancing the round to the leaf. The
+ * return-to-leaf recovery is deliberately a later owner; this function only
+ * completes the durable host reset, worktree synchronization, prior-region
+ * restoration, and marker removal stages.
+ */
+export async function abandonOperatorRound(
+  input: AbandonOperatorRoundInput,
+): Promise<AbandonOperatorRoundResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  let stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record' || stored.record.kind !== 'operator' || stored.record.operator === undefined) {
+    return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable for abandon` };
+  }
+  if (stored.record.hosts[input.host] === 'abandoned') return { kind: 'abandoned' };
+
+  const branch = childBranchFor(input.slug, input.host);
+  if (!branch.ok) return { kind: 'refused', detail: branch.reason };
+  const hostRef = `refs/heads/${branch.branch}`;
+  if (stored.record.hosts[input.host] === 'admitted' || stored.record.hosts[input.host] === 'repairing') {
+    const [rejectedTip, resetTip] = await Promise.all([
+      resolveCommitRef(git, hostRef),
+      resolveCommitRef(git, closureRefFor(input.slug, input.host)),
+    ]);
+    if (rejectedTip === undefined || resetTip === undefined) {
+      return { kind: 'refused', detail: `cannot resolve host ${input.host} rejected or closure tip for abandon` };
+    }
+    const abandoning = transitionHost(stored, input.host, 'abandoning', { credit: false });
+    if (abandoning.kind !== 'updated') return { kind: 'refused', detail: `operator host ${input.host} cannot enter abandoning` };
+    const record: RouteRecord = {
+      ...abandoning.record,
+      operator: {
+        ...abandoning.record.operator!,
+        abandon: { rejectedTip, resetTip, stage: 'moved' },
+      },
+    };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'create-pin', ref: rejectedPinRefFor(input.slug, input.roundId, input.host), new: rejectedTip },
+      { kind: 'update-branch', ref: hostRef, old: rejectedTip, new: resetTip },
+      { kind: 'update-record', previous: stored, record },
+    ], { git });
+    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot record abandoned host reset: ${wrote.kind}` };
+    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    if (stored.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable after host reset` };
+  }
+
+  const abandon = stored.record.operator?.abandon;
+  if (stored.record.hosts[input.host] !== 'abandoning' || abandon === undefined) {
+    return { kind: 'refused', detail: `operator host ${input.host} is not abandonable` };
+  }
+  if (abandon.stage === 'moved') {
+    if (!await onOperatorHostBranch(git, input.slug, input.host)) {
+      return { kind: 'refused', detail: `cannot synchronize abandoned host ${input.host} while not on ${branch.branch}` };
+    }
+    try {
+      await syncRestackedWorktree(input.worktree, abandon.rejectedTip, abandon.resetTip, { git });
+    } catch (error) {
+      return { kind: 'refused', detail: `cannot synchronize abandoned host ${input.host}: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    const restored = await restoreOperatorPriorRegion(input.worktree, input.host, stored.record.operator!.priorRegion);
+    if (restored.kind === 'refused') return restored;
+    const record: RouteRecord = {
+      ...stored.record,
+      operator: { ...stored.record.operator!, abandon: { ...abandon, stage: 'synced' } },
+    };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record },
+    ], { git });
+    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot record abandoned host sync: ${wrote.kind}` };
+    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    if (stored.kind !== 'record') return { kind: 'refused', detail: `operator round ${input.roundId} is unavailable after host sync` };
+  }
+
+  const marker = await readRepairMarker(input.worktree, input.slug, { git });
+  if (marker.kind !== 'marker' || marker.marker.roundId !== input.roundId) {
+    return { kind: 'refused', detail: `operator round ${input.roundId} repair marker is unavailable for abandon` };
+  }
+  const abandoned = transitionHost(stored, input.host, 'abandoned', { credit: false });
+  if (abandoned.kind !== 'updated') return { kind: 'refused', detail: `operator host ${input.host} cannot enter abandoned` };
+  const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+    { kind: 'update-record', previous: stored, record: abandoned.record },
+    { kind: 'delete-marker', old: marker.blob },
+  ], { git });
+  return wrote.kind === 'updated'
+    ? { kind: 'abandoned' }
+    : { kind: 'refused', detail: `cannot finalize operator abandon: ${wrote.kind}` };
 }
