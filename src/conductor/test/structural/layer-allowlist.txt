@@ -244,7 +244,6 @@ execution/pi-provider.ts -> engine/self-host/provider-scratch.ts
 execution/pi-provider.ts -> execution/pi-self-host-auth.ts
 execution/pi-provider.ts -> execution/provider-catalog.ts
 execution/pi-provider.ts -> execution/provider-diagnostics.ts
-execution/pi-self-host-auth.ts -> engine/tracker-client.ts
 execution/pi-self-host-auth.ts -> execution/pi-provider.ts
 execution/pi-self-host-auth.ts -> execution/provider-catalog.ts
 execution/provider-catalog.ts -> engine/provider-model-policy-defaults.ts
