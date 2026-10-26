@@ -112,6 +112,7 @@ import { WorktreeManager, checkPrMerged, slugify } from './engine/worktree.js';
 import { hasDurableChildState } from './engine/slice-topology.js';
 import {
   acquireFeatureDispatchLease,
+  type FeatureDispatchLease,
   type FeatureDispatchLeaseAcquireResult,
 } from './engine/feature-dispatch-lease.js';
 import { detectAutoResume } from './engine/auto-resume.js';
@@ -856,6 +857,11 @@ export type InteractiveConductorRunLeaseResult =
   | { readonly kind: 'ran' }
   | { readonly kind: 'refused'; readonly message: string };
 
+export type InteractiveConductorRunLeaseAcquisition =
+  | { readonly kind: 'unleased' }
+  | { readonly kind: 'acquired'; readonly lease: FeatureDispatchLease }
+  | { readonly kind: 'refused'; readonly message: string };
+
 function interactiveLeaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResult, { kind: 'acquired' }>): string {
   switch (result.kind) {
     case 'live-owner':
@@ -870,21 +876,20 @@ function interactiveLeaseRefusal(result: Exclude<FeatureDispatchLeaseAcquireResu
 }
 
 /**
- * The foreground entry owns the durable lease for an already-stacked feature.
- * It deliberately has no park dependency: boundary parking is daemon-only.
+ * Acquire the foreground lease before the interactive composition can create
+ * session state or prepare a managed context. It deliberately has no park
+ * dependency: boundary parking is daemon-only.
  */
-export async function runInteractiveConductorWithLease(input: {
+export async function acquireInteractiveConductorRunLease(input: {
   readonly projectRoot: string;
   readonly featureDesc: string | undefined;
-  readonly run: () => Promise<void>;
   readonly dependencies?: InteractiveConductorRunLeaseDependencies;
-}): Promise<InteractiveConductorRunLeaseResult> {
+}): Promise<InteractiveConductorRunLeaseAcquisition> {
   const dependencies = input.dependencies ?? {};
   const toSlug = dependencies.slugify ?? slugify;
   const featureSlug = input.featureDesc ? toSlug(input.featureDesc) : '';
   if (!featureSlug) {
-    await input.run();
-    return { kind: 'ran' };
+    return { kind: 'unleased' };
   }
 
   const durableChildState = await (dependencies.hasDurableChildState ?? hasDurableChildState)(
@@ -898,8 +903,7 @@ export async function runInteractiveConductorWithLease(input: {
     };
   }
   if (!durableChildState) {
-    await input.run();
-    return { kind: 'ran' };
+    return { kind: 'unleased' };
   }
 
   const repository = await (dependencies.resolveMainRepoRoot ?? resolveMainRepoRoot)(input.projectRoot);
@@ -915,12 +919,52 @@ export async function runInteractiveConductorWithLease(input: {
     return { kind: 'refused', message: interactiveLeaseRefusal(acquired) };
   }
 
+  return { kind: 'acquired', lease: acquired.lease };
+}
+
+/**
+ * Run the foreground's first stateful preparation while a stacked-feature
+ * lease is already held. A failed preparation releases the just-acquired
+ * lease; successful callers retain it until the interactive run terminates.
+ */
+export async function prepareInteractiveConductorRunWithLease(input: {
+  readonly projectRoot: string;
+  readonly featureDesc: string | undefined;
+  readonly prepare: () => Promise<void>;
+  readonly dependencies?: InteractiveConductorRunLeaseDependencies;
+}): Promise<InteractiveConductorRunLeaseAcquisition> {
+  const acquired = await acquireInteractiveConductorRunLease(input);
+  if (acquired.kind === 'refused') return acquired;
+  try {
+    await input.prepare();
+    return acquired;
+  } catch (error) {
+    if (acquired.kind === 'acquired') {
+      const released = await acquired.lease.release();
+      if (!released.ok) throw new Error(released.message);
+    }
+    throw error;
+  }
+}
+
+/** The small helper remains available to callers that only need to guard a run. */
+export async function runInteractiveConductorWithLease(input: {
+  readonly projectRoot: string;
+  readonly featureDesc: string | undefined;
+  readonly run: () => Promise<void>;
+  readonly dependencies?: InteractiveConductorRunLeaseDependencies;
+}): Promise<InteractiveConductorRunLeaseResult> {
+  const acquired = await acquireInteractiveConductorRunLease(input);
+  if (acquired.kind === 'refused') return acquired;
+
   try {
     await input.run();
     return { kind: 'ran' };
   } finally {
-    const released = await acquired.lease.release();
-    if (!released.ok) throw new Error(released.message);
+    if (acquired.kind === 'acquired') {
+      const released = await acquired.lease.release();
+      if (!released.ok) throw new Error(released.message);
+    }
   }
 }
 
@@ -1434,7 +1478,8 @@ async function dispatchCliCommand(): Promise<void> {
     const resolved = await resolveMainRepoRoot(process.cwd());
     if ('error' in resolved) {
       console.error(resolved.error);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
@@ -1540,17 +1585,17 @@ async function dispatchCliCommand(): Promise<void> {
   // state or initializing provider-facing runtime.
   const mode = deriveMode(opts);
 
+  let interactiveLease: InteractiveConductorRunLeaseAcquisition = { kind: 'unleased' };
+  let persister: EventPersister | undefined;
+  let sessionTail: ReturnType<typeof startSessionEventTail> | undefined;
+  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
+  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
+  try {
+
   let projectRoot = process.cwd();
   let pipelineDir = join(projectRoot, '.pipeline');
   let stateFilePath = join(pipelineDir, 'conduct-state.json');
-
-  // Ensure .pipeline/ exists
-  await mkdir(pipelineDir, { recursive: true });
-
-  // Preflight: ensure .claude/settings.json exists with project-scoped
-  // permissions. Solves the chicken-and-egg where bootstrap can't write its
-  // own permission file without permission. Idempotent — no-op if present.
-  await ensureClaudeSettings(projectRoot);
+  const resumeNeedsFeatureSelection = opts.resume && !opts.featureDesc;
 
   // Shared UI state: one live region, one prompt host. The host suspends the
   // region around each readline prompt so dashboard and prompts don't fight
@@ -1623,6 +1668,7 @@ async function dispatchCliCommand(): Promise<void> {
   // Handle --reset: clear state and exit
   if (opts.reset) {
     // Deliberate full clear — the one place a recorded pr_url is meant to go.
+    await mkdir(pipelineDir, { recursive: true });
     await replaceCommandState(stateFilePath, 'reset conductor state');
     console.log('State cleared.');
     return;
@@ -1675,6 +1721,25 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(1);
   }
 
+  // A stacked interactive run must own its feature before any foreground
+  // setup can create session state, managed context, or a worktree marker.
+  // Flat features deliberately keep the historical no-lease path. A bare
+  // --resume receives its feature identity from the selection below.
+  interactiveLease = await prepareInteractiveConductorRunWithLease({
+    projectRoot,
+    featureDesc: opts.featureDesc,
+    prepare: async () => {
+      if (!resumeNeedsFeatureSelection) {
+        await mkdir(pipelineDir, { recursive: true });
+        await ensureClaudeSettings(projectRoot);
+      }
+    },
+  });
+  if (interactiveLease.kind === 'refused') {
+    console.error(interactiveLease.message);
+    process.exitCode = 1;
+    return;
+  }
   // Auto-resume: if a feature description was provided and a worktree for its
   // slug already exists with in-progress state, silently redirect to that
   // worktree and enable resume. --fresh bypasses this.
@@ -1764,7 +1829,8 @@ async function dispatchCliCommand(): Promise<void> {
           `       feature branch — if it exists — is untouched).\n` +
           `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
       );
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -1774,7 +1840,8 @@ async function dispatchCliCommand(): Promise<void> {
     const features = await scanResumableFeatures(projectRoot);
     if (features.length === 0) {
       console.error('No active features found in .worktrees/');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
 
     let selected = selectFeature(features, undefined);
@@ -1816,6 +1883,25 @@ async function dispatchCliCommand(): Promise<void> {
     }
   }
 
+  // A bare --resume learns its stacked feature only after the non-mutating
+  // selection prompt. Acquire before materializing that selected worktree's
+  // pipeline or provider session state.
+  if (resumeNeedsFeatureSelection) {
+    interactiveLease = await prepareInteractiveConductorRunWithLease({
+      projectRoot,
+      featureDesc: opts.featureDesc,
+      prepare: async () => {
+        await mkdir(pipelineDir, { recursive: true });
+        await ensureClaudeSettings(projectRoot);
+      },
+    });
+    if (interactiveLease.kind === 'refused') {
+      console.error(interactiveLease.message);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   // Foreground resume reuses the persisted run id (conductor.run.id stays
   // stable across resumes). That id may be a legacy bare UUID, so the
   // prelude dispatch directory gets its own letter-prefixed identity.
@@ -1846,15 +1932,12 @@ async function dispatchCliCommand(): Promise<void> {
   // Start persistence before boot discovery so the boot event is retained in
   // the same ledger as the dispatch it authorizes.
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
-  const persister = new EventPersister(eventsLogPath, events);
+  persister = new EventPersister(eventsLogPath, events);
   persister.start();
   // Foreground/project-prelude provider sessions have no daemon feature
   // scope. Own their same-schema producer tail alongside this persister so
   // every exit drains records before subscribers detach.
-  const sessionTail = startSessionEventTail(projectRoot, events);
-  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
-  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
-  try {
+  sessionTail = startSessionEventTail(projectRoot, events);
     subscriber = await bootDispatchingCliProviders({
     command: 'inline',
     registry,
@@ -2081,22 +2164,16 @@ async function dispatchCliCommand(): Promise<void> {
     onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
   });
 
-    const interactiveRun = await runInteractiveConductorWithLease({
-      projectRoot,
-      featureDesc: opts.featureDesc,
-      run: async () => {
-        await conductor.run();
-      },
-    });
-    if (interactiveRun.kind === 'refused') {
-      console.error(interactiveRun.message);
-      process.exitCode = 1;
-    }
+    await conductor.run();
   } finally {
-    await sessionTail.drain();
-    persister.stop();
+    await sessionTail?.drain();
+    persister?.stop();
     await stopVisualizers(visualizerList);
     await subscriber?.stop();
+    if (interactiveLease.kind === 'acquired') {
+      const released = await interactiveLease.lease.release();
+      if (!released.ok) throw new Error(released.message);
+    }
   }
 }
 
