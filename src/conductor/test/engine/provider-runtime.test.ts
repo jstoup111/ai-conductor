@@ -152,6 +152,35 @@ class PrivateStateProvider implements LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it('keeps frozen, namespace-shaped, and partial plugins usable through the guard', async () => {
+    const frozenInvoke = vi.fn(async () => ({ success: true, output: 'frozen', exitCode: 0 }));
+    const namespaceInvoke = vi.fn(async () => ({ success: true, output: 'namespace', exitCode: 0 }));
+    const frozen = Object.freeze({ invoke: frozenInvoke, label: 'frozen' });
+    const namespace = Object.preventExtensions(Object.defineProperty({
+      invoke: namespaceInvoke,
+      label: 'namespace',
+    }, Symbol.toStringTag, { value: 'Module' }));
+    const partial = { invoke: vi.fn(async () => ({ success: true, output: 'partial', exitCode: 0 })) };
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'frozen', frozen);
+    registry.register('llm_provider', 'namespace', namespace);
+    registry.register('llm_provider', 'partial', partial);
+    registry.markInitialized();
+
+    expect(() => createProviderRuntimeSet(registry)).not.toThrow();
+    const runtimes = createProviderRuntimeSet(registry);
+    const frozenRuntime = runtimes.get('frozen').provider;
+    const namespaceRuntime = runtimes.get('namespace').provider;
+
+    expect(frozenRuntime.label).toBe('frozen');
+    expect(namespaceRuntime.label).toBe('namespace');
+    expect(runtimes.get('partial').provider.readiness).toBeUndefined();
+    await frozenRuntime.invoke({ prompt: '/x' });
+    await namespaceRuntime.invoke({ prompt: '/x' });
+    expect(frozenInvoke).toHaveBeenCalledOnce();
+    expect(namespaceInvoke).toHaveBeenCalledOnce();
+  });
+
   it('keeps prototype members, private state, and declared fields transparent through the system-prompt guard', async () => {
     const classProvider = new PrivateStateProvider();
     const classRegistry = new PluginRegistry();

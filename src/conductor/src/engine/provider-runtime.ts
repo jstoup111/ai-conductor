@@ -39,14 +39,17 @@ export function guardSystemPromptDelivery(
   key: string,
   provider: LLMProvider,
 ): LLMProvider {
-  return new Proxy(provider, {
-    get(target, property) {
+  // The proxy target must stay extensible: frozen module namespaces require
+  // their non-configurable `invoke` property to be returned unchanged.
+  const proxyTarget = Object.create(null) as LLMProvider;
+  return new Proxy(proxyTarget, {
+    get(_proxyTarget, property) {
       if (property === 'invoke') {
         return async (options: InvokeOptions) => {
           if (
             typeof options.systemPrompt === 'string' &&
             options.systemPrompt.length > 0 &&
-            target.systemPromptCapability?.deliversSystemPrompt !== true
+            provider.systemPromptCapability?.deliversSystemPrompt !== true
           ) {
             return {
               success: false,
@@ -57,12 +60,12 @@ export function guardSystemPromptDelivery(
               systemPromptUndeliverable: true as const,
             };
           }
-          return target.invoke(options);
+          return provider.invoke(options);
         };
       }
 
-      const value = Reflect.get(target, property, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+      const value = Reflect.get(provider, property, provider);
+      return typeof value === 'function' ? value.bind(provider) : value;
     },
   });
 }
