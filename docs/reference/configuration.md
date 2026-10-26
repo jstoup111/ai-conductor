@@ -1604,11 +1604,24 @@ child, in declared order:
   intermediate child's closure tip; if the leaf has commits of its own it halts `needs-human`. Child
   branches are pushed only at FINISH, by [stacked publication](#stacked-publication). See [branch naming](artifacts.md#worktree-and-branch-names).
 - **Closure.** A closed child's tip is recorded at `refs/conductor/<slug>/closed/c<k>`; only an
-  explicit operator recovery removes it. To change a closed child, commit to its branch; the next
-  [restack](#restack) carries the change into every existing child above it. A closed child's branch
-  that no longer contains its closure tip, or a closure tip that is not an ancestor of the next
-  child's branch, halts `needs-human` with `restack refused (closed-child-rewritten)` or
-  `restack refused (range-not-ancestor)`.
+  explicit operator recovery removes it. With `route_whole_feature_fixes: true`, do not commit
+  directly to a closed child's branch. Use
+  `ai-conductor stack owners --slug <slug> --path <path>` to inspect the affected paths, then open
+  an operator landing on the lowest affected closed child with
+  `ai-conductor stack land --slug <slug> --child <k> [--carry <j> ...] --reason "<why>"`.
+  The command takes the feature dispatch lease, parks the feature, and switches its worktree to
+  the host branch; make the change only there, then declare it with
+  `ai-conductor stack land --slug <slug> --done`. The daemon re-validates that child from
+  `acceptance_specs`, then a journaled restack carries the declared change upward and re-validates
+  affected children. `ai-conductor stack land --slug <slug> --abandon` resets an unfinished landing
+  to its recorded closure while keeping its rejected tip reachable. To re-run a closed child's
+  region without a manual code change, use the closed-child
+  `ai-conductor rewind --child <k> --to <step> --reason "<why>"` route. With
+  `route_whole_feature_fixes: false`, these operator-route commands refuse; the prior direct-commit
+  behavior remains, and a non-halt commit past a closure triggers the automatic
+  [`feature-repair`](#restack) restack. A closed child's branch that no longer contains its closure
+  tip, or a closure tip that is not an ancestor of the next child's branch, halts `needs-human`
+  with `restack refused (closed-child-rewritten)` or `restack refused (range-not-ancestor)`.
 - **Scope.** Each child's acceptance specs cover only the stories it owns, `build` completes on its
   own slice tasks plus remediation tasks recorded to it, and `build_review` grades its diff against
   the parent child's closure tip. A spec an earlier child already turned green records the
@@ -1680,16 +1693,22 @@ Publication state is recorded at `refs/conductor/<slug>/publication`; see
 A restack replays every existing child above a changed position onto its new parent. It has two
 causes:
 
-- **`feature-repair`.** A closed child's branch has commits after its closure tip that change more
-  than its halt record. Each such child is an originating child.
+- **`feature-repair`.** With `route_whole_feature_fixes: false`, a closed child's branch may have
+  non-halt commits after its closure tip; the preflight treats each such child as an originating
+  child and repairs the stack automatically. With routing on, that raw-commit path instead halts
+  `unlanded-closed-child-commits`; open `stack land` on the lowest affected child and include every
+  higher affected child with `--carry`. After `--done`, the declared operator round re-runs the
+  host's gates and its routed exit performs the journaled feature-repair restack.
 - **`base-refresh`.** The default branch moved and a rebase is due. When a re-kick is due while a
   feature repair is pending, the refresh runs after the repair unless the default tip is already in
   the first child's branch.
 
 A stack preflight runs before the daemon dispatches a stacked feature, on conductor resume, and in
-the finish-time `rebase` step. It recovers an interrupted restack from its journal, then applies any
-pending feature repair, then any chained base refresh. A live HALT stops it after journal recovery.
-Features without child state keep the ordinary rebase.
+the finish-time `rebase` step. It recovers an interrupted restack from its journal. With routing on,
+it halts raw unlanded closed-child commits rather than automatically repairing them; a declared
+operator round exits through the journaled restack. With routing off, it applies any pending
+feature repair, then any chained base refresh. A live HALT stops it after journal recovery. Features
+without child state keep the ordinary rebase.
 
 The replay runs off the worktree. The engine then moves every child branch and closure ref in one
 compare-and-swap transaction and syncs the checked-out worktree without stashing; colliding
