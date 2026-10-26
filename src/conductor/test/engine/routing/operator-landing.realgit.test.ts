@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
+import { joinBuildReviewRubricOutcomes } from '../../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../../src/engine/build-review-domain.js';
+import { kickbackLedgerPathFor, readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { journalRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-queue.js';
 import { createRouteRecord, readRevalidationQueue, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
@@ -34,6 +38,31 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
   rename,
 };
+
+function failingBuildReviewAggregate(lap: string) {
+  const lapId = parseBuildReviewLapId(lap)!;
+  return joinBuildReviewRubricOutcomes({
+    lapId,
+    snapshotDigest: 'sha256:operator-landing-kickback',
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:operator-landing-kickback',
+        contractVersion: 'v3', verdict: 'FAIL',
+        findings: [{
+          concernKind: 'test-insensitive', summary: 'operator landing review failure', evidenceLocations: ['test/fixture.test.ts:1'],
+          anchor: {
+            rubric: 'testQuality',
+            locus: {
+              path: 'test/fixture.test.ts',
+              contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              display: 'fixture test',
+            },
+          },
+        }],
+      },
+    },
+  });
+}
 
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
@@ -200,5 +229,76 @@ describe('operator landing host entry (real local Git)', () => {
     await expect(readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!, { git })).resolves.toMatchObject({
       kind: 'record', record: { kind: 'revalidate', hosts: { 2: 'admitted' } },
     });
+  });
+
+  it('kicks an operator review failure back to child 1 build under its ledger and exits from child 1', async () => {
+    const subject = await sealedExitFixture();
+    const git = makeGitRunner(subject.repo);
+    const state = {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      feature_desc: 'demo', complexity_tier: 'M', run_started_at: 1,
+    } as ConductState;
+    await writeState(join(subject.repo, '.pipeline', 'conduct-state.json'), state);
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', c1), {
+      feature_desc: 'demo', acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending', last_step: 'build_review',
+    });
+    await writeFile(kickbackLedgerPathFor(subject.repo, c1), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1, cumulative: 5, treeHash: null, lastReason: 'prior failure', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      routedRepairCredit: { roundId: 'r1' },
+    }));
+
+    const dispatched: StepName[] = [];
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'build_review',
+      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+      events: new ConductorEventEmitter(),
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true }, kickback_escalation: { enabled: false } },
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          if (step === 'build_review') {
+            const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+            await writeFile(join(subject.repo, '.pipeline', 'children', '1', 'build-review.json'), JSON.stringify(failingBuildReviewAggregate(`lap-${head}`)));
+            return { success: true };
+          }
+          if (step === 'build') return { success: false, operatorParkedBeforeDispatch: true };
+          return { success: true };
+        },
+      },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active', child: c1, position: c1, isLeaf: false, branch: 'feat/c1/demo', routedRepair: { child: c1, roundId },
+        }),
+        enterHostRegion: async () => ({ kind: 'resume', pinnedBase: subject.closure as never }) as never,
+        enterChildRegion: async () => ({ kind: 'completed' }),
+      },
+    });
+    await conductor.run();
+
+    expect(dispatched).toEqual(['build_review', 'build']);
+    await expect(readKickbackLedger(subject.repo, c1)).resolves.toMatchObject({
+      gates: { build_review: { cumulative: 6 } },
+      routedRepairCredit: { roundId: 'r1', consumed: true },
+    });
+
+    const calls: Array<{ readonly args: string[]; readonly input?: string }> = [];
+    const recordedGit = async (args: string[], options?: { input?: string }) => {
+      calls.push({ args: [...args], ...(options?.input === undefined ? {} : { input: options.input }) });
+      return git(args, options);
+    };
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: c1, git: recordedGit }))
+      .resolves.toEqual({ kind: 'restacked' });
+    const journalBlob = calls.find((call) => call.args[0] === 'update-ref' && call.args[1] === journalRefFor('demo'))?.args[2];
+    if (journalBlob === undefined) throw new Error('expected a routed restack journal');
+    const journal = JSON.parse((await git(['cat-file', '-p', journalBlob])).stdout) as { readonly originatingChildren?: unknown };
+    expect(journal.originatingChildren).toEqual([1]);
   });
 });
