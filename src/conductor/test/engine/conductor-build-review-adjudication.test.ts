@@ -666,7 +666,7 @@ function task26ActionJudgement(sourceId: string) {
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
   // Covers: task:26
-  it('kicks L2 back to BUILD and stamps recurrenceOf when L1\'s applied repair introduced the delta defect', async () => {
+  it("kicks L2 back to BUILD and stamps recurrenceOf when L1's applied repair introduced the delta defect", async () => {
     const l1Finding = task26Finding(`sha256:${'1'.repeat(64)}`, 'L1 repair target.');
     const l2Finding = task26Finding(TASK_26_HUNK.contentHash, 'L1 repair introduced this defect.');
     const l1SourceId = task26SourceId(l1Finding);
