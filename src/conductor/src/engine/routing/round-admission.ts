@@ -16,8 +16,6 @@ import { publishedStackRefusal } from '../stack-publication.js';
 import { advanceRound } from './routed-exit.js';
 import { readRevalidationQueue } from './route-record-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
-import { switchToChild } from '../child-lifecycle.js';
-import { ConductorEventEmitter } from '../../ui/events.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
 
@@ -122,7 +120,8 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
         const checkedOut = await git(['symbolic-ref', '--short', 'HEAD']);
         if (checkedOut.exitCode !== 0) return { kind: 'unavailable', detail: `cannot determine operator abandon host ${host} branch` };
         if (checkedOut.stdout.trim() !== branch.branch) {
-          const switched = await switchToChild(worktree, { child: host, position: host, branch: branch.branch }, new ConductorEventEmitter(), undefined, { git });
+          const { noOpChildLifecycleEvents, switchToChild } = await import('../child-lifecycle.js');
+          const switched = await switchToChild(worktree, { child: host, position: host, branch: branch.branch }, noOpChildLifecycleEvents, undefined, { git });
           if (switched.kind !== 'completed') return { kind: 'unavailable', detail: 'reason' in switched ? switched.reason : `cannot switch to operator abandon host ${host}` };
         }
         // Keep the stage writer in its owning module. The dynamic edge avoids

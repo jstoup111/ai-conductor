@@ -2,8 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch } from '../cli.js';
-import { ConductorEventEmitter } from '../ui/events.js';
 import { parseChildId, type ChildId } from './child-context.js';
+import { noOpChildLifecycleEvents, type ChildLifecycleEventEmitter } from './child-lifecycle.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { loadConfig } from './config.js';
 import { acquireFeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
@@ -52,7 +52,7 @@ export interface StackLandCliDeps {
   readonly reconcileRounds?: typeof import('./routing/round-admission.js').reconcileRounds;
   readonly releasePark?: typeof releaseOwnedPark;
   readonly clearMatchingHalt?: (worktree: string, roundId: RoundId) => Promise<'cleared' | 'absent' | 'unrelated'>;
-  readonly emitter?: ConductorEventEmitter;
+  readonly emitter?: ChildLifecycleEventEmitter;
 }
 
 type StackLandEligibility = { readonly kind: 'eligible' } | { readonly kind: 'refused'; readonly detail: string };
@@ -349,7 +349,7 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
       operator: operator.trim(),
       carried: admission.carried,
       ...(park.created ? { park: { token: park.token } } : {}),
-      emitter: deps.emitter ?? new ConductorEventEmitter(),
+      emitter: deps.emitter ?? noOpChildLifecycleEvents,
     });
     if (result.kind === 'refused') return refused(print, result.detail);
 

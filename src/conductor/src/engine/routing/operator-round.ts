@@ -1,9 +1,8 @@
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { ConductorEventEmitter } from '../../ui/events.js';
 import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
-import { switchToChild } from '../child-lifecycle.js';
+import { noOpChildLifecycleEvents, switchToChild, type ChildLifecycleEventEmitter } from '../child-lifecycle.js';
 import { createRoutedConductStateStore } from '../conduct-state-store.js';
 import { childBranchFor, parseFeatureBranch } from '../feature-branch-identity.js';
 import { loadConfig } from '../config.js';
@@ -516,7 +515,7 @@ export interface OpenOperatorRoundInput {
   readonly operator: string;
   readonly carried: readonly CarriedOperatorChild[];
   readonly park?: { readonly token: string };
-  readonly emitter: ConductorEventEmitter;
+  readonly emitter: ChildLifecycleEventEmitter;
   readonly git?: GitRunner;
 }
 
@@ -763,7 +762,7 @@ async function switchToAbandonHost(
   } catch {
     return { kind: 'refused', detail: `cannot determine current branch before abandoning host ${host}` };
   }
-  const switched = await switchToChild(worktree, { child: host, position: host, branch: branch.branch }, new ConductorEventEmitter(), undefined, { git });
+  const switched = await switchToChild(worktree, { child: host, position: host, branch: branch.branch }, noOpChildLifecycleEvents, undefined, { git });
   return switched.kind === 'completed'
     ? { kind: 'switched' }
     : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to operator host ${branch.branch}` };
