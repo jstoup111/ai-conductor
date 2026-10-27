@@ -4,6 +4,13 @@ spec_hash: 81b150090f6f33e1b25abea0c1a9bfad09067b63f60b76a829b1e0e8deb2226b
 pr: https://github.com/jstoup111/ai-conductor/pull/3426
 shipped: 2026-10-27
 engine_version: 20261026T134330Z-de66138a044b
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is a test-isolation hardening in an unrelated provider module, with no plan owner. In production AI_CONDUCTOR_TEST_TMP_ROOT is unset, so the fallback still resolves to tmpdir() and nothing changes that a user can see."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
