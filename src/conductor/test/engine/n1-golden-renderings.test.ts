@@ -30,6 +30,9 @@ const execFile = promisify(execFileCb);
 const N1_GOLDEN_SUITE_CHILD = 'AI_CONDUCTOR_N1_GOLDEN_SUITE_CHILD';
 const PRE_CHANGE_N1_GOLDEN_SHA = 'd4870bd95b9bfebe09def9a03fa511e370f6af17';
 const GIT_PROBE_GOLDEN_PATH = 'src/conductor/test/fixtures/n1-golden/finish/git-probe-argv.golden';
+const STALE_RUN_ROOT_TELEMETRY = String.raw`tmpdir-leak-guard: swept \d+ stale run root\(s\) left behind by a previous interrupted run: [^\n]+`;
+const IGNORED_CONCURRENT_TMPDIR_TELEMETRY = String.raw`tmpdir-leak-guard: ignored \d+ new [^\n]+ entry/entries attributed to concurrent tooling \(not the test suite\): [^\n]+`;
+const EXPECTED_CHILD_GUARD_STDERR = new RegExp(String.raw`^(?:|${STALE_RUN_ROOT_TELEMETRY}\n?|${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?|${STALE_RUN_ROOT_TELEMETRY}\n${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?)$`);
 const DURABLE_CHILD_STATE_PROBE_PAIR = [
   ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
   ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
@@ -81,10 +84,9 @@ describe('N=1 golden renderings', () => {
       cwd: join(import.meta.dirname, '..', '..'),
       env: { ...process.env, [N1_GOLDEN_SUITE_CHILD]: '1' },
     });
-    // The child owns a separate run root and may report that it reclaimed a
-    // stale root from an interrupted earlier invocation. That guard notice is
-    // expected setup telemetry; any other child stderr remains a failure.
-    expect(result.stderr).toMatch(/^(?:|tmpdir-leak-guard: swept \d+ stale run root\(s\) left behind by a previous interrupted run: .+\n)$/);
+    // The child may report the pre-run stale-root sweep and its teardown's
+    // concurrent-tooling notice. Any other child stderr remains a failure.
+    expect(result.stderr).toMatch(EXPECTED_CHILD_GUARD_STDERR);
   }, 30_000);
 
   // Covers: task:17, task:rem-operator-17-r3
