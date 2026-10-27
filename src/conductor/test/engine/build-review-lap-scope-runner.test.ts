@@ -28,9 +28,6 @@ import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
-import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
-import { ProviderSessionStore } from '../../src/engine/provider-session.js';
-import { ModelAvailability } from '../../src/engine/model-availability.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 
 vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
