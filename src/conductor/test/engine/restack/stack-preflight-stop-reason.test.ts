@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:4
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -126,6 +126,96 @@ async function appendBaseRefreshRepair(subject: Awaited<ReturnType<typeof fixtur
 }
 
 describe('stack preflight stop reasons', () => {
+  it('preserves bytes written by a nested restack halt and names them in the terminal event', async () => {
+    const subject = await fixture();
+    const main = (await execFile('git', ['rev-parse', 'main'], { cwd: subject.repo })).stdout.trim();
+    await execFile('git', ['update-ref', 'refs/heads/feat/c1/demo', main], { cwd: subject.repo });
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    }));
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'));
+
+    expect(result).toMatchObject({ kind: 'halted' });
+    expect(halt.equals(Buffer.from('restack refused (closed-child-rewritten) child 1\n'))).toBe(true);
+    expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
+      expect.objectContaining({ reason: expect.stringContaining('restack refused (closed-child-rewritten) child 1') }),
+    ]);
+  });
+
+  it('preserves an unauthorized live HALT and reports both reasons', async () => {
+    const subject = await fixture();
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    const seeded = Buffer.from('operator decision\nneeds-human\n');
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), seeded);
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toMatchObject({ kind: 'halted', detail: 'live HALT without resume authorization' });
+    expect((await readFile(join(subject.repo, '.pipeline', 'HALT'))).equals(seeded)).toBe(true);
+    expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
+      expect.objectContaining({ reason: 'live HALT without resume authorization: operator decision' }),
+    ]);
+  });
+
+  it('crosses an authorized HALT without emitting when preflight is clear', async () => {
+    const subject = await fixture();
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    const seeded = Buffer.from('operator decision\nneeds-human\n');
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), seeded);
+    const events = new ConductorEventEmitter();
+    const emitted: string[] = [];
+    events.on('loop_halt', (event) => emitted.push(event.type));
+    events.on('restack_refused', (event) => emitted.push(event.type));
+
+    await expect(runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+      hasMatchingResumeAuthorization: async () => true,
+      reconcileRounds: async () => ({ kind: 'none' }),
+    })).resolves.toEqual({ kind: 'clear' });
+
+    expect((await readFile(join(subject.repo, '.pipeline', 'HALT'))).equals(seeded)).toBe(true);
+    expect(emitted).toEqual([]);
+  });
+
+  it('replaces an authorized resume halt with the unavailable reconciliation reason', async () => {
+    const subject = await fixture();
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'previous halt\nneeds-human\n');
+
+    await runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      events: new ConductorEventEmitter(),
+      git: makeGitRunner(subject.repo),
+      hasMatchingResumeAuthorization: async () => true,
+      reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+    });
+
+    const [firstLine] = (await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).split('\n');
+    expect(firstLine).toContain('round advance cas-failed');
+  });
+
+  it.each([
+    ['clear', async () => {
+      const subject = await fixture();
+      return { subject, options: { reconcileRounds: async () => ({ kind: 'none' as const }) } };
+    }],
+  ])('does not create a HALT or emit loop_halt for %s', async (_kind, arrange) => {
+    const { subject, options } = await arrange();
+    const events = new ConductorEventEmitter();
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event.type));
+
+    await expect(runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo), ...options,
+    })).resolves.toEqual({ kind: 'clear' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).toEqual([]);
+  });
+
   it('writes the unavailable round-reconciliation detail and one durable loop halt', async () => {
     const subject = await fixture();
     const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({

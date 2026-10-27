@@ -306,15 +306,27 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
  * publish the terminal event exactly once from this wrapper.
  */
 export async function runStackPreflight(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
-  const result = await runStackPreflightInner(options);
+  const haltPath = join(options.worktree, HALT_MARKER);
+  const entryHalt = await readFile(haltPath).catch(() => undefined);
+  let crossedHaltUnderAuthorization = false;
+  const hasMatchingResumeAuthorization = options.hasMatchingResumeAuthorization === undefined
+    ? undefined
+    : async () => {
+      const authorized = await options.hasMatchingResumeAuthorization!();
+      crossedHaltUnderAuthorization ||= authorized;
+      return authorized;
+    };
+  const result = await runStackPreflightInner({ ...options, hasMatchingResumeAuthorization });
   if (result.kind !== 'halted' && result.kind !== 'unavailable') return result;
 
-  const haltPath = join(options.worktree, HALT_MARKER);
-  const existing = await readFile(haltPath, 'utf8').catch(() => undefined);
-  if (existing === undefined) {
+  const existing = await readFile(haltPath).catch(() => undefined);
+  const replaceEntryHalt = crossedHaltUnderAuthorization
+    && entryHalt !== undefined
+    && existing?.equals(entryHalt) === true;
+  if (existing === undefined || replaceEntryHalt) {
     await writeHaltMarker(options.worktree, `${result.detail}\n`, result.kind === 'halted' ? result.haltClass ?? 'needs-human' : 'needs-human', options.events);
   }
-  const firstLine = existing?.split('\n', 1)[0]?.trim();
+  const firstLine = replaceEntryHalt ? undefined : existing?.toString('utf8').split('\n', 1)[0]?.trim();
   await options.events?.emit({
     type: 'loop_halt',
     reason: firstLine === undefined || firstLine === '' ? result.detail : `${result.detail}: ${firstLine}`,
