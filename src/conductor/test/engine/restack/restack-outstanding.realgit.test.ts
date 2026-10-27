@@ -126,7 +126,7 @@ describe('restack-outstanding refusals (real local Git)', () => {
     expect(winnerJournal).toMatchObject({ kind: 'journal', journal: { opId: winnerOpId, state: 'planned' } });
 
     releaseLoser.resolve();
-    await expect(cliResume).resolves.toEqual({ kind: 'halted' });
+    await expect(cliResume).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     expect(cliSeen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'restack-outstanding' })]);
     // No journal of its own, no ref moved, no halt-record commit, and the

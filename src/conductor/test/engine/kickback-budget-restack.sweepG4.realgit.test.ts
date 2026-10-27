@@ -223,7 +223,7 @@ describe('kickback-budget --gate restack end to end (sweep G4)', () => {
     const leaf = await unauthorized.git(['rev-parse', 'feat/daemon-demo']);
     expect(generation).toBeTruthy();
     expect(await daemonConsumeAuthorizations(unauthorized)).toEqual([]);
-    await expect(entryPreflight(unauthorized)).resolves.toEqual({ kind: 'halted' });
+    await expect(entryPreflight(unauthorized)).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
     expect(await unauthorized.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).toBe(unauthorized.closed);
     expect(await unauthorized.git(['rev-parse', 'feat/daemon-demo'])).toBe(leaf);
     expect(await readFile(join(unauthorized.repo, HALT_MARKER), 'utf8')).toBe(halt);
@@ -257,7 +257,7 @@ describe('kickback-budget --gate restack end to end (sweep G4)', () => {
     await expect(entryPreflight(subject)).resolves.toEqual({ kind: 'repaired' });
     expect(await cascades(subject)).toMatchObject({ counts: { 1: 5, 2: 3 }, limits: { 1: 5 } });
     await subject.commit('third operator change', 'third.txt');
-    await expect(entryPreflight(subject)).resolves.toEqual({ kind: 'halted' });
+    await expect(entryPreflight(subject)).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
     await expect(access(join(subject.repo, HALT_MARKER))).resolves.toBeUndefined();
 
     // reset after the raise zeroes child 1's count and keeps the raised limit.
