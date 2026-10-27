@@ -37,10 +37,11 @@ engine reads (resume probe) and excludes (self-host fingerprint) but never write
 
 ## `.docs/` — committed artifacts
 
-Twenty-one entries. Alphabetized; the four with no code reference are marked.
+Twenty-two entries. Alphabetized; the four with no code reference are marked.
 
 | Entry | Naming | Written by | Read by / gate role |
 | --- | --- | --- | --- |
+| `<slug>/manifest.json` | one folder per feature slug | `compose land`, its only writer | feature-scoped artifact readers in the daemon, conduct, and SHIP — see [feature manifest](#feature-manifest) |
 | `applicability/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | DECIDE author (`explore` for an operator-confirmed technical maintenance change, declaring only `acceptance_specs`), only when [`feature_applicability`](configuration.md#feature_applicability) is enabled | `land-spec` validates its `Inapplicable: <step> — <reason>` lines; daemon discovery reads the base-branch copy and seeds the feature's declarations — see [per-feature applicability](steps.md#per-feature-applicability) |
 | `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; non-Small artifacts require at least one fenced Mermaid block; protected-artifact seal |
 | `audit/` | free-form | manual | **no code reference** |
@@ -73,6 +74,43 @@ its absence is not a defect. The mechanism behind it is live: the land-time cohe
 `evaluateCoherenceWaiver` (`src/conductor/src/engine/engineer/coherence-waiver.ts`, invoked from
 `coherence-validator.ts`) on every run that reports gaps, and blocks unless a fresh, well-formed waiver
 covers every gap id. Write the first one as a plain file at `.docs/coherence-waivers/<plan-stem>.md`.
+
+### Feature manifest
+
+`compose land` writes `.docs/<slug>/manifest.json` on every land and commits it with the spec. It
+rebuilds the file from the current change set; a prior manifest is never an input, so a stale,
+malformed, or mismatched one is overwritten and a deleted artifact drops out. Schema:
+`src/conductor/src/engine/feature-manifest.ts`.
+
+```json
+{
+  "schemaVersion": 1,
+  "slug": "2026-10-01-alpha",
+  "artifacts": [
+    { "kind": "plan", "path": ".docs/plans/2026-10-01-alpha.md" }
+  ]
+}
+```
+
+| Field | Constraint |
+| --- | --- |
+| `schemaVersion` | `1`; any other value is malformed |
+| `slug` | equals the `<slug>` folder name |
+| `artifacts[].kind` | `plan`, `stories`, `prd`, `track`, `complexity`, `conflicts`, `coherence`, `coherence-waiver`, `architecture`, `intake`, `applicability`, or `decision` |
+| `artifacts[].path` | a `.docs/` path inside that kind's directory |
+
+Unknown top-level fields are malformed. Entries are sorted by kind, then path. `plan-review/`,
+`shipped/`, `halted/`, and `release-waivers/` files are never registered; ADRs are registered only when
+changed by this land and still present.
+
+Readers resolve a feature-scoped artifact manifest-first. When the manifest exists, its entries for that
+kind are authoritative, and a listed path absent from the tree is reported missing. Without a manifest,
+the reader uses its legacy stem lookup. A malformed manifest fails closed instead of falling back; daemon
+discovery reports it as the `malformed-manifest`
+[blocked merged spec](../runbooks/stalled-or-stuck-feature.md#blocked-merged-spec). Daemon discovery
+also treats every committed manifest as a backlog candidate, alongside `.docs/plans/`.
+
+The manifest is outside `DOCS_RETENTION_POLICY`; `docs-prune` never deletes it.
 
 ### Naming
 
@@ -600,7 +638,7 @@ To clear a halt safely, use the procedure in
 | `git-hooks/` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction`, `pre-push` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Externally written `build_review` disposition and kickback-budget authorization events | Separate ledger — see below |
-| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
+| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`, `feature_artifacts_registered`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/` | Sanitized, allowlisted provider session transcripts captured before a self-host provider home is removed | Self-host only. Pruned after a step completes with progress; otherwise retained, capped at 20 captures / 1 GiB per worktree. Read with [`ai-conductor transcripts`](cli.md#ai-conductor-transcripts); see [provider transcripts](../guides/self-hosting.md#provider-transcripts) |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
@@ -967,6 +1005,10 @@ so rejection history remains available after that worktree is removed. The run r
 `land_dependency_decided` records a successful intake land's dependency outcome: repository, source
 reference, proposed, accepted, and declined targets, any `--skip-dependency-check` reason, and the
 status of each post-commit link write. It goes to the same `.pipeline/composer-events.jsonl`.
+`feature_artifacts_registered` records a successful land that changed the
+[feature manifest](#feature-manifest): the slug and the `{ kind, path }` entries newly added relative to
+the prior valid manifest. It goes to the same ledger; a write failure prints a warning and never fails
+the land.
 `dependency_drift_swept` records each hourly `intake-loop` drift sweep per repository: `status`
 (`swept` or `repository-indeterminate`) and the unlinked, stale, cycle, contradiction, and
 indeterminate findings. It persists to `.pipeline/events.jsonl` under the directory where
