@@ -1,4 +1,4 @@
-// Covers: task:2, task:rem-as-built-rem-as-built-r5, task:rem-prd-audit-rem-child-dispatch-lease
+// Covers: task:2, task:rem-as-built-rem-as-built-r5, task:rem-prd-audit-rem-child-dispatch-lease, task:rem-as-built-rem-child-lease-release-on-worktree-failure
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -191,6 +191,32 @@ describe('engine/daemon dispatch lease', () => {
     expect(seams.acquire).toHaveBeenCalledWith(root, 'stacked', 'daemon dispatch');
     expect(trace).toEqual(['acquire', 'create', 'run', 'release']);
     expect(childOutcome(port)).toEqual({ kind: 'outcome', outcome: { slug: 'stacked', status: 'done' } });
+  });
+
+  it('releases an acquired child admission lease when creating its worktree rejects', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'child-dispatch-lease-'));
+    childRoots.push(root);
+    const release = vi.fn(async () => ({ ok: true } as const));
+    const port = new ChildPort();
+    seams.durable.mockResolvedValue(true);
+    seams.parked.mockResolvedValue(false);
+    seams.acquire.mockResolvedValue({ kind: 'acquired', lease: { release } });
+    const run = vi.fn(async () => ({ slug: 'stacked', status: 'done' as const }));
+    const complete = runExecutorChild(port, {
+      moduleDir: '/engine',
+      admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot: root }, order),
+      createWorktree: async () => { throw new Error('cannot create worktree'); },
+      run,
+    });
+
+    port.dispatch({ kind: 'work-order', order: childOrder() });
+    await complete;
+
+    expect(childOutcome(port)).toMatchObject({
+      kind: 'outcome', outcome: { slug: 'stacked', status: 'error' },
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('keeps a live operator lease record and existing child worktree unchanged by skipping before binding it', async () => {

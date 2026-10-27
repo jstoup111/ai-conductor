@@ -168,8 +168,8 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
             await sendOutcome(admission.outcome);
             return;
           }
-          const worktree = await deps.createWorktree(order);
           try {
+            const worktree = await deps.createWorktree(order);
             const pipeline = join(worktree.path, '.pipeline');
             await mkdir(pipeline, { recursive: true });
             await writeFile(join(pipeline, 'work-order.json'), `${JSON.stringify(order)}\n`, 'utf8');
