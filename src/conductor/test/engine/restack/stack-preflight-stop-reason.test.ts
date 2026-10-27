@@ -1,14 +1,14 @@
-// Covers: task:2, task:3, task:4, task:5
+// Covers: task:2, task:3, task:4, task:5, task:6
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import { journalRefFor, readRestackJournal, writeRestackJournalBlob } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
@@ -142,7 +142,70 @@ async function appendBaseRefreshRepair(subject: Awaited<ReturnType<typeof fixtur
   await git(['checkout', '-q', 'feat/daemon-demo']);
 }
 
+async function leaveLiveRestackJournal(subject: Awaited<ReturnType<typeof fixture>>) {
+  const git = (args: string[]) => execFile('git', args, { cwd: subject.repo });
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+  if (processStartTime === undefined) throw new Error('could not read test process start time');
+  const blob = await writeRestackJournalBlob(subject.repo, {
+    opId: 'test-live-owner',
+    cause: 'base-refresh',
+    committer: { name: 'Test', email: 'test@example.test', date: '0 +0000' },
+    dirtyPaths: [],
+    refs: [],
+    ranges: [],
+    children: [],
+    state: 'planned',
+    owner: { host: hostname(), pid: process.pid, processStartTime },
+  });
+  await git(['update-ref', journalRefFor('demo'), blob]);
+}
+
 describe('stack preflight stop reasons', () => {
+  it('halts mechanically and persists the live journal owner', async () => {
+    const subject = await fixture();
+    await leaveLiveRestackJournal(subject);
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      `restack journal owned by live process ${process.pid} on ${hostname()}`,
+    );
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    expect(records.filter((record) => record.type === 'restack_refused')).toEqual([
+      expect.objectContaining({ reason: 'journal-live-owner', detail: expect.stringContaining(`${process.pid} on ${hostname()}`) }),
+    ]);
+    expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
+      expect.objectContaining({ reason: expect.stringContaining(`${process.pid} on ${hostname()}`) }),
+    ]);
+  });
+
+  it.each([
+    ['a readable follow-on owner', { host: 'hostA', pid: 4242, processStartTime: 'x' }, '4242 on hostA'],
+    ['an unreadable follow-on owner', undefined, 'journal owner unreadable'],
+  ] as const)('halts mechanically when %s owns the journal', async (_case, owner, detail) => {
+    const subject = await fixture();
+    vi.mocked(recoverRestackJournal)
+      .mockResolvedValueOnce({ kind: 'none' })
+      .mockResolvedValueOnce(owner === undefined ? { kind: 'live-owner' } : { kind: 'live-owner', owner });
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.stringContaining(detail), haltClass: 'mechanical' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    expect(records.filter((record) => record.type === 'restack_refused')).toEqual([
+      expect.objectContaining({ reason: 'journal-live-owner', detail: expect.stringContaining(detail) }),
+    ]);
+    expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
+      expect.objectContaining({ reason: expect.stringContaining(detail) }),
+    ]);
+  });
+
   it('preserves bytes written by a nested restack halt and names them in the terminal event', async () => {
     const subject = await fixture();
     const main = (await execFile('git', ['rev-parse', 'main'], { cwd: subject.repo })).stdout.trim();

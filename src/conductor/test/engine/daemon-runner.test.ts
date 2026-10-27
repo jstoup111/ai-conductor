@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:8
+// Covers: task:1, task:3, task:6, task:8
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -69,7 +69,7 @@ vi.mock('../../src/engine/halt-marker.js', async (importOriginal) => {
 
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -96,6 +96,8 @@ import { makeGitRunner } from '../../src/engine/rebase.js';
 import { readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
 import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
+import { journalRefFor, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
+import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-rekick.js';
 
 // Covers: task:1
 
@@ -201,7 +203,58 @@ async function stackPreflightFixture(slug: string): Promise<string> {
   return repo;
 }
 
+async function leaveLiveRestackJournal(repo: string, slug: string): Promise<void> {
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+  if (processStartTime === undefined) throw new Error('could not read test process start time');
+  const blob = await writeRestackJournalBlob(repo, {
+    opId: 'test-live-owner',
+    cause: 'base-refresh',
+    committer: { name: 'Test', email: 'test@example.test', date: '0 +0000' },
+    dirtyPaths: [],
+    refs: [],
+    ranges: [],
+    children: [],
+    state: 'planned',
+    owner: { host: hostname(), pid: process.pid, processStartTime },
+  });
+  await execFile('git', ['update-ref', journalRefFor(slug), blob], { cwd: repo });
+}
+
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('reports a live journal owner and does not retain its mechanical HALT', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      await leaveLiveRestackJournal(worktreePath, ITEM.slug);
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => runStackPreflight({
+        worktree: worktree.path, slug: ITEM.slug, git: makeGitRunner(worktree.path),
+      });
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(`${process.pid}`) });
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
+        haltClass: 'mechanical', retained: false,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
   it('reports a real stack preflight refusal from the durable HALT, not the no-marker fallback', async () => {
     const worktreePath = await stackPreflightFixture(ITEM.slug);
     const log: string[] = [];

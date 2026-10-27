@@ -11,7 +11,7 @@ import { checkCascadeCap } from './cascade-cap.js';
 import { defaultTip, runRestack } from './restack-executor.js';
 import type { RestackResolver } from './restack-resolver.js';
 import { emitRestackRefused } from './restack-events.js';
-import { readRestackJournal } from './restack-journal.js';
+import { readRestackJournal, type RestackJournalOwner } from './restack-journal.js';
 import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
@@ -95,6 +95,17 @@ function stageDetail(stage: string, detail: string): string {
   return detail.trim() || `stack preflight: ${stage} refused`;
 }
 
+async function haltForLiveJournalOwner(
+  options: RunStackPreflightOptions,
+  owner: RestackJournalOwner | undefined,
+): Promise<Extract<StackPreflightResult, { kind: 'halted' }>> {
+  const detail = owner === undefined
+    ? 'journal owner unreadable'
+    : `restack journal owned by live process ${owner.pid} on ${owner.host}`;
+  await options.events?.emit(emitRestackRefused({ reason: 'journal-live-owner', detail }));
+  return { kind: 'halted', detail, haltClass: 'mechanical' };
+}
+
 /**
  * Make the durable stack coherent before an entry point judges the active
  * child.  The journal is always probed first, even for a flat feature: an
@@ -112,7 +123,8 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   // base-refresh follow-on must not move published member refs.
   const published = await publishedStackRefusal(options.worktree, options.slug, { git: options.git });
   const recovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
-  if (recovery.kind === 'live-owner' || recovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
+  if (recovery.kind === 'live-owner') return haltForLiveJournalOwner(options, recovery.owner);
+  if (recovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
   if (recovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', recovery.detail);
 
   // Recovery is safe while a feature is parked; changing closure refs is not.
@@ -136,7 +148,8 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   // aborted journal collectible. Task 31.1 adds live-HALT gating around this
   // entry point; until then recovery remains the sole owner of cleanup.
   const secondRecovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
-  if (secondRecovery.kind === 'live-owner' || secondRecovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
+  if (secondRecovery.kind === 'live-owner') return haltForLiveJournalOwner(options, secondRecovery.owner);
+  if (secondRecovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
   if (secondRecovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', secondRecovery.detail);
 
   const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
@@ -180,7 +193,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
         ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
         ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
       });
-      return exited.kind === 'restacked' || exited.kind === 'no-commit-done'
+      return exited.kind === 'restacked' || exited.kind === 'no-commit-done' || exited.kind === 'noop'
         ? { kind: 'repaired' }
         : { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
     }
