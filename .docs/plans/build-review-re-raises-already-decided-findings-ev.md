@@ -850,3 +850,24 @@ Slice 2
 - The repair for task rem-prd-audit-25 is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r7
+
+### Task rem-prd-audit-6.r1: In step-runners.ts build_review scope loop, derive the security rubric's changedFiles, mergeBase and headSha (for priorArtifactsFor merge-base matching, settledBuildReviewHunks, decideBuildReviewReviewScope, hasUnappliedLiveSourceWithoutCurrentHunk and the persisted scopes changedFiles at ~4205) from inputs.securitySourceSnapshot when it is defined, falling back to inputs.sourceSnapshot; add a step-runner test at a stacked leaf asserting security's first-lap reviewScope is full/first-lap over every hunk of the whole-feature security snapshot while other rubrics use the child snapshot
+**Gate:** prd-audit
+**Rationale:** Verified (95%): step-runners.ts:3467 derives changedFiles from inputs.sourceSnapshot.diff and the built-in scope loop (3553-3630) passes inputs.sourceSnapshot.mergeBase/headSha to settledBuildReviewHunks and decideBuildReviewReviewScope for every rubric. But build-review-projections.ts:452 reviews security against source.securitySnapshot (the whole-feature default-branch snapshot) at a stacked leaf. So security's first-lap scope does not cover every hunk security actually reviews. The frontier logic is correct and no architecture decision is needed. This is implementation drift inside approved Task 6, which decides and records each rubric's scope. Fix: choose the security rubric's scope inputs from its review snapshot.
+**Criterion:** S1.1
+**Parent task:** 6
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-6.r1 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r8
+### Task rem-prd-audit-6.r2: Add a build-review-projections/step-runner test at a stacked leaf (securitySourceSnapshot defined) asserting the security projection's reviewScope.deltaHunks are a subset of the hunks of its securitySnapshot changedFiles and include whole-feature hunks absent from the child diff, while non-security rubric projections remain scoped to the child sourceSnapshot
+**Gate:** prd-audit
+**Rationale:** Verified (95%): this has the same root cause as S1.1. projections common() takes security's changedFiles from securitySnapshot, but reviewScope.deltaHunks come from reviewScopes computed against the child sourceSnapshot. At a stacked leaf the delta handed to security therefore misses hunks from security's own diff. The non-leaf path is already correct. The fix lands in Task 6's runner (6.r1). This task adds projection-level coverage that the security projection's deltaHunks are drawn from the same snapshot as its changedFiles. That is BUILD work in an approved task, not a planning or architecture gap.
+**Criterion:** S3.1
+**Parent task:** 6
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-6.r2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r8
