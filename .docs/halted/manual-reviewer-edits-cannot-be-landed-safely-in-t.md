@@ -1,22 +1,26 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-27T11:07:05.143Z
+Status: halted
 Slug: manual-reviewer-edits-cannot-be-landed-safely-in-t
 Class: needs-human
-Halting step: build
-Phase: BUILD
+Halting step: unknown
+Phase: unknown
 Branch: feat/c1/manual-reviewer-edits-cannot-be-landed-safely-in-t
-Child: 3
-Head SHA: 945aaa2ed4203f9a38e357b57fe4ae1414a25ae8
-Halted at: 2026-10-27T05:21:51.224Z
+Head SHA: e26f68d8c74cec75b614e4f6956bd3c5fecd643d
+Halted at: 2026-10-27T11:33:03.398Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review kickback-to-build refused: the build made no tree change (tree 1664f46 unchanged). Investigate the unchanged build before retrying.
-Build note: BUILD: PASS — 56/56 tasks complete; worktree clean. Aggregate verification remains with `test_suite`.
+restack refused (cascade-cap) child 1
+originating child 1 reached 3/3 cascades
+Runbook: Routed repair halted on the cascade cap
+Child: 3
+Kickback budget (restack): 3/3 consumed; 0 remaining
+Latest reason: restack cascade cap for originating child 1
+Adjustment history: unavailable
+Resume authorization: none
+Kickback halt generation: 1793100783093-gf9q9oeqgl8
 ```
