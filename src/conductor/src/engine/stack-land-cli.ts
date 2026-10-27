@@ -334,7 +334,11 @@ export async function dispatchStackLandCommand(command: StackLandDispatch, deps:
     const roundId = admission.roundId ?? await (deps.nextRound ?? nextRoundId)(worktree, command.slug);
     if (typeof roundId !== 'string') return refused(print, roundId.kind === 'round-limit' ? 'routing round limit is reached.' : 'cannot allocate a routing round.');
 
-    const park: OwnedParkCreationResult = await (deps.createPark ?? createOwnedPark)(root, command.slug);
+    // A matching persisted round resumes its own durable state. Creating a
+    // new park here would produce a token that no existing record can own.
+    const park: OwnedParkCreationResult = admission.roundId === undefined
+      ? await (deps.createPark ?? createOwnedPark)(root, command.slug)
+      : { created: false };
 
     const result: OpenOperatorRoundResult = await (deps.openRound ?? openOperatorRound)({
       worktree,

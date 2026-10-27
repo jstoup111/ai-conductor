@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:19, task:rem-prd-audit-rem-stack-land-resume-park
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -31,7 +31,7 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(options: { landing?: boolean; carried?: boolean } = {}) {
+async function fixture(options: { landing?: boolean; carried?: boolean; open?: boolean } = {}) {
   const repo = await mkdtemp(join(tmpdir(), 'stack-land-done-'));
   roots.push(repo);
   const git = makeGitRunner(repo);
@@ -69,13 +69,15 @@ async function fixture(options: { landing?: boolean; carried?: boolean } = {}) {
   }, envelopeFilesystem);
   const park = await createOwnedPark(repo, 'demo');
   if (!park.created) throw new Error('expected an owned park');
-  const opened = await openOperatorRound({
-    worktree: repo, slug: 'demo', roundId, host: c1, reason: 'rename reviewer flag', operator: 'operator@example.test',
-    carried: options.carried ? [{ child: c2, tip: c2Tip as never }] : [], park: { token: park.token },
-    emitter: new ConductorEventEmitter(), git,
-  });
-  if (opened.kind !== 'opened') throw new Error(`could not open landing: ${opened.detail}`);
-  return { repo, git, closure, hostTip, c2Tip, leafTip, commit };
+  if (options.open !== false) {
+    const opened = await openOperatorRound({
+      worktree: repo, slug: 'demo', roundId, host: c1, reason: 'rename reviewer flag', operator: 'operator@example.test',
+      carried: options.carried ? [{ child: c2, tip: c2Tip as never }] : [], park: { token: park.token },
+      emitter: new ConductorEventEmitter(), git,
+    });
+    if (opened.kind !== 'opened') throw new Error(`could not open landing: ${opened.detail}`);
+  }
+  return { repo, git, closure, hostTip, c2Tip, leafTip, commit, park };
 }
 
 async function done(subject: Awaited<ReturnType<typeof fixture>>, output: string[] = []) {
@@ -192,7 +194,28 @@ describe('stack land --done (real local Git)', () => {
       resolveOperator: async () => 'operator@example.test', print: (line) => resumeOutput.push(line),
     })).resolves.toBe(0);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await record(subject)).toEqual(declared);
+  });
+
+  it('retains the recorded crash-created park when a landing reruns after record creation', async () => {
+    const subject = await fixture({ open: false });
+    const marker = join(subject.repo, '.daemon', 'parked', 'demo');
+    const crashedPark = await readFile(marker, 'utf8');
+
+    const recovered = await openOperatorRound({
+      worktree: subject.repo, slug: 'demo', roundId, host: c1, reason: 'rename reviewer flag', operator: 'operator@example.test',
+      carried: [], park: { token: subject.park.token }, emitter: new ConductorEventEmitter(), git: subject.git,
+    });
+    expect(recovered.kind).toBe('opened');
+
+    await expect(dispatchStackLandCommand({ kind: 'stack-land', slug: 'demo', child: '1', carry: [], reason: 'rename reviewer flag' }, {
+      cwd: subject.repo, resolveMainRoot: async () => subject.repo, resolveWorktree: async () => subject.repo,
+      resolveOperator: async () => 'operator@example.test', print: () => undefined,
+    })).resolves.toBe(0);
+
+    await expect(readFile(marker, 'utf8')).resolves.toBe(crashedPark);
+    expect((await record(subject)).operator).toMatchObject({ origin: 'land', park: { token: subject.park.token } });
   });
 
   it('clears only its undeclared halt and names an unrelated needs-human halt without changing it', async () => {
