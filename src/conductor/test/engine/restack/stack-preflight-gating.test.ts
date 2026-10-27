@@ -1,10 +1,10 @@
-// Covers: task:2, task:9, task:31.1, task:rem-as-built-1-r2
+// Covers: task:2, task:8, task:9, task:31.1, task:rem-as-built-1-r2
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
@@ -13,10 +13,19 @@ import { runDaemonRekickStackPreflight } from '../../../src/daemon-cli.js';
 import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
+
+vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/route-record-store.js')>();
+  return { ...actual, drainRoutingOutboxes: vi.fn(actual.drainRoutingOutboxes) };
+});
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-afterEach(async () => { await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.clearAllMocks();
+  await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 async function fixture() {
   const repo = await mkdtemp(join(tmpdir(), 'stack-preflight-gating-'));
@@ -300,5 +309,45 @@ describe('stack preflight dispatch boundaries', () => {
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cause);
     expect(dispatched).toEqual([]);
+  });
+
+  it('reports an outbox-drain refusal to the daemon re-kick outcome', async () => {
+    const subject = await fixture();
+    const log: string[] = [];
+    vi.mocked(drainRoutingOutboxes).mockResolvedValueOnce({ kind: 'unavailable' });
+
+    await expect(runDaemonRekickStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({ kind: 'none' }),
+    }, (line) => log.push(line))).resolves.toMatchObject({
+      kind: 'unavailable',
+      detail: 'cannot drain routing outbox: unavailable',
+    });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toMatch(/^cannot drain routing outbox: unavailable/);
+    expect(log).toContain('stack preflight demo: unavailable — cannot drain routing outbox: unavailable');
+    expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+  });
+
+  it('leaves a clear non-routed daemon re-kick silent', async () => {
+    const subject = await fixture();
+    const log: string[] = [];
+    const events = new ConductorEventEmitter();
+    const emitted: string[] = [];
+    events.on('loop_halt', (event) => emitted.push(event.type));
+
+    await expect(runDaemonRekickStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      events,
+    }, (line) => log.push(line))).resolves.toEqual({ kind: 'clear' });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(log).toEqual([]);
+    expect(emitted).toEqual([]);
   });
 });

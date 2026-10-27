@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:8
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -87,6 +87,9 @@ import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.j
 import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
+import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
 
 // Covers: task:1
 
@@ -155,7 +158,79 @@ function deps(
   };
 }
 
+async function stackPreflightFixture(slug: string): Promise<string> {
+  const repo = await mkdtemp(join(tmpdir(), 'daemon-runner-stack-preflight-'));
+  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  const commit = async (message: string, path: string, value: string) => {
+    await mkdir(join(repo, path, '..'), { recursive: true });
+    await writeFile(join(repo, path), value);
+    await git(['add', path]);
+    await git(['commit', '-qm', message]);
+    return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  };
+  await initTestRepo(repo);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await git(['add', '.gitignore']);
+  await git(['commit', '-qm', 'ignore pipeline']);
+  await commit('base', 'base.txt', 'base\n');
+  await git(['checkout', '-qb', `feat/c1/${slug}`]);
+  const closed = await commit('closed one', 'one.txt', 'one\n');
+  await git(['update-ref', `refs/conductor/${slug}/closed/c1`, closed]);
+  await git(['checkout', '-qb', `feat/daemon-${slug}`]);
+  await commit('leaf', 'leaf.txt', 'leaf\n');
+  await mkdir(join(repo, '.ai-conductor'));
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n');
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'stories', `${slug}.md`), `# Stories: ${slug}\n\n## Story 1: One\n\n## Story 2: Two\n`);
+  await writeFile(join(repo, '.docs', 'plans', `${slug}.md`), [
+    `# Implementation Plan: ${slug}`, '', `**Stories:** .docs/stories/${slug}.md`, '', '## Slices', '',
+    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Two | 2 |', '',
+    '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
+    '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
+  ].join('\n'));
+  await writeFile(join(repo, 'positions.json'), '[1,2]');
+  const positions = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
+  await git(['update-ref', `refs/conductor/${slug}/positions`, positions]);
+  return repo;
+}
+
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('reports a real stack preflight refusal from the durable HALT, not the no-marker fallback', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path,
+          slug: ITEM.slug,
+          git: makeGitRunner(worktree.path),
+          reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+        });
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome.status).toBe('halted');
+      expect(outcome.reason).toContain('round advance cas-failed');
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { item: { slug: 'feature-tiered', tier: 'M' as const }, expectedTier: 'M' },
     { item: { slug: 'feature-untiered' }, expectedTier: undefined },
