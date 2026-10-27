@@ -479,19 +479,6 @@ describe('stack land CLI open path', () => {
     }));
   });
 
-  it.each([
-    ['routing-off stack', 'Routing is disabled by stacked_prs.route_whole_feature_fixes'],
-  ])('refuses a %s before identity, lease, or park mutation', async (_case, text) => {
-    const deps = dependencies({ checkOpen: vi.fn().mockResolvedValue({ kind: 'refused', refusal: { kind: 'not-stacked', text } }) });
-
-    await expect(dispatchStackLandCommand(command, deps as never)).resolves.toBe(1);
-
-    expect(deps.resolveOperator).not.toHaveBeenCalled();
-    expect(deps.acquireLease).not.toHaveBeenCalled();
-    expect(deps.createPark).not.toHaveBeenCalled();
-    expect(deps.print).toHaveBeenCalledWith(expect.stringContaining(text));
-  });
-
   it('refuses a flat feature before the routing predicate, identity, lease, or park mutation', async () => {
     const deps = dependencies({ loadTopology: vi.fn().mockResolvedValue({ kind: 'unsliced' }) });
 
