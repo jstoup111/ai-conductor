@@ -10,6 +10,7 @@ import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
 import { reconcileReceiptLedger } from '../../../src/engine/routing/round-receipt.js';
 import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-queue.js';
@@ -35,6 +36,10 @@ vi.mock('../../../src/engine/restack/restack-journal.js', async (importOriginal)
 vi.mock('../../../src/engine/restack/restack-executor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-executor.js')>();
   return { ...actual, runRestack: vi.fn(actual.runRestack) };
+});
+vi.mock('../../../src/engine/restack/restack-recovery.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-recovery.js')>();
+  return { ...actual, recoverRestackJournal: vi.fn(actual.recoverRestackJournal) };
 });
 
 const execFile = promisify(execFileCallback);
@@ -242,6 +247,41 @@ describe('stack preflight stop reasons', () => {
 
     await expect(runStackPreflight({ worktree: root, slug: 'demo', events })).resolves.toEqual({ kind: 'no-stack' });
     await expect(readFile(join(root, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).toEqual([]);
+  });
+
+  it('does not create a HALT or emit loop_halt for recovered', async () => {
+    const subject = await fixture();
+    const git = (args: string[]) => execFile('git', args, { cwd: subject.repo });
+    await git(['update-ref', '-d', 'refs/conductor/demo/closed/c1']);
+    await git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+    await git(['branch', '-D', 'feat/c1/demo']);
+    vi.mocked(recoverRestackJournal)
+      .mockResolvedValueOnce({ kind: 'recovered', fromState: 'ready' })
+      .mockResolvedValueOnce({ kind: 'none' });
+    const events = new ConductorEventEmitter();
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event.type));
+
+    await expect(runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'recovered' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).toEqual([]);
+  });
+
+  it('does not create a HALT or emit loop_halt for repaired', async () => {
+    const subject = await fixture();
+    await appendBaseRefreshRepair(subject);
+    vi.mocked(runRestack).mockResolvedValueOnce({ kind: 'applied', opId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as never });
+    const events = new ConductorEventEmitter();
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event.type));
+
+    await expect(runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'repaired' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(loopHalts).toEqual([]);
   });
 
