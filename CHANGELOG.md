@@ -75,6 +75,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators receive a safe reseal command when protected-artifact build halts allow an amendment. ([implementation PR #3372](https://github.com/jstoup111/ai-conductor/pull/3372)).
 - The plan and composer skills ask for the stacked-delivery decision before a plan declares slices, so a missing sign-off no longer surfaces only at land. ([implementation PR #3422](https://github.com/jstoup111/ai-conductor/pull/3422)).
 - Stacked features resume reliably after operator interruptions without re-running completed child work. ([implementation PR #3411](https://github.com/jstoup111/ai-conductor/pull/3411)).
+- `/pipeline` has a single mode that runs up to three independent tasks at once, sized to the host's free sub-agent slots, and runs sequentially instead of halting when slots are short; `/bootstrap` suggests the Codex and Claude Code settings that raise the cap. ([implementation PR #3437](https://github.com/jstoup111/ai-conductor/pull/3437)).
 
 ### Removed
 
