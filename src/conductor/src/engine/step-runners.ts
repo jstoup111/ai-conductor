@@ -3634,7 +3634,11 @@ export class DefaultStepRunner implements StepRunner {
         customEntries.length,
         async (_id, entry) => {
           try {
-            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext, customReviewScopes[entry.id], child);
+            return await this.dispatchInstalledBuildReviewPolicy(
+              entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir,
+              executionContext, customReviewScopes[entry.id], child,
+              (scope) => { customReviewScopes[entry.id] = scope; },
+            );
           } finally {
             lapGate?.arrive(entry.id);
           }
@@ -4099,6 +4103,7 @@ export class DefaultStepRunner implements StepRunner {
     executionContext?: ExecutionContext,
     reviewScope?: import('./build-review-artifacts.js').BuildReviewReviewScope,
     child?: import('./child-context.js').ChildId,
+    onResolvedReviewScope?: (reviewScope: import('./build-review-artifacts.js').BuildReviewReviewScope) => void,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -4143,18 +4148,6 @@ export class DefaultStepRunner implements StepRunner {
       const output = `build_review custom policy ${entry.id} has no frozen source materialization`;
       return { id: entry.id, success: true, output, member: failedMember('preflight-failed', output) };
     }
-    // Custom contracts own the frozen-input projection just as built-in
-    // descriptors own theirs. Rendering its output keeps this route on the
-    // descriptor boundary without changing the established prompt bytes.
-    const customReviewerScope = projectBuildReviewCustomReviewerScope(reviewScope);
-    const projection = entry.contract.projection.build({
-      contentDigest: inputs.sourceSnapshot.contentDigest,
-      mergeBase: inputs.sourceSnapshot.mergeBase,
-      headSha: inputs.sourceSnapshot.headSha,
-      changes: inputs.sourceSnapshot.sourceChanges ?? [],
-      ...(customReviewerScope === undefined ? {} : { reviewScope: customReviewerScope }),
-      ...(source === undefined ? {} : { view: source }),
-    });
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
       prompt: `Build-review custom policy ${entry.id}: the candidate will supply the selected immutable policy contract before judgment. Return only the custom findings payload.`,
       cwd: source?.headPath ?? this.projectDir,
@@ -4369,6 +4362,47 @@ export class DefaultStepRunner implements StepRunner {
           context.onTeardown(() => sealingGate.sealPolicyPackage(policy.packageRoot));
         }
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
+        const actualPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+          contractVersion: entry.contract.output.version,
+          projectionVersion: entry.contract.projection.version,
+          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          effectiveBundleDigest: bundle.digest,
+          provider: context.candidate.providerKey,
+          model: context.candidate.model,
+          effort: context.candidate.effort ?? 'default',
+          engineStamp: candidateEngine.engineStamp,
+        });
+        if (reviewScope !== undefined && reviewScope.policyIdentity !== actualPolicyIdentity) {
+          const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff).flatMap((file) =>
+            file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+          );
+          reviewScope = {
+            ...reviewScope,
+            mode: 'full',
+            // D3 orders version changes before open-source-unmapped, but
+            // leaves earlier full-scope reasons (unreadable, first lap, base
+            // move) intact.
+            reason: reviewScope.mode === 'delta' || reviewScope.reason === 'open-source-unmapped'
+              ? 'version-changed'
+              : reviewScope.reason,
+            policyIdentity: actualPolicyIdentity,
+            reviewedHunks: fullHunks,
+            deltaHunks: fullHunks,
+            outOfDeltaSourceIds: [],
+          };
+          onResolvedReviewScope?.(reviewScope);
+        }
+        // The prepared candidate owns the actual bundle and provider identity.
+        // Build its projection only after that capture has reconciled scope.
+        const customReviewerScope = projectBuildReviewCustomReviewerScope(reviewScope);
+        const projection = entry.contract.projection.build({
+          contentDigest: inputs.sourceSnapshot.contentDigest,
+          mergeBase: inputs.sourceSnapshot.mergeBase,
+          headSha: inputs.sourceSnapshot.headSha,
+          changes: inputs.sourceSnapshot.sourceChanges ?? [],
+          ...(customReviewerScope === undefined ? {} : { reviewScope: customReviewerScope }),
+          ...(source === undefined ? {} : { view: source }),
+        });
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
           candidate: { provider: context.candidate.providerKey, model: context.candidate.model, effort: context.candidate.effort ?? 'default' },
