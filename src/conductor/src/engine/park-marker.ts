@@ -177,8 +177,18 @@ export async function releaseOwnedPark(root: string, slug: string, token: ParkTo
   const claimPath = `${markerPath}.release-${encodeURIComponent(token)}`;
 
   // A prior interrupted release can leave this caller's deterministic claim
-  // behind. Removing that private claim cannot affect a later canonical park.
-  await rm(claimPath, { force: true });
+  // behind. It is safe to remove only a claim that still proves this caller's
+  // ownership; another operator's claim must remain visible for recovery.
+  const priorClaim = await readParkMarker(claimPath);
+  if (priorClaim !== undefined) {
+    if (carriesOwnedParkToken(priorClaim, token)) await rm(claimPath);
+    return;
+  }
+
+  // Verify the canonical marker before moving it. In particular, a park that
+  // predates this caller must never be hidden at the deterministic claim path.
+  const marker = await readParkMarker(markerPath);
+  if (marker === undefined || !carriesOwnedParkToken(marker, token)) return;
 
   try {
     await rename(markerPath, claimPath);
@@ -198,7 +208,16 @@ export async function releaseOwnedPark(root: string, slug: string, token: ParkTo
     await restoreParkClaim(claimPath, markerPath);
     return;
   }
-  await rm(claimPath, { force: true });
+  await rm(claimPath);
+}
+
+async function readParkMarker(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
 }
 
 /**
@@ -212,7 +231,6 @@ async function restoreParkClaim(claimPath: string, markerPath: string): Promise<
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
   }
-  await rm(claimPath, { force: true });
 }
 
 /**

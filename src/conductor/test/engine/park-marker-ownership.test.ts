@@ -1,6 +1,6 @@
 // Covers: task:4, task:rem-as-built-rem-as-built-r7
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,6 +13,7 @@ import {
 
 const releaseRace = vi.hoisted(() => ({
   recreateMarker: undefined as undefined | (() => Promise<void>),
+  interruptAfterRename: false,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -27,6 +28,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       }
       return actual.rm(...args);
     },
+    async rename(...args: Parameters<typeof actual.rename>) {
+      await actual.rename(...args);
+      if (releaseRace.interruptAfterRename) {
+        releaseRace.interruptAfterRename = false;
+        throw new Error('simulated interruption after release claim');
+      }
+    },
   };
 });
 
@@ -37,6 +45,8 @@ function markerPath(slug = 'demo'): string {
 }
 
 beforeEach(async () => {
+  releaseRace.recreateMarker = undefined;
+  releaseRace.interruptAfterRename = false;
   repositoryRoot = await mkdtemp(join(tmpdir(), 'park-marker-ownership-'));
 });
 
@@ -104,13 +114,41 @@ describe('owned park markers (Task 4)', () => {
     if (!owned.created) throw new Error('expected owned park');
 
     releaseRace.recreateMarker = async () => {
-      await unlink(markerPath());
       await writeOperatorPark(repositoryRoot, 'demo');
     };
 
     await releaseOwnedPark(repositoryRoot, 'demo', owned.token);
 
     await expect(isOperatorParked(repositoryRoot, 'demo')).resolves.toBe(true);
+  });
+
+  it('never renames a non-owned canonical marker, even when release is interrupted', async () => {
+    await writeOperatorPark(repositoryRoot, 'demo');
+    const unrelated = await createOwnedPark(repositoryRoot, 'other');
+    if (!unrelated.created) throw new Error('expected unrelated owned park');
+
+    releaseRace.interruptAfterRename = true;
+
+    await releaseOwnedPark(repositoryRoot, 'demo', unrelated.token);
+
+    await expect(isOperatorParked(repositoryRoot, 'demo')).resolves.toBe(true);
+    await expect(readFile(markerPath(), 'utf8')).resolves.not.toContain(`owned-park-token: ${unrelated.token}`);
+  });
+
+  it('does not delete another operator\'s claim when retrying an interrupted release', async () => {
+    const owned = await createOwnedPark(repositoryRoot, 'demo');
+    if (!owned.created) throw new Error('expected owned park');
+
+    releaseRace.interruptAfterRename = true;
+    await expect(releaseOwnedPark(repositoryRoot, 'demo', owned.token)).rejects.toThrow('simulated interruption after release claim');
+
+    const claimPath = `${markerPath()}.release-${encodeURIComponent(owned.token)}`;
+    const foreignClaim = 'parked by operator\nowned-park-token: another-operator\n';
+    await writeFile(claimPath, foreignClaim, 'utf8');
+
+    await releaseOwnedPark(repositoryRoot, 'demo', owned.token);
+
+    await expect(readFile(claimPath, 'utf8')).resolves.toBe(foreignClaim);
   });
 
   it('is parked with operator provenance', async () => {
