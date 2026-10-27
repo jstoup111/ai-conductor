@@ -8,6 +8,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
+import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -46,10 +47,12 @@ describe('build_review lap scope runner', () => {
   let emitter: ConductorEventEmitter;
   let runner: DefaultStepRunner;
   let config: ReturnType<typeof resolveBuildReviewConfig>;
+  let effectiveResolverCalls: unknown[][];
 
   beforeEach(async () => {
     projectDir = await mkdtemp(join(tmpdir(), 'build-review-lap-scope-runner-'));
     events = [];
+    effectiveResolverCalls = [];
     emitter = new ConductorEventEmitter();
     emitter.on('build_review_review_scope', (event) => events.push(event));
     config = resolveBuildReviewConfig({
@@ -66,7 +69,9 @@ describe('build_review lap scope runner', () => {
     runner = new DefaultStepRunner(provider, 'scope-runner', projectDir, {
       config,
       events: emitter,
-      buildReviewEffectiveResolver: async () => ({
+      buildReviewEffectiveResolver: async (...args) => {
+        effectiveResolverCalls.push(args);
+        return {
         ok: true as const,
         feature: { version: 'v1' as const, repository: projectDir, feature: 'scope-runner' },
         effective: {
@@ -75,7 +80,8 @@ describe('build_review lap scope runner', () => {
           skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
           uncoveredScopeIncompleteRubrics: [],
         },
-      }),
+        };
+      },
     });
     vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity as never);
     vi.spyOn(runner as never, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set());
@@ -178,6 +184,89 @@ describe('build_review lap scope runner', () => {
     expect((await artifact('4'.repeat(40), child)).reviewScope).toMatchObject({
       mode: 'full', reason: 'merge-base-changed', sequence: 2, mergeBase: 'b'.repeat(40),
     });
+  });
+
+  // Covers: S1.1, task:rem-prd-audit-6.r1
+  it('uses the whole-feature snapshot for a stacked leaf security scope without widening other rubrics', async () => {
+    const child = parseChildId(1)!;
+    const childHead = 'c'.repeat(40);
+    const wholeFeatureHead = 'd'.repeat(40);
+    const childMergeBase = 'a'.repeat(40);
+    const wholeFeatureMergeBase = 'b'.repeat(40);
+    const wholeFeatureDiff = [
+      DIFF,
+      'diff --git a/src/earlier.ts b/src/earlier.ts',
+      '@@ -1 +1 @@',
+      '-export const earlier = false;',
+      '+export const earlier = true;',
+    ].join('\n');
+    config = resolveBuildReviewConfig({
+      build_review: {
+        enabled: true,
+        rubrics: {
+          testQuality: { enabled: false },
+          security: { enabled: true },
+          implementationQuality: { enabled: true },
+        },
+      },
+    } as HarnessConfig, CLAUDE_MODEL_POLICY);
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async (input) => {
+      const branches = await Promise.all((["security", IMPLEMENTATION_QUALITY] as const).map(async (rubric) => {
+        const snapshotDigest = rubric === 'security'
+          ? input.inputs.securitySourceSnapshot!.digest
+          : input.inputs.sourceSnapshot.digest;
+        const result = {
+          kind: 'judged' as const, rubric, lapId: input.lapId, snapshotDigest,
+          contractVersion: 'v4' as const, findings: [], verdict: 'PASS' as const,
+        };
+        await input.writeArtifact({
+          rubric, lapId: input.lapId, snapshotDigest, result,
+          provenance: { kind: 'fresh' }, reviewScope: input.reviewScopes![rubric]!,
+        });
+        return { kind: 'dispatched' as const, rubric, result };
+      }));
+      return {
+        kind: 'ready',
+        branches: [{ kind: 'skipped', rubric: 'testQuality', reason: 'disabled' }, ...branches],
+      } as never;
+    });
+
+    await expect((runner as never as { runRubricBuildReviewInner: (...args: unknown[]) => Promise<unknown> })
+      .runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: `sha256:${childHead}`, mergeBase: childMergeBase, headSha: childHead, diff: DIFF,
+        },
+        securitySourceSnapshot: {
+          digest: `sha256:${wholeFeatureHead}`, mergeBase: wholeFeatureMergeBase, headSha: wholeFeatureHead, diff: wholeFeatureDiff,
+        },
+      }, config, 'M', 'plan.md', undefined, undefined, child)).resolves.toMatchObject({ success: true });
+
+    const readScope = async (rubric: typeof IMPLEMENTATION_QUALITY | 'security') => JSON.parse(await readFile(
+      join(projectDir, '.pipeline', 'children', String(child), 'build-review', `lap-${childHead}`, `${rubric}.json`),
+      'utf8',
+    )).reviewScope;
+    const wholeFeatureHunks = deriveChangedFileReferences(wholeFeatureDiff).flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+    const childHunks = deriveChangedFileReferences(DIFF).flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+
+    await expect(readScope('security')).resolves.toMatchObject({
+      mode: 'full', reason: 'first-lap', mergeBase: wholeFeatureMergeBase, headSha: wholeFeatureHead,
+      reviewedHunks: wholeFeatureHunks, deltaHunks: wholeFeatureHunks,
+    });
+    await expect(readScope(IMPLEMENTATION_QUALITY)).resolves.toMatchObject({
+      mode: 'full', reason: 'first-lap', mergeBase: childMergeBase, headSha: childHead,
+      reviewedHunks: childHunks, deltaHunks: childHunks,
+    });
+    expect(vi.mocked(settledBuildReviewHunks)).toHaveBeenCalledWith(expect.objectContaining({
+      mergeBase: wholeFeatureMergeBase,
+      changedFiles: deriveChangedFileReferences(wholeFeatureDiff),
+    }));
+    const effectiveScopes = (effectiveResolverCalls[0]![2] as { scopes: Record<string, { changedFiles: unknown }> }).scopes;
+    expect(effectiveScopes.security!.changedFiles).toEqual(deriveChangedFileReferences(wholeFeatureDiff));
+    expect(effectiveScopes.implementationQuality!.changedFiles).toEqual(deriveChangedFileReferences(DIFF));
   });
 
   it('records an unreadable prior scope once without altering the corrupt artifact', async () => {

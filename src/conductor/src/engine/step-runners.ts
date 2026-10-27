@@ -3332,7 +3332,15 @@ export class DefaultStepRunner implements StepRunner {
       });
     };
     const reviewScopes: Partial<Record<BuildReviewRubricResult['rubric'], import('./build-review-artifacts.js').BuildReviewReviewScope>> = {};
+    const reviewScopeChangedFiles: Partial<Record<BuildReviewRubricResult['rubric'], readonly import('./build-review-projections.js').ChangedFileReference[]>> = {};
     for (const entry of config.catalog.filter((candidate): candidate is import('./resolved-config.js').ResolvedBuildReviewBuiltinCatalogEntry => candidate.kind === 'builtin')) {
+      // At a stacked leaf, security reviews the whole feature while the other
+      // built-ins remain child-scoped. Its scope record must match that
+      // security projection rather than recording only the child hunks.
+      const scopeSnapshot = entry.id === 'security'
+        ? inputs.securitySourceSnapshot ?? inputs.sourceSnapshot
+        : inputs.sourceSnapshot;
+      const scopeChangedFiles = deriveChangedFileReferences(scopeSnapshot.diff);
       const descriptor = getBuildReviewRubricDescriptor(entry.id).contract;
       const skill = engineIdentity.skillDigests[entry.id];
       const policyIdentity = buildReviewPolicyIdentity(entry.id, {
@@ -3385,7 +3393,7 @@ export class DefaultStepRunner implements StepRunner {
         })(),
       });
       const settled = settledBuildReviewHunks({
-        changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, policyIdentity,
+        changedFiles: scopeChangedFiles, mergeBase: scopeSnapshot.mergeBase, policyIdentity,
         resolvedAppliedActSourceIds,
         unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
         appliedLiveSourceIds: liveActSourceIds.appliedLiveSourceIds,
@@ -3396,17 +3404,18 @@ export class DefaultStepRunner implements StepRunner {
           : []),
       });
       const decision = decideBuildReviewReviewScope({
-        lapId, changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
+        lapId, changedFiles: scopeChangedFiles, mergeBase: scopeSnapshot.mergeBase, headSha: scopeSnapshot.headSha,
         policyIdentity, priorLaps: artifacts.map((artifact) => ({ lapId: artifact.lapId, reviewScope: artifact.reviewScope })),
         settledHunks: settled,
         openSourceUnmapped: hasUnappliedLiveSourceWithoutCurrentHunk({
           sources,
           unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
-          changedFiles,
+          changedFiles: scopeChangedFiles,
         }),
       });
       if (decision !== undefined) {
         reviewScopes[entry.id] = decision;
+        reviewScopeChangedFiles[entry.id] = scopeChangedFiles;
         await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: settled.length });
       }
     }
@@ -3982,7 +3991,10 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(config), minSeverity: buildReviewSeverityThresholds(config),
-      scopes: Object.fromEntries([...Object.entries(reviewScopes), ...Object.entries(customReviewScopes)].map(([rubric, reviewScope]) => [rubric, { reviewScope, changedFiles }])),
+      scopes: Object.fromEntries([...Object.entries(reviewScopes), ...Object.entries(customReviewScopes)].map(([rubric, reviewScope]) => [rubric, {
+        reviewScope,
+        changedFiles: reviewScopeChangedFiles[rubric as BuildReviewRubricResult['rubric']] ?? changedFiles,
+      }])),
       child,
       adjudicationEnabled: config.adjudication.enabled,
     });
