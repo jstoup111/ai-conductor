@@ -305,6 +305,39 @@ describe('build-review rubric projections', () => {
     });
   });
 
+  // Covers: S3.1, task:rem-prd-audit-6.r2
+  it('keeps a stacked leaf security delta within the whole-feature snapshot while peers remain child-scoped', () => {
+    const child = withSnapshot(source(), { mergeBase: 'child-parent', diff: FIXTURE_DIFF });
+    const wholeFeature = { ...child.inputs.sourceSnapshot, mergeBase: 'default-merge-base', diff: THREE_FILE_DIFF };
+    const childHunks = deriveChangedFileReferences(FIXTURE_DIFF).flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+    const wholeFeatureHunks = deriveChangedFileReferences(THREE_FILE_DIFF).flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+    const wholeFeatureOnlyHunk = wholeFeatureHunks.find((hunk) => hunk.path === 'src/b.ts');
+    if (wholeFeatureOnlyHunk === undefined) throw new Error('fixture must contain a whole-feature-only hunk');
+
+    const projections = deriveBuildReviewRubricProjections({
+      ...child,
+      securitySnapshot: wholeFeature,
+      reviewScopes: { security: { mode: 'delta', deltaHunks: [wholeFeatureOnlyHunk] } },
+    });
+    const securityChangedHunks = projections.security.changedFiles.flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+
+    expect(projections.security.reviewScope).toEqual({ mode: 'delta', deltaHunks: [wholeFeatureOnlyHunk] });
+    expect(securityChangedHunks).toEqual(expect.arrayContaining(projections.security.reviewScope.deltaHunks));
+    expect(childHunks).not.toContainEqual(wholeFeatureOnlyHunk);
+    expect(projections.testQuality).toMatchObject({
+      mergeBase: 'child-parent', changedFiles: deriveChangedFileReferences(FIXTURE_DIFF),
+    });
+    expect(projections.implementationQuality).toMatchObject({
+      mergeBase: 'child-parent', changedFiles: deriveChangedFileReferences(FIXTURE_DIFF),
+    });
+  });
+
   it('keeps the security projection sealed when the post-exclusion frozen diff is empty', () => {
     const projection = deriveBuildReviewRubricProjections(withSnapshot(source(), { diff: '' })).security;
 
