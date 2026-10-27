@@ -1738,7 +1738,10 @@ async function dispatchCliCommand(): Promise<void> {
     projectRoot = selected.path;
     pipelineDir = join(projectRoot, '.pipeline');
     stateFilePath = join(pipelineDir, 'conduct-state.json');
-    await mkdir(pipelineDir, { recursive: true });
+
+    if (!opts.featureDesc && selected.featureDesc) {
+      opts.featureDesc = selected.featureDesc;
+    }
 
     // Also check for state in worktree root (legacy location)
     const legacyStatePath = join(selected.path, 'conduct-state.json');
@@ -1753,10 +1756,6 @@ async function dispatchCliCommand(): Promise<void> {
       }
     } catch {
       // No legacy state — use .pipeline
-    }
-
-    if (!opts.featureDesc && selected.featureDesc) {
-      opts.featureDesc = selected.featureDesc;
     }
   }
 

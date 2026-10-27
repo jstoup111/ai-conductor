@@ -54,7 +54,11 @@ async function waitForPath(path: string, description: string, run?: StartedCli):
   throw new Error(`Timed out waiting for ${description}: ${path}${result ? `\n${result.stdout}${result.stderr}` : ''}`);
 }
 
-async function createInteractiveFixture(resume: boolean, parkAsFifo = true): Promise<InteractiveFixture> {
+async function createInteractiveFixture(
+  resume: boolean,
+  parkAsFifo = true,
+  selectedPipelineExists = true,
+): Promise<InteractiveFixture> {
   const root = await mkdtemp(join(tmpdir(), 'interactive-run-lease-entry-'));
   temporaryDirectories.push(root);
   const bin = join(root, 'bin');
@@ -73,8 +77,10 @@ async function createInteractiveFixture(resume: boolean, parkAsFifo = true): Pro
   await Promise.all([
     mkdir(bin, { recursive: true }),
     mkdir(home, { recursive: true }),
-    mkdir(join(activeRoot, '.pipeline', 'children', '1'), { recursive: true }),
-    mkdir(join(activeRoot, '.ai-conductor'), { recursive: true }),
+    ...(selectedPipelineExists ? [
+      mkdir(join(activeRoot, '.pipeline', 'children', '1'), { recursive: true }),
+      mkdir(join(activeRoot, '.ai-conductor'), { recursive: true }),
+    ] : []),
     mkdir(join(root, '.daemon', 'parked'), { recursive: true }),
     mkdir(join(root, '.ai-conductor'), { recursive: true }),
   ]);
@@ -84,12 +90,20 @@ async function createInteractiveFixture(resume: boolean, parkAsFifo = true): Pro
   await writeFile(join(root, 'README.md'), 'fixture\n');
   await execa('git', ['add', 'README.md'], { cwd: root });
   await execa('git', ['commit', '-qm', 'fixture'], { cwd: root });
+  if (resume && !selectedPipelineExists) {
+    await execa('git', ['branch', 'feat/c1/demo'], { cwd: root });
+    await execa('git', ['worktree', 'add', '--detach', activeRoot, 'feat/c1/demo'], { cwd: root });
+    await mkdir(join(activeRoot, '.ai-conductor'), { recursive: true });
+  }
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'llm_provider: codex\n');
   if (activeRoot !== root) {
     await writeFile(join(activeRoot, '.ai-conductor', 'config.yml'), 'llm_provider: codex\n');
   }
   if (resume) {
-    await writeFile(statePath, '{"feature_desc":"Demo"}\n');
+    await writeFile(
+      selectedPipelineExists ? statePath : join(activeRoot, 'conduct-state.json'),
+      '{"feature_desc":"Demo"}\n',
+    );
   }
 
   if (parkAsFifo) {
@@ -270,6 +284,25 @@ describe('interactive conductor run lease', () => {
       expect(existsSync(fixture.providerDispatched)).toBe(false);
       expect(existsSync(fixture.statePath)).toBe(false);
       expect(existsSync(join(fixture.activeRoot, '.pipeline', 'session-events'))).toBe(false);
+    } finally {
+      await acquired.lease.release();
+    }
+  });
+
+  it('bare --resume refuses a live owner without creating the selected worktree pipeline', async () => {
+    const fixture = await createInteractiveFixture(true, false, false);
+    const acquired = await acquireFeatureDispatchLease(fixture.root, 'demo', 'operator stack land');
+    expect(acquired.kind).toBe('acquired');
+    if (acquired.kind !== 'acquired') return;
+
+    try {
+      const run = startInteractiveEntry(fixture, ['--resume', '--interactive']);
+      const result = await run.completed;
+
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).toContain(`operator stack land (pid ${process.pid})`);
+      expect(existsSync(join(fixture.activeRoot, '.pipeline'))).toBe(false);
+      expect(existsSync(fixture.providerDispatched)).toBe(false);
     } finally {
       await acquired.lease.release();
     }
