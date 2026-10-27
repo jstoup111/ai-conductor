@@ -1,23 +1,28 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-27T03:02:00.079Z
+Status: halted
 Slug: manual-reviewer-edits-cannot-be-landed-safely-in-t
 Class: needs-human
-Halting step: rebase
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-manual-reviewer-edits-cannot-be-landed-safely-in-t
 Child: 3
-Head SHA: b93bc4d765e4a4921fe8d7e59534e0c13d322e3a
-Halted at: 2026-10-27T02:34:16.229Z
+Head SHA: f45155a75f83295fd41634ff34293d68949a30ba
+Halted at: 2026-10-27T04:55:16.494Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-restack conflict child 2
-commit 83e09ee10e89c1fb7c56874c0669d0819eddd5af; paths: src/conductor/src/engine/routing/host-region-entry.ts, src/conductor/src/engine/routing/operator-round.ts, src/conductor/src/engine/routing/route-record-store.ts, src/conductor/src/engine/worktree-prepare.ts, src/conductor/test/engine/routing/operator-round-open.realgit.test.ts
-replay commit 83e09ee10e89c1fb7c56874c0669d0819eddd5af; src/conductor/src/engine/routing/route-record-store.ts lines 72-86 (CreateRouteRecordInput); source intends to admit kind 'operator' with an 'operator' section and sealedAuthored: 0 (operator-round.ts:351-354); upstream 97c01cfbf7 (#3433) intends a kind-discriminated input where audit seals the real authored count and revalidate seals none, because a placeholder 0 conflicts with readRoutedGrowthSnapshot (round-receipt.ts:358 skips only revalidate); missing decision: whether operator rounds seal no authored denominator (new operator variant with sealedAuthored?: never, drop sealedAuthored: 0 in operator-round.ts, and extend the round-receipt.ts skip to operator), seal the real authored count, or keep 0 despite the #3433 snapshot conflict
+conductor error: Error: step-transition (rebase): Expected test_suite to match before reopen test_suite selected gate
+    at Conductor.applyStateBatch (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/chunk-6AKILQK7.js:22959:36)
+    at async Conductor.commitStateChanges (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/chunk-6AKILQK7.js:23013:20)
+    at async Conductor.advanceTail (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/chunk-6AKILQK7.js:32805:7)
+    at async Conductor.run (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/chunk-6AKILQK7.js:32126:23)
+    at async Object.runConductor (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/executor-child-runtime-T4QXKE3N.js:308:16)
+    at async file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/chunk-COSRBHVH.js:298:36
+    at async runExecutorChildFeature (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/executor-child-runtime-T4QXKE3N.js:336:20)
+    at async Object.run (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/executor-child-UP264EQL.js:217:16)
+    at async file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261026T134330Z-de66138a044b/executor-child-UP264EQL.js:289:151
 ```
