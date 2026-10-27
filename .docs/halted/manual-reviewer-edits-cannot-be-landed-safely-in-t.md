@@ -1,20 +1,20 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-26T22:39:05.899Z
+Status: halted
 Slug: manual-reviewer-edits-cannot-be-landed-safely-in-t
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: build
+Phase: BUILD
 Branch: feat/c2/manual-reviewer-edits-cannot-be-landed-safely-in-t
-Head SHA: 019b3ec15dd00c0819985e0d1b7d9b2b32bc144a
-Halted at: 2026-10-26T21:06:38.814Z
+Child: 3
+Head SHA: 1fe6d4fbc91191f9c3721d023b31ca7278b77700
+Halted at: 2026-10-27T12:19:27.725Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: case reconciliation illegal-disposition-transition
+build_review kickback-to-build refused: the build made no tree change (tree a9a16d5 unchanged). Investigate the unchanged build before retrying.
+Build note: BUILD: PASS — 56/56 tasks completed; worktree clean. Scoped verification is recorded; aggregate verification remains with `test_suite`.
 ```
