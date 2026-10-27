@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { assembleBuildReviewInputs } from '../../../src/engine/build-review-inputs.js';
 import type { GitRunner } from '../../../src/engine/rebase.js';
 
-const proof = { status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } } as const;
+const proof = { status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } as never } as const;
 
 function git(): GitRunner {
   return async (args) => {

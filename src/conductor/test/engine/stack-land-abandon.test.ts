@@ -66,7 +66,7 @@ async function fixture() {
 
 async function abandon(subject: Awaited<ReturnType<typeof fixture>>, deps: Record<string, unknown> = {}, output: string[] = []) {
   return dispatchStackLandCommand({ kind: 'stack-land-abandon', slug: 'demo' }, {
-    cwd: subject.repo, resolveMainRoot: async () => subject.repo, resolveWorktree: async () => subject.repo, print: (line) => output.push(line), ...deps,
+    cwd: subject.repo, resolveMainRoot: async () => subject.repo, resolveWorktree: async () => subject.repo, print: (line: string) => output.push(line), ...deps,
   } as never);
 }
 

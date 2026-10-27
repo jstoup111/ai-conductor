@@ -100,7 +100,7 @@ function routedConductor(
   childEntry: () => Promise<unknown> = async () => ({ kind: 'completed' as const }),
 ) {
   const runner = { run: vi.fn(async () => ({ success: true })) };
-  const enterChildRegion = vi.fn(childEntry);
+  const enterChildRegion = vi.fn(childEntry as () => Promise<never>);
   const conductor = new Conductor({
     projectRoot: root,
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),

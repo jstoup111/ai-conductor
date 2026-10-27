@@ -19,9 +19,9 @@ function route(kind: 'operator' | 'audit', declared = false): RouteRecord {
     phase: 'open',
     items: [],
     allocation: {},
-    hosts: { 1: 'repairing' },
+    hosts: { 1: 'repairing' } as RouteRecord['hosts'],
     currentHostIndex: 0,
-    receipt: {},
+    receipt: {} as never,
     outbox: [],
     ...(kind === 'operator' ? {
       operator: {

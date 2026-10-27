@@ -163,7 +163,7 @@ describe('stack land CLI open path', () => {
   it.each([
     ['flat', true, false, 'Feature demo is not a stacked feature'],
     ['routing disabled', false, true, 'Routing is disabled'],
-  ])('refuses %s stacks before any command reads repair refs or creates a lease', async (_name, routingOn, durable, detail) => {
+  ])('refuses %s stacks before any command reads repair refs or creates a lease', async (_name, routingOn, durable, _detail) => {
     const root = await mkdtemp(join(tmpdir(), 'stack-land-ineligible-'));
     haltRoots.push(root);
     for (const stackLandCommand of [

@@ -276,6 +276,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
+  operator_round: 'not-audited-by-design',
   child_revalidated: 'not-audited-by-design',
   // Stack-publication occurrences persist on the spine but are not audited (event-sinks audit: false).
   stack_member_published: 'not-audited-by-design',
@@ -1012,6 +1013,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   routed_repair_phase: {
     type: 'routed_repair_phase', eventId: 'route-3', occurredAt: '2030-01-01T00:00:00.000Z',
     roundId: parseRoundId('r1')!, host: parseChildId(1)!, phase: 'repairing', credit: false, child: parseChildId(1)!,
+  },
+  operator_round: {
+    type: 'operator_round', eventId: 'route-5', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, child: parseChildId(1)!, origin: 'land', reason: 'test', action: 'opened',
   },
   child_revalidated: {
     type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',

@@ -127,7 +127,7 @@ async function runLanding(subject: Awaited<ReturnType<typeof fixture>>, options:
   const dispatched: StepName[] = [];
   const started: StepName[] = [];
   const events = new ConductorEventEmitter();
-  events.on('step_started', (event) => { started.push(event.step); });
+  events.on('step_started', (event) => { if (event.type === 'step_started') started.push(event.step); });
   const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never }));
   const conductor = new Conductor({
     projectRoot: subject.repo, stateFilePath: subject.rootStatePath, featureSlug: 'demo', resume: true,
@@ -186,7 +186,7 @@ async function sealedExitFixture(): Promise<SweepRepository & { readonly closure
     },
   };
   const created = await createRouteRecord(subject.repo, 'demo', {
-    roundId, kind: 'operator', items: [], allocation: record.allocation, operator: record.operator!,
+    roundId, sealedAuthored: 1, kind: 'operator', items: [], allocation: record.allocation, operator: record.operator!,
   }, { git });
   if (created.kind !== 'created') throw new Error(created.kind);
   const admitted = await admitRound(subject.repo, 'demo', created.record, c1, { git });
