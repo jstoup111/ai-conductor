@@ -1,8 +1,9 @@
 // Covers: task:12, task:rem-as-built-rem-as-built-r15
 import { describe, expect, it, vi } from 'vitest';
 import { runStackCommitGuard, type StackCommitGuardDependencies } from '../../src/engine/stack-commit-guard-cli.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { SliceTopology } from '../../src/engine/slice-topology.js';
-import type { RouteRecord } from '../../src/engine/routing/route-types.js';
+import { emptyUnsettledReceipt, type RouteRecord } from '../../src/engine/routing/route-types.js';
 
 const topology: SliceTopology = {
   kind: 'sliced',
@@ -19,9 +20,9 @@ function route(kind: 'operator' | 'audit', declared = false): RouteRecord {
     phase: 'open',
     items: [],
     allocation: {},
-    hosts: { 1: 'repairing' } as RouteRecord['hosts'],
+    hosts: { [parseChildId(1)!]: 'repairing' },
     currentHostIndex: 0,
-    receipt: {} as never,
+    receipt: emptyUnsettledReceipt(),
     outbox: [],
     ...(kind === 'operator' ? {
       operator: {
