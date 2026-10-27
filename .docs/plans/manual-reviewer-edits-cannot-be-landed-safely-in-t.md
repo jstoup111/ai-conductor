@@ -1173,3 +1173,14 @@ Slice 3: 27 (9, 20) ── 28;  29 ── 30;  31 (10, 17, 27, 29)
 - The repair for task rem-as-built-rem-park-release-check-before-rename is committed and its targeted tests pass.
 **Child:** 2
 **Round:** r2
+
+### Task rem-prd-audit-25-s14-1-order: operator-round-events.test.ts: add an opened→declared→exited landing case that drains the outbox and asserts the exact persisted event-type sequence in events.jsonl, starting routed_repair_phase(admitted), operator_round(opened), remediation_routed(kind operator), then the declared and exited operator_round events. Assert each operator_round carries round id, child 1, origin land and the reason. Keep the existing abandoned and replay assertions.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): test/engine/routing/operator-round-events.test.ts:116 only uses toContainEqual for remediation_routed and checks operator_round events relative to each other. It never asserts the full persisted order of the opened, declared and exited landing. The admitRound outbox order is routed_repair_phase(admitted), operator_round(opened), remediation_routed. This is a test-strengthening gap inside approved Task 25's done-when. No architecture or product decision is needed, so it is BUILD work bound to Task 25.
+**Criterion:** S14.1
+**Parent task:** 25
+**Done when:**
+- [test] S14.1 is satisfied by this task.
+- The repair for task rem-prd-audit-25-s14-1-order is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r3
