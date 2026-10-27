@@ -5192,7 +5192,7 @@ export class DefaultStepRunner implements StepRunner {
                 // baseline/head input the custom reviewers are bound to.
                 prompt: `${builtinBundle.manifest.filter((file) => isUtf8(file.bytes)).map((file) => file.bytes.toString('utf8')).join('\n\n')}\n\n${rubricPrompt}${materialized === undefined ? '' : `\n\n${renderBuildReviewFrozenInputScope({
                   contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
-                  changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
+                  changes: inputs.sourceSnapshot.sourceChanges ?? [], reviewScope: projection.reviewScope, view: materialized,
                 })}`}`,
                 ...(customPolicyLap ? { readOnlyReview: true } : {}),
                 reviewDispatch: true,

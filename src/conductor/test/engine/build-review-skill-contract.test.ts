@@ -202,6 +202,7 @@ describe('build-review delta contract', () => {
       mergeBase: 'base-sha',
       headSha: 'head-sha',
       changes: [],
+      reviewScope: { mode: 'delta', deltaHunks: [] },
     }))).toContain(DELTA_CONTRACT);
   });
 

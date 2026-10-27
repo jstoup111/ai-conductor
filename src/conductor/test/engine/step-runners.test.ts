@@ -6499,4 +6499,101 @@ describe('build_review rubric dispatch', () => {
     ]));
   });
 
+  it.each([
+    {
+      name: 'a delta lap',
+      reviewScope: {
+        mode: 'delta' as const,
+        deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'c'.repeat(64)}` }],
+      },
+      scopeInstruction: 'Judge only the `reviewScope` delta hunks.',
+    },
+    {
+      name: 'a full lap',
+      reviewScope: { mode: 'full' as const, deltaHunks: [] },
+      scopeInstruction: 'Judge the full changed diff described by `changedFiles`.',
+    },
+  ])('renders the projected peer review scope for %s', async ({ reviewScope, scopeInstruction }) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-peer-scope-'));
+    const baselinePath = join(projectDir, 'baseline');
+    const headPath = join(projectDir, 'head');
+    await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
+    const invoke = vi.fn<(options: InvokeOptions) => Promise<InvokeResult>>(async (_options) => ({
+      success: true,
+      output: '{"findings":[]}',
+      exitCode: 0,
+      finalStructuredResult: { findings: [] },
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'peer-scope', projectDir, {
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project',
+        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (capturedPolicy) => ({
+        policy: capturedPolicy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review test quality\n') }],
+        metadata: { version: 1, semanticName: capturedPolicy.semanticName, source: capturedPolicy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const peerProjection = {
+      rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4',
+      lapId, snapshotDigest, contentDigest: 'sha256:content', digest: 'sha256:peer-projection',
+      mergeBase: 'base', headSha: 'head', changedFiles: [], reviewScope,
+      runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
+      testScope: { analysisVersion: 'test-scope-v1', changedDeclarations: [], targets: [], candidates: [], notes: [], affectedGroups: [], sharedSources: [], evidence: [] },
+      testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: 'not-requested' },
+    };
+    const inputs = {
+      sourceSnapshot: {
+        contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head',
+        sourceChanges: [{ kind: 'M', path: 'src/current.ts' }],
+      },
+      sourceMaterialization: {
+        contextFor: () => ({
+          memberId: 'testQuality',
+          source: {
+            identity: { snapshotDigest, contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' },
+            baselinePath,
+            headPath,
+          },
+        }),
+        settle: async () => {},
+      },
+    };
+
+    try {
+      await (runner as unknown as {
+        dispatchBuildReviewRubric: (
+          branch: unknown, projection: unknown, tier: undefined, context: undefined,
+          inputs: unknown, engineIdentity: unknown, customPolicyLap: boolean,
+          readOnlyReviewCapabilityFor: (provider: string) => Promise<unknown>,
+        ) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(
+        branch,
+        peerProjection,
+        undefined,
+        undefined,
+        inputs,
+        { engineStamp: 'engine-stamp', skillDigests: { testQuality: { kind: 'resolved', digest: `sha256-v1:${'a'.repeat(64)}` } } },
+        true,
+        async (provider) => ({ provider, platform: process.platform, status: 'available' }),
+      );
+
+      const prompt = invoke.mock.calls[0]?.[0].prompt;
+      expect(prompt).toContain(JSON.stringify({ reviewScope }));
+      expect(prompt).toContain(scopeInstruction);
+      if (reviewScope.mode === 'full') {
+        expect(prompt).not.toContain('Judge only the `reviewScope` delta hunks.');
+      }
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
 });

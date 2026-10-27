@@ -52,7 +52,9 @@ export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputS
   return [
     `Frozen build-review input ${scope.contentDigest}.`,
     `Review scope: ${JSON.stringify({ reviewScope })}`,
-    'Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.',
+    ...(reviewScope.mode === 'delta'
+      ? ['Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.']
+      : ['Judge the full changed diff described by `changedFiles`.']),
     ...(scope.view === undefined ? [] : [
       `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
       `Reviewed head ${scope.headSha} (read-only): ${scope.view.headPath}`,
