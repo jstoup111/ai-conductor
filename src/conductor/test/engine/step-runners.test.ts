@@ -453,6 +453,39 @@ describe('DefaultStepRunner', () => {
 
       expect(piInvoke).not.toHaveBeenCalled();
       expect(claudeInvoke).toHaveBeenCalledOnce();
+      const durableScope = {
+        mode: 'delta' as const,
+        reason: 'delta' as const,
+        sequence: 2,
+        predecessorLapId: 'lap-predecessor',
+        unreadableLapIds: [],
+        mergeBase: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
+        policyIdentity: `sha256:${'c'.repeat(64)}`,
+        reviewedHunks: [{ path: 'src/reviewed.ts', contentHash: `sha256:${'d'.repeat(64)}` }],
+        deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'e'.repeat(64)}` }],
+        outOfDeltaSourceIds: ['portable:prior-finding'],
+      };
+      await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy(...args: readonly unknown[]): Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(
+        config.catalog[0], inputs, 'lap-scope-projection', 'S', undefined,
+        async () => ({ provider: 'claude', platform: process.platform, status: 'available' }),
+        join(projectDir, '.pipeline'), undefined, durableScope,
+      );
+      // Covers: task:rem-as-built-6-r2
+      const serializedCustomInput = (claudeInvoke.mock.calls[1]![0] as InvokeOptions).prompt
+        .match(/Frozen build-review input [^\n]+\.\nReview scope: (.+)\n/)?.[1];
+      expect(serializedCustomInput).toBeDefined();
+      expect(JSON.parse(serializedCustomInput!)).toEqual({
+        reviewScope: {
+          mode: 'delta',
+          deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'e'.repeat(64)}` }],
+        },
+      });
+      expect(serializedCustomInput).not.toContain('predecessorLapId');
+      expect(serializedCustomInput).not.toContain('reviewedHunks');
+      expect(serializedCustomInput).not.toContain('outOfDeltaSourceIds');
       expect(attempts).toEqual(expect.arrayContaining([
         expect.objectContaining({
           provider: 'pi', outcome: 'unavailable', invoked: false,

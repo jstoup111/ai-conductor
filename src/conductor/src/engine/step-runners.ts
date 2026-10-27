@@ -141,7 +141,11 @@ import {
 } from './resolved-config.js';
 import type { ResolvedBuildReviewCatalogEntry, ResolvedBuildReviewCustomCatalogEntry } from './resolved-config.js';
 import { fingerprintBuildReviewPolicyDeclaration, type InstalledReviewSkill } from './build-review-policy.js';
-import { resolveInstalledReviewPolicyCatalog, ReviewPolicyCatalogError } from './build-review-policy-resolver.js';
+import {
+  projectBuildReviewCustomReviewerScope,
+  resolveInstalledReviewPolicyCatalog,
+  ReviewPolicyCatalogError,
+} from './build-review-policy-resolver.js';
 import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
 import { captureInstalledReviewPolicyBundle, resolveReviewPolicyPackageReference, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import {
@@ -4139,12 +4143,13 @@ export class DefaultStepRunner implements StepRunner {
     // Custom contracts own the frozen-input projection just as built-in
     // descriptors own theirs. Rendering its output keeps this route on the
     // descriptor boundary without changing the established prompt bytes.
+    const customReviewerScope = projectBuildReviewCustomReviewerScope(reviewScope);
     const projection = entry.contract.projection.build({
       contentDigest: inputs.sourceSnapshot.contentDigest,
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       changes: inputs.sourceSnapshot.sourceChanges ?? [],
-      ...(reviewScope === undefined ? {} : { reviewScope }),
+      ...(customReviewerScope === undefined ? {} : { reviewScope: customReviewerScope }),
       ...(source === undefined ? {} : { view: source }),
     });
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {

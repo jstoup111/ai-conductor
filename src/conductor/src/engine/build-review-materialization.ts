@@ -37,9 +37,21 @@ export interface BuildReviewFrozenInputScope {
 
 /** Engine-authored description of the same immutable change every lap member inspects. */
 export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputScope): string {
+  // The renderer is a containment boundary as well as a description.  It
+  // receives a structurally compatible durable scope from some callers, so
+  // select only the reviewer contract rather than serializing it wholesale.
+  const reviewScope = scope.reviewScope === undefined
+    ? { mode: 'full' as const, deltaHunks: [] }
+    : {
+      mode: scope.reviewScope.mode,
+      deltaHunks: scope.reviewScope.deltaHunks.map((hunk) => ({
+        path: hunk.path,
+        contentHash: hunk.contentHash,
+      })),
+    };
   return [
     `Frozen build-review input ${scope.contentDigest}.`,
-    `Review scope: ${JSON.stringify({ reviewScope: scope.reviewScope ?? { mode: 'full', deltaHunks: [] } })}`,
+    `Review scope: ${JSON.stringify({ reviewScope })}`,
     'Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.',
     ...(scope.view === undefined ? [] : [
       `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
