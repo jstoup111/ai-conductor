@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-27T23:11:40.591Z
 Slug: build-review-re-raises-already-decided-findings-ev
 Class: needs-human
 Halting step: unknown
