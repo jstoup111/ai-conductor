@@ -1076,7 +1076,7 @@ describe('build_review structured rubric dispatch', () => {
         sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
       }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b', undefined, undefined, async (provider) => ({
         provider, platform: process.platform, status: 'available' as const,
-      }), join(projectDir, '.pipeline'), undefined, undefined, undefined, async (policyIdentity) => ({
+      }), join(projectDir, '.pipeline'), undefined, undefined, undefined, undefined, async (policyIdentity) => ({
         mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity,
         predecessorLapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b', reviewedHunks: [], deltaHunks: [], outOfDeltaSourceIds: [],
       }));
