@@ -1007,3 +1007,14 @@ Slice 3: 27 (9, 20) ── 28;  29 ── 30;  31 (10, 17, 27, 29)
 - The repair for task rem-as-built-rem-resume-lease-before-mkdir is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r2
+
+### Task rem-as-built-rem-child-lease-release-on-worktree-failure: executor-child.ts: move `deps.createWorktree(order)` inside the try/finally that calls `admission?.release?.()`, so a rejected worktree creation still releases the dispatch lease and keeps acquire-before-worktree order. In daemon-dispatch-lease.test.ts (or the executor-child test), add a child-mode case where createWorktree rejects and assert release is called once and the error outcome is sent.
+**Gate:** as-built
+**Rationale:** Verified (99%): in src/conductor/src/engine/executor-child.ts:171, `await deps.createWorktree(order)` runs after admitDispatch acquires the lease. It sits outside the try/finally that calls admission.release. If createWorktree rejects, the outer catch sends an error outcome and the lease is never released. That breaks the approved 'release at unit end' requirement of task rem-prd-audit-rem-child-dispatch-lease. The approved architecture stays authoritative, so this is a conforming implementation fix: move the worktree creation inside the release-protected try. That keeps the existing acquire-before-worktree order and the skip behavior.
+**Parent task:** rem-prd-audit-rem-child-dispatch-lease
+**Governing clause:** Task rem-prd-audit-rem-child-dispatch-lease
+**Done when:**
+- Task rem-prd-audit-rem-child-dispatch-lease is satisfied by this task.
+- The repair for task rem-as-built-rem-child-lease-release-on-worktree-failure is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r3
