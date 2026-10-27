@@ -1153,3 +1153,23 @@ Slice 3: 27 (9, 20) ── 28;  29 ── 30;  31 (10, 17, 27, 29)
 - The repair for task rem-as-built-rem-as-built-r19 is committed and its targeted tests pass.
 **Child:** 2
 **Round:** r1
+
+### Task rem-prd-audit-rem-stack-land-resume-park: src/conductor/src/engine/stack-land-cli.ts dispatchStackLandCommand: on the resumable path (an existing route record found by openOperatorRound, including a declared round or a re-run after a crash before createRouteRecord), do not leave a fresh round park unrecorded. Either skip createOwnedPark when a record exists, or release the just-created park by its token when openOperatorRound does not store it. Extend stack-land-done.realgit.test.ts: re-running `stack land --slug demo --child 1` on a declared round leaves no park marker, and a re-run after a crash between createOwnedPark and createRouteRecord leaves exactly the recorded park.
+**Gate:** prd-audit
+**Rationale:** Concrete implementation defect inside task 19's scope. dispatchStackLandCommand always calls createOwnedPark, even on the resumable path. When openOperatorRound finds an existing record, the new park token is never stored and the park is orphaned. The fix is conforming code and needs no design decision.
+**Criterion:** S5.5
+**Parent task:** 19
+**Done when:**
+- [test] S5.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-stack-land-resume-park is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r2
+### Task rem-as-built-rem-park-release-check-before-rename: src/conductor/src/engine/park-marker.ts owned-park release: read the canonical marker and verify carriesOwnedParkToken before any rename, and return without touching a non-owned park. Only then claim it, re-verifying the token on the claimed body and restoring on mismatch. Never delete a leftover claim whose body does not carry this caller's token. Add park-marker tests: a non-owned park is never renamed (a simulated crash at the release point leaves the canonical park visible to isOperatorParked), and a retry after an interrupted release never deletes another operator's claim. Callers in stack-land-cli.ts and kickback-budget-cli.ts stay unchanged.
+**Gate:** as-built
+**Rationale:** Verified from source: park-marker.ts releases by renaming the canonical marker to a claim before checking its token. A crash before restoration hides another operator's park from isOperatorParked, and a retry deletes that claim. ADR decision 3's crash-safety contract already governs here, so the fix is conforming code with no new decision.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 3
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-park-release-check-before-rename is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r2
