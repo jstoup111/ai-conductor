@@ -1,4 +1,4 @@
-// Covers: task:2, task:8, task:9, task:31.1, task:rem-as-built-1-r2
+// Covers: task:2, task:7, task:8, task:9, task:31.1, task:rem-as-built-1-r2
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,13 +11,20 @@ import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { runDaemonRekickStackPreflight } from '../../../src/daemon-cli.js';
 import { Conductor } from '../../../src/engine/conductor.js';
+import { readWorktreeOutcome } from '../../../src/engine/daemon-deps.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
+import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
 
 vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/route-record-store.js')>();
   return { ...actual, drainRoutingOutboxes: vi.fn(actual.drainRoutingOutboxes) };
+});
+
+vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/routed-exit.js')>();
+  return { ...actual, requestRoutedExit: vi.fn(actual.requestRoutedExit) };
 });
 
 const execFile = promisify(execFileCallback);
@@ -309,6 +316,74 @@ describe('stack preflight dispatch boundaries', () => {
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cause);
     expect(dispatched).toEqual([]);
+  });
+
+  it('ends a resumed dispatch at an unavailable preflight and exposes its durable reason', async () => {
+    const subject = await fixture();
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({
+      ...state, feature_desc: 'demo', complexity_tier: 'M',
+    }));
+    const dispatched: string[] = [];
+
+    await new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stackPreflight: (options) => runStackPreflight({
+        ...options,
+        git: makeGitRunner(subject.repo),
+        reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+      }),
+      stepRunner: { run: async (step) => { dispatched.push(step); return { success: true }; } },
+    }).run();
+
+    expect(dispatched).toEqual([]);
+    await expect(readWorktreeOutcome(subject.repo)).resolves.toMatchObject({
+      halted: true,
+      reason: expect.stringContaining('round advance cas-failed'),
+    });
+  });
+
+  it.each([
+    ['unavailable', 'round advance cas-failed', async () => ({ kind: 'unavailable' as const, detail: 'round advance cas-failed' })],
+    ['halted', 'routed exit host 2: leaf compare-and-swap cas-failed', async () => ({ kind: 'resume-exit' as const, roundId: 'round-1' as never, host: 2 as never })],
+  ] as const)('surfaces a %s stack-preflight stop from the rebase step', async (_kind, detail, reconcileRounds) => {
+    const subject = await fixture();
+    if (_kind === 'halted') {
+      vi.mocked(requestRoutedExit).mockResolvedValueOnce({ kind: 'halted', detail });
+    }
+    const state = { feature_desc: 'demo', manual_test: 'skipped' };
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      daemon: true,
+      mode: 'auto',
+      verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stackPreflight: (options) => runStackPreflight({
+        ...options,
+        git: makeGitRunner(subject.repo),
+        reconcileRounds,
+      }),
+      stepRunner: { run: async () => ({ success: true }) },
+    }) as unknown as {
+      persistedStateSnapshot: typeof state;
+      runRebaseStep(value: typeof state): Promise<{ success: boolean; output?: string }>;
+    };
+    conductor.persistedStateSnapshot = { ...state };
+
+    await expect(conductor.runRebaseStep(state)).resolves.toEqual({
+      success: false,
+      output: `stack preflight ${_kind}: ${detail}`,
+    });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`^${detail}`));
   });
 
   it('reports an outbox-drain refusal to the daemon re-kick outcome', async () => {

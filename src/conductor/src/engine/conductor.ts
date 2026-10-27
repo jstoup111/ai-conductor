@@ -16830,9 +16830,7 @@ export class Conductor {
         resolverCap: resolveRebaseResolutionAttempts(this.config),
       });
       if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
-        const reason = preflight.kind === 'unavailable'
-          ? `stack preflight unavailable: ${preflight.detail}`
-          : 'stack preflight halted';
+        const reason = `stack preflight ${preflight.kind}: ${preflight.detail}`;
         return { success: false, output: reason };
       }
 
