@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-26
+## [1.7.0] - 2026-10-27
 
 ### Added
 
@@ -54,6 +54,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Composer panes display the active feature and DECIDE phase in herdr or tmux. ([implementation PR #3413](https://github.com/jstoup111/ai-conductor/pull/3413)).
 - Plan reviews refuse oversized prompts with an actionable size override. ([implementation PR #3425](https://github.com/jstoup111/ai-conductor/pull/3425)).
 - Operators can configure remediation lap caps by complexity tier. ([implementation PR #3443](https://github.com/jstoup111/ai-conductor/pull/3443)).
+- Pi-backed steps now receive the engine-built system prompt reliably. ([implementation PR #3441](https://github.com/jstoup111/ai-conductor/pull/3441)).
 
 ### Changed
 
@@ -192,6 +193,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked features whose restack queued a revalidation round no longer crash remediation planning with "route receipts disagree on sealed authored denominator". ([implementation PR #3433](https://github.com/jstoup111/ai-conductor/pull/3433)).
 - Routed repairs no longer halt on the engine's own plan remediation append, and a refused routed exit keeps its specific halt reason instead of a generic one. ([implementation PR #3444](https://github.com/jstoup111/ai-conductor/pull/3444)).
 - A conflict while carrying a routed repair up a stacked feature is now handed to the configured conflict resolver instead of halting immediately. ([implementation PR #3447](https://github.com/jstoup111/ai-conductor/pull/3447)).
+- Operators see actionable daemon startup state in a compact dashboard. ([implementation PR #3440](https://github.com/jstoup111/ai-conductor/pull/3440)).
 
 ## Migration
 
