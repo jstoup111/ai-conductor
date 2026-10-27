@@ -2,15 +2,21 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { detectStackLandCommand, type StackLandDispatch } from '../../src/cli.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { acquireFeatureDispatchLease } from '../../src/engine/feature-dispatch-lease.js';
+import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
+import { openOperatorRound } from '../../src/engine/routing/operator-round.js';
+import { readRouteRecord } from '../../src/engine/routing/route-record-store.js';
+import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
 import { dispatchStackLandCommand } from '../../src/engine/stack-land-cli.js';
 import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { dispatchCliEntry } from '../../src/index.js';
-import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 const command: StackLandDispatch = {
   kind: 'stack-land', slug: 'demo', child: '1', carry: [], reason: 'reviewer requested rename',
@@ -121,11 +127,111 @@ async function stackLandStateSnapshot(root: string, git: (args: string[]) => Ret
     }
   };
   return {
+    branch: (await git(['symbolic-ref', '--short', 'HEAD'])).stdout,
+    status: (await git(['status', '--porcelain'])).stdout,
     refs: (await git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout,
     parks: await tree('.daemon/parked'),
     leases: await tree('.daemon/leases'),
     state: await tree('.pipeline'),
   };
+}
+
+type RealStackFixture = Awaited<ReturnType<typeof realStackFixture>>;
+
+/** A real local-Git stack, deliberately entered from its daemon leaf. */
+async function realStackFixture(options: {
+  readonly existingHostCommit?: boolean;
+  readonly noOwnedCriteria?: boolean;
+  readonly positions?: 2 | 3;
+  readonly existingSecondCommit?: boolean;
+} = {}) {
+  const repo = await mkdtemp(join(tmpdir(), 'stack-land-cli-real-'));
+  haltRoots.push(repo);
+  const git = makeGitRunner(repo);
+  const positions = options.positions ?? 2;
+  const c1 = parseChildId(1)!;
+  const c2 = parseChildId(2)!;
+  const commit = async (message: string, path: string, contents: string) => {
+    await mkdir(dirname(join(repo, path)), { recursive: true });
+    await writeFile(join(repo, path), contents);
+    await git(['add', path]);
+    await git(['commit', '--no-verify', '-qm', message]);
+    return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  };
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'stack-land-cli@example.invalid']);
+  await git(['config', 'user.name', 'Stack land CLI']);
+  await commit('base', '.gitignore', '.pipeline/\n.daemon/\n');
+  await commit('routing enabled', '.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  const topology = {
+    slug: 'demo', materializeTopologyCommit: true,
+    sliceMembership: positions === 2
+      ? { taskSlices: { one: 1, leaf: 2 }, titles: ['one', 'leaf'] }
+      : { taskSlices: { one: 1, two: 2, leaf: 3 }, titles: ['one', 'two', 'leaf'] },
+    storyOwnership: options.noOwnedCriteria ? { S1: 2 } : { S1: 1 },
+  } as const;
+  await writeSliceTopologyFixture(repo, topology);
+  await sealSliceTopologyPositions(repo, topology);
+  await git(['checkout', '-qb', 'feat/c1/demo']);
+  const closure1 = await commit('closed child one', 'one.txt', 'one\n');
+  await git(['update-ref', closureRefFor('demo', c1), closure1]);
+  if (options.existingHostCommit) await commit('reviewer commit', 'review.txt', 'review\n');
+  let secondTip: string | undefined;
+  if (positions === 3) {
+    await git(['checkout', '-qb', 'feat/c2/demo', closure1]);
+    const closure2 = await commit('closed child two', 'two.txt', 'two\n');
+    await git(['update-ref', closureRefFor('demo', c2), closure2]);
+    if (options.existingSecondCommit) secondTip = await commit('reviewer commit two', 'review-two.txt', 'review\n');
+  }
+  const leaf = positions === 2 ? 'feat/daemon-demo' : 'feat/c3/demo';
+  await git(['checkout', '-qb', leaf, closure1]);
+  await commit('leaf', 'leaf.txt', 'leaf\n');
+  await mkdir(join(repo, '.pipeline', 'children', '1'), { recursive: true });
+  await writeFile(join(repo, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+    acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+  }));
+  if (!options.noOwnedCriteria) await writeFile(join(repo, '.pipeline', 'children', '1', 'acceptance-specs-run.json'), '{}\n');
+  return { repo, git, closure1, leaf, secondTip };
+}
+
+async function realSnapshot(subject: RealStackFixture) {
+  const files = async (path: string): Promise<Record<string, string>> => {
+    try {
+      const base = join(subject.repo, path);
+      const entries = await readdir(base, { recursive: true, withFileTypes: true });
+      return Object.fromEntries(await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => [
+        join(entry.parentPath.slice(base.length + 1), entry.name), await readFile(join(base, entry.parentPath.slice(base.length + 1), entry.name), 'utf8'),
+      ] as const)));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw error;
+    }
+  };
+  return {
+    branch: (await subject.git(['symbolic-ref', '--short', 'HEAD'])).stdout,
+    status: (await subject.git(['status', '--porcelain'])).stdout,
+    refs: (await subject.git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout,
+    park: await files('.daemon/parked'), lease: await files('.daemon/leases'), state: await files('.pipeline'),
+  };
+}
+
+async function land(subject: RealStackFixture, commandOverride: Partial<StackLandDispatch> = {}, deps: Record<string, unknown> = {}, output: string[] = []) {
+  return dispatchStackLandCommand({ ...command, ...commandOverride }, {
+    cwd: subject.repo,
+    resolveMainRoot: async () => subject.repo,
+    resolveWorktree: async () => subject.repo,
+    resolveOperator: async () => 'operator@example.test',
+    print: (line: string) => output.push(line),
+    ...deps,
+  } as never);
+}
+
+async function soleOperatorRecord(subject: RealStackFixture) {
+  const routes = (await subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/'])).stdout.split('\n').filter(Boolean);
+  expect(routes).toHaveLength(1);
+  const stored = await readRouteRecord(subject.repo, 'demo', 'r1' as never, { git: subject.git });
+  if (stored.kind !== 'record') throw new Error('missing operator route record');
+  return stored.record;
 }
 
 describe('stack land CLI open path', () => {
@@ -151,6 +257,152 @@ describe('stack land CLI open path', () => {
     ])).toEqual({ kind: 'stack-land', slug: 'demo', child: '1', carry: ['2', '3'], reason: 'reviewer request' });
     expect(detectStackLandCommand(['node', 'ai-conductor', 'stack', 'land', '--slug', 'demo', '--child', '1', '--done'])).toBeNull();
     expect(detectStackLandCommand(['node', 'ai-conductor', 'stack', 'land', '--slug', '../demo', '--child', '1', '--reason', 'why'])).toBeNull();
+  });
+
+  it.each([
+    ['a clean closed child', {}],
+    ['a child with a pre-existing reviewer commit', { existingHostCommit: true }],
+    ['a child with no owned criteria', { noOwnedCriteria: true }],
+  ] as const)('opens %s under the real lease and leaves one operator round on child 1', async (_case, fixtureOptions) => {
+    const subject = await realStackFixture(fixtureOptions);
+    const ownerPids: number[] = [];
+    const observeOwner = async () => {
+      const owner = JSON.parse(await readFile(join(subject.repo, '.daemon', 'leases', 'demo', 'owner.json'), 'utf8')) as { pid: number; purpose: string };
+      expect(owner).toMatchObject({ pid: process.pid, purpose: 'stack land' });
+      ownerPids.push(owner.pid);
+    };
+    const output: string[] = [];
+
+    expect(await land(subject, {}, {
+      acquireLease: async (root: string, slug: string, purpose: string) => {
+        const acquired = await acquireFeatureDispatchLease(root, slug, purpose);
+        if (acquired.kind === 'acquired') await observeOwner();
+        return acquired;
+      },
+    }, output), output.join('\n')).toBe(0);
+
+    expect((await subject.git(['symbolic-ref', '--short', 'HEAD'])).stdout.trim()).toBe('feat/c1/demo');
+    expect(await soleOperatorRecord(subject)).toMatchObject({ kind: 'operator', phase: 'open', operator: { origin: 'land' } });
+    expect(ownerPids).not.toEqual([]);
+    await expect(readFile(join(subject.repo, '.daemon', 'leases', 'demo', 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8')).resolves.toContain('owned-park-token:');
+  });
+
+  it('re-runs a marker-transaction crash exactly once and retains its original park and operator round', async () => {
+    const subject = await realStackFixture({ existingHostCommit: true });
+    let transactions = 0;
+    const crashingGit: GitRunner = async (args, options) => {
+      const result = await subject.git(args, options);
+      if (args[0] === 'update-ref' && args[1] === '--stdin' && ++transactions === 2) throw new Error('crash after marker transaction');
+      return result;
+    };
+    await expect(land(subject, {}, {
+      openRound: (input: Parameters<typeof openOperatorRound>[0]) => openOperatorRound({ ...input, git: crashingGit }),
+    })).resolves.toBe(1);
+    const crashedPark = await readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8');
+
+    const recoveryOutput: string[] = [];
+    expect(await land(subject, {}, {}, recoveryOutput), recoveryOutput.join('\n')).toBe(0);
+
+    expect((await subject.git(['symbolic-ref', '--short', 'HEAD'])).stdout.trim()).toBe('feat/c1/demo');
+    expect(await soleOperatorRecord(subject)).toMatchObject({ kind: 'operator', phase: 'open' });
+    await expect(readFile(join(subject.repo, '.daemon', 'parked', 'demo'), 'utf8')).resolves.toBe(crashedPark);
+    await expect(readFile(join(subject.repo, '.daemon', 'leases', 'demo', 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a live lease owner without altering refs, parks, state, or its owner record', async () => {
+    const subject = await realStackFixture();
+    const held = await acquireFeatureDispatchLease(subject.repo, 'demo', 'other operator command');
+    if (held.kind !== 'acquired') throw new Error('could not acquire live lease');
+    const before = await realSnapshot(subject);
+    const output: string[] = [];
+
+    await expect(land(subject, {}, {}, output)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain(`other operator command (pid ${process.pid})`);
+    expect(await realSnapshot(subject)).toEqual(before);
+    await held.lease.release();
+  });
+
+  it('carries child 2 only when requested and clears only the matching unlanded-closed-child HALT', async () => {
+    const carried = await realStackFixture({ positions: 3, existingSecondCommit: true });
+    const halt = join(carried.repo, '.pipeline', 'HALT');
+    const haltClass = join(carried.repo, '.pipeline', 'HALT.class');
+    await writeFile(halt, 'unlanded-closed-child-commits: children 1, 2\n');
+    await writeFile(haltClass, 'needs-human\n');
+
+    const carriedOutput: string[] = [];
+    expect(await land(carried, { carry: ['2'] }, {}, carriedOutput), carriedOutput.join('\n')).toBe(0);
+    expect((await soleOperatorRecord(carried)).operator?.carried.map((entry) => entry.child)).toEqual([2]);
+    await expect(readFile(halt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(haltClass, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const hostOnly = await realStackFixture();
+    const hostHalt = join(hostOnly.repo, '.pipeline', 'HALT');
+    await writeFile(hostHalt, 'unlanded-closed-child-commits: child 1\n');
+    await writeFile(join(hostOnly.repo, '.pipeline', 'HALT.class'), 'needs-human\n');
+    const hostOutput: string[] = [];
+    expect(await land(hostOnly, {}, {}, hostOutput), hostOutput.join('\n')).toBe(0);
+    await expect(readFile(hostHalt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const refused = await realStackFixture({ positions: 3, existingSecondCommit: true });
+    const refusedHalt = join(refused.repo, '.pipeline', 'HALT');
+    const refusedBody = 'unlanded-closed-child-commits: children 1, 2\n';
+    await writeFile(refusedHalt, refusedBody);
+    const output: string[] = [];
+    await expect(land(refused, {}, {}, output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('--carry 2');
+    await expect(readFile(refusedHalt, 'utf8')).resolves.toBe(refusedBody);
+  });
+
+  it.each([
+    ['published stack', 'published-stack #3268'],
+    ['leaf host', 'child 3 is the leaf'],
+    ['undeclared position', 'declared: 1, 2, 3'],
+    ['open round', 'routing round r1 is already open'],
+    ['queue', 'revalidation queue has child 2 open'],
+    ['journal', 'restack journal is open'],
+    ['dirty worktree', 'worktree has uncommitted changes'],
+    ['missing verify-green contract', 'no verify-green contract'],
+    ['uncarried child', 'carry it with ai-conductor stack land --slug demo --child 1 --carry 2'],
+    ['carried child below host', 'ai-conductor stack land --child 1 --carry 2'],
+  ] as const)('preserves the real feature byte-for-byte when the open predicate refuses %s', async (_case, detail) => {
+    const subject = await realStackFixture({ positions: 3 });
+    const before = await realSnapshot(subject);
+    const output: string[] = [];
+
+    await expect(land(subject, { child: detail.includes('below host') ? '2' : '1', carry: detail.includes('below host') ? ['1'] : [] }, {
+      checkOpen: async () => ({ kind: 'refused' as const, refusal: { kind: 'not-stacked' as const, text: detail } }),
+    }, output)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain(detail);
+    expect(await realSnapshot(subject)).toEqual(before);
+    expect(before.branch.trim()).toBe('feat/c3/demo');
+  });
+
+  it('refuses empty and whitespace-only reasons before it can acquire a lease or alter a feature', async () => {
+    for (const reason of ['', '   ']) {
+      const subject = await realStackFixture();
+      const before = await realSnapshot(subject);
+      const output: string[] = [];
+      await expect(land(subject, { reason }, {}, output)).resolves.toBe(1);
+      expect(output.join('\n')).toContain('non-empty --reason');
+      expect(await realSnapshot(subject)).toEqual(before);
+    }
+  });
+
+  it('does not reclaim an unreadable lease owner', async () => {
+    const subject = await realStackFixture();
+    const owner = join(subject.repo, '.daemon', 'leases', 'demo', 'owner.json');
+    await mkdir(dirname(owner), { recursive: true });
+    await writeFile(owner, '{not-json}\n');
+    const before = await realSnapshot(subject);
+    const output: string[] = [];
+
+    await expect(land(subject, {}, {}, output)).resolves.toBe(1);
+
+    expect(output.join('\n')).toMatch(/lease owner is unreadable/i);
+    expect(await realSnapshot(subject)).toEqual(before);
   });
 
   it('opens while leased, carries the predicate result, preserves an existing park, and releases the lease', async () => {
