@@ -3430,11 +3430,15 @@ export class DefaultStepRunner implements StepRunner {
         })
         : [];
     for (const entry of customEntries) {
+      // Scope identity is durable state. Capture the installed policy before
+      // selecting a scope so a changed custom bundle forces a fresh full lap,
+      // including when that lap would otherwise be scope-empty.
+      const effectiveBundleDigest = await this.resolveBuildReviewCustomPolicyBundleDigest(entry);
       const policyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: entry.contract.output.version,
         projectionVersion: entry.contract.projection.version,
         declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
-        effectiveBundleDigest: 'pending-candidate-policy', provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        effectiveBundleDigest, provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
         model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
       });
       const artifacts = await priorArtifactsFor(entry.id);
@@ -4037,6 +4041,38 @@ export class DefaultStepRunner implements StepRunner {
       // rework. Only a pure infrastructure lap owns the mechanical lane.
       ...(infrastructureFailure === undefined || hasJudgedFinding ? {} : { currentLapMechanicalFault: true }),
     };
+  }
+
+  /** Resolve the configured custom policy bundle for durable scope identity. */
+  private async resolveBuildReviewCustomPolicyBundleDigest(
+    entry: ResolvedBuildReviewCustomCatalogEntry,
+  ): Promise<string> {
+    const provider = Array.isArray(entry.policy.llm_provider)
+      ? entry.policy.llm_provider[0]
+      : entry.policy.llm_provider;
+    try {
+      const catalog = await this.buildReviewPolicyCatalog({
+        provider,
+        entry,
+        skill: entry.skill,
+      });
+      const resolved = resolveInstalledReviewPolicyCatalog({
+        skill: entry.skill,
+        ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }),
+      }, catalog);
+      if (resolved.kind === 'failure') return 'unavailable';
+      const policy = {
+        ...resolved.policy,
+        declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])],
+      };
+      return (await this.buildReviewPolicyCapture(policy, {
+        materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
+      })).digest;
+    } catch {
+      // Candidate dispatch owns the diagnostic and bounded failure path. Scope
+      // selection fails conservatively toward a full lap meanwhile.
+      return 'unavailable';
+    }
   }
 
   /**
