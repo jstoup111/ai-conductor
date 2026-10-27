@@ -586,7 +586,7 @@ describe('live build-review effective resolver', () => {
       ...identityDeps,
       child: parseChildId('1'),
       createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
-      readFile: async (path) => {
+      readFile: async (path: string) => {
         readPaths.push(path);
         return path.endsWith('/testQuality.json')
           ? JSON.stringify({

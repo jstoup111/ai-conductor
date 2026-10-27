@@ -103,6 +103,12 @@ function createMockProvider(): LLMProvider {
   };
 }
 
+function customCatalogEntry(config: ReturnType<typeof resolveBuildReviewConfig>, id = 'portable') {
+  const entry = config.catalog.find((candidate) => candidate.id === id);
+  if (!entry || entry.kind !== 'custom') throw new Error(`expected custom ${id} rubric`);
+  return entry;
+}
+
 describe('build_review declared replication suppressions', () => {
   const sourcePath = 'src/source-widget.ts';
   const targetPath = 'src/target-widget.ts';
@@ -363,7 +369,7 @@ describe('DefaultStepRunner', () => {
     await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
     const attempts: ProviderAttemptEvent[] = [];
     const piInvoke = vi.fn();
-    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+    const claudeInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: true,
       output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }),
       exitCode: 0,
@@ -472,7 +478,7 @@ describe('DefaultStepRunner', () => {
         config.catalog[0], inputs, 'lap-scope-projection', 'S', undefined,
         async () => ({ provider: 'claude', platform: process.platform, status: 'available' }),
         join(projectDir, '.pipeline'), undefined, durableScope, undefined, undefined,
-        async (policyIdentity) => ({ ...durableScope, policyIdentity }),
+        async (policyIdentity: string) => ({ ...durableScope, policyIdentity }),
       );
       // Covers: task:rem-as-built-6-r2
       const serializedCustomInput = (claudeInvoke.mock.calls[1]![0] as InvokeOptions).prompt
@@ -4590,12 +4596,12 @@ TIER: M`,
           deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
         },
       }));
-      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config: {} as HarnessConfig });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set([sourceId]));
       let observedScope: unknown;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.implementationQuality;
+        observedScope = input.reviewScopes?.implementationQuality;
         throw new Error('expected frontier observation');
       });
 
@@ -4615,7 +4621,7 @@ TIER: M`,
       });
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.implementationQuality;
+        observedScope = input.reviewScopes?.implementationQuality;
         throw new Error('expected live frontier observation');
       });
 
@@ -4632,7 +4638,7 @@ TIER: M`,
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.implementationQuality;
+        observedScope = input.reviewScopes?.implementationQuality;
         throw new Error('expected unmapped frontier observation');
       });
       await expect((runner as any).runRubricBuildReviewInner({
@@ -4658,7 +4664,7 @@ TIER: M`,
           },
         },
       } as HarnessConfig, CLAUDE_POLICY);
-      const entry = config.catalog.find((candidate) => candidate.id === 'portable')!;
+      const entry = customCatalogEntry(config);
       const diff = [
         'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
         '-export const portable = false;', '+export const portable = true;',
@@ -4710,14 +4716,14 @@ TIER: M`,
       const baselinePath = join(dir, 'baseline');
       const headPath = join(dir, 'head');
       await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
-      const capture = vi.fn(async (policy) => ({
+      const capture: NonNullable<StepRunnerOptions['buildReviewPolicyCapture']> = vi.fn(async (policy) => ({
         policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
-        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
         digest: stamp.policy.bundleDigest,
       }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        config,
+        config: {} as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([{
           key: 'claude',
           provider: {
@@ -4786,7 +4792,7 @@ TIER: M`,
           },
         },
       } as HarnessConfig, CLAUDE_POLICY);
-      const entry = config.catalog.find((candidate) => candidate.id === 'portable')!;
+      const entry = customCatalogEntry(config);
       const diff = [
         'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
         '-export const portable = false;', '+export const portable = true;',
@@ -4831,14 +4837,14 @@ TIER: M`,
           deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
         },
       }));
-      const capture = vi.fn(async (policy) => ({
+      const capture: NonNullable<StepRunnerOptions['buildReviewPolicyCapture']> = vi.fn(async (policy) => ({
         policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# changed policy bundle') }],
-        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
         digest: currentBundleDigest,
       }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        config,
+        config: {} as HarnessConfig,
         buildReviewPolicyCatalog: async () => [{
           semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
           canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
@@ -4855,12 +4861,9 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       let observedScope: unknown;
-      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
-        _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
-        _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, reviewScope: unknown,
-        _child: unknown, _onResolvedReviewScope: unknown,
-        resolveReviewScope: (policyIdentity: string) => Promise<unknown>,
-      ) => {
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
+        const reviewScope = args[8];
+        const resolveReviewScope = args[11] as (policyIdentity: string) => Promise<unknown>;
         expect(reviewScope).toBeUndefined();
         const currentPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
           contractVersion: entry.contract.output.version,
@@ -4898,7 +4901,7 @@ TIER: M`,
           },
         },
       } as HarnessConfig, CLAUDE_POLICY);
-      const entry = config.catalog.find((candidate) => candidate.id === 'portable')!;
+      const entry = customCatalogEntry(config);
       const diff = [
         'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
         '-export const portable = false;', '+export const portable = true;',
@@ -4944,7 +4947,7 @@ TIER: M`,
       }));
       const catalog = vi.fn().mockRejectedValueOnce(new Error('preliminary catalog unavailable'));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        config,
+        config: {} as HarnessConfig,
         buildReviewPolicyCatalog: catalog,
         buildReviewEffectiveResolver: async () => ({
           ok: true as const,
@@ -4957,12 +4960,9 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       let observedScope: unknown;
-      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
-        _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
-        _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, reviewScope: unknown,
-        _child: unknown, _onResolvedReviewScope: unknown,
-        resolveReviewScope: (policyIdentity: string) => Promise<unknown>,
-      ) => {
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
+        const reviewScope = args[8];
+        const resolveReviewScope = args[11] as (policyIdentity: string) => Promise<unknown>;
         expect(reviewScope).toBeUndefined();
         const candidatePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
           contractVersion: entry.contract.output.version,
@@ -5002,7 +5002,7 @@ TIER: M`,
           },
         },
       } as HarnessConfig, CLAUDE_POLICY);
-      const entry = config.catalog.find((candidate) => candidate.id === 'portable')!;
+      const entry = customCatalogEntry(config);
       const diff = [
         'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
         '-export const portable = false;', '+export const portable = true;',
@@ -5020,17 +5020,17 @@ TIER: M`,
       const baselinePath = join(dir, 'baseline');
       const headPath = join(dir, 'head');
       await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
-      const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      const claudeInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
         success: true, output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }), exitCode: 0,
         finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
       }));
       const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
-        key, provider: { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke },
-        lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true },
+        key, provider: { lifecycleCapability: { synchronousSpawnPermit: true as const }, nativeSchemaCapability: { nativeOutputSchema: true as const }, invoke },
+        lifecycleCapability: { synchronousSpawnPermit: true as const }, nativeSchemaCapability: { nativeOutputSchema: true as const },
         policy: CLAUDE_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
       });
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        config, providerRuntimes: new ProviderRuntimeSet([runtime('pi', vi.fn()), runtime('claude', claudeInvoke)]),
+        config: {} as HarnessConfig, providerRuntimes: new ProviderRuntimeSet([runtime('pi', vi.fn()), runtime('claude', claudeInvoke)]),
         sessionStore: new ProviderSessionStore(), configuredProviders: ['pi', 'claude'],
         buildReviewPolicyCatalog: async ({ provider: catalogProvider }) => [{
           semanticName: entry.skill, source: 'project', installationOrigin: `/fixture/${catalogProvider}`,
@@ -5041,7 +5041,7 @@ TIER: M`,
           policy, materialPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}`,
           definitionPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}/SKILL.md`,
           manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy') }],
-          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
           digest: policy.packageRoot.endsWith('/pi') ? bundleA : bundleB,
         }),
         buildReviewEffectiveResolver: async () => ({
@@ -5061,7 +5061,7 @@ TIER: M`,
           contextFor: (memberId: string) => ({ memberId, source: { identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current' }, baselinePath, headPath } }),
           settle: async () => {}, finish: async () => {},
         },
-      } as never;
+      } as any;
       await (runner as any).dispatchInstalledBuildReviewPolicy(
         entry, inputs, 'lap-current', 'M', undefined,
         async (providerKey: string) => providerKey === 'pi'
@@ -5084,12 +5084,9 @@ TIER: M`,
         effort: current.descriptor.producer.effort, engineStamp: engineIdentity.engineStamp,
       });
       let nextScope: unknown;
-      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
-        _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
-        _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, scope: unknown,
-        _child: unknown, _onResolvedReviewScope: unknown,
-        resolveReviewScope: (policyIdentity: string) => Promise<unknown>,
-      ) => {
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
+        const scope = args[8];
+        const resolveReviewScope = args[11] as (policyIdentity: string) => Promise<unknown>;
         expect(scope).toBeUndefined();
         nextScope = await resolveReviewScope(actualIdentity);
         return { id: entry.id, success: true, member: { result: { kind: 'scope-empty' as const, rubric: entry.id } } };
@@ -5204,11 +5201,11 @@ TIER: M`,
           reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
         },
       }));
-      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config: {} as HarnessConfig });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       let observedScope: unknown;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.testQuality;
+        observedScope = input.reviewScopes?.testQuality;
         throw new Error('expected unknown frontier observation');
       });
 
@@ -5223,7 +5220,7 @@ TIER: M`,
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.testQuality;
+        observedScope = input.reviewScopes?.testQuality;
         throw new Error('expected stale unknown to be ignored');
       });
 
@@ -5234,7 +5231,7 @@ TIER: M`,
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.testQuality;
+        observedScope = input.reviewScopes?.testQuality;
         throw new Error('expected child-local frontier observation');
       });
 
@@ -5246,7 +5243,7 @@ TIER: M`,
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
-        observedScope = input.reviewScopes.testQuality;
+        observedScope = input.reviewScopes?.testQuality;
         throw new Error('expected sibling child frontier isolation');
       });
       await mkdir(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling'), { recursive: true });

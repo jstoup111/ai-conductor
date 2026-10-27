@@ -30,6 +30,7 @@ const projection: TestQualityProjection = {
   mergeBase: 'base-sha',
   headSha: 'head-sha',
   changedFiles: [],
+  reviewScope: { mode: 'full', deltaHunks: [] },
   changedTestSelectors: [],
   runnerSelectors: [],
   unresolvedMarkers: [],

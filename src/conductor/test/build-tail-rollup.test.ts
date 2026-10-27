@@ -17,7 +17,7 @@ async function ledger(events: object[], pipeline: object[] = []): Promise<string
 describe('build tail rollup', () => {
   it('counts scope-empty as a skip rather than a judged rubric result', () => {
     expect(computeBuildReviewMetrics([
-      { type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-2', reason: 'scope-empty' },
+      { type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-2', reason: 'scope-empty', ts: 1 },
     ])).toMatchObject({
       skipped: 1,
       skipReasons: { 'scope-empty': 1 },

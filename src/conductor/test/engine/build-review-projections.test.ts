@@ -328,7 +328,7 @@ describe('build-review rubric projections', () => {
     );
 
     expect(projections.security.reviewScope).toEqual({ mode: 'delta', deltaHunks: [wholeFeatureOnlyHunk] });
-    expect(securityChangedHunks).toEqual(expect.arrayContaining(projections.security.reviewScope.deltaHunks));
+    expect(securityChangedHunks).toEqual(expect.arrayContaining([...projections.security.reviewScope.deltaHunks]));
     expect(childHunks).not.toContainEqual(wholeFeatureOnlyHunk);
     expect(projections.testQuality).toMatchObject({
       mergeBase: 'child-parent', changedFiles: deriveChangedFileReferences(FIXTURE_DIFF),

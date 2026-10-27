@@ -15,7 +15,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -54,7 +54,7 @@ describe('build_review lap scope runner', () => {
     events = [];
     effectiveResolverCalls = [];
     emitter = new ConductorEventEmitter();
-    emitter.on('build_review_review_scope', (event) => events.push(event));
+    emitter.on('build_review_review_scope', (event) => { events.push(event); });
     config = resolveBuildReviewConfig({
       build_review: {
         enabled: true,
@@ -67,7 +67,7 @@ describe('build_review lap scope runner', () => {
     } as HarnessConfig, CLAUDE_MODEL_POLICY);
     const provider: LLMProvider = { invoke: vi.fn() };
     runner = new DefaultStepRunner(provider, 'scope-runner', projectDir, {
-      config,
+      config: {} as HarnessConfig,
       events: emitter,
       buildReviewEffectiveResolver: async (...args) => {
         effectiveResolverCalls.push(args);
@@ -83,9 +83,9 @@ describe('build_review lap scope runner', () => {
         };
       },
     });
-    vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity as never);
-    vi.spyOn(runner as never, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set());
-    vi.spyOn(runner as never, 'liveBuildReviewActSourceIds').mockResolvedValue({
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity as never);
+    vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set());
+    vi.spyOn(runner as any, 'liveBuildReviewActSourceIds').mockResolvedValue({
       unappliedLiveSourceIds: new Set(), appliedLiveSourceIds: new Set(),
     });
     vi.mocked(coordinateBuildReviewRubrics).mockReset();
@@ -361,8 +361,8 @@ describe('build_review lap scope runner', () => {
     };
     await Promise.all([mkdir(policyRoot, { recursive: true }), mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
     let candidateUnavailable = true;
-    const invoke = vi.fn(async (options: { model?: string }) => options.model === candidateModel && candidateUnavailable
-      ? (candidateUnavailable = false, { success: false, exitCode: 1, modelUnavailable: true })
+    const invoke = vi.fn<LLMProvider['invoke']>(async (options): Promise<InvokeResult> => options.model === candidateModel && candidateUnavailable
+      ? (candidateUnavailable = false, { success: false, exitCode: 1, output: '', modelUnavailable: true })
       : {
           success: true, exitCode: 0, output: 'fixture judgment',
           finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
@@ -416,9 +416,9 @@ describe('build_review lap scope runner', () => {
         },
       }),
     });
-    vi.spyOn(customRunner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity as never);
-    vi.spyOn(customRunner as never, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set());
-    vi.spyOn(customRunner as never, 'liveBuildReviewActSourceIds').mockResolvedValue({
+    vi.spyOn(customRunner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity as never);
+    vi.spyOn(customRunner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set());
+    vi.spyOn(customRunner as any, 'liveBuildReviewActSourceIds').mockResolvedValue({
       unappliedLiveSourceIds: new Set(), appliedLiveSourceIds: new Set(),
     });
     const runCustom = async (headSha: string) => {
