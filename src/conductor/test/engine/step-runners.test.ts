@@ -5127,7 +5127,9 @@ TIER: M`,
       expect(current.reviewScope).toMatchObject({
         mode: 'full', reason: 'version-changed', policyIdentity: actualIdentity,
       });
-      expect(nextScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+      // The fallback lap persisted Claude's actual identity. Re-resolving that
+      // same candidate is compatible evidence, so only a delta is needed.
+      expect(nextScope).toMatchObject({ mode: 'delta', reason: 'delta', policyIdentity: actualIdentity });
       expect(openSource.reviewScope).toMatchObject({
         mode: 'full', reason: 'version-changed', policyIdentity: actualIdentity,
       });
