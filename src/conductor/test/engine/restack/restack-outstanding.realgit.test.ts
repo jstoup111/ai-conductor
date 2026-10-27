@@ -130,10 +130,11 @@ describe('restack-outstanding refusals (real local Git)', () => {
 
     expect(cliSeen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'restack-outstanding' })]);
     // No journal of its own, no ref moved, no halt-record commit, and the
-    // winner's journal is untouched (same blob, same state).
+    // winner's journal is untouched (same blob, same state). The losing
+    // preflight is still a durable terminal stop for its own run.
     expect(await subject.refs()).toBe(refsWhileWinnerOwnsJournal);
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toEqual(winnerJournal);
-    expect(await haltMarkerExists(subject.repo)).toBe(false);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('feature-repair restack halted');
     await expect(subject.git(['show', 'HEAD:.docs/halted/demo.md'])).rejects.toBeDefined();
 
     releaseWinner.resolve();
@@ -143,7 +144,7 @@ describe('restack-outstanding refusals (real local Git)', () => {
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(subject.operatorX);
     expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
     await expect(subject.git(['rev-parse', '--verify', journalRef])).rejects.toBeDefined();
-    expect(await haltMarkerExists(subject.repo)).toBe(false);
+    expect(await haltMarkerExists(subject.repo)).toBe(true);
   });
 
   // Covers: S9.13, task:rem-prd-audit-R1-2, task:rem-prd-audit-R3
