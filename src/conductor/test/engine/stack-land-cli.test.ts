@@ -1,18 +1,22 @@
 // Covers: task:10, task:rem-as-built-rem-as-built-r10, task:rem-as-built-rem-as-built-r16
+import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { detectStackLandCommand, type StackLandDispatch } from '../../src/cli.js';
 import { dispatchStackLandCommand } from '../../src/engine/stack-land-cli.js';
 import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { dispatchCliEntry } from '../../src/index.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 const command: StackLandDispatch = {
   kind: 'stack-land', slug: 'demo', child: '1', carry: [], reason: 'reviewer requested rename',
 };
 
+const execFile = promisify(execFileCallback);
 const haltRoots: string[] = [];
 
 afterEach(async () => {
@@ -48,6 +52,79 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     print: vi.fn(),
     release,
     ...overrides,
+  };
+}
+
+async function routingDisabledStackedFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'stack-land-routing-disabled-'));
+  haltRoots.push(root);
+  const git = (args: string[]) => execFile('git', args, { cwd: root });
+  const commit = async (message: string, path: string, contents: string) => {
+    await writeFile(join(root, path), contents);
+    await git(['add', path]);
+    await git(['commit', '-qm', message]);
+  };
+
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'stack-land@example.invalid']);
+  await git(['config', 'user.name', 'Stack land']);
+  await mkdir(join(root, '.ai-conductor'), { recursive: true });
+  await commit('configure routing off', '.ai-conductor/config.yml', [
+    'stacked_prs:',
+    '  enabled: true',
+    '  route_whole_feature_fixes: false',
+    '',
+  ].join('\n'));
+  await git(['checkout', '-qb', 'feat/c1/demo']);
+  await commit('closed child', 'child.txt', 'child\n');
+  const childTip = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  await git(['update-ref', 'refs/conductor/demo/closed/c1', childTip]);
+  await git(['checkout', '-qb', 'feat/daemon-demo']);
+  await commit('leaf', 'leaf.txt', 'leaf\n');
+  await git(['checkout', '-q', 'feat/c1/demo']);
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { one: 1, two: 2 }, titles: ['Child', 'Leaf'] },
+    storyOwnership: { S1: 1, S2: 2 },
+  });
+  await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+  await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), '{"build":"done"}\n');
+  await writeFile(join(root, '.pipeline', 'task-status.json'), '{"task":"done"}\n');
+  await mkdir(join(root, '.daemon', 'parked'), { recursive: true });
+  await writeFile(join(root, '.daemon', 'parked', 'demo'), 'park-token\n');
+  await mkdir(join(root, '.daemon', 'leases', 'existing'), { recursive: true });
+  await writeFile(join(root, '.daemon', 'leases', 'existing', 'owner.json'), JSON.stringify({
+    host: 'other-host', pid: 123, processStartTime: '1', token: 'existing-token', purpose: 'existing command',
+  }));
+  const tip = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  await Promise.all([
+    git(['update-ref', 'refs/conductor/demo/routes/r1', tip]),
+    git(['update-ref', 'refs/conductor/demo/repairing/c1', tip]),
+    git(['update-ref', 'refs/conductor/demo/revalidate/c2', tip]),
+  ]);
+  return { root, git };
+}
+
+async function stackLandStateSnapshot(root: string, git: (args: string[]) => ReturnType<typeof execFile>) {
+  const tree = async (path: string): Promise<Record<string, string>> => {
+    try {
+      const base = join(root, path);
+      const entries = await readdir(base, { recursive: true, withFileTypes: true });
+      const files = await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => {
+        const relative = join(entry.parentPath.slice(base.length + 1), entry.name);
+        return [relative, await readFile(join(base, relative), 'utf8')] as const;
+      }));
+      return Object.fromEntries(files.sort(([left], [right]) => left.localeCompare(right)));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw error;
+    }
+  };
+  return {
+    refs: (await git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout,
+    parks: await tree('.daemon/parked'),
+    leases: await tree('.daemon/leases'),
+    state: await tree('.pipeline'),
   };
 }
 
@@ -160,10 +237,42 @@ describe('stack land CLI open path', () => {
     expect(deps.print).toHaveBeenCalledWith(expect.stringContaining('not stacked'));
   });
 
+  it('refuses a routing-disabled stacked fixture through the production setting guard before reading routing refs or mutating durable state', async () => {
+    const { root, git } = await routingDisabledStackedFixture();
+    const checkOpen = vi.fn().mockRejectedValue(new Error('routes, repairing, and revalidate refs must not be read'));
+    const readRepairMarker = vi.fn();
+    const readRouteRecord = vi.fn();
+    const before = await stackLandStateSnapshot(root, git);
+
+    for (const stackLandCommand of [
+      command,
+      { kind: 'stack-land-done' as const, slug: 'demo' },
+      { kind: 'stack-land-abandon' as const, slug: 'demo' },
+    ]) {
+      const output: string[] = [];
+      await expect(dispatchStackLandCommand(stackLandCommand, {
+        cwd: root,
+        resolveMainRoot: async () => root,
+        resolveWorktree: async () => root,
+        checkOpen,
+        readRepairMarker,
+        readRouteRecord,
+        print: (line) => output.push(line),
+      })).resolves.toBe(1);
+
+      expect(output.join('\n')).toContain('stacked_prs.route_whole_feature_fixes');
+    }
+    expect(checkOpen).not.toHaveBeenCalled();
+    expect(readRepairMarker).not.toHaveBeenCalled();
+    expect(readRouteRecord).not.toHaveBeenCalled();
+    expect(await stackLandStateSnapshot(root, git)).toEqual(before);
+    await expect(readdir(join(root, '.daemon', 'leases'))).resolves.toEqual(['existing']);
+    await expect(readFile(join(root, '.daemon', 'leases', 'demo', 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.each([
-    ['flat', true, false, 'Feature demo is not a stacked feature'],
-    ['routing disabled', false, true, 'Routing is disabled'],
-  ])('refuses %s stacks before any command reads repair refs or creates a lease', async (_name, routingOn, durable, _detail) => {
+    ['flat', false],
+  ])('refuses %s stacks before any command reads repair refs or creates a lease', async (_name, durable) => {
     const root = await mkdtemp(join(tmpdir(), 'stack-land-ineligible-'));
     haltRoots.push(root);
     for (const stackLandCommand of [
@@ -175,7 +284,7 @@ describe('stack land CLI open path', () => {
       const deps = dependencies({
         resolveMainRoot: vi.fn().mockResolvedValue(root),
         resolveWorktree: vi.fn().mockResolvedValue(root),
-        loadConfig: vi.fn().mockResolvedValue({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: routingOn } } }),
+        loadConfig: vi.fn().mockResolvedValue({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: true } } }),
         hasDurableChildState: vi.fn().mockResolvedValue(durable),
         readRepairMarker,
       });
@@ -188,7 +297,6 @@ describe('stack land CLI open path', () => {
       expect(deps.nextRound).not.toHaveBeenCalled();
       expect(deps.acquireLease).not.toHaveBeenCalled();
       expect(deps.createPark).not.toHaveBeenCalled();
-      if (!routingOn) expect(deps.hasDurableChildState).not.toHaveBeenCalled();
       await expect(readdir(join(root, '.daemon', 'leases'))).rejects.toMatchObject({ code: 'ENOENT' });
     }
   });
