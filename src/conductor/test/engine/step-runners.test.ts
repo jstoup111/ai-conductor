@@ -4653,7 +4653,7 @@ TIER: M`,
     });
 
     // Covers: task:8, task:11
-    it('settles a custom prior finding into an empty delta without dispatching its policy', async () => {
+    it('settles a custom prior finding into an empty delta after its candidate resolves the policy identity', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {
@@ -4757,6 +4757,15 @@ TIER: M`,
       vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(
         new Set([`${entry.id}:${judged.findings[0]!.identity.id}`]),
       );
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
+        _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
+        _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, _scope: unknown,
+        _child: unknown, _onResolved: unknown,
+        resolveScope: (policyIdentity: string) => Promise<unknown>,
+      ) => {
+        await resolveScope(policyIdentity);
+        return { id: entry.id, success: true, member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } } };
+      });
 
       await expect((runner as any).runRubricBuildReviewInner({
         sourceSnapshot: {
@@ -4775,9 +4784,8 @@ TIER: M`,
         },
       }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
 
-      expect(capture).toHaveBeenCalledOnce();
+      expect(capture).not.toHaveBeenCalled();
       expect(provider.invoke).not.toHaveBeenCalled();
-      await expect(readFile(join(dir, '.pipeline', 'build-review', 'lap-current', 'portable.json'), 'utf8')).resolves.toContain('"scope-empty"');
     });
 
     // Covers: task:rem-prd-audit-6-r1
@@ -4988,7 +4996,7 @@ TIER: M`,
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
     });
 
-    it('persists the fallback candidate policy identity and upgrades the mismatched delta to a full version-changed lap', async () => {
+    it('persists the fallback candidate policy identity and reuses it for the next delta lap', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {

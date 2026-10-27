@@ -3581,7 +3581,6 @@ export class DefaultStepRunner implements StepRunner {
         }),
       });
       if (decision !== undefined) {
-        customReviewScopes[entry.id] = decision;
         await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: settled.length });
       }
       return decision;
@@ -4498,7 +4497,7 @@ export class DefaultStepRunner implements StepRunner {
           if (resolveReviewScope !== undefined) {
             reviewScope = await resolveReviewScope(actualPolicyIdentity);
           } else if (reviewScope !== undefined && reviewScope.policyIdentity !== actualPolicyIdentity) {
-            const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff).flatMap((file) =>
+            const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff ?? '').flatMap((file) =>
               file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
             );
             reviewScope = {
@@ -4627,10 +4626,13 @@ export class DefaultStepRunner implements StepRunner {
           }),
         }));
         const invoked = dispatched.invocation;
-        if (scopeEmpty) return { kind: 'judged' as const, result: {
-          ...invoked,
-          output: JSON.stringify({ declaration, result: { kind: 'scope-empty', rubric: entry.id } }),
-        } };
+        if (scopeEmpty) {
+          await this.events?.emit({ type: 'build_review_rubric_skipped', rubric: entry.id, lapId, reason: 'scope-empty' });
+          return { kind: 'judged' as const, result: {
+            ...invoked,
+            output: JSON.stringify({ declaration, result: { kind: 'scope-empty', rubric: entry.id } }),
+          } };
+        }
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success && dispatched.kind !== 'root-rejection') {
           coverageFailure = true;
