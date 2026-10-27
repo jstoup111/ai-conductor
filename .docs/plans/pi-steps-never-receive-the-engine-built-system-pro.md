@@ -544,3 +544,19 @@ Task 1 ─┬─▶ Task 2 ─┬─▶ Task 3
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this at Medium and Large tier
+
+### Task rem-as-built-r1: pi-provider test (Task 11 suite): RED test where stat reports the prepared system-prompt path as a regular file but the injected readability check rejects; assert zero spawn-factory calls, success:false, output naming Pi, the path and 'is not a readable regular file', and the file disposed
+**Gate:** as-built
+**Rationale:** Verified (99%, observed): pi-provider.ts:564 gates the prepared system-prompt file with isFile(), which (:66-72) only calls stat().isFile() and never checks readability. ADR D4 says Pi must verify the path is a readable regular file before spawning. The architecture is unambiguous, so this is implementation drift routed to BUILD. Plan Task 11 ('Pi refuses to spawn when the system prompt cannot be prepared or verified') admits the repair. Its existing failure path already returns success:false, names the path and disposes of the file. Task 11's existing not-a-regular-file coverage is preserved. Sibling isFile() sites are found and excluded: HARNESS.md (:515), skills (:111) and package.json (:604) are outside D4 and Task 11.
+**Governing clause:** adr-2026-10-24-system-prompt-delivery-is-a-declared-provider-capability decision 4
+**Done when:**
+- adr-2026-10-24-system-prompt-delivery-is-a-declared-provider-capability decision 4 is satisfied by this task.
+- The repair for task rem-as-built-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-r2: src/conductor/src/execution/pi-provider.ts: add an injectable readability check to PiEnvironment (default fs.promises.access with constants.R_OK) and require regular-file AND readable at the pre-spawn system-prompt check (:564)
+**Gate:** as-built
+**Rationale:** Verified (99%, observed): pi-provider.ts:564 gates the prepared system-prompt file with isFile(), which (:66-72) only calls stat().isFile() and never checks readability. ADR D4 says Pi must verify the path is a readable regular file before spawning. The architecture is unambiguous, so this is implementation drift routed to BUILD. Plan Task 11 ('Pi refuses to spawn when the system prompt cannot be prepared or verified') admits the repair. Its existing failure path already returns success:false, names the path and disposes of the file. Task 11's existing not-a-regular-file coverage is preserved. Sibling isFile() sites are found and excluded: HARNESS.md (:515), skills (:111) and package.json (:604) are outside D4 and Task 11.
+**Governing clause:** adr-2026-10-24-system-prompt-delivery-is-a-declared-provider-capability decision 4
+**Done when:**
+- adr-2026-10-24-system-prompt-delivery-is-a-declared-provider-capability decision 4 is satisfied by this task.
+- The repair for task rem-as-built-r2 is committed and its targeted tests pass.

@@ -1,8 +1,9 @@
-// Covers: task:2, task:3, task:4, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:10, task:13, task:15, task:16, task:17, task:18
 // Covers: task:4
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat as fileStat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
@@ -17,6 +18,8 @@ import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { STEP_SKILL_INVOCATIONS, renderSkillInvocation } from '../../src/engine/skill-invocation.js';
+import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { createProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 
 type PiSubprocessFactory = (
   file: string,
@@ -76,12 +79,16 @@ function fakePiEnvironment(options: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   cwd?: string;
+  stat?: PiEnvironment['stat'];
+  access?: PiEnvironment['access'];
 } = {}): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
   const files = new Set(options.files ?? []);
   const directories = new Set(options.directories ?? []);
   const stat = vi.fn(async (path: string) => {
+    if (options.stat) return options.stat(path);
     if (files.has(path)) return { isFile: () => true, isDirectory: () => false };
     if (directories.has(path)) return { isFile: () => false, isDirectory: () => true };
+    if (path.includes('ai-conductor-pi-system-prompt-')) return fileStat(path);
     const error = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
     error.code = 'ENOENT';
     throw error;
@@ -89,6 +96,7 @@ function fakePiEnvironment(options: {
   return {
     environment: {
       stat,
+      access: options.access ?? (async () => {}),
       env: options.env ?? {},
       homeDir: () => options.homeDir ?? '/home/agent',
       cwd: () => options.cwd ?? '/workspace/project',
@@ -254,6 +262,338 @@ describe('PiProvider', () => {
       }),
     );
     expect(spawn.mock.calls[0]?.[1]).not.toContain('claude-opus-4-5:xhigh');
+  });
+
+  // Covers: task:10
+  it.each([
+    ['no system prompt', {}],
+    ['an empty system prompt', { systemPrompt: '' }],
+  ])('does not create a system-prompt file for %s', async (_caseName, systemPromptOptions) => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-no-system-prompt-'));
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
+    try {
+      await expect(provider.invoke({ ...invokeOptions, ...systemPromptOptions })).resolves.toMatchObject({ success: true });
+
+      const args = spawn.mock.calls[0]![1];
+      const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      expect({
+        appendPrompts: appendIndices.map((index) => args[index + 1]),
+        tempEntries: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
+      }).toEqual({ appendPrompts: [harnessPath], tempEntries: [] });
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:10
+  it.each([
+    ['no system prompt', {}],
+    ['an empty system prompt', { systemPrompt: '' }],
+  ])('spawns without trying to create a system-prompt file for %s when the temp root is invalid', async (_caseName, systemPromptOptions) => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-invalid-temp-root-'));
+    const blockingFile = join(fixtureRoot, 'not-a-directory');
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    await writeFile(blockingFile, 'file blocks mkdtemp parent');
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = join(blockingFile, 'child');
+    try {
+      const result = await provider.invoke({ ...invokeOptions, ...systemPromptOptions });
+
+      expect({
+        spawned: spawn.mock.calls.length,
+        systemPromptPreparationFailed: result.output.includes('could not prepare the system prompt for delivery'),
+      }).toEqual({ spawned: 1, systemPromptPreparationFailed: false });
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:8
+  it('appends the engine system prompt after HARNESS.md and delivers it through its file', async () => {
+    const systemPrompt = 'RETRY: fix the lint error\n[Conduct step 7/20]';
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, systemPrompt });
+
+    const args = spawn.mock.calls[0]![1];
+    const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+    expect({
+      harnessFirst: flags[0]! < flags[1]!,
+      harness: args[flags[0]! + 1],
+      delivered,
+    }).toEqual({ harnessFirst: true, harness: harnessPath, delivered: systemPrompt });
+  });
+
+  // Covers: task:8
+  it('keeps a remediate prompt unchanged while delivering adjudication context through the appended file', async () => {
+    const systemPrompt = 'RETRY: Adjudicate findings\n{"currentFindings":["A"]}';
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, prompt: '/remediate', systemPrompt });
+
+    expect({ input: spawn.mock.calls[0]![2].input, delivered }).toEqual({ input: '/remediate', delivered: systemPrompt });
+  });
+
+  // Covers: task:8
+  it('keeps a skill-shaped system prompt out of Pi argv and stdin', async () => {
+    const systemPrompt = '/skill:remediate\nDo not turn this into the dispatch prompt.';
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, systemPrompt });
+
+    const [, args, options] = spawn.mock.calls[0]!;
+    expect({
+      input: options.input,
+      delivered,
+      inArgv: args.some((value) => value.includes(systemPrompt)),
+      inStdin: String(options.input).includes(systemPrompt),
+    }).toEqual({ input: invokeOptions.prompt, delivered: systemPrompt, inArgv: false, inStdin: false });
+  });
+
+  // Covers: task:11
+  it('refuses Pi before spawn when its system-prompt file cannot be prepared or verified', async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-system-prompt-refusal-'));
+    const blockingFile = join(fixtureRoot, 'not-a-directory');
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    await writeFile(blockingFile, 'blocks mkdtemp');
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = join(blockingFile, 'child');
+    try {
+      const preparationFailure = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
+      expect({ spawned: spawn.mock.calls.length, output: preparationFailure.output }).toEqual({
+        spawned: 0,
+        output: expect.stringMatching(/Pi could not prepare the system prompt for delivery/),
+      });
+
+      process.env.AI_CONDUCTOR_TEST_TMP_ROOT = fixtureRoot;
+      let preparedPath: string | undefined;
+      ({ environment } = fakePiEnvironment({
+        stat: async (path) => {
+          if (path === harnessPath) return { isFile: () => true, isDirectory: () => false };
+          if (path.includes('ai-conductor-pi-system-prompt-')) {
+            preparedPath = path;
+            return { isFile: () => false, isDirectory: () => false };
+          }
+          throw new Error(`ENOENT: ${path}`);
+        },
+      }));
+      provider = new PiProvider('/resolved/pi', spawn, environment);
+      const verificationFailure = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
+      expect({
+        spawned: spawn.mock.calls.length,
+        namesPath: verificationFailure.output.includes(preparedPath!),
+        output: verificationFailure.output,
+      }).toEqual({ spawned: 0, namesPath: true, output: expect.stringMatching(/Pi.*is not a readable regular file/) });
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:11
+  it('refuses Pi before spawn when its regular system-prompt file is unreadable', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-system-prompt-unreadable-'));
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
+    let preparedPath: string | undefined;
+    const readabilityCheck = vi.fn(async (path: string) => {
+      preparedPath = path;
+      throw new Error('EACCES');
+    });
+    try {
+      ({ environment } = fakePiEnvironment({
+        files: [harnessPath],
+        access: readabilityCheck,
+      }));
+      provider = new PiProvider('/resolved/pi', spawn, environment);
+
+      const result = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
+
+      expect({
+        spawned: spawn.mock.calls.length,
+        success: result.success,
+        output: result.output,
+        disposed: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
+      }).toEqual({
+        spawned: 0,
+        success: false,
+        output: expect.stringMatching(/Pi.*is not a readable regular file/),
+        disposed: [],
+      });
+      expect(result.output).toContain(preparedPath!);
+      expect(readabilityCheck).toHaveBeenCalledWith(preparedPath, constants.R_OK);
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:12
+  it.each([
+    ['a 300 KiB prompt', 'x'.repeat(300 * 1024)],
+    ['a multi-byte UTF-8 prompt', 'é → 🚀'.repeat(4096)],
+    ['the 128 KiB argument boundary', 'x'.repeat(128 * 1024)],
+    ['a multi-line prompt', 'first line\nsecond line\nthird line'],
+  ])('delivers %s through the appended file only', async (_caseName, systemPrompt) => {
+    let delivered: Buffer | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      delivered = await readFile(args[indices[1]! + 1]!);
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await provider.invoke({ ...invokeOptions, systemPrompt });
+
+    const args = spawn.mock.calls[0]![1];
+    expect({
+      containsText: args.some((value) => value.includes(systemPrompt)),
+      containsSlice: args.some((value) => value.includes(systemPrompt.slice(0, 64))),
+      everyArgUnderLimit: args.every((value) => Buffer.byteLength(value) < 131_072),
+      noPromptLineIsArg: systemPrompt.split('\n').every((line) => !args.includes(line)),
+      bytes: delivered,
+    }).toEqual({
+      containsText: false,
+      containsSlice: false,
+      everyArgUnderLimit: true,
+      noPromptLineIsArg: true,
+      bytes: Buffer.from(systemPrompt, 'utf8'),
+    });
+  });
+
+  // Covers: task:13
+  it('uses distinct private files and removes them after success, failure, abort, and ENOENT', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-system-prompt-cleanup-'));
+    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
+    const paths: string[] = [];
+    try {
+      for (const result of [
+        { stdout: assistantEnd, stderr: '', exitCode: 0 },
+        { stdout: '', stderr: '', exitCode: 1 },
+        { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
+      ]) {
+        spawn.mockImplementationOnce(async (_file, args) => {
+          const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+          const path = args[indices[1]! + 1]!;
+          paths.push(path);
+          expect((await fileStat(path)).mode & 0o777).toBe(0o600);
+          return result as ExecaResult;
+        });
+        await provider.invoke({ ...invokeOptions, systemPrompt: `prompt-${paths.length}` });
+      }
+
+      const controller = new AbortController();
+      let resolveProcess: (result: ExecaResult) => void;
+      const process = Object.assign(new Promise<ExecaResult>((resolve) => { resolveProcess = resolve; }), {
+        kill: vi.fn(() => resolveProcess({ stdout: '', stderr: '', exitCode: 1 } as ExecaResult)),
+      });
+      spawn.mockImplementationOnce((_file, args) => {
+        const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+        paths.push(args[indices[1]! + 1]!);
+        return process as ReturnType<PiSubprocessFactory>;
+      });
+      const aborted = provider.invoke({ ...invokeOptions, systemPrompt: 'abort', abortSignal: controller.signal });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(4));
+      controller.abort();
+      await expect(aborted).resolves.toMatchObject({ output: 'Pi invocation aborted.' });
+
+      expect(await Promise.all(paths.flatMap((path) => [
+        fileStat(path).then(() => true, () => false),
+        fileStat(dirname(path)).then(() => true, () => false),
+      ]))).toEqual(Array(paths.length * 2).fill(false));
+
+      const preSpawnController = new AbortController();
+      let preSpawnPath: string | undefined;
+      ({ environment } = fakePiEnvironment({
+        stat: async (path) => {
+          if (path === harnessPath) return { isFile: () => true, isDirectory: () => false };
+          if (path.includes('ai-conductor-pi-system-prompt-')) {
+            preSpawnPath = path;
+            preSpawnController.abort();
+            return { isFile: () => true, isDirectory: () => false };
+          }
+          throw new Error(`ENOENT: ${path}`);
+        },
+      }));
+      provider = new PiProvider('/resolved/pi', spawn, environment);
+      const callsBeforePreSpawnAbort = spawn.mock.calls.length;
+      await expect(provider.invoke({ ...invokeOptions, systemPrompt: 'pre-spawn abort', abortSignal: preSpawnController.signal }))
+        .resolves.toMatchObject({ output: 'Pi invocation aborted.' });
+      expect({
+        spawned: spawn.mock.calls.length - callsBeforePreSpawnAbort,
+        fileExists: await fileStat(preSpawnPath!).then(() => true, () => false),
+        tempEntries: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
+      }).toEqual({ spawned: 0, fileExists: false, tempEntries: [] });
+
+      const concurrentPaths: string[] = [];
+      const concurrentContents: string[] = [];
+      spawn.mockImplementation(async (_file, args) => {
+        const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+        const path = args[indices[1]! + 1]!;
+        concurrentPaths.push(path);
+        concurrentContents.push(await readFile(path, 'utf8'));
+        return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+      });
+      await Promise.all([provider.invoke({ ...invokeOptions, systemPrompt: 'A' }), provider.invoke({ ...invokeOptions, systemPrompt: 'B' })]);
+      expect({ paths: concurrentPaths, contents: concurrentContents }).toEqual({
+        paths: expect.arrayContaining([expect.any(String), expect.any(String)]),
+        contents: expect.arrayContaining(['A', 'B']),
+      });
+      expect(new Set(concurrentPaths).size).toBe(2);
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:8
+  it('delivers a system prompt through the guarded Pi runtime', async () => {
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const path = args[flags[1]! + 1]!;
+      delivered = await readFile(path, 'utf8');
+      await rm(dirname(path), { recursive: true, force: true });
+      return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
+    });
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'pi', provider);
+    registry.markInitialized();
+
+    await createProviderRuntimeSet(registry).get('pi').provider.invoke({
+      ...invokeOptions,
+      prompt: '/x',
+      systemPrompt: 'S',
+    });
+
+    expect({ spawned: spawn.mock.calls.length, delivered }).toEqual({ spawned: 1, delivered: 'S' });
   });
 
   it.each([
@@ -1022,6 +1362,40 @@ describe('PiProvider read-only review argv', () => {
     expect(toolsValue(args)).toBe('read,grep,find,ls,git_read');
     expect(args[args.indexOf('-e') + 1]).toBe(asset);
     expect(asset.startsWith('/')).toBe(true);
+  });
+
+  // Covers: task:9
+  it('appends the system prompt after HARNESS.md without changing read-only restrictions', async () => {
+    await invokeReadOnly();
+    const baselineArgs = spawn.mock.calls[0]![1];
+    let delivered: string | undefined;
+    spawn.mockImplementationOnce(async (_file, args) => {
+      const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const systemPromptPath = args[appendIndices[1]! + 1]!;
+      delivered = await readFile(systemPromptPath, 'utf8');
+      await rm(dirname(systemPromptPath), { recursive: true, force: true });
+      return { stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'), stderr: '', exitCode: 0 } as ExecaResult;
+    });
+
+    await invokeReadOnly({ systemPrompt: 'S' });
+
+    const args = spawn.mock.calls[1]![1];
+    const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+    expect({
+      harnessFirst: appendIndices[0]! < appendIndices[1]!,
+      harness: args[appendIndices[0]! + 1],
+      delivered,
+      noExtensions: args.includes('--no-extensions'),
+      tools: toolsValue(args),
+      conductGitRead: args.includes('--conduct-git-read'),
+    }).toEqual({
+      harnessFirst: true,
+      harness: '/home/agent/.agents/skills/HARNESS.md',
+      delivered: 'S',
+      noExtensions: baselineArgs.includes('--no-extensions'),
+      tools: toolsValue(baselineArgs),
+      conductGitRead: baselineArgs.includes('--conduct-git-read'),
+    });
   });
 
   it('adds submit_result to the tools when a native schema is requested', async () => {

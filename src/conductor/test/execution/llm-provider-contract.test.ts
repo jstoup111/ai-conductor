@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type {
   AuthenticationReadiness,
@@ -5,6 +6,7 @@ import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  ProviderSystemPromptCapability,
   ProviderStreamCandidateObserver,
 } from '../../src/execution/llm-provider.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -66,6 +68,29 @@ async function executeCodexCandidate(
 }
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('declares provider system-prompt delivery and its refusal marker', () => {
+    expectTypeOf<LLMProvider['systemPromptCapability']>().toEqualTypeOf<
+      ProviderSystemPromptCapability | undefined
+    >();
+
+    const undeliverable: InvokeResult = {
+      success: false,
+      output: 'system prompt cannot be delivered',
+      exitCode: 1,
+      systemPromptUndeliverable: true,
+    };
+
+    expect({
+      claude: new ClaudeProvider().systemPromptCapability,
+      codex: new CodexProvider().systemPromptCapability,
+      undeliverable: undeliverable.systemPromptUndeliverable,
+    }).toEqual({
+      claude: { deliversSystemPrompt: true },
+      codex: { deliversSystemPrompt: true },
+      undeliverable: true,
+    });
+  });
+
   it('exposes invoke as the sole built-in provider dispatch member', () => {
     type RemovedInteractiveMember = Extract<keyof LLMProvider, 'invokeInteractive'>;
 
