@@ -324,7 +324,15 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     && entryHalt !== undefined
     && existing?.equals(entryHalt) === true;
   if (existing === undefined || replaceEntryHalt) {
-    await writeHaltMarker(options.worktree, `${result.detail}\n`, result.kind === 'halted' ? result.haltClass ?? 'needs-human' : 'needs-human', options.events);
+    const write = await writeHaltMarker(
+      options.worktree,
+      `${result.detail}\n`,
+      result.kind === 'halted' ? result.haltClass ?? 'needs-human' : 'needs-human',
+      options.events,
+    );
+    if (write.status === 'failed') {
+      throw new Error(`stack preflight stopped (${result.detail}) but its HALT could not be written: ${write.reason}`);
+    }
   }
   const firstLine = replaceEntryHalt ? undefined : existing?.toString('utf8').split('\n', 1)[0]?.trim();
   await options.events?.emit({

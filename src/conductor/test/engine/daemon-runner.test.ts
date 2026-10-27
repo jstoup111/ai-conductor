@@ -1,4 +1,4 @@
-// Covers: task:1, task:8
+// Covers: task:1, task:3, task:8
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -62,6 +62,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/halt-marker.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/halt-marker.js')>();
+  return { ...actual, writeHaltMarker: vi.fn(actual.writeHaltMarker) };
+});
+
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -90,6 +95,7 @@ import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
 import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
+import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 
 // Covers: task:1
 
@@ -225,6 +231,48 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       const outcome = await makeRunFeature(featureDeps)(ITEM);
       expect(outcome.status).toBe('halted');
       expect(outcome.reason).toContain('round advance cas-failed');
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a failed stack-preflight HALT write reason instead of the no-marker fallback', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      vi.mocked(writeHaltMarker).mockResolvedValueOnce({
+        status: 'failed',
+        path: join(worktreePath, '.pipeline', 'HALT'),
+        reason: 'injected write failure',
+      });
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => runStackPreflight({
+        worktree: worktree.path,
+        slug: ITEM.slug,
+        git: makeGitRunner(worktree.path),
+        reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+      });
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome).toMatchObject({
+        status: 'error',
+        reason: expect.stringContaining('round advance cas-failed'),
+      });
+      expect(outcome.reason).toContain('could not be written');
+      expect(outcome.reason).toContain('injected write failure');
       expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
     } finally {
       await rm(worktreePath, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:3, task:4
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,13 @@ import { reconcileReceiptLedger } from '../../../src/engine/routing/round-receip
 import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-queue.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+
+vi.mock('../../../src/engine/halt-marker.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/halt-marker.js')>();
+  return { ...actual, writeHaltMarker: vi.fn(actual.writeHaltMarker) };
+});
+
+import { writeHaltMarker } from '../../../src/engine/halt-marker.js';
 
 vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
@@ -301,6 +308,23 @@ describe('stack preflight stop reasons', () => {
     expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
       expect.objectContaining({ reason: expect.stringContaining('round advance cas-failed') }),
     ]);
+  });
+
+  it('rejects with the preflight detail when its HALT cannot be written', async () => {
+    const subject = await fixture();
+    vi.mocked(writeHaltMarker).mockResolvedValueOnce({
+      status: 'failed',
+      path: join(subject.repo, '.pipeline', 'HALT'),
+      reason: 'injected write failure',
+    });
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+    })).rejects.toThrow(/round advance cas-failed.*could not be written.*injected write failure/);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('names receipt-ledger, routing-outbox, and revalidation-queue refusals', async () => {
