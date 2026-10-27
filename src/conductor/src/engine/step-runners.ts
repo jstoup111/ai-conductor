@@ -3437,7 +3437,7 @@ export class DefaultStepRunner implements StepRunner {
       // Scope identity is durable state. Capture the installed policy before
       // selecting a scope so a changed custom bundle forces a fresh full lap,
       // including when that lap would otherwise be scope-empty.
-      const effectiveBundleDigest = await this.resolveBuildReviewCustomPolicyBundleDigest(entry);
+      const effectiveBundleDigest = await this.resolveBuildReviewCustomPolicyBundleDigest(entry, lapId);
       const policyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: entry.contract.output.version,
         projectionVersion: entry.contract.projection.version,
@@ -4050,6 +4050,7 @@ export class DefaultStepRunner implements StepRunner {
   /** Resolve the configured custom policy bundle for durable scope identity. */
   private async resolveBuildReviewCustomPolicyBundleDigest(
     entry: ResolvedBuildReviewCustomCatalogEntry,
+    lapId: BuildReviewLapId,
   ): Promise<string> {
     const provider = Array.isArray(entry.policy.llm_provider)
       ? entry.policy.llm_provider[0]
@@ -4064,7 +4065,7 @@ export class DefaultStepRunner implements StepRunner {
         skill: entry.skill,
         ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }),
       }, catalog);
-      if (resolved.kind === 'failure') return 'unavailable';
+      if (resolved.kind === 'failure') return `unavailable:${lapId}`;
       const policy = {
         ...resolved.policy,
         declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])],
@@ -4074,8 +4075,10 @@ export class DefaultStepRunner implements StepRunner {
       })).digest;
     } catch {
       // Candidate dispatch owns the diagnostic and bounded failure path. Scope
-      // selection fails conservatively toward a full lap meanwhile.
-      return 'unavailable';
+      // selection fails conservatively toward a full lap meanwhile. The lap
+      // identity preserves same-head replay while ensuring uncertainty cannot
+      // reuse an earlier lap's policy identity.
+      return `unavailable:${lapId}`;
     }
   }
 

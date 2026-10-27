@@ -4860,6 +4860,98 @@ TIER: M`,
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
     });
 
+    // Covers: task:rem-as-built-6-r6
+    it('uses a full version-changed lap when preliminary custom policy identity is unavailable', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+          },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = config.catalog.find((candidate) => candidate.id === 'portable')!;
+      const diff = [
+        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
+        '-export const portable = false;', '+export const portable = true;',
+      ].join('\n');
+      const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
+      const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
+      const declaration = {
+        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+        question: entry.question, source: 'project' as const, resources: entry.resources,
+      };
+      const priorBundleDigest = `sha256:${'a'.repeat(64)}`;
+      const stamp = {
+        rubric: entry.id, lapId: 'lap-prior', declaration,
+        policy: { version: 'v1' as const, bundleDigest: priorBundleDigest },
+        candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
+        reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'b'.repeat(64)}` },
+      };
+      const judged = stampBuildReviewCustomJudgedResult(
+        { kind: 'custom-findings', version: 'v2', findings: [] }, stamp, { sourceRegions: [] },
+      )!;
+      const unavailablePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: 'unavailable',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
+        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
+        descriptor: {
+          version: 'v1', semanticSkill: entry.skill, declaration,
+          installation: { source: 'project' }, effectivePolicy: stamp.policy,
+          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
+        },
+        result: judged,
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity: unavailablePolicyIdentity,
+          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const catalog = vi.fn().mockRejectedValueOnce(new Error('preliminary catalog unavailable'));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        config,
+        buildReviewPolicyCatalog: catalog,
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-identity-unavailable' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
+      });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      let observedScope: unknown;
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
+        _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
+        _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, reviewScope: unknown,
+      ) => {
+        observedScope = reviewScope;
+        return {
+          id: entry.id, success: true,
+          member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
+        };
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
+        },
+      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+
+      expect(catalog).toHaveBeenCalledOnce();
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+    });
+
     // Covers: task:2, task:6, task:9, task:rem-as-built-rem-2, task:rem-as-built-rem-5
     it('uses compatible current test-scope resolutions for the frontier and policy identity', async () => {
       const provider = createMockProvider();
