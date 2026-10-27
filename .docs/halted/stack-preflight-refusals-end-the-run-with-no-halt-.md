@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-27T11:12:04.825Z
 Slug: stack-preflight-refusals-end-the-run-with-no-halt-
 Class: needs-human
 Halting step: prd_audit
