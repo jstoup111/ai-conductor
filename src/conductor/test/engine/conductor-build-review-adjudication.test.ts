@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionContext } from '../../src/engine/artifacts.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { isBuildReviewFindingOutOfDelta, joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
@@ -548,7 +549,9 @@ async function fixture(options: FixtureOptions = {}) {
     }),
     gh,
   } as never);
-  const git = options.frozenDiff === undefined ? undefined : vi.spyOn(conductor as never, 'git').mockResolvedValue({ stdout: options.frozenDiff });
+  const git = options.frozenDiff === undefined
+    ? undefined
+    : vi.spyOn(conductor as unknown as { git: GitRunner }, 'git').mockResolvedValue({ stdout: options.frozenDiff });
   for (const relative of ['.pipeline/remediation-cases.json', '.pipeline/build-review-work-order.json']) {
     await stat(join(projectRoot, relative)).then((metadata) => artifactMtimes.set(relative, metadata.mtimeMs)).catch(() => {});
   }
