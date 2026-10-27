@@ -1,21 +1,19 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-26T01:55:55.349Z
+Status: halted
 Slug: build-review-re-raises-already-decided-findings-ev
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-build-review-re-raises-already-decided-findings-ev
 Child: 2
-Head SHA: ab201dee90644ea7d31b78068492ca310bfe6c5e
-Halted at: 2026-10-26T00:53:34.282Z
+Head SHA: e3c5ccf4aed88c2f8ca9f667b91cd7bad0727fdb
+Halted at: 2026-10-27T21:22:29.634Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-step 'acceptance_specs' failed in auto mode (retries exhausted)
+child BUILD region refused: revalidating child 1 has no matching repair marker
 ```
