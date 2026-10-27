@@ -26,6 +26,11 @@ export interface ExecutorChildDeps {
   /** Test seam; production always derives this module's own directory. */
   moduleDir?: string;
   supervisorEngineVersionId?: string;
+  /**
+   * Claims any root-owned dispatch coordination before the child binds its
+   * feature worktree. A skipped admission is a normal daemon outcome.
+   */
+  admitDispatch?: (order: WorkOrder) => Promise<ExecutorChildDispatchAdmission>;
   /** Creates/reuses a worktree only after the supervisor has sent its order. */
   createWorktree(order: WorkOrder): Promise<{ path: string }>;
   run(input: ExecutorChildBaseRunInput): Promise<FeatureExecutionOutcome>;
@@ -45,6 +50,10 @@ export interface ExecutorChildBaseRunInput {
   /** Feature-scoped logger forwarded to the supervisor-owned daemon sink. */
   log?: (line: string) => void;
 }
+
+export type ExecutorChildDispatchAdmission =
+  | { readonly kind: 'admitted'; readonly release?: () => Promise<unknown> }
+  | { readonly kind: 'skipped'; readonly outcome: FeatureExecutionOutcome };
 
 /**
  * The executor's identity belongs to the loaded child module, never to the
@@ -154,26 +163,35 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
       const effectiveConcurrency = parsed.message.effectiveConcurrency ?? order.effectiveConcurrency;
       void (async () => {
         try {
-          const worktree = await deps.createWorktree(order);
-          const pipeline = join(worktree.path, '.pipeline');
-          await mkdir(pipeline, { recursive: true });
-          await writeFile(join(pipeline, 'work-order.json'), `${JSON.stringify(order)}\n`, 'utf8');
-          const events = new ConductorEventEmitter();
-          const persister = new EventPersister(join(pipeline, 'events.jsonl'), events);
-          persister.start();
-          for (const type of Object.keys((await import('./event-sinks.js')).EVENT_SINKS) as Array<import('../types/events.js').ConductorEvent['type']>) {
-            events.on(type, (event) => { port.send({ kind: 'event', scope: event.type === 'feature_shipped' || event.type === 'provider_suppressed' ? 'root' : 'feature', payload: event }); });
+          const admission = await deps.admitDispatch?.(order);
+          if (admission?.kind === 'skipped') {
+            await sendOutcome(admission.outcome);
+            return;
           }
-          await events.emit({
-            type: 'executor_started', slug: order.slug, engineVersionId,
-            protocolVersion: EXECUTOR_PROTOCOL_VERSION,
-            supervisorEngineVersionId: deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
-          });
-          const outcome = controller.signal.aborted
-            ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
-            : await deps.run({ order, engineVersionId, effectiveConcurrency, events, signal: controller.signal });
-          persister.stop();
-          await sendOutcome(outcome);
+          const worktree = await deps.createWorktree(order);
+          try {
+            const pipeline = join(worktree.path, '.pipeline');
+            await mkdir(pipeline, { recursive: true });
+            await writeFile(join(pipeline, 'work-order.json'), `${JSON.stringify(order)}\n`, 'utf8');
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(join(pipeline, 'events.jsonl'), events);
+            persister.start();
+            for (const type of Object.keys((await import('./event-sinks.js')).EVENT_SINKS) as Array<import('../types/events.js').ConductorEvent['type']>) {
+              events.on(type, (event) => { port.send({ kind: 'event', scope: event.type === 'feature_shipped' || event.type === 'provider_suppressed' ? 'root' : 'feature', payload: event }); });
+            }
+            await events.emit({
+              type: 'executor_started', slug: order.slug, engineVersionId,
+              protocolVersion: EXECUTOR_PROTOCOL_VERSION,
+              supervisorEngineVersionId: deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
+            });
+            const outcome = controller.signal.aborted
+              ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
+              : await deps.run({ order, engineVersionId, effectiveConcurrency, events, signal: controller.signal });
+            persister.stop();
+            await sendOutcome(outcome);
+          } finally {
+            await admission?.release?.();
+          }
         } catch (error) {
           await sendOutcome({ slug: order.slug, status: 'error', reason: error instanceof Error ? error.message : String(error) });
         } finally { resolve(); }

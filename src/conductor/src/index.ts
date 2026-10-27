@@ -853,7 +853,7 @@ async function dispatchCliCommand(): Promise<void> {
   if (process.argv[2] === 'executor-child') {
     const [
       { runExecutorChild, withExecutorBrokerProxies },
-      { makeExecutorChildRun },
+      { makeExecutorChildDispatchAdmission, makeExecutorChildRun },
       { createWorkOrderGitRunner },
       { makeFeatureRunnerDeps },
       { defaultSelfHostDetector },
@@ -866,6 +866,7 @@ async function dispatchCliCommand(): Promise<void> {
     ]);
     const projectRoot = process.cwd();
     await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
       // Reuse the daemon seam, which verifies the WorkOrder before its first
       // worktree side effect and performs the pinned-base create under the
       // brokered lifecycle lock.
