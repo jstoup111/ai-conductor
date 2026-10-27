@@ -840,3 +840,13 @@ Slice 2
 - The repair for task rem-as-built-6-r7 is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r6
+
+### Task rem-prd-audit-25: In step-runners.ts, custom-policy branch of runRubricBuildReviewInner: derive the policy identity and resolve reviewScope from the model that actually judges (the fallback rung), not context.candidate.model. Do this before cache reuse and judgement, and persist the actual-model identity in the branch artifact's reviewScope. Add a RED test in build-review-lap-scope-runner.test.ts: L1 judged by fallback model B records B's identity, and an L2 run on candidate A must not reuse L1's settled scope or skip review.
+**Gate:** prd-audit
+**Rationale:** Confirmed in step-runners.ts. Around line 4557, actualPolicyIdentity and resolveReviewScope use context.candidate.model. The fallback ladder at line 4705 can judge with a different rung model, read later as actualModel = context.invokedModel() around line 4745. That value updates cache and provenance, but the branch-artifact write around line 4980 persists the pre-dispatch reviewScope unchanged. When a fallback model judges L1, the lap is recorded under the first candidate's identity. ADR adr-2026-10-24-lap-monotonic-build-review-scope decision 1 already says policy identity includes the model, so the approved architecture is unambiguous and this is conforming implementation drift. The code is Task 25's integration point: passing each rubric's decided scope through the build_review step and writing reviewScope.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-prd-audit-25 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r7
