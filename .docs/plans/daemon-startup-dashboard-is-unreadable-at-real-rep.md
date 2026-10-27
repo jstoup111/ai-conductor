@@ -603,3 +603,50 @@ Tasks 1, 3, 7 ─▶ Task 12
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this at Medium tier
+
+### Task rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451: In src/conductor/src/engine/daemon-dashboard.ts, split the closing rule from pushRule so full mode ends with the plain 61-char `─` rule and the opening line keeps the inherited-state header; compact rules stay `─`×rowBudget. Add a full-mode test asserting the last line equals '─'.repeat(61).
+**Gate:** prd-audit
+**Rationale:** Removal only. pushRule at daemon-dashboard.ts:1141 emits the `── inherited state ──` header for both the opening and closing rules in full mode. The operator refuses this: the closing rule must stay the plain 61-char `─` rule, and the goldens must be re-recorded. This reverts the closing line to its pre-change behavior and adds no capability. Task 13 owns rule sizing (full-mode rules stay 61 chars), and Task 11 owns re-recording the dashboard goldens.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 2da9f283-c8ce-40b8-b6e8-4a9105947451 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 2da9f283-c8ce-40b8-b6e8-4a9105947451 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451-2: Re-record the five src/conductor/test/fixtures/n1-golden/*-dashboard.golden fixtures so their last line is the plain 61-char rule again, with no other changes beyond Task 11's approved NEEDS YOU and reorder diffs.
+**Gate:** prd-audit
+**Rationale:** Removal only. pushRule at daemon-dashboard.ts:1141 emits the `── inherited state ──` header for both the opening and closing rules in full mode. The operator refuses this: the closing rule must stay the plain 61-char `─` rule, and the goldens must be re-recorded. This reverts the closing line to its pre-change behavior and adds no capability. Task 13 owns rule sizing (full-mode rules stay 61 chars), and Task 11 owns re-recording the dashboard goldens.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 2da9f283-c8ce-40b8-b6e8-4a9105947451 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 2da9f283-c8ce-40b8-b6e8-4a9105947451 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-10: In src/conductor/src/daemon-cli.ts createStartupDashboardBinding, stop passing includeCompleted:false to the compact console render so the collapsed PROCESSED (n) line appears. Add a binding test asserting the console string contains `PROCESSED (`.
+**Gate:** prd-audit
+**Rationale:** Verified: daemon-cli.ts:1172 passes includeCompleted:false explicitly to the compact console render, so the `opts?.includeCompleted ?? compact` default at daemon-dashboard.ts:1244 never fires and compact output omits the PROCESSED count line. This is a wiring defect within Task 10's binding scope and needs no design decision.
+**Criterion:** S3.4
+**Parent task:** 10
+**Done when:**
+- [test] S3.4 is satisfied by this task.
+- The repair for task rem-prd-audit-10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-8: In src/conductor/src/engine/daemon-dashboard.ts, make detail() clip text to budget minus the indent width so each indented detail line is at most rowBudget; a clipped line must be exactly rowBudget. Strengthen the dashboard tests to assert the exact length 80 for a 280-char halted reason, and that the line's content after the indent starts with the reason.
+**Gate:** prd-audit
+**Rationale:** Verified at daemon-dashboard.ts:1142. detail() clips text to the full budget and then prepends a 6-space indent, which gives lines of budget+6. Task 8 requires an indented detail line of exactly the budget whose content starts with the reason. The test only checks endsWith('…'), so the assertion has to be strengthened as part of Task 8's RED/GREEN work.
+**Criterion:** S4.1
+**Parent task:** 8
+**Done when:**
+- [test] S4.1 is satisfied by this task.
+- The repair for task rem-prd-audit-8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-12: In src/conductor/src/engine/daemon-dashboard.ts renderDashboard, have retained also exclude inProgressSet, and have processed exclude haltedSet and inProgressSet so every slug renders in exactly its highest-ranked group.
+**Gate:** prd-audit
+**Rationale:** Verified at daemon-dashboard.ts:1159 and :1170. `retained` does not exclude inProgressSet. `processed` excludes only parked and retained, so it can overlap halted and in-progress. That breaks the approved precedence PARKED > HALTED > IN-PROGRESS > RETAINED > PROCESSED > ... The Task 12 generated-fixture test is absent. The precedence is already approved, so this is conforming implementation work.
+**Criterion:** S6.4
+**Parent task:** 12
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-12 is committed and its targeted tests pass.

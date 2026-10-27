@@ -6,7 +6,7 @@ import { ALL_STEPS } from './steps.js';
 import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
-import type { GatedItem } from './daemon-backlog.js';
+import type { BlockedSpecItem, GatedItem } from './daemon-backlog.js';
 import {
   classifyHeartbeatAge,
   formatHeartbeatAge,
@@ -202,6 +202,8 @@ export interface ParkedEntry {
 }
 
 export interface InheritedState {
+  /** Whether the discovery partitions came from a completed discovery pass. */
+  discovery?: 'complete' | 'unavailable';
   /** Optional read-only build-review summary; skipped coverage is never a pass. */
   buildReviewMetrics?: { lapsToPass?: number; skipped: number; cacheHits: number; infrastructureFailures: number; rubricFailureRates?: Record<string, { failures: number; judged: number }>; skipReasons?: Record<string, number> };
   halted: HaltedEntry[];
@@ -217,6 +219,8 @@ export interface InheritedState {
    * HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE.
    */
   waiting?: WaitingEntry[];
+  /** Specs held back by actionable content failures. */
+  blocked?: BlockedSpecItem[];
   /**
    * Priority resolution result from the resolver, if available. Used by the
    * dashboard to render band annotations (banded mode) or fallback marker
@@ -265,7 +269,12 @@ export interface ScanInheritedStateDeps {
    */
   discover: () => Promise<
     | BacklogItem[]
-    | { items: BacklogItem[]; waiting: WaitingEntry[]; gated?: GatedItem[] }
+    | {
+      items: BacklogItem[];
+      waiting: WaitingEntry[];
+      blocked?: BlockedSpecItem[];
+      gated?: GatedItem[];
+    }
   >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
@@ -901,12 +910,15 @@ export async function scanInheritedState(
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
   let waiting: WaitingEntry[] = [];
+  let blocked: BlockedSpecItem[] = [];
   let gated: GatedItem[] = [];
   let priorityResolution: PriorityResolution | undefined;
+  let discovery: 'complete' | 'unavailable' = 'complete';
   try {
     const result = await deps.discover();
     const backlog = Array.isArray(result) ? result : result.items;
     waiting = Array.isArray(result) ? [] : result.waiting;
+    blocked = Array.isArray(result) ? [] : (result.blocked ?? []);
     const rawGated = Array.isArray(result) ? [] : (result.gated ?? []);
     const inProgressSlugs = new Set(inProgress.map((p) => p.slug));
     // GATED precedence: HALTED > PROCESSED > IN-PROGRESS > GATED — a `kind:
@@ -938,12 +950,14 @@ export async function scanInheritedState(
       priorityResolution = { mode: 'fallback' };
     }
   } catch (err) {
+    discovery = 'unavailable';
     deps.log?.(
       `dashboard: backlog discovery failed (${err instanceof Error ? err.message : String(err)})`,
     );
   }
 
   return {
+    discovery,
     buildReviewMetrics,
     halted,
     inProgress,
@@ -951,6 +965,7 @@ export async function scanInheritedState(
     processed,
     processedCount: processed.length,
     waiting,
+    blocked,
     gated,
     priorityResolution,
     retainedWorktrees,
@@ -1115,22 +1130,137 @@ export function waitingDetail(verdict: BlockerVerdict): string {
  */
 export function renderDashboard(
   state: InheritedState,
-  opts?: { includeCompleted?: boolean },
+  opts?: { includeCompleted?: boolean; mode?: 'full' | 'compact'; rowBudget?: number },
   priorityResolution?: PriorityResolution,
 ): string {
+  const compact = opts?.mode === 'compact';
+  const budget = opts?.rowBudget ?? 80;
   const lines: string[] = [];
-  lines.push('── inherited state ──────────────────────────────────────────');
+  const chrome = (line: string) => compact ? clipToBudget(line, budget) : line;
+  const pushChrome = (line: string) => lines.push(chrome(line));
+  const pushOpeningRule = () => lines.push(compact ? '─'.repeat(budget) : '── inherited state ──────────────────────────────────────────');
+  const pushClosingRule = () => lines.push('─'.repeat(compact ? budget : 61));
+  const detail = (text: string) => {
+    const indent = '      ';
+    return `${indent.slice(0, budget)}${clipToBudget(text, Math.max(0, budget - indent.length))}`;
+  };
+  const slugDetail = (slug: string, heading: string, text: string) => {
+    lines.push(`  • ${slug}${heading}`);
+    lines.push(detail(text));
+  };
+  const activeRow = (slug: string, tier: string, rest: string) => {
+    const prefix = `  • ${slug}${tier}`;
+    lines.push(prefix + clipToBudget(rest, Math.max(0, budget - prefix.length)));
+  };
+  const parkedRaw = state.parked ?? [];
+  const parkedEntries: ParkedEntry[] = parkedRaw.map((p) => typeof p === 'string' ? { slug: p } : p);
+  const parked = [...parkedEntries].sort((a, b) => a.slug.localeCompare(b.slug));
+  const parkedSet = new Set(parked.map((p) => p.slug));
+  const halted = state.halted.filter((h) => !parkedSet.has(h.slug));
+  const haltedSet = new Set(halted.map((h) => h.slug));
+  const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
+  const inProgressSet = new Set(inProgress.map((p) => p.slug));
+  const retained = (state.retainedWorktrees ?? []).filter((entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug) && !inProgressSet.has(entry.slug));
+  const retainedSet = new Set(retained.map((entry) => entry.slug));
+  const processedSet = new Set(state.processed.map((p) => p.slug));
+  const blocked = (state.blocked ?? []).filter((entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug) && !inProgressSet.has(entry.slug) && !retainedSet.has(entry.slug) && !processedSet.has(entry.slug));
+  const blockedSet = new Set(blocked.map((entry) => entry.slug));
+  const gated = (state.gated ?? []).filter((g) => g.kind !== 'spec' || (!parkedSet.has(g.slug) && !haltedSet.has(g.slug) && !inProgressSet.has(g.slug) && !retainedSet.has(g.slug) && !processedSet.has(g.slug) && !blockedSet.has(g.slug)));
+  const gatedSet = new Set(gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug));
+  const waiting = (state.waiting ?? []).filter((w) => !parkedSet.has(w.slug) && !haltedSet.has(w.slug) && !inProgressSet.has(w.slug) && !retainedSet.has(w.slug) && !processedSet.has(w.slug) && !blockedSet.has(w.slug) && !gatedSet.has(w.slug));
+  const waitingSet = new Set(waiting.map((w) => w.slug));
+  const eligible = state.eligible.filter((e) => !parkedSet.has(e.slug) && !haltedSet.has(e.slug) && !inProgressSet.has(e.slug) && !retainedSet.has(e.slug) && !processedSet.has(e.slug) && !blockedSet.has(e.slug) && !gatedSet.has(e.slug) && !waitingSet.has(e.slug));
+  const neverStarted = (state.neverStarted ?? []).filter((slug) => !parkedSet.has(slug) && !haltedSet.has(slug) && !retainedSet.has(slug));
+  const processed = state.processed.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug) && !inProgressSet.has(p.slug) && !retainedSet.has(p.slug));
+
+  pushOpeningRule();
+  const attention = [
+    halted.length ? `${halted.length} halted` : undefined,
+    blocked.length ? `${blocked.length} blocked` : undefined,
+    gated.length ? `${gated.length} gated` : undefined,
+    parked.filter((p) => p.annotation === 'orphan' || p.annotation === 'merged-ready').length ? `${parked.filter((p) => p.annotation === 'orphan' || p.annotation === 'merged-ready').length} parked need review` : undefined,
+    retained.filter((p) => p.reason !== 'pr-open-awaiting-main').length ? `${retained.filter((p) => p.reason !== 'pr-open-awaiting-main').length} retained need action` : undefined,
+  ].filter((v): v is string => v !== undefined);
+  if (state.discovery === 'unavailable') attention.push('discovery state unknown');
+  const attentionPrefix = attention.length === 0 ? 'NEEDS YOU: nothing' : `NEEDS YOU: ${attention.length === 1 && attention[0] === 'discovery state unknown' ? 'no known items' : attention.filter((x) => x !== 'discovery state unknown').join(' · ') || 'no known items'}${state.discovery === 'unavailable' ? ' · discovery state unknown' : ''}`;
+  if (!compact || attentionPrefix.length <= budget) pushChrome(attentionPrefix);
+  else {
+    const parts = attentionPrefix.replace('NEEDS YOU: ', '').split(' · ');
+    let line = 'NEEDS YOU: ';
+    for (const part of parts) {
+      const separator = line === 'NEEDS YOU: ' ? '' : ' · ';
+      if (line.length + separator.length + part.length > budget && line !== 'NEEDS YOU: ') {
+        lines.push(line);
+        line = `  ${part}`;
+      } else line += separator + part;
+    }
+    lines.push(line);
+  }
   if (state.buildReviewMetrics) {
     const metrics = state.buildReviewMetrics;
-    lines.push(`BUILD REVIEW: laps-to-pass=${metrics.lapsToPass ?? 'not reached'}; reduced coverage (skipped, not pass)=${metrics.skipped}; cache-hits=${metrics.cacheHits}; infrastructure-failures=${metrics.infrastructureFailures}`);
-    for (const [rubric, rate] of Object.entries(metrics.rubricFailureRates ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
-      lines.push(`  raw ${rubric}: failures=${rate.failures}/${rate.judged}`);
-    }
+    pushChrome(`BUILD REVIEW: laps-to-pass=${metrics.lapsToPass ?? 'not reached'}; reduced coverage (skipped, not pass)=${metrics.skipped}; cache-hits=${metrics.cacheHits}; infrastructure-failures=${metrics.infrastructureFailures}`);
+    for (const [rubric, rate] of Object.entries(metrics.rubricFailureRates ?? {}).sort(([a], [b]) => a.localeCompare(b))) pushChrome(`  raw ${rubric}: failures=${rate.failures}/${rate.judged}`);
     const skipReasons = Object.entries(metrics.skipReasons ?? {});
-    if (skipReasons.length > 0) lines.push(`  skip reasons: ${skipReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`);
+    if (skipReasons.length > 0) pushChrome(`  skip reasons: ${skipReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`);
   }
 
-  // PARKED (FR-6) has ABSOLUTE precedence over every other group: it renders
+  const unknown = (group: string) => pushChrome(`${group}: unknown — discovery did not complete`);
+  pushChrome(`HALTED (${halted.length})`);
+  for (const h of halted) {
+    const heading = `${tierTag(h.tier)}${h.step ? ` @${h.step}` : ''}${activeChildSuffix(h)}`;
+    const text = `reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`;
+    if (compact) slugDetail(h.slug, heading, text); else lines.push(`  • ${h.slug}${heading} — ${text}`);
+    for (const entry of h.inapplicable ?? []) pushChrome(`    inapplicable: ${entry.step} — ${entry.reason}`);
+  }
+  if (state.discovery === 'unavailable') unknown('BLOCKED');
+  else if (blocked.length > 0) { pushChrome(`BLOCKED (${blocked.length})`); for (const entry of blocked) compact ? slugDetail(entry.slug, '', `${entry.reason} — ${entry.remedy}`) : lines.push(`  • ${entry.slug} — ${entry.reason} — ${entry.remedy}`); }
+  if (state.discovery === 'unavailable') unknown('GATED');
+  else if (state.gated !== undefined) { pushChrome(`GATED (${gated.length})`); for (const g of gated) { const text = g.kind === 'spec' ? gatedSpecLine(g).replace(/^  • [^ ]+ — /, '') : gatedRepoLine(g); if (compact && g.kind === 'spec') slugDetail(g.slug, '', text); else pushChrome(g.kind === 'spec' ? gatedSpecLine(g) : gatedRepoLine(g)); } }
+  pushChrome(`IN-PROGRESS (${inProgress.length})`);
+  for (const p of inProgress) {
+    const rest = ` @${p.step}${activeChildSuffix(p)}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`;
+    if (compact) activeRow(p.slug, tierTag(p.tier), rest); else lines.push(`  • ${p.slug}${tierTag(p.tier)}${rest}`);
+    for (const entry of p.inapplicable ?? []) pushChrome(`    inapplicable: ${entry.step} — ${entry.reason}`);
+  }
+  if (state.discovery === 'unavailable') unknown('WAITING');
+  else if (waiting.length > 0) { pushChrome(`WAITING (${waiting.length})`); for (const w of waiting) compact ? activeRow(w.slug, '', ` — ${waitingDetail(w.verdict)}`) : lines.push(`  • ${w.slug} — ${waitingDetail(w.verdict)}`); }
+  if (state.discovery === 'unavailable') unknown('ELIGIBLE');
+  else {
+    pushChrome(`ELIGIBLE (${eligible.length})`);
+    const resolution = priorityResolution ?? state.priorityResolution;
+    for (const e of eligible) compact ? activeRow(e.slug, tierTag(e.tier), resolution?.mode === 'banded' ? bandTag(e.band) : '') : lines.push(`  • ${e.slug}${tierTag(e.tier)}${resolution?.mode === 'banded' ? bandTag(e.band) : ''}`);
+    if (resolution?.mode === 'fallback' && eligible.length > 0) pushChrome('  (priority: chronological fallback)');
+  }
+  const parkedAction = parked.filter((p) => p.annotation === 'orphan' || p.annotation === 'merged-ready');
+  pushChrome(`PARKED (${parked.length})${compact && parkedAction.length ? ` — ${parkedAction.length} need review` : ''}`);
+  for (const entry of compact ? parkedAction : parked) {
+    const reason = entry.provenance === 'auto' ? 'auto-parked' : 'operator-parked';
+    const annotation = entry.annotation === 'orphan' ? ' — orphan — needs manual review' : entry.annotation === 'merged-ready' ? ' — merged — ready to reconcile' : '';
+    const text = `${reason}${entry.reason ? `: ${entry.reason}` : ''}${annotation}; remedy: run conduct daemon unpark for this row`;
+    if (compact) slugDetail(entry.slug, '', text); else lines.push(`  • ${entry.slug} — ${text}`);
+  }
+  if (retained.length > 0) {
+    const retainedAction = retained.filter((p) => p.reason !== 'pr-open-awaiting-main');
+    pushChrome(`RETAINED WORKTREES (${retained.length})${compact && retainedAction.length ? ` — ${retainedAction.length} needs action` : ''}`);
+    for (const entry of compact ? retainedAction : retained) { const text = `reason: ${retainedReason(entry)}${prSuffix(entry.prUrl)}; remedy: ${retainedRemedy(entry)}`; if (compact) slugDetail(entry.slug, '', text); else lines.push(`  • ${entry.slug} — ${text}`); }
+  }
+  if (neverStarted.length > 0) { pushChrome(`NEVER-STARTED (${neverStarted.length})`); if (!compact) for (const slug of neverStarted) lines.push(`  • ${slug} — reason: no pipeline state was ever written; remedy: no operator action applies; feature remains dispatchable`); }
+  if (opts?.includeCompleted ?? compact) { pushChrome(`PROCESSED (${processed.length})`); if (!compact) for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`); }
+  pushClosingRule();
+  return lines.join('\n');
+}
+
+/** Terminal output width: 80 outside a TTY, never narrower than 40. */
+export function resolveRowBudget(input: { isTTY?: boolean; columns?: number }): number {
+  return input.isTTY && typeof input.columns === 'number' ? Math.max(40, input.columns) : 80;
+}
+
+function clipToBudget(text: string, budget: number): string {
+  const normalized = text.replace(/\n+/g, ' ');
+  if (budget <= 0) return '';
+  return normalized.length <= budget ? normalized : `${normalized.slice(0, Math.max(0, budget - 1))}…`;
+}
+/* Legacy renderer retained below only as historical context while this branch is in flight.
   // FIRST, and a parked slug is excluded from HALTED, PROCESSED, IN-PROGRESS,
   // WAITING, and ELIGIBLE below — a slug appears in exactly one group, and if
   // it's parked, that group is PARKED. Sorted alphabetically for stability.
@@ -1194,6 +1324,24 @@ export function renderDashboard(
     }
   }
 
+  const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
+  const inProgressSet = new Set(inProgress.map((p) => p.slug));
+  const blocked = (state.blocked ?? []).filter(
+    (entry) =>
+      !parkedSet.has(entry.slug) &&
+      !haltedSet.has(entry.slug) &&
+      !inProgressSet.has(entry.slug) &&
+      !retainedWorktreeSet.has(entry.slug) &&
+      !processedSlugsSet.has(entry.slug),
+  );
+  const blockedSlugs = new Set(blocked.map((entry) => entry.slug));
+  if (blocked.length > 0) {
+    lines.push(`BLOCKED (${blocked.length})`);
+    for (const entry of blocked) {
+      lines.push(`  • ${entry.slug} — ${entry.reason} — ${entry.remedy}`);
+    }
+  }
+
   // GATED (FR-7/FR-11): specs (and repo-scoped conditions) held back by the
   // OWNERSHIP gate. Precedence HALTED > IN-PROGRESS > RETAINED > GATED >
   // WAITING > ELIGIBLE > PROCESSED — a `kind: 'spec'` slug already excluded upstream from
@@ -1203,14 +1351,16 @@ export function renderDashboard(
   // empty, matching the WAITING empty convention (and the ELIGIBLE
   // discovery-failure fallback, which likewise degrades to an empty list
   // rather than rendering a distinct failure line).
-  const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
+  // BLOCKED outranks this group and every lower-precedence bucket.
   const gated = (state.gated ?? []).filter(
     (g) =>
       g.kind !== 'spec' ||
       (!parkedSet.has(g.slug) &&
         !haltedSet.has(g.slug) &&
+        !inProgressSet.has(g.slug) &&
         !retainedWorktreeSet.has(g.slug) &&
-        !processedSlugsSet.has(g.slug)),
+        !processedSlugsSet.has(g.slug) &&
+        !blockedSlugs.has(g.slug)),
   );
   const gatedSlugs = new Set(
     gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug),
@@ -1227,6 +1377,9 @@ export function renderDashboard(
       !parkedSet.has(w.slug) &&
       !haltedSet.has(w.slug) &&
       !retainedWorktreeSet.has(w.slug) &&
+      !inProgressSet.has(w.slug) &&
+      !processedSlugsSet.has(w.slug) &&
+      !blockedSlugs.has(w.slug) &&
       !gatedSlugs.has(w.slug),
   );
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
@@ -1244,9 +1397,12 @@ export function renderDashboard(
   const eligible = state.eligible.filter(
     (e) =>
       !waitingSlugs.has(e.slug) &&
+      !blockedSlugs.has(e.slug) &&
       !gatedSlugs.has(e.slug) &&
       !parkedSet.has(e.slug) &&
       !haltedSet.has(e.slug) &&
+      !inProgressSet.has(e.slug) &&
+      !processedSlugsSet.has(e.slug) &&
       !retainedWorktreeSet.has(e.slug),
   );
   lines.push(`ELIGIBLE (${eligible.length})`);
@@ -1276,3 +1432,4 @@ export function renderDashboard(
   lines.push('─────────────────────────────────────────────────────────────');
   return lines.join('\n');
 }
+*/
