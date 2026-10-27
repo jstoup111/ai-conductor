@@ -1,4 +1,4 @@
-// Covers: task:9, task:31.1, task:rem-as-built-1-r2
+// Covers: task:2, task:9, task:31.1, task:rem-as-built-1-r2
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -78,7 +78,7 @@ async function expectCursorRefusal(
   // Keeping this assertion at the preflight boundary proves the refusal is
   // terminal rather than an `unavailable` result which a daemon could mishandle.
   await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git, events }))
-    .resolves.toEqual({ kind: 'halted' });
+    .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
   const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
   expect(halt).toContain(cause);
@@ -103,7 +103,7 @@ describe('stack preflight live-HALT gate', () => {
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'operator action required\n');
 
     await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(subject.closed);
     await expect(subject.git(['show', 'feat/daemon-demo:operator.txt'])).rejects.toThrow();
   });
@@ -206,7 +206,7 @@ describe('stack preflight live-HALT gate', () => {
     const subject = await fixture();
     await subject.git(['update-ref', '-d', 'refs/conductor/demo/positions']);
     await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
     // Hash the exact durable positions that the recovery command renders.
     await writeFile(join(subject.repo, 'positions-recovered.json'), '[1,2]');
     const recoveredBlob = (await subject.git(['hash-object', '-w', 'positions-recovered.json'])).stdout.trim();
@@ -270,7 +270,7 @@ describe('stack preflight dispatch boundaries', () => {
       worktree: subject.repo,
       slug: 'demo',
       ...(git ? { git } : {}),
-    }, (line) => log.push(line))).resolves.toEqual({ kind: 'halted' });
+    }, (line) => log.push(line))).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cause);
     expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
