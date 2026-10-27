@@ -471,7 +471,8 @@ describe('DefaultStepRunner', () => {
       }).dispatchInstalledBuildReviewPolicy(
         config.catalog[0], inputs, 'lap-scope-projection', 'S', undefined,
         async () => ({ provider: 'claude', platform: process.platform, status: 'available' }),
-        join(projectDir, '.pipeline'), undefined, durableScope,
+        join(projectDir, '.pipeline'), undefined, durableScope, undefined, undefined,
+        async (policyIdentity) => ({ ...durableScope, policyIdentity }),
       );
       // Covers: task:rem-as-built-6-r2
       const serializedCustomInput = (claudeInvoke.mock.calls[1]![0] as InvokeOptions).prompt
@@ -4717,6 +4718,21 @@ TIER: M`,
       }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         config,
+        providerRuntimes: new ProviderRuntimeSet([{
+          key: 'claude',
+          provider: {
+            lifecycleCapability: { synchronousSpawnPermit: true },
+            nativeSchemaCapability: { nativeOutputSchema: true },
+            invoke: provider.invoke,
+          },
+          lifecycleCapability: { synchronousSpawnPermit: true },
+          nativeSchemaCapability: { nativeOutputSchema: true },
+          policy: CLAUDE_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+        }]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['claude'],
         buildReviewPolicyCatalog: async () => [{
           semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
           canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
@@ -4759,7 +4775,7 @@ TIER: M`,
     });
 
     // Covers: task:rem-prd-audit-6-r1
-    it('uses a full version-changed lap when an installed custom policy bundle changes', async () => {
+    it('uses the candidate-resolved custom policy identity for a version-changed lap', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {
@@ -4842,8 +4858,18 @@ TIER: M`,
       vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
         _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
         _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, reviewScope: unknown,
+        _child: unknown, _onResolvedReviewScope: unknown,
+        resolveReviewScope: (policyIdentity: string) => Promise<unknown>,
       ) => {
-        observedScope = reviewScope;
+        expect(reviewScope).toBeUndefined();
+        const currentPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+          contractVersion: entry.contract.output.version,
+          projectionVersion: entry.contract.projection.version,
+          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          effectiveBundleDigest: currentBundleDigest,
+          provider: 'claude', model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        });
+        observedScope = await resolveReviewScope(currentPolicyIdentity);
         return {
           id: entry.id, success: true,
           member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
@@ -4856,12 +4882,12 @@ TIER: M`,
         },
       }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
 
-      expect(capture).toHaveBeenCalledOnce();
+      expect(capture).not.toHaveBeenCalled();
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
     });
 
     // Covers: task:rem-as-built-6-r6
-    it('uses a full version-changed lap when preliminary custom policy identity is unavailable', async () => {
+    it('does not prefetch a custom policy identity before candidate dispatch', async () => {
       const provider = createMockProvider();
       const config = resolveBuildReviewConfig({
         build_review: {
@@ -4934,8 +4960,18 @@ TIER: M`,
       vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
         _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
         _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, reviewScope: unknown,
+        _child: unknown, _onResolvedReviewScope: unknown,
+        resolveReviewScope: (policyIdentity: string) => Promise<unknown>,
       ) => {
-        observedScope = reviewScope;
+        expect(reviewScope).toBeUndefined();
+        const candidatePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+          contractVersion: entry.contract.output.version,
+          projectionVersion: entry.contract.projection.version,
+          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          effectiveBundleDigest: `sha256:${'b'.repeat(64)}`,
+          provider: 'claude', model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        });
+        observedScope = await resolveReviewScope(candidatePolicyIdentity);
         return {
           id: entry.id, success: true,
           member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
@@ -4948,7 +4984,7 @@ TIER: M`,
         },
       }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
 
-      expect(catalog).toHaveBeenCalledOnce();
+      expect(catalog).not.toHaveBeenCalled();
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
     });
 
@@ -5051,8 +5087,11 @@ TIER: M`,
       vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
         _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
         _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, scope: unknown,
+        _child: unknown, _onResolvedReviewScope: unknown,
+        resolveReviewScope: (policyIdentity: string) => Promise<unknown>,
       ) => {
-        nextScope = scope;
+        expect(scope).toBeUndefined();
+        nextScope = await resolveReviewScope(actualIdentity);
         return { id: entry.id, success: true, member: { result: { kind: 'scope-empty' as const, rubric: entry.id } } };
       });
       await (runner as any).runRubricBuildReviewInner({
