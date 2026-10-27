@@ -216,6 +216,35 @@ describe('stack preflight stop reasons', () => {
     expect(loopHalts).toEqual([]);
   });
 
+  it.each([
+    ['navigate-host', { kind: 'navigate-host', roundId: 'round-1', host: 1 }],
+    ['navigate-leaf-to-build', { kind: 'navigate-leaf-to-build', roundId: 'round-1', host: 2 }],
+  ] as const)('does not create a HALT or emit loop_halt for %s', async (_kind, reconciled) => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event.type));
+
+    await expect(runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => reconciled as never,
+    })).resolves.toEqual(reconciled);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).toEqual([]);
+  });
+
+  it('does not create a HALT or emit loop_halt for no-stack', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-preflight-no-stack-'));
+    repositories.push(root);
+    const events = new ConductorEventEmitter();
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event.type));
+
+    await expect(runStackPreflight({ worktree: root, slug: 'demo', events })).resolves.toEqual({ kind: 'no-stack' });
+    await expect(readFile(join(root, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).toEqual([]);
+  });
+
   it('writes the unavailable round-reconciliation detail and one durable loop halt', async () => {
     const subject = await fixture();
     const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
