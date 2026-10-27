@@ -505,7 +505,7 @@ function scopeRunner(dir: string, events?: ConductorEventEmitter) {
     events,
     buildReviewEffectiveResolver: async (_root, aggregate, deps) => ({
       ok: true as const,
-      feature: undefined,
+      feature: { version: 'v1', repository: dir, feature: 'scope-runner' },
       effective: deriveEffectiveBuildReviewVerdict(
         aggregate,
         new Set(),
@@ -517,11 +517,11 @@ function scopeRunner(dir: string, events?: ConductorEventEmitter) {
       )!,
     }),
   });
-  vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
+  vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
     engineStamp: 'scope-engine',
     skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:scope-policy' } },
   });
-  vi.spyOn(runner as never, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: unknown, projection: any) => ({
+  vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: unknown, projection: any) => ({
     kind: 'judged',
     rubric: 'implementationQuality',
     lapId: projection.lapId,
@@ -568,7 +568,7 @@ describe('build-review lap scope runner', () => {
       };
       const filesystem = {
         readFile: (path: string) => readFile(path, 'utf8'),
-        mkdir: (path: string) => mkdir(path, { recursive: true }),
+        mkdir: async (path: string) => { await mkdir(path, { recursive: true }); },
         writeFile,
         rename,
       };
@@ -627,7 +627,7 @@ describe('build-review lap scope runner', () => {
           path: 'test/feature.test.ts', contentHash: 'sha256:test-title', display: 'preserves feature behavior', startLine: 12, endLine: 12,
         } },
       };
-      const filesystem = { readFile: (path: string) => readFile(path, 'utf8'), mkdir: (path: string) => mkdir(path, { recursive: true }), writeFile, rename };
+      const filesystem = { readFile: (path: string) => readFile(path, 'utf8'), mkdir: async (path: string) => { await mkdir(path, { recursive: true }); }, writeFile, rename };
       await writeBuildReviewBranchArtifact(root, {
         rubric: 'testQuality', lapId: l1, snapshotDigest: 'sha256:region-l1',
         result: { kind: 'judged', rubric: 'testQuality', lapId: l1, snapshotDigest: 'sha256:region-l1', contractVersion: 'v4', findings: [], verdict: 'PASS' },
@@ -681,11 +681,11 @@ describe('build-review lap scope runner', () => {
           effective: deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], {}, new Set(), {}, deps.scopes as never)!,
         }),
       });
-      vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
         engineStamp: 'engine', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:skill' } },
       });
       const calls: unknown[] = [];
-      vi.spyOn(runner as never, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: any, projection: any) => {
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: any, projection: any) => {
         calls.push(projection);
         const hunk = projection.changedFiles.find((file: any) => file.path === 'src/feature.ts').hunks[0];
         const repairHunk = projection.changedFiles.find((file: any) => file.path === 'src/repair.ts').hunks[0];
@@ -727,7 +727,7 @@ describe('build-review lap scope runner', () => {
       const identity = canonicalizeBuildReviewFindingIdentity(finding)!;
       await expect(new BuildReviewDispositionStore(projectRoot).append({
         feature: { version: 'v1', repository: await realpath(main), feature: 'feature' }, finding: identity,
-        sourceLapId: 'lap-head-l1', summary: 'accepted', rationale: 'operator decision', operator: 'test',
+        sourceLapId: parseBuildReviewLapId('lap-head-l1')!, summary: 'accepted', rationale: 'operator decision', operator: 'test',
       })).resolves.toMatchObject({ ok: true });
 
       await expect(run(inputs('head-l2'))).resolves.toMatchObject({ success: true });
@@ -810,9 +810,9 @@ describe('build-review lap scope runner', () => {
       const runner = new DefaultStepRunner(provider, 'rejected-scope', projectRoot, {
         buildReviewEffectiveResolver: async (_root, aggregate, deps) => ({ ok: true, feature: { version: 'v1', repository: await realpath(main), feature: 'feature' }, effective: deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], {}, new Set(), {}, deps.scopes as never)! }),
       });
-      vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'engine', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:skill' } } });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'engine', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:skill' } } });
       const calls: any[] = [];
-      vi.spyOn(runner as never, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: any, projection: any) => {
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (_branch: any, projection: any) => {
         calls.push(projection);
         const h1 = projection.changedFiles.find((file: any) => file.path === 'src/feature.ts').hunks[0];
         const h2 = projection.changedFiles.find((file: any) => file.path === 'src/repair.ts').hunks[0];
@@ -898,7 +898,9 @@ describe('build_review runner scope decisions', () => {
     const dir = await mkdtemp(join(tmpdir(), 'build-review-runner-scope-'));
     const events = new ConductorEventEmitter();
     const scopes: Array<Extract<ConductorEvent, { type: 'build_review_review_scope' }>> = [];
-    events.on('build_review_review_scope', (event) => { scopes.push(event); });
+    events.on('build_review_review_scope', (event) => {
+      if (event.type === 'build_review_review_scope') scopes.push(event);
+    });
     try {
       const runner = scopeRunner(dir, events);
       await expect(runScopeLap(runner, scopeInput('scope-l1'))).resolves.toMatchObject({ success: true });

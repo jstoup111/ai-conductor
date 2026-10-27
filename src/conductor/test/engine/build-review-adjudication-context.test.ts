@@ -1,5 +1,5 @@
 // Covers: task:3, task:4, task:5, task:14, task:23, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -188,7 +188,8 @@ describe('build-review adjudication context', () => {
     const root = await mkdtemp(join(tmpdir(), 'build-review-prior-digests-'));
     try {
       const filesystem = {
-        mkdir: (path: string) => mkdir(path, { recursive: true }),
+        readFile: (path: string) => readFile(path, 'utf8'),
+        mkdir: async (path: string) => { await mkdir(path, { recursive: true }); },
         writeFile,
         rename,
       };

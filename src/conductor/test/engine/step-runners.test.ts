@@ -4757,15 +4757,11 @@ TIER: M`,
       vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(
         new Set([`${entry.id}:${judged.findings[0]!.identity.id}`]),
       );
-      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (
-        _entry: unknown, _inputs: unknown, _lapId: unknown, _tier: unknown, _lapGate: unknown,
-        _capability: unknown, _pipelineDir: unknown, _executionContext: unknown, _scope: unknown,
-        _child: unknown, _onResolved: unknown,
-        resolveScope: (policyIdentity: string) => Promise<unknown>,
-      ) => {
-        await resolveScope(policyIdentity);
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation((async (...args: unknown[]) => {
+        const resolveScope = args[11] as ((policyIdentity: string) => Promise<unknown>) | undefined;
+        await resolveScope?.(policyIdentity);
         return { id: entry.id, success: true, member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } } };
-      });
+      }) as any);
 
       await expect((runner as any).runRubricBuildReviewInner({
         sourceSnapshot: {
