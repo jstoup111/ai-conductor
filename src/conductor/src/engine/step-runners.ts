@@ -3433,18 +3433,10 @@ export class DefaultStepRunner implements StepRunner {
           }];
         })
         : [];
-    for (const entry of customEntries) {
-      // Scope identity is durable state. Capture the installed policy before
-      // selecting a scope so a changed custom bundle forces a fresh full lap,
-      // including when that lap would otherwise be scope-empty.
-      const effectiveBundleDigest = await this.resolveBuildReviewCustomPolicyBundleDigest(entry, lapId);
-      const policyIdentity = buildReviewPolicyIdentity(entry.id, {
-        contractVersion: entry.contract.output.version,
-        projectionVersion: entry.contract.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
-        effectiveBundleDigest, provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
-        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
-      });
+    const resolveCustomReviewScope = async (
+      entry: ResolvedBuildReviewCustomCatalogEntry,
+      policyIdentity: string,
+    ): Promise<import('./build-review-artifacts.js').BuildReviewReviewScope | undefined> => {
       const artifacts = await priorArtifactsFor(entry.id);
       const sources = artifacts.flatMap((artifact) => customJudgedSourcesFor(entry.id, artifact));
       const settled = settledBuildReviewHunks({
@@ -3470,7 +3462,8 @@ export class DefaultStepRunner implements StepRunner {
         customReviewScopes[entry.id] = decision;
         await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: settled.length });
       }
-    }
+      return decision;
+    };
     const builtinEntries = config.catalog.filter((entry) => entry.kind === 'builtin');
     // Consume startup observations first. When a provider was not among the
     // custom-entry providers probed at startup (for example a built-in peer's
@@ -3636,8 +3629,9 @@ export class DefaultStepRunner implements StepRunner {
           try {
             return await this.dispatchInstalledBuildReviewPolicy(
               entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir,
-              executionContext, customReviewScopes[entry.id], child,
+              executionContext, undefined, child,
               (scope) => { customReviewScopes[entry.id] = scope; },
+              (policyIdentity) => resolveCustomReviewScope(entry, policyIdentity),
             );
           } finally {
             lapGate?.arrive(entry.id);
@@ -4051,41 +4045,6 @@ export class DefaultStepRunner implements StepRunner {
     };
   }
 
-  /** Resolve the configured custom policy bundle for durable scope identity. */
-  private async resolveBuildReviewCustomPolicyBundleDigest(
-    entry: ResolvedBuildReviewCustomCatalogEntry,
-    lapId: BuildReviewLapId,
-  ): Promise<string> {
-    const provider = Array.isArray(entry.policy.llm_provider)
-      ? entry.policy.llm_provider[0]
-      : entry.policy.llm_provider;
-    try {
-      const catalog = await this.buildReviewPolicyCatalog({
-        provider,
-        entry,
-        skill: entry.skill,
-      });
-      const resolved = resolveInstalledReviewPolicyCatalog({
-        skill: entry.skill,
-        ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }),
-      }, catalog);
-      if (resolved.kind === 'failure') return `unavailable:${lapId}`;
-      const policy = {
-        ...resolved.policy,
-        declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])],
-      };
-      return (await this.buildReviewPolicyCapture(policy, {
-        materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
-      })).digest;
-    } catch {
-      // Candidate dispatch owns the diagnostic and bounded failure path. Scope
-      // selection fails conservatively toward a full lap meanwhile. The lap
-      // identity preserves same-head replay while ensuring uncertainty cannot
-      // reuse an earlier lap's policy identity.
-      return `unavailable:${lapId}`;
-    }
-  }
-
   /**
    * Resolve, capture, and deliver one installed policy from the environment
    * prepared for its actual provider candidate.  The operation deliberately
@@ -4104,6 +4063,7 @@ export class DefaultStepRunner implements StepRunner {
     reviewScope?: import('./build-review-artifacts.js').BuildReviewReviewScope,
     child?: import('./child-context.js').ChildId,
     onResolvedReviewScope?: (reviewScope: import('./build-review-artifacts.js').BuildReviewReviewScope) => void,
+    resolveReviewScope?: (policyIdentity: string) => Promise<import('./build-review-artifacts.js').BuildReviewReviewScope | undefined>,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -4115,7 +4075,7 @@ export class DefaultStepRunner implements StepRunner {
       declaration,
       result: { kind: 'infrastructure-failure', rubric: entry.id, reason, detail },
     });
-    if (reviewScope?.mode === 'delta' && reviewScope.deltaHunks.length === 0) {
+    if (resolveReviewScope === undefined && reviewScope?.mode === 'delta' && reviewScope.deltaHunks.length === 0) {
       const member: BuildReviewCustomArtifactMember = {
         declaration,
         result: { kind: 'scope-empty', rubric: entry.id },
@@ -4362,47 +4322,42 @@ export class DefaultStepRunner implements StepRunner {
           context.onTeardown(() => sealingGate.sealPolicyPackage(policy.packageRoot));
         }
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
-        const actualPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+        const policyIdentityFor = (model: string) => buildReviewPolicyIdentity(entry.id, {
           contractVersion: entry.contract.output.version,
           projectionVersion: entry.contract.projection.version,
           declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
           effectiveBundleDigest: bundle.digest,
           provider: context.candidate.providerKey,
-          model: context.candidate.model,
+          model,
           effort: context.candidate.effort ?? 'default',
           engineStamp: candidateEngine.engineStamp,
         });
-        if (reviewScope !== undefined && reviewScope.policyIdentity !== actualPolicyIdentity) {
-          const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff).flatMap((file) =>
-            file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
-          );
-          reviewScope = {
-            ...reviewScope,
-            mode: 'full',
-            // D3 orders version changes before open-source-unmapped, but
-            // leaves earlier full-scope reasons (unreadable, first lap, base
-            // move) intact.
-            reason: reviewScope.mode === 'delta' || reviewScope.reason === 'open-source-unmapped'
-              ? 'version-changed'
-              : reviewScope.reason,
-            policyIdentity: actualPolicyIdentity,
-            reviewedHunks: fullHunks,
-            deltaHunks: fullHunks,
-            outOfDeltaSourceIds: [],
-          };
-          onResolvedReviewScope?.(reviewScope);
+        const resolveScopeForModel = async (model: string) => {
+          const actualPolicyIdentity = policyIdentityFor(model);
+          if (resolveReviewScope !== undefined) {
+            reviewScope = await resolveReviewScope(actualPolicyIdentity);
+          } else if (reviewScope !== undefined && reviewScope.policyIdentity !== actualPolicyIdentity) {
+            const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff).flatMap((file) =>
+              file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+            );
+            reviewScope = {
+              ...reviewScope,
+              mode: 'full',
+              // D3 orders version changes before open-source-unmapped, but
+              // leaves earlier full-scope reasons (unreadable, first lap, base
+              // move) intact.
+              reason: reviewScope.mode === 'delta' || reviewScope.reason === 'open-source-unmapped'
+                ? 'version-changed'
+                : reviewScope.reason,
+              policyIdentity: actualPolicyIdentity,
+              reviewedHunks: fullHunks,
+              deltaHunks: fullHunks,
+              outOfDeltaSourceIds: [],
+            };
+          }
+          if (reviewScope !== undefined) onResolvedReviewScope?.(reviewScope);
+          return reviewScope;
         }
-        // The prepared candidate owns the actual bundle and provider identity.
-        // Build its projection only after that capture has reconciled scope.
-        const customReviewerScope = projectBuildReviewCustomReviewerScope(reviewScope);
-        const projection = entry.contract.projection.build({
-          contentDigest: inputs.sourceSnapshot.contentDigest,
-          mergeBase: inputs.sourceSnapshot.mergeBase,
-          headSha: inputs.sourceSnapshot.headSha,
-          changes: inputs.sourceSnapshot.sourceChanges ?? [],
-          ...(customReviewerScope === undefined ? {} : { reviewScope: customReviewerScope }),
-          ...(source === undefined ? {} : { view: source }),
-        });
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
           candidate: { provider: context.candidate.providerKey, model: context.candidate.model, effort: context.candidate.effort ?? 'default' },
@@ -4440,40 +4395,54 @@ export class DefaultStepRunner implements StepRunner {
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         let cacheHit = false;
+        let scopeEmpty = false;
         // D5.3: no reviewer starts until every lap member's baseline exists.
         await lapGate?.waitForBaseline(entry.id);
         const dispatchWithinLap = <T>(run: () => Promise<T>): Promise<T> => lapGate === undefined ? run() : lapGate.withReviewerSlot(run);
-        const customPrompt = `${renderBuildReviewPolicyContract({
-          bundle, question: entry.question, contract: entry.contract,
-          scope: renderBuildReviewFrozenInputScope({
-            ...projection,
-          }),
-        })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`;
-        // Keep the exact bytes delivered to a custom reviewer beside its lap
-        // artifact.  This is intentionally best-effort: prompt retention is
-        // diagnostic evidence, never a reason to skip a judgement.
-        const retainedPrompt = await (async () => {
-          const path = join(pipelineDir, 'build-review', lapId, `${entry.id}.prompt.txt`);
-          try {
-            await mkdir(dirname(path), { recursive: true });
-            await writeFile(path, customPrompt, 'utf8');
-            return {
-              path: relative(this.projectDir, path).split('\\').join('/'),
-              sha256: `sha256:${createHash('sha256').update(customPrompt, 'utf8').digest('hex')}`,
-            };
-          } catch {
-            return undefined;
-          }
-        })();
+        let retainedPrompt: { readonly path: string; readonly sha256: string } | undefined;
         const dispatched = await dispatchWithinLap(() => dispatchRubricContract({
           descriptor: entry.contract,
           options: {
-            prompt: customPrompt,
+            prompt: 'Resolve the custom review scope for the selected model rung.',
             cwd: source?.headPath ?? this.projectDir,
             readOnlyReview: true,
             reviewDispatch: true,
           },
           invoke: (options) => context.invoke(options, async (rung, invoke) => {
+          const resolvedReviewScope = await resolveScopeForModel(rung.model);
+          const customReviewerScope = projectBuildReviewCustomReviewerScope(resolvedReviewScope);
+          const projection = entry.contract.projection.build({
+            contentDigest: inputs.sourceSnapshot.contentDigest,
+            mergeBase: inputs.sourceSnapshot.mergeBase,
+            headSha: inputs.sourceSnapshot.headSha,
+            changes: inputs.sourceSnapshot.sourceChanges ?? [],
+            ...(customReviewerScope === undefined ? {} : { reviewScope: customReviewerScope }),
+            ...(source === undefined ? {} : { view: source }),
+          });
+          const customPrompt = `${renderBuildReviewPolicyContract({
+            bundle, question: entry.question, contract: entry.contract,
+            scope: renderBuildReviewFrozenInputScope({ ...projection }),
+          })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`;
+          // Keep the exact bytes delivered to the actual rung beside its lap
+          // artifact. Prompt retention is diagnostic evidence, never a reason
+          // to skip a judgement.
+          retainedPrompt = await (async () => {
+            const path = join(pipelineDir, 'build-review', lapId, `${entry.id}.prompt.txt`);
+            try {
+              await mkdir(dirname(path), { recursive: true });
+              await writeFile(path, customPrompt, 'utf8');
+              return {
+                path: relative(this.projectDir, path).split('\\').join('/'),
+                sha256: `sha256:${createHash('sha256').update(customPrompt, 'utf8').digest('hex')}`,
+              };
+            } catch {
+              return undefined;
+            }
+          })();
+          if (resolvedReviewScope?.mode === 'delta' && resolvedReviewScope.deltaHunks.length === 0) {
+            scopeEmpty = true;
+            return cachedRubricInvocation({ kind: 'custom-findings', version: 'v2', findings: [] });
+          }
           const semanticIdentity = semanticIdentityFor(rung.model);
           const cached = await readBuildReviewCacheEntry(this.projectDir, entry.id, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename }, semanticIdentity);
           const cache = classifyBuildReviewCacheLookup(cached, {
@@ -4493,10 +4462,14 @@ export class DefaultStepRunner implements StepRunner {
             } });
             return cachedRubricInvocation(cache.hit.result);
           }
-          return invoke();
+          return invoke({ prompt: customPrompt });
           }),
         }));
         const invoked = dispatched.invocation;
+        if (scopeEmpty) return { kind: 'judged' as const, result: {
+          ...invoked,
+          output: JSON.stringify({ declaration, result: { kind: 'scope-empty', rubric: entry.id } }),
+        } };
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success && dispatched.kind !== 'root-rejection') {
           coverageFailure = true;

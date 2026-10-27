@@ -10,6 +10,9 @@ import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coor
 import { settledBuildReviewHunks } from '../../src/engine/build-review-review-frontier.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { ConductorEvent } from '../../src/types/events.js';
@@ -255,5 +258,108 @@ describe('build_review lap scope runner', () => {
     expect((await artifact('9'.repeat(40))).reviewScope).toMatchObject({
       mode: 'full', reason: 'first-lap', sequence: 1,
     });
+  });
+
+  it('records the fallback judge identity and fully re-reviews when the configured candidate would otherwise settle the lap', async () => {
+    const rubric = 'portable';
+    const candidateModel = 'candidate-a';
+    const fallbackModel = 'fallback-b';
+    const policyRoot = join(projectDir, 'policy');
+    const source = {
+      identity: { snapshotDigest: `sha256:${'e'.repeat(64)}`, contentDigest: `sha256:${'f'.repeat(64)}`, mergeBase: 'a'.repeat(40), headSha: 'ignored' },
+      baselinePath: join(projectDir, 'baseline'),
+      headPath: join(projectDir, 'head'),
+    };
+    await Promise.all([mkdir(policyRoot, { recursive: true }), mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    let candidateUnavailable = true;
+    const invoke = vi.fn(async (options: { model?: string }) => options.model === candidateModel && candidateUnavailable
+      ? (candidateUnavailable = false, { success: false, exitCode: 1, modelUnavailable: true })
+      : {
+          success: true, exitCode: 0, output: 'fixture judgment',
+          finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
+        });
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const customConfig = resolveBuildReviewConfig({
+      build_review: {
+        enabled: true,
+        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        custom_rubrics: {
+          [rubric]: {
+            enabled: true, skill: 'portable-policy', question: 'Review the fixture.', source: 'project',
+            llm_provider: 'claude', model: candidateModel, model_fallback_ladder: [candidateModel, fallbackModel],
+          },
+        },
+      },
+    } as HarnessConfig, CLAUDE_MODEL_POLICY);
+    const availability = new ModelAvailability([candidateModel, fallbackModel]);
+    const customRunner = new DefaultStepRunner(provider, 'scope-runner', projectDir, {
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      events: emitter,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY, builtIn: true,
+        availability,
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      buildReviewPolicyCatalog: async ({ skill }) => [{
+        semanticName: skill, source: 'project', installationOrigin: policyRoot,
+        canonicalSkillPath: join(policyRoot, 'SKILL.md'), packageRoot: policyRoot,
+        declaredDependencies: [], availability: 'available' as const,
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: policyRoot, definitionPath: join(policyRoot, 'SKILL.md'),
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }],
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256:${'c'.repeat(64)}`,
+      }),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: projectDir, feature: 'scope-runner' },
+        effective: {
+          rawVerdict: 'PASS' as const, verdict: 'PASS' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+          skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          uncoveredScopeIncompleteRubrics: [],
+        },
+      }),
+    });
+    vi.spyOn(customRunner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity as never);
+    vi.spyOn(customRunner as never, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set());
+    vi.spyOn(customRunner as never, 'liveBuildReviewActSourceIds').mockResolvedValue({
+      unappliedLiveSourceIds: new Set(), appliedLiveSourceIds: new Set(),
+    });
+    const runCustom = async (headSha: string) => {
+      const result = await (customRunner as never as {
+        runRubricBuildReviewInner: (...args: unknown[]) => Promise<unknown>;
+      }).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: `sha256:${headSha}`, contentDigest: `sha256:${'f'.repeat(64)}`, mergeBase: 'a'.repeat(40), headSha, diff: DIFF,
+          sourceChanges: [],
+        },
+        sourceMaterialization: {
+          source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {},
+        },
+      }, customConfig, 'M', 'plan.md');
+      expect(result).toMatchObject({ success: true });
+    };
+    const scopeFor = async (headSha: string) => JSON.parse(await readFile(
+      join(projectDir, '.pipeline', 'build-review', `lap-${headSha}`, `${rubric}.json`), 'utf8',
+    )).reviewScope;
+
+    const firstHead = 'c'.repeat(40);
+    const secondHead = 'd'.repeat(40);
+    await runCustom(firstHead);
+    availability.dead.clear();
+    await runCustom(secondHead);
+
+    expect(await scopeFor(firstHead)).toMatchObject({ mode: 'full', policyIdentity: expect.any(String) });
+    expect(await scopeFor(secondHead)).toMatchObject({ mode: 'full', reason: 'version-changed' });
+    expect((await scopeFor(firstHead)).policyIdentity).not.toBe((await scopeFor(secondHead)).policyIdentity);
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([candidateModel, fallbackModel, candidateModel]);
   });
 });
