@@ -1,6 +1,6 @@
 import { acquireFeatureDispatchLease, type FeatureDispatchLease, type FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
 import { resolveMainRepoRoot } from './daemon-park-cli.js';
-import { hasDurableChildState } from './slice-topology.js';
+import { hasDurableChildState } from './child-cursor.js';
 import { slugify } from './worktree.js';
 
 export interface InteractiveConductorRunLeaseDependencies {
