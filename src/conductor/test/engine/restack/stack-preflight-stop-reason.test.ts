@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4
+// Covers: task:2, task:3, task:4, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,7 @@ import { recoverRestackJournal } from '../../../src/engine/restack/restack-recov
 import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
 import { reconcileReceiptLedger } from '../../../src/engine/routing/round-receipt.js';
 import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-queue.js';
+import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -47,6 +48,10 @@ vi.mock('../../../src/engine/restack/restack-executor.js', async (importOriginal
 vi.mock('../../../src/engine/restack/restack-recovery.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-recovery.js')>();
   return { ...actual, recoverRestackJournal: vi.fn(actual.recoverRestackJournal) };
+});
+vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/routed-exit.js')>();
+  return { ...actual, requestRoutedExit: vi.fn(actual.requestRoutedExit) };
 });
 
 const execFile = promisify(execFileCallback);
@@ -359,5 +364,78 @@ describe('stack preflight stop reasons', () => {
       worktree: subject.repo, slug: 'demo', events, baseRefreshDue: true, git: makeGitRunner(subject.repo),
     }));
     expect(readRestackJournal).toHaveBeenCalled();
+  });
+
+  it('writes a markerless routed-exit refusal detail to the HALT and loop halt', async () => {
+    const subject = await fixture();
+    vi.mocked(requestRoutedExit).mockResolvedValueOnce({
+      kind: 'halted', detail: 'routed exit host 2: leaf compare-and-swap cas-failed',
+    });
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({ kind: 'resume-exit', roundId: 'round-1' as never, host: 2 as never }),
+    }));
+
+    expect(result).toEqual({ kind: 'halted', detail: 'routed exit host 2: leaf compare-and-swap cas-failed' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^routed exit host 2: leaf compare-and-swap cas-failed/);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
+      expect.objectContaining({ reason: 'routed exit host 2: leaf compare-and-swap cas-failed' }),
+    ]);
+  });
+
+  it.each([
+    ['routed exit', 'stack preflight: routed exit refused', async () => {
+      const subject = await fixture();
+      vi.mocked(requestRoutedExit).mockResolvedValueOnce({ kind: 'halted', detail: '' });
+      return { subject, options: { reconcileRounds: async () => ({ kind: 'resume-exit' as const, roundId: 'round-1' as never, host: 2 as never }) } };
+    }],
+    ['round reconciliation', 'stack preflight: round reconciliation refused', async () => ({
+      subject: await fixture(), options: { reconcileRounds: async () => ({ kind: 'unavailable' as const, detail: '' }) },
+    })],
+    ['feature-repair restack', 'stack preflight: feature-repair restack refused', async () => {
+      const subject = await fixture();
+      await appendBaseRefreshRepair(subject);
+      vi.mocked(runRestack).mockResolvedValueOnce({ kind: 'unavailable', detail: '' });
+      return { subject, options: {} };
+    }],
+    ['base-refresh restack', 'stack preflight: base-refresh restack refused', async () => {
+      const subject = await fixture();
+      await appendBaseRefreshRepair(subject);
+      const actualJournal = await vi.importActual<typeof import('../../../src/engine/restack/restack-journal.js')>(
+        '../../../src/engine/restack/restack-journal.js',
+      );
+      let featureRepairApplied = false;
+      vi.mocked(readRestackJournal).mockImplementation(async (...args) => featureRepairApplied
+        ? {
+            kind: 'journal',
+            slug: 'demo',
+            blob: 'a'.repeat(40),
+            journal: { state: 'applied', followOnCause: 'base-refresh' },
+          } as never
+        : actualJournal.readRestackJournal(...args));
+      vi.mocked(runRestack).mockImplementation(async (input) => {
+        if (input.cause === 'feature-repair') {
+          featureRepairApplied = true;
+          return { kind: 'applied', opId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as never };
+        }
+        return { kind: 'unavailable', detail: '' };
+      });
+      return { subject, options: { baseRefreshDue: true } };
+    }],
+  ])('uses a non-blank fallback when %s forwards an empty detail', async (_stage, fallback, arrange) => {
+    const { subject, options } = await arrange();
+    const { records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo), ...options,
+    }));
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`^${fallback}`));
+    expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
+      expect.objectContaining({ reason: fallback }),
+    ]);
   });
 });

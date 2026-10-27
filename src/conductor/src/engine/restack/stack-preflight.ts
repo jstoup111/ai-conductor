@@ -91,6 +91,10 @@ async function liveHaltExists(worktree: string): Promise<boolean> {
   return access(join(worktree, HALT_MARKER)).then(() => true).catch(() => false);
 }
 
+function stageDetail(stage: string, detail: string): string {
+  return detail.trim() || `stack preflight: ${stage} refused`;
+}
+
 /**
  * Make the durable stack coherent before an entry point judges the active
  * child.  The journal is always probed first, even for a flat feature: an
@@ -163,7 +167,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       return { kind: 'clear' };
     }
     const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
-    if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: reconciled.detail };
+    if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
     if (reconciled.kind === 'resume-exit') {
       const exited = await requestRoutedExit({
         worktree: options.worktree,
@@ -178,7 +182,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       });
       return exited.kind === 'restacked' || exited.kind === 'no-commit-done'
         ? { kind: 'repaired' }
-        : { kind: 'halted', detail: 'routed exit halted' };
+        : { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
     }
     // Queue admission is marker-first and happens before any leaf return.
     // A closed audit round may therefore yield to its lowest invalidated child.
@@ -251,7 +255,9 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   });
   if (repair.kind !== 'applied') {
     if (baseRefreshDue) await deferredBaseRefresh(options.events);
-    return repair.kind === 'unavailable' ? repair : { kind: 'halted', detail: 'feature-repair restack halted' };
+    return repair.kind === 'unavailable'
+      ? { kind: 'unavailable', detail: stageDetail('feature-repair restack', repair.detail) }
+      : { kind: 'halted', detail: 'feature-repair restack halted' };
   }
   if (!baseRefreshDue) {
     if (options.baseRefreshDue) await options.consumeRekick?.();
@@ -295,7 +301,9 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   });
   if (followOn.kind !== 'applied') {
     await deferredBaseRefresh(options.events);
-    return followOn.kind === 'unavailable' ? followOn : { kind: 'halted', detail: 'base-refresh restack halted' };
+    return followOn.kind === 'unavailable'
+      ? { kind: 'unavailable', detail: stageDetail('base-refresh restack', followOn.detail) }
+      : { kind: 'halted', detail: 'base-refresh restack halted' };
   }
   return { kind: 'repaired' };
 }
