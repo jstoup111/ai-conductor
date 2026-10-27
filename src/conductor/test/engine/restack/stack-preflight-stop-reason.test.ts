@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { journalRefFor, readRestackJournal, writeRestackJournalBlob } from '../../../src/engine/restack/restack-journal.js';
+import type { RestackOpId } from '../../../src/engine/restack/restack-types.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
@@ -148,7 +149,7 @@ async function leaveLiveRestackJournal(subject: Awaited<ReturnType<typeof fixtur
   const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
   if (processStartTime === undefined) throw new Error('could not read test process start time');
   const blob = await writeRestackJournalBlob(subject.repo, {
-    opId: 'test-live-owner',
+    opId: 'test-live-owner' as RestackOpId,
     cause: 'base-refresh',
     committer: { name: 'Test', email: 'test@example.test', date: '0 +0000' },
     dirtyPaths: [],
@@ -247,8 +248,8 @@ describe('stack preflight stop reasons', () => {
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), seeded);
     const events = new ConductorEventEmitter();
     const emitted: string[] = [];
-    events.on('loop_halt', (event) => emitted.push(event.type));
-    events.on('restack_refused', (event) => emitted.push(event.type));
+    events.on('loop_halt', (event) => { emitted.push(event.type); });
+    events.on('restack_refused', (event) => { emitted.push(event.type); });
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
@@ -287,7 +288,7 @@ describe('stack preflight stop reasons', () => {
     const { subject, options } = await arrange();
     const events = new ConductorEventEmitter();
     const loopHalts: string[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event.type));
+    events.on('loop_halt', (event) => { loopHalts.push(event.type); });
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo), ...options,
@@ -303,7 +304,7 @@ describe('stack preflight stop reasons', () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();
     const loopHalts: string[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event.type));
+    events.on('loop_halt', (event) => { loopHalts.push(event.type); });
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
@@ -318,7 +319,7 @@ describe('stack preflight stop reasons', () => {
     repositories.push(root);
     const events = new ConductorEventEmitter();
     const loopHalts: string[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event.type));
+    events.on('loop_halt', (event) => { loopHalts.push(event.type); });
 
     await expect(runStackPreflight({ worktree: root, slug: 'demo', events })).resolves.toEqual({ kind: 'no-stack' });
     await expect(readFile(join(root, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -336,7 +337,7 @@ describe('stack preflight stop reasons', () => {
       .mockResolvedValueOnce({ kind: 'none' });
     const events = new ConductorEventEmitter();
     const loopHalts: string[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event.type));
+    events.on('loop_halt', (event) => { loopHalts.push(event.type); });
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
@@ -351,7 +352,7 @@ describe('stack preflight stop reasons', () => {
     vi.mocked(runRestack).mockResolvedValueOnce({ kind: 'applied', opId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as never });
     const events = new ConductorEventEmitter();
     const loopHalts: string[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event.type));
+    events.on('loop_halt', (event) => { loopHalts.push(event.type); });
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),

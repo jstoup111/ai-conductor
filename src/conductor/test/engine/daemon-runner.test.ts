@@ -97,6 +97,7 @@ import { readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
 import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { journalRefFor, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
+import type { RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-rekick.js';
 
 // Covers: task:1
@@ -208,7 +209,7 @@ async function leaveLiveRestackJournal(repo: string, slug: string): Promise<void
   const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
   if (processStartTime === undefined) throw new Error('could not read test process start time');
   const blob = await writeRestackJournalBlob(repo, {
-    opId: 'test-live-owner',
+    opId: 'test-live-owner' as RestackOpId,
     cause: 'base-refresh',
     committer: { name: 'Test', email: 'test@example.test', date: '0 +0000' },
     dirtyPaths: [],
@@ -229,9 +230,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       await leaveLiveRestackJournal(worktreePath, ITEM.slug);
       const featureDeps = deps({ done: false, halted: false });
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
-      featureDeps.runConductor = async (worktree) => runStackPreflight({
-        worktree: worktree.path, slug: ITEM.slug, git: makeGitRunner(worktree.path),
-      });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path, slug: ITEM.slug, git: makeGitRunner(worktree.path),
+        });
+      };
       featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
       featureDeps.beginFeatureRun = () => ({
         events: new ConductorEventEmitter(),
@@ -301,12 +304,14 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       });
       const featureDeps = deps({ done: false, halted: false });
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
-      featureDeps.runConductor = async (worktree) => runStackPreflight({
-        worktree: worktree.path,
-        slug: ITEM.slug,
-        git: makeGitRunner(worktree.path),
-        reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
-      });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path,
+          slug: ITEM.slug,
+          git: makeGitRunner(worktree.path),
+          reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+        });
+      };
       featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
       featureDeps.beginFeatureRun = () => ({
         events: new ConductorEventEmitter(),

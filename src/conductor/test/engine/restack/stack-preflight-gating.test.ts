@@ -412,7 +412,7 @@ describe('stack preflight dispatch boundaries', () => {
     const log: string[] = [];
     const events = new ConductorEventEmitter();
     const emitted: string[] = [];
-    events.on('loop_halt', (event) => emitted.push(event.type));
+    events.on('loop_halt', (event) => { emitted.push(event.type); });
 
     await expect(runDaemonRekickStackPreflight({
       worktree: subject.repo,
