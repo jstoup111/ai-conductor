@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { detectStackLandCommand, type StackLandDispatch } from '../../src/cli.js';
+import { detectStackLandCommand, type StackLandOpenDispatch } from '../../src/cli.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { acquireFeatureDispatchLease } from '../../src/engine/feature-dispatch-lease.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
@@ -16,9 +16,9 @@ import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
 import { dispatchStackLandCommand } from '../../src/engine/stack-land-cli.js';
 import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { dispatchCliEntry } from '../../src/index.js';
-import { sealSliceTopologyPositions, writeSliceTopologyFixture } from './slice-topology-fixture.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture, type SliceTopologyFixture } from './slice-topology-fixture.js';
 
-const command: StackLandDispatch = {
+const command: StackLandOpenDispatch = {
   kind: 'stack-land', slug: 'demo', child: '1', carry: [], reason: 'reviewer requested rename',
 };
 
@@ -163,13 +163,13 @@ async function realStackFixture(options: {
   await git(['config', 'user.name', 'Stack land CLI']);
   await commit('base', '.gitignore', '.pipeline/\n.daemon/\n');
   await commit('routing enabled', '.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
-  const topology = {
+  const topology: SliceTopologyFixture = {
     slug: 'demo', materializeTopologyCommit: true,
     sliceMembership: positions === 2
       ? { taskSlices: { one: 1, leaf: 2 }, titles: ['one', 'leaf'] }
       : { taskSlices: { one: 1, two: 2, leaf: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: options.noOwnedCriteria ? { S1: 2 } : { S1: 1 },
-  } as const;
+  };
   await writeSliceTopologyFixture(repo, topology);
   await sealSliceTopologyPositions(repo, topology);
   await git(['checkout', '-qb', 'feat/c1/demo']);
@@ -215,7 +215,7 @@ async function realSnapshot(subject: RealStackFixture) {
   };
 }
 
-async function land(subject: RealStackFixture, commandOverride: Partial<StackLandDispatch> = {}, deps: Record<string, unknown> = {}, output: string[] = []) {
+async function land(subject: RealStackFixture, commandOverride: Partial<Omit<StackLandOpenDispatch, 'kind'>> = {}, deps: Record<string, unknown> = {}, output: string[] = []) {
   return dispatchStackLandCommand({ ...command, ...commandOverride }, {
     cwd: subject.repo,
     resolveMainRoot: async () => subject.repo,
