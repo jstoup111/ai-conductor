@@ -821,3 +821,22 @@ Slice 2
 - The repair for task rem-as-built-6-r3 is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r5
+
+### Task rem-as-built-6-r6: step-runners.ts: make the scope decision fail closed when the custom policy identity is uncertain. When resolveBuildReviewCustomPolicyBundleDigest cannot resolve or capture the bundle (the current 'unavailable' paths at :4324/:4335), it must return a marker that decideBuildReviewReviewScope treats as forcing mode full (reason version-changed). That marker must never match an earlier record's identity, so it never allows a delta lap or a scope-empty skip at :4367. Add a runner test: L1 completes, L2's preliminary custom bundle lookup fails, and L2 is a full lap rather than a delta or scope-empty lap.
+**Gate:** as-built
+**Rationale:** Checked against the source; 95% confident. At step-runners.ts:4308-4338, resolveBuildReviewCustomPolicyBundleDigest looks up the catalog with the first configured provider (llm_provider[0]) and no prepared env. When the lookup or capture fails it returns the constant 'unavailable'. step-runners.ts:3660-3665 hashes that value into policyIdentity. Because the fallback is a stable constant, two laps where the lookup failed get the same identity, so delta reuse and scope-empty (:4367) are allowed even if the bundle actually dispatched changed. Dispatch then finds the catalog again using the prepared candidate's provider and env (:4549-4556) and captures its bundle (:4610), but :4971 persists the pre-dispatch reviewScope unchanged. ADR adr-2026-10-24-lap-monotonic-build-review-scope D1 still governs and says a policy identity change forces a full lap. No architecture or product decision is needed. This is implementation drift in Task 6, where the runner decides each rubric's scope, and it continues the earlier repair rem-prd-audit-6-r1, which brought custom bundle digests into the identity. Route it to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-as-built-6-r6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r6
+### Task rem-as-built-6-r7: step-runners.ts: tie the persisted custom reviewScope.policyIdentity to the bundle that actually judged the lap. After the prepared candidate captures its bundle (:4610), recompute the policy identity from that bundle's digest and the dispatching provider, and write that identity at :4971 instead of the pre-dispatch value. If it differs from the identity used to choose scope, persist the lap as full, since a delta scope picked under a different identity is not valid evidence. Add a runner test: the preliminary lookup sees bundle A (or provider P1), dispatch uses bundle B (or fallback provider P2), and the persisted scope carries B/P2's identity, so the next lap is full whenever B's content differs from what L1 recorded.
+**Gate:** as-built
+**Rationale:** Checked against the source; 95% confident. At step-runners.ts:4308-4338, resolveBuildReviewCustomPolicyBundleDigest looks up the catalog with the first configured provider (llm_provider[0]) and no prepared env. When the lookup or capture fails it returns the constant 'unavailable'. step-runners.ts:3660-3665 hashes that value into policyIdentity. Because the fallback is a stable constant, two laps where the lookup failed get the same identity, so delta reuse and scope-empty (:4367) are allowed even if the bundle actually dispatched changed. Dispatch then finds the catalog again using the prepared candidate's provider and env (:4549-4556) and captures its bundle (:4610), but :4971 persists the pre-dispatch reviewScope unchanged. ADR adr-2026-10-24-lap-monotonic-build-review-scope D1 still governs and says a policy identity change forces a full lap. No architecture or product decision is needed. This is implementation drift in Task 6, where the runner decides each rubric's scope, and it continues the earlier repair rem-prd-audit-6-r1, which brought custom bundle digests into the identity. Route it to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-as-built-6-r7 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r6
