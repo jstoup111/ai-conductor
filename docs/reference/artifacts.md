@@ -99,7 +99,7 @@ malformed, or mismatched one is overwritten and a deleted artifact drops out. Sc
 | `artifacts[].kind` | `plan`, `stories`, `prd`, `track`, `complexity`, `conflicts`, `coherence`, `coherence-waiver`, `architecture`, `intake`, `applicability`, or `decision` |
 | `artifacts[].path` | a `.docs/` path inside that kind's directory |
 
-Unknown top-level fields are malformed. Entries are sorted by kind, then path. `plan-review/`,
+Exactly one `plan` entry is required. Unknown top-level or entry fields are malformed. Entries are sorted by kind, then path. `plan-review/`,
 `shipped/`, `halted/`, and `release-waivers/` files are never registered; ADRs are registered only when
 changed by this land and still present.
 
