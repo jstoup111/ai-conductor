@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-27T15:57:18.239Z
+Status: halted
 Slug: manual-reviewer-edits-cannot-be-landed-safely-in-t
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/c2/manual-reviewer-edits-cannot-be-landed-safely-in-t
-Head SHA: 4ded68f6fab9f72998024dc47fbcdd8f6141d2e6
-Halted at: 2026-10-27T14:45:17.164Z
+Head SHA: 31f2fa6aa552344d2af5b5496543de125a0d5ccc
+Halted at: 2026-10-27T15:58:07.963Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -24,5 +22,5 @@ Kickback budget (restack): 3/4 consumed; 1 remaining
 Latest reason: restack cascade cap for originating child 2
 Adjustment history: raise 8ec96f92-5566-4801-ad4e-22a804b1f3e9 (restacks)
 Resume authorization: pending (live halt not read)
-Kickback halt generation: 1793112316730-2c74vzwh69t
+Kickback halt generation: 1793116687716-y0pxrv4fxg9
 ```
