@@ -10,10 +10,6 @@ export interface InteractiveConductorRunLeaseDependencies {
   readonly acquire?: typeof acquireFeatureDispatchLease;
 }
 
-export type InteractiveConductorRunLeaseResult =
-  | { readonly kind: 'ran' }
-  | { readonly kind: 'refused'; readonly message: string };
-
 export type InteractiveConductorRunLeaseAcquisition =
   | { readonly kind: 'unleased' }
   | { readonly kind: 'acquired'; readonly lease: FeatureDispatchLease }
@@ -86,26 +82,5 @@ export async function prepareInteractiveConductorRunWithLease(input: {
       if (!released.ok) throw new Error(released.message);
     }
     throw error;
-  }
-}
-
-/** Run one foreground operation under the feature lease, if the feature is stacked. */
-export async function runInteractiveConductorWithLease(input: {
-  readonly projectRoot: string;
-  readonly featureDesc: string | undefined;
-  readonly run: () => Promise<void>;
-  readonly dependencies?: InteractiveConductorRunLeaseDependencies;
-}): Promise<InteractiveConductorRunLeaseResult> {
-  const acquired = await acquireInteractiveConductorRunLease(input);
-  if (acquired.kind === 'refused') return acquired;
-
-  try {
-    await input.run();
-    return { kind: 'ran' };
-  } finally {
-    if (acquired.kind === 'acquired') {
-      const released = await acquired.lease.release();
-      if (!released.ok) throw new Error(released.message);
-    }
   }
 }

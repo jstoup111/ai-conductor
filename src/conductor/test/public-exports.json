@@ -32,7 +32,6 @@
   "resolveCurrentBranch",
   "resolveDaemonProjectRoot",
   "runShipmentReconcileAction",
-  "runInteractiveConductorWithLease",
   "selectVisualizers",
   "stopVisualizers",
   "wireOtelVisualizer"

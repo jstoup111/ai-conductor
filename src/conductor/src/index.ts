@@ -2,7 +2,6 @@ export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
 export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectBuildReviewResolveCaseCommand, detectDoneWhenAcceptCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
-export { runInteractiveConductorWithLease } from './engine/interactive-run-lease.js';
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';

@@ -10,7 +10,7 @@ import { execa } from 'execa';
 import type { FeatureDispatchLease } from '../../src/engine/feature-dispatch-lease.js';
 import { acquireFeatureDispatchLease } from '../../src/engine/feature-dispatch-lease.js';
 import {
-  runInteractiveConductorWithLease,
+  prepareInteractiveConductorRunWithLease,
 } from '../../src/engine/interactive-run-lease.js';
 
 const temporaryDirectories: string[] = [];
@@ -197,15 +197,15 @@ describe('interactive conductor run lease', () => {
       calls.push('lease acquire');
       return { kind: 'acquired' as const, lease: { release } satisfies FeatureDispatchLease };
     });
-    const run = vi.fn(async () => {
+    const prepare = vi.fn(async () => {
       calls.push('worktree preparation');
       calls.push('conduct-state write');
     });
 
-    const result = await runInteractiveConductorWithLease({
+    const result = await prepareInteractiveConductorRunWithLease({
       projectRoot: '/main/.worktrees/demo',
       featureDesc: 'Demo',
-      run,
+      prepare,
       dependencies: {
         slugify: () => 'demo',
         hasDurableChildState: async () => true,
@@ -214,18 +214,17 @@ describe('interactive conductor run lease', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'ran' });
+    expect(result).toMatchObject({ kind: 'acquired' });
     expect(calls).toEqual([
       'lease acquire',
       'worktree preparation',
       'conduct-state write',
-      'lease release',
     ]);
     expect(acquire).toHaveBeenCalledWith('/main', 'demo', 'interactive conductor run');
     // The interactive entry has no park predicate/dependency: a present marker
     // cannot be consulted or stop its first dispatched step.
-    expect(run).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -277,12 +276,12 @@ describe('interactive conductor run lease', () => {
   });
 
   it('refuses a live lease owner before dispatching any conductor step', async () => {
-    const run = vi.fn(async () => undefined);
+    const prepare = vi.fn(async () => undefined);
 
-    const result = await runInteractiveConductorWithLease({
+    const result = await prepareInteractiveConductorRunWithLease({
       projectRoot: '/main/.worktrees/demo',
       featureDesc: 'Demo',
-      run,
+      prepare,
       dependencies: {
         slugify: () => 'demo',
         hasDurableChildState: async () => true,
@@ -304,6 +303,6 @@ describe('interactive conductor run lease', () => {
       kind: 'refused',
       message: 'interactive conductor run refused: feature dispatch lease is held by operator stack land (pid 4321)',
     });
-    expect(run).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
   });
 });
