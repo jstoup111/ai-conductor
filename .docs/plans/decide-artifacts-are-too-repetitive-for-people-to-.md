@@ -420,3 +420,13 @@ none. Daemon discovery finds specs by manifest. 17 tasks in three slices. No art
 - [ ] All negative path criteria covered by at least one task
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-6: Have land-spec.ts report whether the manifest bytes changed (separately from added entries) and make engineer-cli.ts emit feature_artifacts_registered for any changed manifest, staying silent on unchanged re-land; add a deletion-only re-land test in engineer-cli-land-manifest-event.test.ts
+**Gate:** as-built
+**Rationale:** Verified at land-spec.ts:915-917 and engineer-cli.ts:1656: land rewrites the manifest but reports only additions, and the CLI emits only when additions are non-empty. A deletion-only re-land therefore changes the manifest with no feature_artifacts_registered event, which ADR D6 requires. Task 6 owns the land event emission and its unchanged-re-land silence criterion.
+**Governing clause:** adr-2026-10-24-per-feature-artifact-manifest decision 6
+**Done when:**
+- adr-2026-10-24-per-feature-artifact-manifest decision 6 is satisfied by this task.
+- The repair for task rem-as-built-6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r1
