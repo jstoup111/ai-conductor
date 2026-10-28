@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "build-review-severity-definitions-are-duplicated-p",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/build-review-severity-definitions-are-duplicated-p.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-19-build-review-finding-severity-advisory-threshold.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/build-review-severity-definitions-are-duplicated-p.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/build-review-severity-definitions-are-duplicated-p.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/build-review-severity-definitions-are-duplicated-p.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/build-review-severity-definitions-are-duplicated-p.md"
+    }
+  ]
+}

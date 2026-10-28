@@ -386,14 +386,14 @@ so that a repair loop halts with the child named instead of churning indefinitel
 ### Acceptance Criteria
 
 #### Happy Path
-- Given child 1 has originated 2 applied `feature-repair` restacks, when a third applies, then child 1's cascade count in `refs/conductor/demo/cascades` is 3.
+- Given a feature with no recorded complexity tier (cascade allowance 3) whose child 1 has originated 2 applied `feature-repair` restacks, when a third applies, then child 1's cascade count in `refs/conductor/demo/cascades` is 3.
 - Given `base-refresh` restacks and aborted restacks, when they finish, then no cascade count changes.
 - Given the cascade-cap halt for child 1, when the operator runs `kickback-budget raise --gate restack --child 1`, then: the raised limit is stored in `refs/conductor/demo/cascades`; the next resume runs the repair.
 - Given the cascade-cap halt for child 1, when the operator runs `kickback-budget reset --gate restack --child 1`, then child 1's count is 0, and the next resume runs the repair.
 - Given the worktree is recreated, when the counts are read, then they are unchanged.
 
 #### Negative Paths
-- Given child 1 has originated 3 applied `feature-repair` restacks, when a fourth repair is due, then: no journal is created and no `restack_planned` event is emitted; it halts with `HALT.class` `needs-human`, naming child 1; the active child's ledger holds cap evidence for gate `restack`, with allowance `restacks`, naming child 1.
+- Given a feature with no recorded complexity tier (cascade allowance 3) whose child 1 has originated 3 applied `feature-repair` restacks, when a fourth repair is due, then: no journal is created and no `restack_planned` event is emitted; it halts with `HALT.class` `needs-human`, naming child 1; the active child's ledger holds cap evidence for gate `restack`, with allowance `restacks`, naming child 1.
 - Given no live cascade-cap halt and no `restack` cap evidence, when `kickback-budget reset --gate restack --child 1` runs, then it is refused, and the ref is unchanged.
 - Given the cascade-cap halt for child 1 and a recreated worktree with no `.pipeline/children/1/`, when `kickback-budget raise --gate restack --child 1` runs, then it is accepted, because `--child` is validated against the `cascades` ref.
 - Given the `cascades` blob is unreadable or malformed, when a repair is due, then the cap counts as exhausted, and it halts needs-human naming the unreadable ref.
@@ -402,7 +402,7 @@ so that a repair loop halts with the child named instead of churning indefinitel
 - Given repairs originate from child 1 and child 2 alternately, when counts are read, then each child's count reflects only the restacks it originated, and the leaf's count is 0.
 
 ### Done When
-- [ ] The bound is 3, charged to the originating child, and checked before any journal exists.
+- [ ] The bound is the originating child's tier-resolved cascade allowance (3 for an unrecorded or tier-M feature, #3472), charged to the originating child, and checked before any journal exists.
 - [ ] `raise` and `reset` work end to end for `--gate restack`, and the PR body carries a
       `## Migration` block.
 

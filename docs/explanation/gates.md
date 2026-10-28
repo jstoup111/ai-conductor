@@ -815,7 +815,8 @@ remainder; the refuted source settles only after that residual is applied, while
 residual remains blocking. A second refutation of the same case halts `needs-human`. In a mixed lap,
 an action route takes precedence while an uncovered infrastructure failure remains blocking after the
 BUILD attempt. Invalid, incomplete, stale, repeated, or unfinished case state halts rather than silently
-routing or passing.
+routing or passing. A repeated or regressed action case halts naming its recovery command; see
+[semantic case repeat or regression](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
 
 Only open cases own a source. A later judgement may re-raise a source that resolved history already
 links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the

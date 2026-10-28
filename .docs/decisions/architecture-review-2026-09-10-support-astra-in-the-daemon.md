@@ -14,11 +14,15 @@ The implementation is a bounded addition to existing TypeScript model metadata a
 
 This implements FR-5 without placing Astra into any default step model, tier override, automatic escalation order, or default fallback ladder. Adding Astra to those ladders would change behavior for operators who did not select it and violate FR-2.
 
+> **Amended 2026-10-25 by codex-steps-resolve-the-newest-catalog-model-per-t (operator decision, composer DECIDE):** `gpt-6-astra` is now the top rung of Codex's automatic escalation order (`gpt-5.6-luna → gpt-5.6-terra → gpt-5.6-sol → gpt-6-astra`), per `adr-2026-10-25-codex-model-floors-upgraded-from-cli-catalog` D1. It is still in no default step model, tier override, or default fallback ladder.
+
 FR-1 uses existing configuration precedence, including inherited defaults, phase and step selections, tier overrides, and separately resolved auxiliary policies where these already accept a model. BUILD must enumerate those distinct paths from current source and prove each at the lowest sufficient layer; the feature adds no new selection surface. Existing provider-switch isolation continues to prevent a Codex model from leaking into a Claude fallback candidate.
 
 FR-3 and FR-4 reuse `ModelAvailability`: an unavailable configured model absent from the ladder falls to its first live entry; an explicit empty ladder disables model fallback; exhaustion returns the existing failure to normal provider-candidate and retry handling. Authentication, rate-limit, and expired-session signals are not model-unavailability signals. Explicit provider fallback remains valid under the existing policy and must not be described as an undeclared substitution.
 
 Verified: `bumpModel` leaves a model outside its escalation order unchanged. Configured Astra therefore stays Astra during ordinary retry model escalation; effort still follows the existing bounded policy. This preserves the operator's selection without making Astra reachable from unrelated Sol retries.
+
+> **Amended 2026-10-25 by codex-steps-resolve-the-newest-catalog-model-per-t (operator decision, composer DECIDE):** Astra is now inside Codex's escalation order as its cap, so configured Astra still stays Astra on retry, but a Sol retry at attempt 3 or later now reaches Astra (`adr-2026-10-25-codex-model-floors-upgraded-from-cli-catalog` D1).
 
 ## Alignment
 

@@ -19,7 +19,7 @@ import { planContractPointers, readActivePlanPath } from './remediation-context-
 import { parsePlanTaskBodies, parsePlanTaskPaths, parsePlanTaskTitles } from './plan-task-parse.js';
 import { parsePlanDependencyGraph } from './plan-dependencies.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
-import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
+import { authorizeBuildReviewRemediationActionEffects, formatBuildReviewResolveCaseCommand, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate, type BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
@@ -756,6 +756,25 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
   };
   /**
+   * A reuse halt names its recovery. A repeated case is still open, so the
+   * operator resolves it; a regressed case is already resolved and refuses
+   * resolve-case, so only accepting the re-raised finding (or fixing it) helps.
+   */
+  // ai-conductor:session-command-context=operator-only
+  const semanticReuseHaltDetail = (reuse: 'halt-repeat' | 'halt-regression', caseId: string, sourceIds: readonly string[]): string => {
+    const feature = input.feature.feature;
+    if (reuse === 'halt-repeat') {
+      return `semantic remediation case repeat ${caseId}; resolve with ${formatBuildReviewResolveCaseCommand({ feature, child: input.child, caseId })}`;
+    }
+    if (input.child !== undefined) {
+      return `semantic remediation case regression ${caseId}; fix the finding on child ${input.child} (build-review accept has no --child yet)`;
+    }
+    const accepts = sources.filter((source) => sourceIds.includes(buildReviewAdjudicationSourceId(source))).map((source) =>
+      `ai-conductor build-review accept --feature ${feature} --lap ${input.aggregate.lapId} --finding ${source.findingId} --rationale "<why>"`);
+    return `semantic remediation case regression ${caseId}; accept with ${accepts.join('; ')}, or fix the finding in the feature worktree`;
+  };
+  // /ai-conductor:session-command-context
+  /**
    * A content-specific failure that follows awaited work. The work may have
    * outlasted an exact operator acceptance, in which case the failure's HALT
    * would be obsolete: re-read authority once and, if every source is now
@@ -1213,9 +1232,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         caseId: record.id, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
         reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
       });
-      return failUnlessAccepted(reuse === 'halt-repeat'
-        ? `semantic remediation case repeat ${record.id}`
-        : `semantic remediation case regression ${record.id}`, {
+      return failUnlessAccepted(semanticReuseHaltDetail(reuse, record.id, proposed.sources.map((source) => source.sourceId)), {
           settleAbsentAttempted: false,
           // A reused case's own sources belong to the lap that resolved it and
           // are not live now, so only the reusing proposal's sources can show
@@ -1365,9 +1382,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
       });
       // The emission was awaited; the HALT decision reads authority after it.
-      return failUnlessAccepted(reuse === 'halt-repeat'
-        ? `semantic remediation case repeat ${caseId}`
-        : `semantic remediation case regression ${caseId}`, {
+      return failUnlessAccepted(semanticReuseHaltDetail(reuse, caseId, proposed.sources.map((source) => source.sourceId)), {
           settleAbsentAttempted: false,
           // A reused case's own sources belong to the lap that resolved it and
           // are not live now, so only the reusing proposal's sources can show
