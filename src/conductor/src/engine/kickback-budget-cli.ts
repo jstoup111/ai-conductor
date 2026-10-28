@@ -21,7 +21,7 @@ import { childStateExists, parseChildId, type ChildId } from './child-context.js
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { applyCascadeAdjustment, readCascadeCounts } from './restack/cascade-cap.js';
-import { resolveCascadeAllowanceForWorktree, type RestackCascadeAllowance } from './restack/cascade-allowance.js';
+import { renderCascadeSummary, resolveCascadeAllowanceForWorktree, type RestackCascadeAllowance } from './restack/cascade-allowance.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
@@ -211,7 +211,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(flatLedger) || isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const ledgerFor = (gate: string) => WHOLE_FEATURE_GATES.has(gate) ? flatLedger : childLedger;
-    const { limits: defaults, allowances } = await defaultsFor(worktree);
+    const { limits: defaults, allowances, restackAllowance } = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
     const planGrowth = await planGrowthViewFor(worktree, flatLedger);
@@ -237,17 +237,35 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const views = readable.map((gate) => kickbackBudgetView(
       ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate), allowances[gate],
     ));
+    const cascadeState = child === undefined ? undefined : await readCascadeCounts(worktree, command.feature);
+    const cascadeSummary = cascadeState?.kind === 'counts'
+      ? renderCascadeSummary(cascadeState.counts, restackAllowance)
+      : undefined;
+    const unavailableCascade = cascadeState?.kind === 'unreadable'
+      ? cascadeState.detail
+      : undefined;
     const human = [
         ...views.map((view) => renderKickbackBudgetView(
           ledgerFor(view.gate).gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
           undefined, pendingLaps(view.gate), allowances[view.gate],
         )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
+        ...(cascadeSummary === undefined
+          ? unavailableCascade === undefined ? [] : [`Restack cascades: unavailable (${unavailableCascade})`]
+          : [cascadeSummary.inspectLines.join('\n')]),
       ].join('\n\n');
     print(command.format === 'json'
-      ? JSON.stringify({ feature: command.feature, ...(child === undefined ? {} : { child }), gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
+      ? JSON.stringify({
+        feature: command.feature,
+        ...(child === undefined ? {} : { child }),
+        gates: views,
+        ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}),
+        ...(cascadeSummary === undefined
+          ? unavailableCascade === undefined ? {} : { restackCascades: { unavailable: unavailableCascade } }
+          : { restackCascades: cascadeSummary.json }),
+      })
       : `${child === undefined ? '' : `Child: ${child}\n\n`}${human}`);
-    return unavailable.length > 0 ? 1 : 0;
+    return unavailable.length > 0 || unavailableCascade !== undefined ? 1 : 0;
   }
   if (!deps.isInteractive?.() && deps.isInteractive !== undefined || (deps.isInteractive === undefined && !process.stdin.isTTY)) {
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
