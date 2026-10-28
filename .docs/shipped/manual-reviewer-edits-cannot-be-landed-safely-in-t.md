@@ -4,6 +4,13 @@ spec_hash: 6d7779aae323a92272ff9bf28706a119e4ffb3ff467f1002632a28a21c224d88
 pr: https://github.com/jstoup111/ai-conductor/pull/3453
 shipped: 2026-10-28
 engine_version: 20261027T031452Z-97f09b9bd067
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "These are incidental robustness fixes to tests and an exit path, made alongside the lease and interactive-run refactor. They change no user-visible behavior beyond an equivalent exit code. The Scope trailer on stack-preflight.ts (abandon recovery past the undeclared-round guard) is within intent: it is Story 9's recovery."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
