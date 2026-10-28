@@ -316,7 +316,7 @@ function describeInvalidRemediationJudgement(
       ? `invalid remediation judgement ${reason}`
       : `invalid remediation judgement ${reason} (${bindings.join('; ')})`;
   }
-  if (reason !== 'unknown-admission-task' || rejection === undefined) {
+  if (reason !== 'unknown-admission-task' || rejection === undefined || !('indexOnlyTaskIds' in rejection)) {
     return `invalid remediation judgement ${reason}`;
   }
   const details = [
