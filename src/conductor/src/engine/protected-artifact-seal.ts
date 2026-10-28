@@ -1787,7 +1787,6 @@ export async function resealProtectedArtifactSeal(options: ResealProtectedArtifa
     recomputed: prepared.recomputed,
     trigger: options.trigger,
     paths: prepared.survivingPaths,
-    ownership: options.ownership,
     prune: prepared.prune,
     reason: options.reason,
     fileOperations: options.fileOperations ?? { writeFile, rename, rm },

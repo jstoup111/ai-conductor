@@ -1537,7 +1537,9 @@ export async function performRebase(
       // so no call site can disable the tolerance by forgetting to pass it.
       featureDesc: await resolveFeatureDesc(projectRoot),
       baseBranch: base.branch,
-      ownership,
+      ownership: ownership?.kind === 'legacy' || ownership?.kind === 'manifest'
+        ? ownership
+        : undefined,
     });
     if (!verdict.ok) throw new ProtectedArtifactSealRejection(verdict.reason);
   } catch (error) {

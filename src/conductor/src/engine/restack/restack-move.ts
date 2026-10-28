@@ -176,7 +176,7 @@ export async function checkRestackPreMove(
   worktree: string,
   moves: readonly RestackMoveRef[],
   checkedOut: RefName,
-  dependencies: Pick<RestackMoveDependencies, 'git'> = {},
+  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBaseRef'> = {},
 ): Promise<RestackPreMoveResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const changedMoves = moves.filter((move) => move.oldSha !== move.newSha && move.ref.startsWith('refs/heads/'));
