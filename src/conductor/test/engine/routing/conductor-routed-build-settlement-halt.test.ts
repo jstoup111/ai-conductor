@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,6 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
 
 const child = parseChildId(1)!;
-const roundId = parseRoundId('r8')!;
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -24,7 +23,18 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function subject(options: { added?: number; cap?: number; growth?: number; laps?: number; effectiveLapCap?: number } = {}) {
+async function subject(options: {
+  added?: number;
+  allocation?: Record<number, { remTaskIds: string[]; blockBodies: string[] }>;
+  cap?: number;
+  growth?: number;
+  items?: { findingId: string; kind: 'audit'; owner: typeof child; host: typeof child; reason: 'task-slice'; fallback: never[]; existingTask?: boolean; taskIds?: string[] }[];
+  laps?: number;
+  receiptLaps?: Record<'prd_audit' | 'architecture_review_as_built', number>;
+  effectiveLapCap?: number;
+  pendingAsBuiltFindings?: { gate: 'architecture_review_as_built'; finding: string; class: 'REMEDIABLE'; governingClause: string; summary: string; outcome: 'remediated' }[];
+  roundId?: string;
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
   const git = makeGitRunner(root);
@@ -44,14 +54,16 @@ async function subject(options: { added?: number; cap?: number; growth?: number;
     gates: { prd_audit: { count: 0, cumulative: 0, laps: options.laps ?? 0, ...(options.effectiveLapCap === undefined ? {} : { effectiveLapCap: options.effectiveLapCap }), treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 } },
     growth: { authored: 1, added: options.added ?? 13, byGate: {} },
   });
+  const routeRoundId = parseRoundId(options.roundId ?? 'r8')!;
   const created = await createRouteRecord(root, 'demo', {
-    roundId, sealedAuthored: 1, kind: 'audit',
-    items: [
+    roundId: routeRoundId, sealedAuthored: 1, kind: 'audit',
+    items: options.items ?? [
       { findingId: 'S1.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] },
       { findingId: 'S3.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] },
     ],
-    allocation: { [child]: { remTaskIds: ['rem-prd-audit-6.r1', 'rem-prd-audit-6.r2'], blockBodies: ['### Task rem-prd-audit-6.r1\n', '### Task rem-prd-audit-6.r2\n'] } },
-    receipt: { ...emptyUnsettledReceipt(), laps: { prd_audit: 1 }, growth: options.growth ?? 2 },
+    allocation: options.allocation ?? { [child]: { remTaskIds: ['rem-prd-audit-6.r1', 'rem-prd-audit-6.r2'], blockBodies: ['### Task rem-prd-audit-6.r1\n', '### Task rem-prd-audit-6.r2\n'] } },
+    ...(options.pendingAsBuiltFindings === undefined ? {} : { pendingAsBuiltFindings: options.pendingAsBuiltFindings }),
+    receipt: { ...emptyUnsettledReceipt(), laps: options.receiptLaps ?? { prd_audit: 1 }, growth: options.growth ?? 2 },
   });
   if (created.kind !== 'created') throw new Error(`route fixture: ${created.kind}`);
   if ((await admitRound(root, 'demo', created.record, child, { git })).kind !== 'admitted') {
@@ -70,12 +82,12 @@ async function subject(options: { added?: number; cap?: number; growth?: number;
     operatorParkBoundary: async () => parkAfterBuild,
     config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
-      resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/demo', routedRepair: { child, roundId } }) as never,
+      resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/demo', routedRepair: { child, roundId: routeRoundId } }) as never,
       enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
       enterChildRegion: async () => ({ kind: 'completed' }) as never,
     },
   });
-  return { root, build, conductor, git };
+  return { root, build, conductor, git, roundId: routeRoundId };
 }
 
 describe('routed BUILD settlement cap halt', () => {
@@ -111,14 +123,57 @@ describe('routed BUILD settlement cap halt', () => {
     await raised.conductor.run();
     expect(raised.build).toHaveBeenCalledOnce();
     await expect(readKickbackLedger(raised.root)).resolves.toMatchObject({ growth: { added: 15 }, gates: { prd_audit: { laps: 1 } } });
-    await expect(readRouteRecord(raised.root, 'demo', roundId, { git: raised.git })).resolves.toMatchObject({ kind: 'record', record: { receipt: { settlementId: expect.any(String) } } });
+    await expect(readRouteRecord(raised.root, 'demo', raised.roundId, { git: raised.git })).resolves.toMatchObject({ kind: 'record', record: { receipt: { settlementId: expect.any(String) } } });
     await expect(readFile(join(raised.root, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
 
     const unchanged = await subject();
     await unchanged.conductor.run();
     await expect(readKickbackLedger(unchanged.root)).resolves.toMatchObject({ growth: { added: 13 }, gates: { prd_audit: { laps: 0 } } });
-    const unsettled = await readRouteRecord(unchanged.root, 'demo', roundId, { git: unchanged.git });
+    const unsettled = await readRouteRecord(unchanged.root, 'demo', unchanged.roundId, { git: unchanged.git });
     expect(unsettled).toMatchObject({ kind: 'record' });
     if (unsettled.kind === 'record') expect(unsettled.record.receipt).not.toHaveProperty('settlementId');
+  });
+
+  it('names the refused r8 findings and remediation tasks in order and records the same reason', async () => {
+    const fixture = await subject();
+    await fixture.conductor.run();
+
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Routed round r8 findings: S1.1, S3.1\nRouted round r8 remediation tasks: rem-prd-audit-6.r1, rem-prd-audit-6.r2');
+    expect(halt).not.toContain('repair record is malformed');
+    await expect(readKickbackLedger(fixture.root)).resolves.toMatchObject({
+      gates: { prd_audit: { capEvidence: { latestReason: 'Routed round r8 findings: S1.1, S3.1' } } },
+    });
+  });
+
+  it('renders routed pending as-built findings and tasks from a two-host round', async () => {
+    const fixture = await subject({
+      roundId: 'r1',
+      allocation: {
+        1: { remTaskIds: ['rem-ab-1.r1', 'rem-ab-1.r2'], blockBodies: ['### Task rem-ab-1.r1\n', '### Task rem-ab-1.r2\n'] },
+        2: { remTaskIds: ['rem-ab-1.r3', 'rem-ab-1.r4'], blockBodies: ['### Task rem-ab-1.r3\n', '### Task rem-ab-1.r4\n'] },
+      },
+      pendingAsBuiltFindings: [{ gate: 'architecture_review_as_built', finding: 'AB-1', class: 'REMEDIABLE', governingClause: 'adr-x D2', summary: 'drift', outcome: 'remediated' }],
+    });
+    await fixture.conductor.run();
+
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Routed round r1 remediation tasks: rem-ab-1.r1, rem-ab-1.r2, rem-ab-1.r3, rem-ab-1.r4');
+    expect(halt).toContain('Blocking findings:\nAB-1 (REMEDIABLE; adr-x D2): drift');
+  });
+
+  it('names existing task repairs for a routed lap halt without a remediation-task line', async () => {
+    const fixture = await subject({
+      added: 0, cap: 10, growth: 0, laps: 2, effectiveLapCap: 2, roundId: 'r3',
+      allocation: { 1: { remTaskIds: [], blockBodies: [] } },
+      items: [{ findingId: 'S2.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [], existingTask: true, taskIds: ['4', '7'] }],
+    });
+    await fixture.conductor.run();
+
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Routed round r3 findings: S2.1');
+    expect(halt).toContain('Routed round r3 repairs existing tasks: 4, 7');
+    expect(halt).not.toContain('Routed round r3 remediation tasks:');
+    expect(halt).not.toContain('repair record is malformed');
   });
 });

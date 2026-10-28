@@ -10410,7 +10410,8 @@ export class Conductor {
             const refusedRound = settlement?.kind === 'exhausted' && 'round' in settlement ? settlement.round : undefined;
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
-            const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const legacyPendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const pendingAsBuiltFindings = refusedRound?.pendingAsBuiltFindings ?? legacyPendingAsBuiltFindings;
             const asBuiltFindingIds = pendingAsBuiltFindings.map((finding) => finding.finding);
             const haltingFindings = gate === 'architecture_review_as_built'
               ? asBuiltFindingIds
@@ -10421,23 +10422,38 @@ export class Conductor {
             const otherFindings = gate === 'architecture_review_as_built'
               ? prdAuditCriteria
               : asBuiltFindingIds;
-            const findings = haltingFindings.length > 0
+            const findings = refusedRound === undefined
+              ? haltingFindings.length > 0
               ? `Findings (${gate}): ${haltingFindings.join(', ')}`
               : pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
-              : 'Pending remediation findings are unavailable because the repair record is malformed.';
+              : 'Pending remediation findings are unavailable because the repair record is malformed.'
+              : `Routed round ${refusedRound.roundId} findings: ${refusedRound.findingIds.join(', ')}`;
+            const routedTasks = refusedRound === undefined
+              ? ''
+              : refusedRound.remTaskIds.length > 0
+                ? `Routed round ${refusedRound.roundId} remediation tasks: ${refusedRound.remTaskIds.join(', ')}`
+                : refusedRound.existingTaskIds.length > 0
+                  ? `Routed round ${refusedRound.roundId} repairs existing tasks: ${refusedRound.existingTaskIds.join(', ')}`
+                  : '';
             const alsoPending = otherFindings.length > 0
               ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
               : '';
-            const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
-              ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
-                  `${finding.finding} (${finding.class}; ${finding.reference === undefined
-                    ? finding.governingClause
-                    : finding.reference.kind === 'plan-task'
-                      ? `plan task ${finding.reference.taskId}`
-                      : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
-                ).join('; ')}`
-              : '';
+            const asBuiltFindingDetail = refusedRound === undefined
+              ? legacyPendingAsBuiltFindings.length > 0
+                ? `\n\nBlocking findings:\n${legacyPendingAsBuiltFindings.map((finding) =>
+                    `${finding.finding} (${finding.class}; ${finding.reference === undefined
+                      ? finding.governingClause
+                      : finding.reference.kind === 'plan-task'
+                        ? `plan task ${finding.reference.taskId}`
+                        : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
+                  ).join('; ')}`
+                : ''
+              : refusedRound.pendingAsBuiltFindings.length > 0
+                ? `\n\nBlocking findings:\n${refusedRound.pendingAsBuiltFindings.map((finding) =>
+                    `${finding.finding} (${finding.class}; ${finding.governingClause}): ${finding.summary}`,
+                  ).join('; ')}`
+                : '';
             const fallbackLapCap = remediationLapCapForGate(
               gate, this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
             );
@@ -10496,7 +10512,7 @@ export class Conductor {
             }
             const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
+              `${detail}\n${findings}${routedTasks === '' ? '' : `\n${routedTasks}`}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
