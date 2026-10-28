@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "build-review-halts-needs-human-when-the-judge-reje",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-28-build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-10-portable-build-review-policy.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/build-review-halts-needs-human-when-the-judge-reje.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/build-review-halts-needs-human-when-the-judge-reje.md"
+    }
+  ]
+}

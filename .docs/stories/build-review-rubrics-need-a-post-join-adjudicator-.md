@@ -18,10 +18,10 @@ rubric can erase a sibling or independently order contradictory rework.
 
 #### Happy Path
 
-- Given two or more enabled rubrics produce valid judged findings for one frozen lap, when the raw join settles, then exactly one authoritative `remediate` judgement (one dispatch, or two when the single mixed-laps D2 expansion round runs) receives every operator-unresolved finding from that lap.
+- Given two or more enabled rubrics produce valid judged findings for one frozen lap, when the raw join settles, then exactly one authoritative `remediate` judgement (one dispatch, plus at most one mixed-laps D2 expansion round and at most one binding correction round) receives every operator-unresolved finding from that lap.
 - Given every raw finding is already covered by a current operator disposition, when the raw join settles, then the effective gate passes without dispatching `remediate`, creating a case, applying an effect, or consuming a kickback.
-- Given an exhausted infrastructure result has exact current operator reduced coverage and content siblings remain unresolved, when the aggregate is evaluated, then the infrastructure branch stays outside autonomous judgement and exactly one authoritative `remediate` judgement (one dispatch, or two when the single mixed-laps D2 expansion round runs) receives the content findings.
-- Given one rubric has an uncovered infrastructure failure while siblings have valid unresolved content findings, when every branch settles, then the current-lap aggregate preserves both kinds, exactly one authoritative `remediate` judgement (one dispatch, or two when the single mixed-laps D2 expansion round runs) receives only the content findings, and a new actionable work order may take the existing one semantic BUILD route while infrastructure remains independently blocking.
+- Given an exhausted infrastructure result has exact current operator reduced coverage and content siblings remain unresolved, when the aggregate is evaluated, then the infrastructure branch stays outside autonomous judgement and exactly one authoritative `remediate` judgement (one dispatch, plus at most one mixed-laps D2 expansion round and at most one binding correction round) receives the content findings.
+- Given one rubric has an uncovered infrastructure failure while siblings have valid unresolved content findings, when every branch settles, then the current-lap aggregate preserves both kinds, exactly one authoritative `remediate` judgement (one dispatch, plus at most one mixed-laps D2 expansion round and at most one binding correction round) receives only the content findings, and a new actionable work order may take the existing one semantic BUILD route while infrastructure remains independently blocking.
 
 #### Negative Paths
 
