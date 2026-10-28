@@ -631,6 +631,7 @@ describe('PiProvider', () => {
     expect(stat.mock.calls.flat().filter((path) => String(path).endsWith('/pipeline/SKILL.md'))).toEqual([]);
   });
 
+  // Covers: task:8
   it.each([
     ['no skill catalog entry', [], []],
     ['only the retired PI_HOME catalog', ['/legacy/pi-home/skills/pipeline/SKILL.md'], []],
@@ -648,6 +649,7 @@ describe('PiProvider', () => {
       success: false,
       commandUnresolved: true,
       commandUnresolvedName: 'pipeline',
+      executionDisposition: 'not-started',
       output: expect.stringContaining('pipeline'),
     });
 
@@ -670,6 +672,7 @@ describe('PiProvider', () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
+  // Covers: task:8
   it.each([
     ['missing', [], []],
     ['a dangling symlink', [], []],
@@ -682,6 +685,7 @@ describe('PiProvider', () => {
       providerUnavailable: true,
       providerUnavailableScope: 'run',
       providerUnavailableReason: expect.stringMatching(/HARNESS\.md.*bin\/install/),
+      executionDisposition: 'not-started',
     });
 
     expect(spawn).not.toHaveBeenCalled();
@@ -971,7 +975,8 @@ describe('PiProvider', () => {
     });
   });
 
-  it('kills a running Pi subprocess on abort without reporting a provider failure signal', async () => {
+  // Covers: task:8
+  it('keeps a post-spawn abort invoked without reporting a provider failure signal', async () => {
     const controller = new AbortController();
     let resolveProcess: (result: ExecaResult) => void;
     const process = Object.assign(
@@ -997,6 +1002,7 @@ describe('PiProvider', () => {
     expect(result).not.toHaveProperty('modelUnavailable');
     expect(result).not.toHaveProperty('authFailure');
     expect(result).not.toHaveProperty('rateLimited');
+    expect(result).not.toHaveProperty('executionDisposition');
   });
 
   it('records a SIGTERM without inventing an exit code for an unclassified Pi failure', async () => {
@@ -1018,7 +1024,8 @@ describe('PiProvider', () => {
     ]]);
   });
 
-  it('does not spawn after an abort arrives during asynchronous preflight', async () => {
+  // Covers: task:8
+  it('marks an abort during asynchronous preflight as not started without spawning', async () => {
     const controller = new AbortController();
     controller.abort();
 
@@ -1026,11 +1033,13 @@ describe('PiProvider', () => {
       success: false,
       output: 'Pi invocation aborted.',
       exitCode: 1,
+      executionDisposition: 'not-started',
     });
 
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  // Covers: task:8
   it.each([
     [
       'a structural ENOENT',
@@ -1076,6 +1085,7 @@ describe('PiProvider', () => {
     }
     if (!('modelUnavailable' in expected)) expect(result).not.toHaveProperty('modelUnavailable');
     if (Object.keys(expected).length > 0) expect(result).not.toHaveProperty('exitFacts');
+    expect(result).not.toHaveProperty('executionDisposition');
   });
 });
 
@@ -1183,12 +1193,14 @@ describe('PiProvider native output schema', () => {
     expect(materializeExtension).not.toHaveBeenCalled();
   });
 
-  it('fails before spawning pi, naming the schema path, when the schema cannot be written', async () => {
+  // Covers: task:8
+  it('marks a native-schema setup failure as not started before spawning pi', async () => {
     const missingHome = join(worktree, '.daemon', 'scratch', 'run-1', 'absent');
 
     const result = await schemaInvoke({ nativeSchemaScratchHome: missingHome });
 
     expect(result.success).toBe(false);
+    expect(result.executionDisposition).toBe('not-started');
     expect(result.output).toContain(join(missingHome, 'output-schema.json'));
     expect(spawn).not.toHaveBeenCalled();
   });
@@ -1317,10 +1329,16 @@ describe('PiProvider subagents', () => {
     expect(args).not.toContain('subagents_enable');
   });
 
-  it('fails run-scoped provider-unavailable, naming the install command, when the package is missing', async () => {
+  // Covers: task:8
+  it('marks a missing subagents package as not started before spawning', async () => {
     const result = await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, subagents: true });
 
-    expect(result).toMatchObject({ success: false, providerUnavailable: true, providerUnavailableScope: 'run' });
+    expect(result).toMatchObject({
+      success: false,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      executionDisposition: 'not-started',
+    });
     expect(result.output).toContain('pi install npm:pi-subagents');
     expect(spawn).not.toHaveBeenCalled();
   });
