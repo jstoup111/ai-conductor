@@ -28,6 +28,8 @@ const input = {
   allocation: { [c1]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
 };
 
+const revalidateInput = { ...input, sealedAuthored: undefined, kind: 'revalidate' as const };
+
 async function fixture() {
   const repo = await mkdtemp(join(tmpdir(), 'round-admission-'));
   const git = makeGitRunner(repo);
@@ -145,7 +147,7 @@ describe('routed-round admission (real local Git)', () => {
     const subject = await fixture();
     try {
       const audit = await createRouteRecord(subject.repo, 'demo', { ...input, allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c3]: { remTaskIds: [], blockBodies: [] } } });
-      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...input, roundId: parseRoundId('r2')!, kind: 'revalidate', allocation: { [c1]: { remTaskIds: [], blockBodies: [] } } });
+      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...revalidateInput, roundId: parseRoundId('r2')!, allocation: { [c1]: { remTaskIds: [], blockBodies: [] } } });
       if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(audit.record, { [c1]: 'restacked', [c3]: 'pending' }));
       await writeQueue(subject);
@@ -176,7 +178,7 @@ describe('routed-round admission (real local Git)', () => {
     const subject = await fixture();
     try {
       const audit = await createRouteRecord(subject.repo, 'demo', input);
-      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...input, roundId: parseRoundId('r2')!, kind: 'revalidate' });
+      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...revalidateInput, roundId: parseRoundId('r2')! });
       if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(audit.record, { [c1]: state }));
       await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({ kind: 'refused', fence: true });
@@ -189,7 +191,7 @@ describe('routed-round admission (real local Git)', () => {
     const subject = await fixture();
     try {
       const audit = await createRouteRecord(subject.repo, 'demo', { ...input, allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] }, [c3]: { remTaskIds: [], blockBodies: [] } } });
-      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...input, roundId: parseRoundId('r2')!, kind: 'revalidate' });
+      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...revalidateInput, roundId: parseRoundId('r2')! });
       if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(audit.record, { [c1]: 'restacked', [c2]: 'pending', [c3]: 'pending' }));
       await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({ kind: 'refused', fence: true });
@@ -298,9 +300,8 @@ describe('routed-round admission (real local Git)', () => {
     const subject = await fixture();
     try {
       const revalidate = await createRouteRecord(subject.repo, 'demo', {
-        ...input,
+        ...revalidateInput,
         roundId: parseRoundId('r3')!,
-        kind: 'revalidate',
         allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
       });
       const audit = await createRouteRecord(subject.repo, 'demo', {
