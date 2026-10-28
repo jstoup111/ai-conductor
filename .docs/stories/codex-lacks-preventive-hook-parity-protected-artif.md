@@ -40,8 +40,9 @@ written.
 #### Negative Paths
 - Given a commit staging **only** source files under `src/`, when the commit runs, then it succeeds —
   the gate does not block ordinary build work.
-- Given a commit staging the active feature's **own** protected artifacts (matching `namesOwnFeature`,
-  `protected-artifact-seal.ts:508-523`), when the commit runs, then it succeeds.
+- Given a commit staging the active feature's **own** protected artifacts (for a feature without an
+  artifact manifest, matching `namesOwnFeature`, `protected-artifact-seal.ts:508-523`; for a feature
+  with one, a path the phase marker lists on an `own:` line), when the commit runs, then it succeeds.
 - Given `CONDUCT_ENGINE_COMMIT=1` in the environment, when the engine commits a protected path during
   rebase mechanics, quarantine, a shipped record, or spec landing, then the commit succeeds — matching
   the existing `commit-msg` convention at `git-hook-assets.ts:140`.
@@ -265,8 +266,8 @@ routed to `plan`, so that the fix is never sent to the one phase whose seal reje
 - Given a gap with disposition `build` whose rationale merely mentions a protected artifact as context
   and whose tasks target only source files, when the plan is read, then it is **not** redirected — the
   rationale scan must not over-trigger on incidental references.
-- Given a gap whose rationale names the active feature's own artifact, when the plan is read, then it
-  is not redirected.
+- Given a gap whose rationale names the active feature's own artifact (for a feature with an
+  artifact manifest, a listed path), when the plan is read, then it is not redirected.
 - Given a gap with no rationale field at all, when the plan is read, then it is handled without error.
 - Given the redirect fires, when the operator reads the daemon log, then the reason names the gap and
   the protected artifact that caused the reroute.
