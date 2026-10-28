@@ -49,7 +49,7 @@ import type { ConductStateStore } from '../../src/engine/conduct-state-store.js'
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption, RecoveryContext } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readState, writeState } from '../../src/engine/state.js';
+import { applyStateChanges, readState, writeState } from '../../src/engine/state.js';
 import {
   ALL_STEPS,
   VALIDATION_GROUP,
@@ -826,6 +826,84 @@ describe('engine/conductor', () => {
       expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
       expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
+    });
+
+    it('adopts journaled-restack re-pends before the validation-group join writes them', async () => {
+      const initial = {
+        ...VALIDATION_GROUP_PREREQS,
+        manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'stale',
+        rebase: 'pending', finish: 'pending',
+      } as ConductState;
+      await writeState(statePath, initial);
+      const completed: string[] = [];
+      events.on('parallel_completed', (event) => { if (event.type === 'parallel_completed') completed.push(event.type); });
+      let repended = false;
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, events, resume: true, mode: 'auto', verifyArtifacts: false,
+        stackPreflight: async () => {
+          if (!repended) {
+            repended = true;
+            await applyStateChanges(statePath, initial, {
+              prd_audit: 'pending', architecture_review_as_built: 'pending',
+            }, 'journaled restack re-pends');
+          }
+          return { kind: 'clear' };
+        },
+        stepRunner: joinRunner({}),
+      });
+
+      await conductor.run();
+
+      await expect(readState(statePath)).resolves.toMatchObject({
+        ok: true,
+        value: { prd_audit: 'done', architecture_review_as_built: 'done' },
+      });
+      expect(completed).toEqual(['parallel_completed']);
+    });
+
+    it('preserves a peer prd_audit write after preflight adoption as a real join conflict', async () => {
+      const initial = {
+        ...VALIDATION_GROUP_PREREQS,
+        manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'stale',
+        rebase: 'pending', finish: 'pending',
+      } as ConductState;
+      await writeState(statePath, initial);
+      const loopHalts: string[] = [];
+      const completed: string[] = [];
+      events.on('loop_halt', (event) => { if (event.type === 'loop_halt') loopHalts.push(event.reason); });
+      events.on('parallel_completed', (event) => { if (event.type === 'parallel_completed') completed.push(event.type); });
+      let repended = false;
+      const runner = joinRunner({});
+      runner.run = vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+        if (step === 'prd_audit') {
+          const disk = await readState(statePath);
+          if (disk.ok) await applyStateChanges(statePath, disk.value, { prd_audit: 'stale' }, 'peer prd audit write');
+        }
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        if (step === 'prd_audit') await writePrdAuditFixture(dir, options?.runId);
+        if (step === 'architecture_review_as_built') await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
+        return { success: true };
+      });
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, events, resume: true, mode: 'auto', verifyArtifacts: false,
+        stackPreflight: async () => {
+          if (!repended) {
+            repended = true;
+            await applyStateChanges(statePath, initial, {
+              prd_audit: 'pending', architecture_review_as_built: 'pending',
+            }, 'journaled restack re-pends');
+          }
+          return { kind: 'clear' };
+        },
+        stepRunner: runner,
+      }).run();
+
+      expect(loopHalts).toContainEqual(expect.stringContaining('Expected prd_audit to match before join'));
+      expect(completed).toEqual([]);
+      await expect(readState(statePath)).resolves.toMatchObject({
+        ok: true,
+        value: { prd_audit: 'stale', architecture_review_as_built: 'pending' },
+      });
     });
 
     it('retries a transient prd_audit branch failure within the serial attempt budget before joining', async () => {

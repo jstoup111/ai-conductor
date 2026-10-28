@@ -192,6 +192,7 @@ import {
   filterRestageChanges,
   extractPrUrl,
 } from './state.js';
+import { stateMutationValuesEqual } from './conduct-state-conflicts.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -2553,6 +2554,30 @@ export class Conductor {
     return result.value;
   }
 
+  /**
+   * Advance clean fields to values an engine writer already made durable.
+   *
+   * Local changes retain their original compare-and-swap baseline so a peer's
+   * same-field update still refuses the next write rather than being lost.
+   */
+  private async adoptDurableState(state: ConductState): Promise<void> {
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+
+    const durable = this.activeRegionChild === undefined
+      ? await readState(this.stateFilePath)
+      : await readConductStateOverlay(this.projectRoot, this.activeRegionChild);
+    if (!durable.ok) return;
+
+    const current = state as Record<string, unknown>;
+    for (const [field, value] of Object.entries(durable.value)) {
+      if (stateMutationValuesEqual(current[field], value)) continue;
+      if (!stateMutationValuesEqual(current[field], snapshot[field])) continue;
+      current[field] = value;
+      snapshot[field] = value;
+    }
+  }
+
   private async initializeRunState(state: ConductState): Promise<boolean> {
     const sessionStartedAt = Date.now();
     const isFreshFeatureSession = !state.run_started_at;
@@ -2780,24 +2805,40 @@ export class Conductor {
     child: ChildId,
     isLeaf?: boolean,
   ): Promise<void> {
+    // A routed exit can re-pend whole-feature gates while this process still
+    // carries the former host's overlay. Adopt clean values before changing
+    // stores, while the active overlay still combines that child with the
+    // feature document. The new region values below then replace the old
+    // child's region without making unsaved feature fields look clean.
+    await this.adoptDurableState(state);
     this.stateStore = createRoutedConductStateStore(this.projectRoot, child);
     const overlay = await readConductStateOverlay(this.projectRoot, child);
     if (!overlay.ok) throw new Error(`cannot read child ${child} BUILD state: ${overlay.error.message}`);
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
     for (const step of CHILD_REGION_STEPS) {
       const value = overlay.value[step];
-      if (value === undefined) delete state[step];
-      else state[step] = value;
+      if (value === undefined) {
+        delete state[step];
+        if (snapshot) delete snapshot[step];
+      } else {
+        state[step] = value;
+        if (snapshot) snapshot[step] = value;
+      }
     }
     // `last_step` is written alongside every region status through the routed
     // store.  Keeping the flat breadcrumb here makes its compare-and-swap
     // expectation target a field that does not exist in the child state,
     // falsely reporting a concurrent update on the first resumed dispatch.
     const lastStep = overlay.value.last_step;
-    if (lastStep === undefined) delete state.last_step;
-    else state.last_step = lastStep;
+    if (lastStep === undefined) {
+      delete state.last_step;
+      if (snapshot) delete snapshot.last_step;
+    } else {
+      state.last_step = lastStep;
+      if (snapshot) snapshot.last_step = lastStep;
+    }
     this.activeRegionChild = child;
     this.activeRegionIsLeaf = isLeaf;
-    this.persistedStateSnapshot = { ...state };
   }
 
   /** Rebind from a child overlay to feature state after a routed leaf return. */
@@ -6871,6 +6912,10 @@ export class Conductor {
           },
         });
         if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
+        // The preflight may have re-pended feature or region gates through a
+        // separate writer. Refresh only clean fields before the resume path
+        // computes its next transition or enters a child region.
+        await this.adoptDurableState(state);
         if (preflight.kind === 'navigate-leaf-to-build' || preflight.kind === 'navigate-host') {
           // Admission wrote the route and marker before its normal leaf
           // rewind.  A crash in that gap is recovered by rewinding the leaf's
@@ -16912,6 +16957,12 @@ export class Conductor {
    * the verdict and so a HALT routes the loop to stop.
    */
   private async runRebaseStep(state: ConductState): Promise<StepRunResult> {
+    const result = await this.runRebaseStepBody(state);
+    await this.adoptDurableState(state);
+    return result;
+  }
+
+  private async runRebaseStepBody(state: ConductState): Promise<StepRunResult> {
     // Phase 9.0: the native rebase-on-latest is a DAEMON finish-time mechanism.
     // In non-daemon runs (interactive `/conduct` and the entire test suite) we
     // must NOT invoke git here: a real `git rebase origin/<default>` against the

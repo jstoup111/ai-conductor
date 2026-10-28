@@ -1,4 +1,4 @@
-// Covers: task:9, task:rem-prd-audit-rem-prd-audit-S4.2-r1, task:rem-as-built-rem-asbuilt-b00b54a4-2-r1
+// Covers: task:1, task:9, task:rem-prd-audit-rem-prd-audit-S4.2-r1, task:rem-as-built-rem-asbuilt-b00b54a4-2-r1
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -142,6 +142,41 @@ describe('child-routed conduct state', () => {
 
     expect(result.kind).not.toBe('applied');
     await expect(readFile(flatPath, 'utf8')).resolves.toContain('"last_step": "plan_review"');
+  });
+
+  it('reopens only child 3 in the #3394 routed state layout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
+    roots.push(root);
+    const flatPath = join(root, '.pipeline', 'conduct-state.json');
+    const childOnePath = join(root, '.pipeline', 'children', '1', 'conduct-state.json');
+    const childTwoPath = join(root, '.pipeline', 'children', '2', 'conduct-state.json');
+    await writeState(flatPath, { plan_review: 'done' });
+    await createRoutedConductStateStore(root, parseChildId(1)!).apply({
+      field: 'test_suite', expected: undefined, next: 'done', intent: 'complete child one suite',
+    });
+    await createRoutedConductStateStore(root, parseChildId(2)!).apply({
+      field: 'test_suite', expected: undefined, next: 'done', intent: 'complete child two suite',
+    });
+    await createRoutedConductStateStore(root, parseChildId(3)!).apply({
+      field: 'test_suite', expected: undefined, next: 'pending', intent: 'reopen child three suite',
+    });
+    const originalFeature = await readFile(flatPath, 'utf-8');
+    const originalChildOne = await readFile(childOnePath, 'utf-8');
+    const originalChildTwo = await readFile(childTwoPath, 'utf-8');
+
+    await expect(createRoutedConductStateStore(root, parseChildId(3)!).applyBatch({
+      name: 'reopen selected gate after rebase',
+      mutations: [{
+        field: 'test_suite',
+        expected: 'done',
+        intent: 'reopen test_suite selected gate',
+        next: 'pending',
+      }],
+    })).resolves.toEqual({ kind: 'applied' });
+
+    await expect(readFile(flatPath, 'utf-8')).resolves.toBe(originalFeature);
+    await expect(readFile(childOnePath, 'utf-8')).resolves.toBe(originalChildOne);
+    await expect(readFile(childTwoPath, 'utf-8')).resolves.toBe(originalChildTwo);
   });
 
   it('does not let a flat completed build skip the active child build in Conductor selection', async () => {

@@ -1,4 +1,4 @@
-// Covers: task:32, task:33
+// Covers: task:3, task:32, task:33
 //
 // FINISH-boundary tests for the stacked `rebase` step.  Each test drives the
 // conductor's engine-native `runRebaseStep` (daemon mode) — or, for the
@@ -7,7 +7,7 @@
 // `feat/daemon-demo`.  No remote exists (base resolves to local `main`), and
 // the step runner is a fake whose `run` is never reached.
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -163,7 +163,7 @@ async function runFinishRebaseStep(subject: Fixture, events: ConductorEventEmitt
  */
 async function runStackedRebaseLifecycle(subject: Fixture) {
   const firstEvents = new ConductorEventEmitter();
-  const seen = observe(firstEvents, [...OBSERVED, 'step_completed', 'rebase_gate_invalidated']);
+  const seen = observe(firstEvents, [...OBSERVED, 'step_completed', 'rebase_gate_invalidated', 'loop_halt']);
   const firstRunner: StepRunner = { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) };
   // A daemon observes the park marker between completed work and the next
   // dispatch.  Stop at that boundary so this test can assert the persisted
@@ -193,6 +193,29 @@ async function runStackedRebaseLifecycle(subject: Fixture) {
   return { seen };
 }
 
+async function resumeStackedRebaseLifecycle(subject: Fixture): Promise<RecordedEvent[]> {
+  const events = new ConductorEventEmitter();
+  const seen = observe(events, ['step_started', 'loop_halt']);
+  let testSuiteStarted = false;
+  events.on('step_started', ((event: RecordedEvent) => {
+    if (event.step === 'test_suite') testSuiteStarted = true;
+  }) as never);
+  const resumed = new Conductor({
+    stateFilePath: subject.statePath,
+    stepRunner: { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) },
+    events,
+    projectRoot: subject.repo,
+    daemon: true,
+    featureSlug: 'demo',
+    mode: 'auto',
+    resume: true,
+    operatorParkBoundary: async () => testSuiteStarted,
+    verifyArtifacts: false,
+  });
+  await resumed.run();
+  return seen;
+}
+
 async function seedLeafRegionAtPreFinish(subject: Fixture, child: 2 | 3): Promise<void> {
   const childStore = join(subject.repo, '.pipeline', 'children', String(child));
   await mkdir(childStore, { recursive: true });
@@ -207,6 +230,71 @@ const OBSERVED = [
 ] as const;
 
 describe('FINISH rebase step on a stacked feature (real local Git)', () => {
+  // Covers: task:3
+  it('adopts an advanced-default restack so the resumed leaf reaches test_suite without a loop halt', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('src/upstream.ts', 'export const upstream = 1;\n');
+
+    const { seen: firstSeen } = await runStackedRebaseLifecycle(subject);
+    const resumedSeen = await resumeStackedRebaseLifecycle(subject);
+    const events = [...firstSeen, ...resumedSeen];
+    const rebaseCompleted = events.findIndex((event) => event.type === 'step_completed' && event.step === 'rebase');
+    const testSuiteStarted = events.findIndex((event, index) => index > rebaseCompleted && event.type === 'step_started' && event.step === 'test_suite');
+
+    expect(rebaseCompleted).toBeGreaterThanOrEqual(0);
+    expect(testSuiteStarted).toBeGreaterThan(rebaseCompleted);
+    expect(events.some((event) => event.type === 'loop_halt')).toBe(false);
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toThrow();
+  });
+
+  // Covers: task:3
+  it('keeps a no-op restack leaf complete without redispatching test_suite or halting', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+
+    await runStackedRebaseLifecycle(subject);
+    const resumedSeen = await resumeStackedRebaseLifecycle(subject);
+    const leaf = await readState(join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json'));
+
+    expect(leaf.ok && leaf.value).toMatchObject({ test_suite: 'done', build_review: 'done' });
+    expect(resumedSeen.some((event) => event.type === 'step_started' && event.step === 'test_suite')).toBe(false);
+    expect(resumedSeen.some((event) => event.type === 'loop_halt')).toBe(false);
+  });
+
+  // Covers: task:3
+  it('does not write while adopting the durable state already returned by a restack', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('src/upstream.ts', 'export const upstream = 1;\n');
+    const events = new ConductorEventEmitter();
+    const conductor = new Conductor({
+      stateFilePath: subject.statePath,
+      stepRunner: { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) },
+      events,
+      projectRoot: subject.repo,
+      daemon: true,
+      mode: 'auto',
+    });
+    const state = await readState(subject.statePath);
+    if (!state.ok) throw new Error(state.error.message);
+    const internals = conductor as unknown as {
+      persistedStateSnapshot: ConductState;
+      runRebaseStepBody(state: ConductState): Promise<StepRunResult>;
+      adoptDurableState(state: ConductState): Promise<void>;
+    };
+    internals.persistedStateSnapshot = { ...state.value };
+
+    await expect(internals.runRebaseStepBody(state.value)).resolves.toEqual({ success: true });
+    const rootBefore = await readFile(subject.statePath, 'utf8');
+    const leafPath = join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json');
+    const leafBefore = await readFile(leafPath, 'utf8');
+    await internals.adoptDurableState(state.value);
+
+    await expect(readFile(subject.statePath, 'utf8')).resolves.toBe(rootBefore);
+    await expect(readFile(leafPath, 'utf8')).resolves.toBe(leafBefore);
+  });
+
   // Covers: task:12
   it('reopens the two-child leaf suite after a non-DECIDE base refresh without reviving coverage_binding', async () => {
     const subject = await stackedFixture({ childCount: 2 });
