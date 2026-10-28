@@ -184,6 +184,7 @@ describe('kickback-budget inspect --child', () => {
     child: string | undefined,
     format: 'human' | 'json' = 'human',
   ): Promise<{ code: number; output: string }> {
+    if (child !== undefined) await execFileP('git', ['init', '-q'], { cwd: fixture.root });
     const lines: string[] = [];
     const code = await dispatchKickbackBudgetCommand(
       {
@@ -306,8 +307,6 @@ describe('kickback-budget inspect --child', () => {
   it('leaves non-stacked inspect output unchanged', async () => {
     const fixture = await makeFeature({ version: 1, gates: { build_review: baseEntry } });
     try {
-      await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
-      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n');
       const human = await inspect(fixture, undefined);
       expect(human.code).toBe(0);
       expect(human.output).not.toContain('Restack cascades');

@@ -50,9 +50,17 @@ export async function resolveCascadeAllowanceForWorktree(
     loadConfig(mainRoot),
     readState(join(worktree, '.pipeline', 'conduct-state.json')),
   ]);
-  if (!configResult.ok) throw new Error(configResult.error.message);
-  if (!stateResult.ok) throw new Error(stateResult.error.message);
-  return resolveRestackCascadeAllowance(configResult.config, stateResult.value.complexity_tier);
+  // The budget CLI has always rendered its built-in defaults before a project
+  // config exists. A missing optional config therefore means no cascade
+  // override; malformed or invalid config remains a refusal.
+  if (!configResult.ok && configResult.error.type !== 'missing') throw new Error(configResult.error.message);
+  // Existing budget surfaces treat unavailable state as an unrecorded tier;
+  // keep that compatibility while still refusing malformed configuration.
+  const tier = stateResult.ok ? stateResult.value.complexity_tier : undefined;
+  return resolveRestackCascadeAllowance(
+    configResult.ok ? configResult.config : {} as HarnessConfig,
+    tier,
+  );
 }
 
 /** Render the shared allowance phrase used by cascade cap surfaces. */
