@@ -1,8 +1,5 @@
 // Covers: pi-per-step-model-selection-via-wrapped-providers:task:14,task:15, codex-steps-resolve-the-newest-catalog-model-per-t:task:5,task:6,task:7
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { execa } from 'execa';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
@@ -302,34 +299,47 @@ describe('validateConfiguredProviderModels', () => {
 
 describe('resolveProviderModelTiers', () => {
   it('warns once per unpriced upgraded id, and never warns for priced upgrades', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'codex-tier-rate-card-'));
     const warn = vi.fn();
-    vi.stubEnv('HOME', home);
-    await mkdir(join(home, '.ai-conductor'), { recursive: true });
-    await writeFile(join(home, '.ai-conductor', 'rate-card.json'), JSON.stringify({
-      as_of: '2026-10-25T00:00:00.000Z',
-      source: 'https://example.invalid/rates',
-      models: {
-        'gpt-5.6-luna': { input_cost_per_token: 1 },
-        'gpt-5.6-terra': { input_cost_per_token: 1 },
-        'gpt-5.6-sol': { input_cost_per_token: 1 },
-        'gpt-6-astra': { input_cost_per_token: 1 },
+    const floorsOnlyRateCard = {
+      as_of: '2026-10-25T00:00:00.000Z', source: 'https://example.invalid/rates', models: {
+        'gpt-5.6-luna': { input_cost_per_token: 1 }, 'gpt-5.6-terra': { input_cost_per_token: 1 },
+        'gpt-5.6-sol': { input_cost_per_token: 1 }, 'gpt-6-astra': { input_cost_per_token: 1 },
       },
-    }));
+    };
+    await resolveProviderModelTiers({
+      discovery: installedCodex(), runner: runner({ exitCode: 0, stdout: CODEX_LISTING }), warn,
+      rateCardLoader: () => floorsOnlyRateCard,
+    });
 
-    try {
-      await resolveProviderModelTiers({
-        discovery: installedCodex(), runner: runner({ exitCode: 0, stdout: CODEX_LISTING }), warn,
-      });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6.1-sol has no rate-card price'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6-luna has no rate-card price'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-5.6-terra has no rate-card price'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-6-astra has no rate-card price'));
 
-      expect(warn).toHaveBeenCalledTimes(2);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6.1-sol has no rate-card price'));
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6-luna has no rate-card price'));
-      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-5.6-terra has no rate-card price'));
-      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-6-astra has no rate-card price'));
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+    resetProviderModelTierProbeForTest();
+    const pricedWarn = vi.fn();
+    await resolveProviderModelTiers({
+      discovery: installedCodex(), runner: runner({ exitCode: 0, stdout: CODEX_LISTING }), warn: pricedWarn,
+      rateCardLoader: () => ({
+        ...floorsOnlyRateCard,
+        models: {
+          ...floorsOnlyRateCard.models,
+          'gpt-6-luna': { input_cost_per_token: 1 }, 'gpt-6.1-sol': { input_cost_per_token: 1 },
+        },
+      }),
+    });
+    expect(pricedWarn).not.toHaveBeenCalled();
+
+    resetProviderModelTierProbeForTest();
+    const failedWarn = vi.fn();
+    await resolveProviderModelTiers({
+      discovery: installedCodex(), runner: runner({ exitCode: 2, stdout: '' }), warn: failedWarn,
+      rateCardLoader: () => floorsOnlyRateCard,
+    });
+    expect(failedWarn).toHaveBeenCalledExactlyOnceWith(
+      'Codex tier catalog unavailable (exit code 2); using floor model ids.',
+    );
   });
 
   it('resolves tiers during dispatching CLI boot before runtimes are created', async () => {
