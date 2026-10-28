@@ -406,6 +406,7 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
         { kind: 'track', path: '.docs/track/dep-bump.md' },
         { kind: 'intake', path: '.docs/intake/dep-bump.md' },
       ],
+      manifestChanged: true,
     });
 
     const message = await git(['log', '-1', '--format=%B'], dir);
@@ -482,7 +483,7 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     const countBeforeSecondLand = await git(['rev-list', '--count', 'HEAD'], dir);
     const second = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
 
-    expect(second).toEqual({ ...first, added: [] });
+    expect(second).toEqual({ ...first, added: [], manifestChanged: false });
     expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBeforeSecondLand);
     expect(await git(['rev-list', '--count', 'HEAD'], dir)).toBe(countBeforeSecondLand);
   });
