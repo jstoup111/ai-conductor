@@ -79,6 +79,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked features resume reliably after operator interruptions without re-running completed child work. ([implementation PR #3411](https://github.com/jstoup111/ai-conductor/pull/3411)).
 - `/pipeline` has a single mode that runs up to three independent tasks at once, sized to the host's free sub-agent slots, and runs sequentially instead of halting when slots are short; `/bootstrap` suggests the Codex and Claude Code settings that raise the cap. ([implementation PR #3437](https://github.com/jstoup111/ai-conductor/pull/3437)).
 - Build reviews now retain resolved findings across reconsideration laps. ([implementation PR #3414](https://github.com/jstoup111/ai-conductor/pull/3414)).
+- The implementation-quality build review now reports duplication and complexity findings completely, listing every affected site, so one repair can resolve them. ([implementation PR #3518](https://github.com/jstoup111/ai-conductor/pull/3518)).
 
 ### Removed
 
