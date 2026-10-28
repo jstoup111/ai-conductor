@@ -335,6 +335,8 @@ the manifest on prune. 23 tasks in three stacked slices.
 
 **Files:** src/conductor/src/engine/remediation-hints.ts, src/conductor/test/engine/remediation-hints-ownership.test.ts
 
+> **Amended 2026-10-28 by #3418:** Operator decision on the Task 12 BUILD halt: `src/conductor/src/engine/conductor.ts` joins this task's Files. The remediation sealed-artifact redirect call site calls `remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath))` with only the plan stem, so a change confined to `remediation-hints.ts` leaves the ownership classification unwired and Story 3 undelivered. That call site supplies the feature's ownership result, computed from the project root and base ref the way the step-entry ownership check already computes it. The legacy plan-stem path is unchanged, and the Done-when checks above are unchanged in meaning.
+
 **Dependencies:** Task 1
 
 ### Task 13: Resolve review-document inputs from the owned set
