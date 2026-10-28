@@ -19,6 +19,7 @@ import {
 } from '../../../src/engine/restack/restack-conflict-record.js';
 import { createRestackJournal, journalRefFor, pinStagingRef, readRestackJournal, writeRestackJournalBlob, type RestackJournalDraft } from '../../../src/engine/restack/restack-journal.js';
 import { cleanClearedAbortedRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
+import { replayChildRange } from '../../../src/engine/restack/restack-replay.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 
 const execFile = promisify(execFileCallback);
@@ -198,6 +199,7 @@ describe('restack conflict record (real local Git)', () => {
       parent: liveParent,
       committer: { name: 'Restack', email: 'restack@example.test', date: '2030-01-01T00:00:00Z' },
       git: makeGitRunner(subject.repo),
+      replay: (range, parent, committer, git) => replayChildRange(range, parent, committer, git, { comparisonCommits: [] }),
     });
 
     expect(result).toMatchObject({ kind: 'consumed', resolution: { child: child(2), tip: resolutionTip } });
