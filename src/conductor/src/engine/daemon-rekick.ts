@@ -942,6 +942,8 @@ export async function resumeRebaseFirst(opts: {
     let stackedOutcome: RebaseOutcome;
     if (contained.exitCode === 0) {
       stackedOutcome = { kind: 'noop', baseSha: targetSha, allChangedPaths: [] };
+      // Refresh the verdict a routed leaf return left unsatisfied (#3479).
+      await applyRebaseVerdicts(opts.worktreePath, stackedOutcome, opts.ranManualTest);
     } else {
       const restacked = await runRestack({
         worktree: opts.worktreePath,

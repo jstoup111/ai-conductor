@@ -309,9 +309,9 @@ rebase runs on a stacked feature.
 #### Happy Path
 - Given a three-child stack and a default advance, when the FINISH `rebase` step runs, then: a `base-refresh` restack moves child 1 onto `B'` and restacks child 2 and the leaf; the `rebase` step verdict's operation carries `cause: 'base-refresh'` and the whole-stack tuple: P = old leaf tip, B = `merge-base(old c1, B)`, O = `B'`, H = new leaf tip.
 - Given the one-closed-one-active stack mid-build and a default advance, with no routing round open, when the daemon re-kicks the feature, then: a `base-refresh` restack moves child 1 and the active child 2; no `rebase_skipped_for_stack` event is emitted.
-- Given `B'` is already an ancestor of `feat/c1/demo`, when the FINISH step or a re-kick runs, then no ref moves.
+- Given `B'` is already an ancestor of `feat/c1/demo`, including after a routed leaf return left the `rebase` verdict unsatisfied, when the FINISH step or a re-kick runs, then: no ref moves; the `rebase` verdict is rewritten satisfied with reason `branch already current with base`, so the gate passes on that first run.
 - Given a `base-refresh` restack applies, when the events are read, then `rebase_changed` is persisted with the whole-stack delta from `B` to `B'`, so base-caused test failures stay attributed to the base advance.
-- Given the leaf PR is mergeable and the base delta does not touch the feature's review inputs, when the FINISH step runs, then the existing mergeable-skip applies.
+- Given the leaf PR is mergeable and the base delta does not touch the feature's review inputs, when the FINISH step runs, then: the existing mergeable-skip applies; the `rebase` verdict is rewritten satisfied with the unstacked path's mergeable-skip reason.
 
 #### Negative Paths
 - Given a stacked feature, when the FINISH step or a re-kick runs, then no single-branch rebase runs on any child branch or the leaf.

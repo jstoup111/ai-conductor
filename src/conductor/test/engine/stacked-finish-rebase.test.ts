@@ -17,7 +17,7 @@ import { Conductor, type StepRunner, type StepRunResult } from '../../src/engine
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -332,6 +332,10 @@ describe('FINISH rebase step on a stacked feature (real local Git)', () => {
     expect(result).toEqual({ success: true });
     expect(seen.map((event) => event.type)).toEqual(['rebase_mergeable_skip']);
     expect(seen[0]).toMatchObject({ baseRef: 'main', baseSha: advanced });
+    expect(await readVerdict(subject.repo, 'rebase')).toMatchObject({
+      satisfied: true,
+      reason: expect.stringContaining('rebase skipped'),
+    });
     expect(await subject.refSnapshot()).toBe(before);
     const state = await readState(subject.statePath);
     expect(state.ok && state.value.rebase).toBe('done');
@@ -438,6 +442,50 @@ describe('stacked no-op when B-prime is already contained (real local Git)', () 
     ]);
     const state = await readState(subject.statePath);
     expect(state.ok && state.value.rebase).toBe('done');
+  });
+
+  // Covers: #3479
+  it('satisfies the rebase gate a routed leaf return re-pended when the FINISH step is a stacked no-op', async () => {
+    const subject = await stackedFixture({ preBranchAdvance: { path: 'src/upstream.ts', value: 'export const upstream = 1;\n' } });
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
+    });
+
+    const { result } = await runFinishRebaseStep(subject, new ConductorEventEmitter());
+
+    expect(result).toEqual({ success: true });
+    expect(await readVerdict(subject.repo, 'rebase')).toMatchObject({
+      satisfied: true,
+      reason: 'branch already current with base',
+    });
+  });
+
+  // Covers: #3479
+  it('satisfies the rebase gate a routed leaf return re-pended when the daemon re-kick is a stacked no-op', async () => {
+    const subject = await stackedFixture({ preBranchAdvance: { path: 'src/upstream.ts', value: 'export const upstream = 1;\n' } });
+    await writeFile(join(subject.repo, REKICK_SENTINEL), '');
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
+    });
+
+    const outcome = await resumeRebaseFirst({
+      worktreePath: subject.repo,
+      localBase: 'main',
+      events: new ConductorEventEmitter(),
+      ranManualTest: false,
+      slug: 'demo',
+      performRebase: vi.fn() as never,
+    });
+
+    expect(outcome).toBe('rebased');
+    expect(await readVerdict(subject.repo, 'rebase')).toMatchObject({
+      satisfied: true,
+      reason: 'branch already current with base',
+    });
   });
 
   // Covers: S10.3, task:rem-prd-audit-R10, task:33
