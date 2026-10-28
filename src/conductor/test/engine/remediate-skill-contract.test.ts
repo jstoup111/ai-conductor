@@ -140,6 +140,20 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/never report text/i);
   });
 
+  it('states the binding disposition rule and its one-round correction path', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+
+    expect(caseMode).toMatch(/`priorCases\[\]\.bindableDispositions`/);
+    expect(caseMode).toMatch(
+      /non-escalation row.*binding an `existingCaseId`.*must use a disposition.*prior case.*`bindableDispositions`/is,
+    );
+    expect(caseMode).toMatch(/refused binding.*`bindingCorrections`.*one corrected judgement/is);
+    expect(caseMode).toMatch(
+      /re-raised finding.*no longer present.*attempted applied action.*evidence-backed `refute`.*not.*bound `reject`/is,
+    );
+  });
+
   it('renders the same shared remediate skill in Claude and Codex candidates', async () => {
     const root = await mkdtemp(join(tmpdir(), 'remediate-skill-candidates-'));
     candidateRoots.push(root);

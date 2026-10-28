@@ -88,7 +88,7 @@ are:
 - `currentFindings`: every current operator-unresolved content finding, each with its rubric id,
   stable finding id, anchor, summary, and evidence locations.
 - `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
-  resolution evidence.
+  resolution evidence, and `priorCases[].bindableDispositions`.
   - A prior source may carry `finding`, a bounded digest of the earlier finding: `rubric`,
     `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`.
   - Treat a supplied `finding` digest as binding context when deciding whether a current finding is
@@ -127,6 +127,11 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
   the engine in `priorCases`, may bind that existing case only.
+- A non-escalation row binding an `existingCaseId` must use a disposition listed in that prior case's
+  `bindableDispositions`.
+- A refused binding is named in `bindingCorrections` for one corrected judgement. This is the single
+  correction retry; correct the named binding without changing the
+  supplied sources or inventing a new case.
 - `disposition` is closed: `act` | `defer` | `reject` | `refute` | `advisory` when the context declares severity thresholds.
 - `priority` is closed: `critical` | `high` | `medium` | `low`.
 - `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
@@ -153,6 +158,8 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   `upheld` verdict, and evidence entries containing only `path` and `excerpt`. Evidence proves current
   tree content: use no line numbers, hunks, commits, or SHAs. A case may be refuted once only; a later
   attempt to refute the same case is rejected for human review.
+- A re-raised finding judged no longer present on an attempted applied action receives an
+  evidence-backed `refute`, not a bound `reject`.
 
 ### Authority boundaries
 
