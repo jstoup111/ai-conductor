@@ -4739,6 +4739,7 @@ TIER: M`,
         }]),
         sessionStore: new ProviderSessionStore(),
         configuredProviders: ['claude'],
+        probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
         buildReviewPolicyCatalog: async () => [{
           semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
           canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',

@@ -405,6 +405,7 @@ describe('build_review lap scope runner', () => {
         availability,
       }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       buildReviewPolicyCatalog: async ({ skill }) => [{
         semanticName: skill, source: 'project', installationOrigin: policyRoot,
         canonicalSkillPath: join(policyRoot, 'SKILL.md'), packageRoot: policyRoot,
