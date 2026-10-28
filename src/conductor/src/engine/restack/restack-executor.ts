@@ -721,7 +721,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         parent = adopted;
         continue;
       }
-      if (options.cause === 'feature-repair' && range.kind !== 'leaf-unentered') {
+      if (options.cause === 'feature-repair') {
         const recorded = await consumeRecordedResolution({ slug: options.slug, range, parent, committer: journal.journal.committer, git });
         if (recorded.kind === 'stale') {
           await abortJournal(options.worktree, journal, git, moves);
