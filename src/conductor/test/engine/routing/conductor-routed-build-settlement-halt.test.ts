@@ -209,6 +209,20 @@ describe('routed BUILD settlement cap halt', () => {
     expect(halt).not.toContain('repair record is malformed');
   });
 
+  it('names remediation tasks before existing task repairs when both are routed', async () => {
+    const fixture = await subject({
+      roundId: 'r9',
+      items: [
+        { findingId: 'S1.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] },
+        { findingId: 'S2.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [], existingTask: true, taskIds: ['4', '7'] },
+      ],
+    });
+    await fixture.conductor.run();
+
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Routed round r9 remediation tasks: rem-prd-audit-6.r1, rem-prd-audit-6.r2\nRouted round r9 repairs existing tasks: 4, 7');
+  });
+
   it('halts needs-human with the unreadable route ref before BUILD', async () => {
     const fixture = await subject();
     await enableRoutedGrowthSnapshot(fixture.root);

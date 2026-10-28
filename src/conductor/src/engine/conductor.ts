@@ -10436,9 +10436,14 @@ export class Conductor {
             };
             const renderRoutedTasks = (): string => {
               if (refusedRound === undefined) return '';
-              if (refusedRound.remTaskIds.length > 0) return `Routed round ${refusedRound.roundId} remediation tasks: ${refusedRound.remTaskIds.join(', ')}`;
-              if (refusedRound.existingTaskIds.length > 0) return `Routed round ${refusedRound.roundId} repairs existing tasks: ${refusedRound.existingTaskIds.join(', ')}`;
-              return '';
+              const taskLines: string[] = [];
+              if (refusedRound.remTaskIds.length > 0) {
+                taskLines.push(`Routed round ${refusedRound.roundId} remediation tasks: ${refusedRound.remTaskIds.join(', ')}`);
+              }
+              if (refusedRound.existingTaskIds.length > 0) {
+                taskLines.push(`Routed round ${refusedRound.roundId} repairs existing tasks: ${refusedRound.existingTaskIds.join(', ')}`);
+              }
+              return taskLines.join('\n');
             };
             const alsoPending = otherFindings.length > 0
               ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
