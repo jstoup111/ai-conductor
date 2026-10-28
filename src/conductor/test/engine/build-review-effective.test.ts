@@ -1,7 +1,8 @@
-// Covers: task:2, task:9, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
+// Covers: task:2, task:9, task:19, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
@@ -178,6 +179,37 @@ describe('live build-review effective resolver', () => {
       scopeAggregate('indeterminate'),
       healthy,
     ].map(isBuildReviewLapHealthyForAbsenceRetirement)).toEqual([false, false, false, true]);
+  });
+
+  // Covers: task:11
+  it('counts scope-empty built-in and custom rubrics as completed effective evidence', () => {
+    const customScopeEmpty = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      customResults: { portablePolicy: { result: { kind: 'scope-empty', rubric: 'portablePolicy' } } },
+      currentCustomRubrics: ['portablePolicy'],
+    } as never);
+    const builtinScopeEmptyWithCoveredCustomFailure = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'scope-empty', rubric: 'testQuality' } },
+      customResults: {
+        portablePolicy: {
+          declaration: customStamp.declaration,
+          result: { kind: 'infrastructure-failure', rubric: 'portablePolicy', reason: 'policy-load-failed', detail: 'policy could not be loaded' },
+        },
+      },
+      currentCustomRubrics: ['portablePolicy'],
+    } as never);
+    const reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [{
+      kind: 'reduced-coverage', version: 'v1', feature,
+      identity: { declaration: customStamp.declaration, reason: 'policy-load-failed' },
+      rationale: 'The policy loader outage is already recorded.', operator: 'operator', acceptedAt: '2026-10-25T00:00:00.000Z',
+    }];
+
+    expect(deriveComposedBuildReviewEffectiveVerdict(customScopeEmpty, feature, [], [])).toMatchObject({ verdict: 'PASS' });
+    expect(deriveComposedBuildReviewEffectiveVerdict(
+      builtinScopeEmptyWithCoveredCustomFailure, feature, [], reducedCoverage,
+    )).toMatchObject({ verdict: 'PASS' });
   });
 
   it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
@@ -438,6 +470,34 @@ describe('live build-review effective resolver', () => {
       ]);
     });
 
+    // Covers: task:19
+    it('keeps case settlement ahead of out-of-delta classification when no finding starts unresolved', async () => {
+      const scope = {
+        reviewScope: {
+          mode: 'delta' as const,
+          deltaHunks: [{ path: 'test/a.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }],
+        },
+        changedFiles: [{
+          path: 'test/a.test.ts', changeKind: 'modified' as const,
+          hunks: [
+            { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: testQualityFinding.anchor.locus.contentHash },
+            { oldStart: 20, oldCount: 1, newStart: 20, newCount: 1, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+          ],
+        }],
+      };
+      const result = await resolveEffectiveBuildReviewVerdict(worktree, aggregate(), {
+        ...identityDeps,
+        scopes: { testQuality: scope },
+        createStore: noDispositions,
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { cases: [caseRecord(`testQuality:${builtinId}`, 'reject')] } } as never) }),
+      });
+
+      expect(result).toMatchObject({ ok: true, effective: {
+        verdict: 'PASS', unresolvedFindingIds: [], settledFindingIds: [builtinId],
+      } });
+      expect(result.ok && result.effective.outOfDeltaFindingIds).toBeUndefined();
+    });
+
     it('keeps the finding blocking for an open action case, another rubric, or unreadable case state', async () => {
       const blocked = { ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [builtinId] } };
       await expect(withCases(aggregate(), [caseRecord(`testQuality:${builtinId}`, 'act', { kind: 'action', status: 'reserved' })])).resolves.toMatchObject(blocked);
@@ -495,6 +555,58 @@ describe('live build-review effective resolver', () => {
       createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
     });
     expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], infrastructureFailureRubrics: [] } });
+  });
+
+  // Covers: task:19
+  it('uses the active child current-lap artifact and real changed-file ranges when every finding is otherwise out of delta', async () => {
+    const raw = aggregate();
+    const findingId = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: currentContractVersion, concernKind: testQualityFinding.concernKind, anchor: testQualityFinding.anchor,
+    } as never)!.id;
+    const reviewScope = {
+      mode: 'delta' as const, reason: 'delta' as const, sequence: 2,
+      unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity: 'policy',
+      reviewedHunks: [{ path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      deltaHunks: [{ path: 'test/a.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }],
+      outOfDeltaSourceIds: [],
+    };
+    const changedFileCalls: unknown[] = [];
+    const readPaths: string[] = [];
+    const readCurrentLapChangedFiles = async (input: unknown) => {
+      changedFileCalls.push(input);
+      return [{
+      path: 'test/a.test.ts', changeKind: 'modified' as const,
+      hunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+        { oldStart: 20, oldCount: 1, newStart: 20, newCount: 1, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+      ],
+      }];
+    };
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      child: parseChildId('1'),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
+      readFile: async (path: string) => {
+        readPaths.push(path);
+        return path.endsWith('/testQuality.json')
+          ? JSON.stringify({
+          version: 2, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: raw.results.testQuality,
+          provenance: { kind: 'fresh' }, reviewScope,
+        })
+          : '{}';
+      },
+      readCurrentLapChangedFiles,
+    } as unknown as BuildReviewEffectiveResolverDeps);
+
+    expect(result).toMatchObject({ ok: true, effective: {
+      verdict: 'PASS', unresolvedFindingIds: [], outOfDeltaFindingIds: [findingId],
+    } });
+    expect(changedFileCalls).toEqual([{ projectRoot: worktree, mergeBase: 'base', headSha: 'head' }]);
+    expect(readPaths).toEqual([
+      join(worktree, '.pipeline', 'children', '1', 'build-review', lapId, 'testQuality.json'),
+      join(worktree, '.pipeline', 'children', '1', 'build-review', lapId, 'security.json'),
+      join(worktree, '.pipeline', 'children', '1', 'build-review', lapId, 'implementationQuality.json'),
+    ]);
   });
 
   it('applies digestless reduced coverage only to the current custom declaration and closed failure reason', async () => {

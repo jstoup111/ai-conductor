@@ -17,6 +17,9 @@ Use only the supplied v3 projection. It identifies the frozen feature diff by re
 referenced file or `git diff <mergeBase>..HEAD -- <path>` when needed; do not use plan, story,
 ADR, transcript, or prior-review content.
 
+Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review
+identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.
+
 ## Judgement
 
 Report one finding per independent concrete defect. Anchor it to the changed hunk that introduces

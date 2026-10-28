@@ -42,6 +42,12 @@ export interface BuildReviewTestQualityProjectionInput {
   readonly preflight: TestQualityPreflightEvidence;
 }
 
+/** The engine-computed hunk subset a rubric must judge for this lap. */
+export interface BuildReviewProjectionReviewScope {
+  readonly mode: 'full' | 'delta';
+  readonly deltaHunks: readonly { readonly path: string; readonly contentHash: string }[];
+}
+
 /** The complete engine-owned source from which the closed projection is derived. */
 export interface BuildReviewProjectionSource {
   readonly lapId: BuildReviewLapId;
@@ -49,6 +55,8 @@ export interface BuildReviewProjectionSource {
   readonly testQuality: BuildReviewTestQualityProjectionInput;
   /** Security's whole-feature source at a stacked leaf; otherwise shared. */
   readonly securitySnapshot?: BuildReviewSourceSnapshot;
+  /** One engine-computed review scope per built-in rubric. */
+  readonly reviewScopes?: Readonly<Partial<Record<BuildReviewRubricId, BuildReviewProjectionReviewScope>>>;
 }
 
 /** One hunk's line-range header from a unified diff (`@@ -old +new @@`). */
@@ -76,7 +84,7 @@ export interface ChangedFileReference {
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
   readonly contractVersion: 'v4';
-  /** Versioned frozen-input shape; v4 carries typed scope and pinned evidence. */
+  /** Versioned frozen-input shape; v4 carries typed scope, pinned evidence and the engine-computed review scope. */
   readonly projectionVersion: 'v4';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
@@ -88,6 +96,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly headSha: string;
   /** The graded diff by reference — paths, change kinds, and hunk line ranges. */
   readonly changedFiles: readonly ChangedFileReference[];
+  /** The hunk subset this rubric judges; the whole diff remains context. */
+  readonly reviewScope: BuildReviewProjectionReviewScope;
 }
 
 export interface TestQualityProjection extends CommonProjection<'testQuality'> {
@@ -441,6 +451,21 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
   const snapshot = rubric === 'security'
     ? source.securitySnapshot ?? source.inputs.sourceSnapshot
     : source.inputs.sourceSnapshot;
+  const changedFiles = deriveChangedFileReferences(snapshot.diff);
+  const suppliedReviewScope = source.reviewScopes?.[rubric] ?? {
+    mode: 'full' as const,
+    deltaHunks: changedFiles.flatMap((file) => file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash }))),
+  };
+  // The scope is derived from durable engine state, but it still crosses this
+  // projection boundary. Copy and freeze it so later mutation of assembly
+  // inputs cannot change an already-sealed cache identity or reviewer input.
+  const reviewScope: BuildReviewProjectionReviewScope = Object.freeze({
+    mode: suppliedReviewScope.mode,
+    deltaHunks: Object.freeze(suppliedReviewScope.deltaHunks.map((hunk) => Object.freeze({
+      path: hunk.path,
+      contentHash: hunk.contentHash,
+    }))),
+  });
   return {
     rubric,
     contractVersion: descriptor.contract.output.version as 'v4',
@@ -450,7 +475,8 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     contentDigest: snapshot.contentDigest,
     mergeBase: snapshot.mergeBase,
     headSha: snapshot.headSha,
-    changedFiles: deriveChangedFileReferences(snapshot.diff),
+    changedFiles,
+    reviewScope,
   };
 }
 

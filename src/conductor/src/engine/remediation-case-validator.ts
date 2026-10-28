@@ -55,6 +55,8 @@ export interface RemediationCaseValidationReferences {
   readonly sourceReviewerSeverities?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   /** Resolved non-nit thresholds declared by the operator, keyed by rubric. */
   readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  /** Engine-selected exact owners and repair provenance candidates for each proposed row. */
+  readonly allowedDistinctFromCaseIdsByCaseRef?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface ProposedRemediationCase {
@@ -103,6 +105,19 @@ function hasValidDistinctFrom(caseRow: RemediationCaseRow): boolean {
         typeof candidate.caseId === 'string' && candidate.caseId.length > 0 && candidate.caseId.length <= 256 &&
         typeof candidate.reason === 'string' && candidate.reason.length > 0 && candidate.reason.length <= 8_000;
     });
+}
+
+function retainAllowedDistinctFrom(
+  caseRow: RemediationCaseRow,
+  references: RemediationCaseValidationReferences,
+): RemediationCaseRow {
+  const allowed = references.allowedDistinctFromCaseIdsByCaseRef?.[caseRow.caseRef];
+  if (allowed === undefined || caseRow.distinctFrom === undefined) return caseRow;
+  const allowedCaseIds = new Set(allowed);
+  const distinctFrom = caseRow.distinctFrom.filter((entry) => allowedCaseIds.has(entry.caseId));
+  if (distinctFrom.length > 0) return { ...caseRow, distinctFrom };
+  const { distinctFrom: _distinctFrom, ...withoutDistinctFrom } = caseRow;
+  return withoutDistinctFrom;
 }
 
 function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
@@ -354,7 +369,7 @@ export function validateRemediationCaseGraph(
     graph: {
       sourceOutcomes: judgement.sourceOutcomes,
       cases: judgement.cases.map((caseRow) => ({
-        case: caseRow,
+        case: retainAllowedDistinctFrom(caseRow, references),
         sources: sourcesByCase.get(caseRow.caseRef)!,
       })),
     },

@@ -227,6 +227,7 @@ import {
 import {
   scanInheritedState,
   renderDashboard,
+  resolveRowBudget,
   type InheritedState,
   type ParkedEntry,
   type ScanInheritedStateDeps,
@@ -1045,6 +1046,8 @@ export interface StartupDashboardBindingOptions {
   worktreeBase: string;
   processedDir: string;
   showCompleted?: boolean;
+  discoveryPartitions?: () => { waiting: import('./engine/daemon-dashboard.js').WaitingEntry[]; blocked: import('./engine/daemon-backlog.js').BlockedSpecItem[]; gated: import('./engine/daemon-backlog.js').GatedItem[] } | undefined;
+  consoleStream?: { isTTY?: boolean; columns?: number };
   log: (message: string) => void;
   discoverTick: (options: { refresh: boolean }) => Promise<BacklogItem[]>;
   scanInheritedState?: (deps: ScanInheritedStateDeps) => Promise<InheritedState>;
@@ -1104,9 +1107,13 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
   renderStartupDashboard: (pausedAtStartup: boolean) => Promise<void>;
 } {
   let cachedStartupDiscovery: BacklogItem[] | undefined;
+  let cachedPartitions: ReturnType<NonNullable<StartupDashboardBindingOptions['discoveryPartitions']>>;
   const discoverAndCacheStartup = async (discoverOptions: { refresh: boolean }): Promise<BacklogItem[]> => {
     const result = await options.discoverTick(discoverOptions);
-    cachedStartupDiscovery ??= result;
+    if (cachedStartupDiscovery === undefined) {
+      cachedStartupDiscovery = result;
+      cachedPartitions = options.discoveryPartitions?.();
+    }
     return result;
   };
 
@@ -1117,7 +1124,12 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
       const state = await (options.scanInheritedState ?? scanInheritedState)({
         worktreeBase: options.worktreeBase,
         processedDir: options.processedDir,
-        discover: () => Promise.resolve(cachedStartupDiscovery ?? []),
+        discover: () => {
+          if (cachedStartupDiscovery === undefined) return Promise.reject(new Error('startup discovery did not complete'));
+          return Promise.resolve(cachedPartitions === undefined
+            ? cachedStartupDiscovery
+            : { items: cachedStartupDiscovery, waiting: cachedPartitions.waiting, blocked: cachedPartitions.blocked, gated: cachedPartitions.gated });
+        },
         log: options.log,
         prStateProbe: options.prStateProbe,
       });
@@ -1127,6 +1139,8 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         ...state.eligible.map((entry) => entry.slug),
         ...state.processed.map((entry) => entry.slug),
         ...(state.waiting ?? []).map((entry) => entry.slug),
+        ...(state.blocked ?? []).map((entry) => entry.slug),
+        ...(state.gated ?? []).flatMap((entry) => entry.kind === 'spec' ? [entry.slug] : []),
         ...await options.listOperatorParkedSlugs(options.projectRoot),
       ]);
       const reconciliation = await options.reconcileParkedFeatures({
@@ -1152,8 +1166,10 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
       }
       const dashboardState = { ...state, parked };
       options.writeDashboard(
-        renderDashboard(dashboardState),
-        renderDashboard(dashboardState, { includeCompleted: options.showCompleted }),
+        renderDashboard(dashboardState, { mode: 'full' }),
+        options.showCompleted
+          ? renderDashboard(dashboardState, { mode: 'full', includeCompleted: true })
+          : renderDashboard(dashboardState, { mode: 'compact', rowBudget: resolveRowBudget(options.consoleStream ?? process.stdout) }),
       );
     },
   };
@@ -1293,7 +1309,7 @@ export async function runDaemonRekickStackPreflight(
 ): Promise<StackPreflightResult> {
   const result = await runStackPreflight(options);
   if (result.kind === 'halted' || result.kind === 'unavailable') {
-    log(`stack preflight ${options.slug}: ${result.kind}`);
+    log(`stack preflight ${options.slug}: ${result.kind} — ${result.detail}`);
   }
   return result;
 }
@@ -2611,6 +2627,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     showCompleted,
     log,
     discoverTick,
+    discoveryPartitions: () => workSource.partitions?.(),
     prStateProbe: async (prUrl) => {
       const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
       return state === 'OPEN' ? { prUrl, state: 'open' } : state === 'CLOSED' ? { prUrl, state: 'closed' } : undefined;

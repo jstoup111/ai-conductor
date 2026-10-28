@@ -1691,6 +1691,16 @@ the finish-time `rebase` step. It recovers an interrupted restack from its journ
 pending feature repair, then any chained base refresh. A live HALT stops it after journal recovery.
 Features without child state keep the ordinary rebase.
 
+Every preflight stop is durable. A `halted` or `unavailable` result writes `.pipeline/HALT` with
+its reason and emits `loop_halt`; a HALT already written by an inner step is kept, and the
+`loop_halt` reason appends its first line. When a resume authorization crossed the entry HALT and
+preflight still stops, the new reason replaces that unchanged entry HALT. Stops are `needs-human`
+except a journal owned by a live process, which halts `mechanical` and emits `restack_refused`
+with reason `journal-live-owner`. The `rebase` step fails with
+`stack preflight <halted|unavailable>: <reason>`; the daemon re-kick logs
+`stack preflight <slug>: <halted|unavailable> — <reason>`. A HALT that cannot be written fails the
+run with both reasons.
+
 The replay runs off the worktree. The engine then moves every child branch and closure ref in one
 compare-and-swap transaction and syncs the checked-out worktree without stashing; colliding
 untracked files move to the rebase untracked quarantine. A replay conflict goes to the configured

@@ -274,6 +274,7 @@ function piCapture() {
       isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
       isDirectory: () => false,
     }),
+    access: async () => {},
     env: {},
     homeDir: () => '/home/agent',
     cwd: () => '/workspace',

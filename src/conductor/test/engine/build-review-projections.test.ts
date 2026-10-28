@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { classifyBuildReviewCacheLookup } from '../../src/engine/build-review-cache.js';
+import { renderBuildReviewFrozenInputScope } from '../../src/engine/build-review-materialization.js';
 import {
   BUILD_REVIEW_PROVENANCE_KEYS,
   canonicalJson,
@@ -21,11 +23,11 @@ import type {
 import type { BuildReviewTestScope } from '../../src/engine/build-review-test-scope.js';
 import { analyzeBuildReviewTestScope } from '../../src/engine/build-review-test-scope.js';
 
-// The reduced-coverage publication contract and cache-identity behaviour are
-// covered by test/engine/build-review-cache.test.ts and the coordinator tests;
-// this file pins projection derivation itself.
-
 const lapId = parseBuildReviewLapId('lap-1')!;
+
+const DELTA_HUNKS = [
+  { path: 'src/a.ts', contentHash: 'sha256:delta-a' },
+] as const;
 
 function contentHash(content: string): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
@@ -199,6 +201,80 @@ function scopedSource(overrides: {
 }
 
 describe('build-review rubric projections', () => {
+  it('carries only the current delta scope in v4 projections and custom inputs', () => {
+    const deltaSource = {
+      ...source(),
+      reviewScopes: {
+        testQuality: { mode: 'delta' as const, deltaHunks: DELTA_HUNKS },
+        security: { mode: 'delta' as const, deltaHunks: DELTA_HUNKS },
+        implementationQuality: { mode: 'delta' as const, deltaHunks: DELTA_HUNKS },
+      },
+    };
+
+    const projections = deriveBuildReviewRubricProjections(deltaSource);
+    const customInput = renderBuildReviewFrozenInputScope({
+      contentDigest: 'sha256:content',
+      mergeBase: 'base',
+      headSha: 'head',
+      changes: [],
+      reviewScope: { mode: 'delta', deltaHunks: DELTA_HUNKS },
+    } as Parameters<typeof renderBuildReviewFrozenInputScope>[0]);
+
+    for (const projection of Object.values(projections)) {
+      expect(projection).toMatchObject({
+        projectionVersion: 'v4',
+        changedFiles: deriveChangedFileReferences(FIXTURE_DIFF),
+        reviewScope: { mode: 'delta', deltaHunks: DELTA_HUNKS },
+      });
+      expect(JSON.stringify(projection)).not.toMatch(/findings|case|disposition|settled|suppression|predecessorLapId/);
+    }
+    expect(customInput).toContain('"reviewScope":{"mode":"delta","deltaHunks":[{"path":"src/a.ts","contentHash":"sha256:delta-a"}]}');
+  });
+
+  it('binds the digest and cache identity to delta hunks without treating scope as provenance', () => {
+    const first = deriveBuildReviewRubricProjections({
+      ...source(),
+      reviewScopes: { security: { mode: 'delta' as const, deltaHunks: DELTA_HUNKS } },
+    }).security;
+    const same = deriveBuildReviewRubricProjections({
+      ...source(),
+      reviewScopes: { security: { mode: 'delta' as const, deltaHunks: DELTA_HUNKS } },
+    }).security;
+    const changed = deriveBuildReviewRubricProjections({
+      ...source(),
+      reviewScopes: { security: { mode: 'delta' as const, deltaHunks: [{ path: 'src/a.ts', contentHash: 'sha256:delta-b' }] } },
+    }).security;
+
+    expect(projectionDigest(same)).toBe(projectionDigest(first));
+    expect(projectionDigest(changed)).not.toBe(projectionDigest(first));
+
+    const engineIdentity = { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:skill-a' };
+    const semanticIdentity = {
+      declarationFingerprint: 'sha256:declaration-a', effectiveBundleDigest: 'sha256:bundle-a',
+      contractVersion: 'v4' as const, projectionVersion: 'v4' as const,
+      semanticInputDigest: 'sha256:input-a', executionPolicyFingerprint: 'sha256:execution-a',
+      engineStamp: engineIdentity.engineStamp, provider: 'claude', model: 'sonnet', effort: 'medium',
+    };
+    const lookupFor = (projection: typeof first) => ({
+      rubric: 'security' as const, contractVersion: 'v4' as const, projectionVersion: 'v4' as const,
+      projectionDigest: projection.digest, policyFingerprint: 'sha256:policy-a', engineIdentity,
+      semanticIdentity, lapId, snapshotDigest: projection.snapshotDigest,
+    });
+    const cached = {
+      version: 2, rubric: 'security', contractVersion: 'v4', projectionVersion: 'v4',
+      projectionDigest: first.digest, policyFingerprint: 'sha256:policy-a', engineIdentity, semanticIdentity,
+      result: {
+        kind: 'judged', rubric: 'security', contractVersion: 'v4', lapId: parseBuildReviewLapId('lap-cached')!,
+        snapshotDigest: first.snapshotDigest, findings: [], verdict: 'PASS',
+      },
+    };
+
+    expect(classifyBuildReviewCacheLookup(cached, lookupFor(same))).toMatchObject({ kind: 'hit' });
+    expect(classifyBuildReviewCacheLookup(cached, lookupFor(changed))).toEqual({
+      kind: 'miss', reason: 'projection-digest-mismatch',
+    });
+  });
+
   it('derives the whole frozen diff as a sealed security projection', () => {
     const threeFileSource = withSnapshot(source(), { diff: THREE_FILE_DIFF });
     const first = deriveBuildReviewRubricProjections(threeFileSource).security;
@@ -206,7 +282,7 @@ describe('build-review rubric projections', () => {
 
     expect(Object.keys(first).sort()).toEqual([
       'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
-      'mergeBase', 'projectionVersion', 'rubric', 'snapshotDigest',
+      'mergeBase', 'projectionVersion', 'reviewScope', 'rubric', 'snapshotDigest',
     ]);
     expect(first).toMatchObject({ rubric: 'security', changedFiles: deriveChangedFileReferences(THREE_FILE_DIFF) });
     expect(first.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
@@ -226,6 +302,39 @@ describe('build-review rubric projections', () => {
     expect(projections.security).toMatchObject({
       mergeBase: 'default-merge-base',
       changedFiles: deriveChangedFileReferences(THREE_FILE_DIFF),
+    });
+  });
+
+  // Covers: S3.1, task:rem-prd-audit-6.r2
+  it('keeps a stacked leaf security delta within the whole-feature snapshot while peers remain child-scoped', () => {
+    const child = withSnapshot(source(), { mergeBase: 'child-parent', diff: FIXTURE_DIFF });
+    const wholeFeature = { ...child.inputs.sourceSnapshot, mergeBase: 'default-merge-base', diff: THREE_FILE_DIFF };
+    const childHunks = deriveChangedFileReferences(FIXTURE_DIFF).flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+    const wholeFeatureHunks = deriveChangedFileReferences(THREE_FILE_DIFF).flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+    const wholeFeatureOnlyHunk = wholeFeatureHunks.find((hunk) => hunk.path === 'src/b.ts');
+    if (wholeFeatureOnlyHunk === undefined) throw new Error('fixture must contain a whole-feature-only hunk');
+
+    const projections = deriveBuildReviewRubricProjections({
+      ...child,
+      securitySnapshot: wholeFeature,
+      reviewScopes: { security: { mode: 'delta', deltaHunks: [wholeFeatureOnlyHunk] } },
+    });
+    const securityChangedHunks = projections.security.changedFiles.flatMap((file) =>
+      file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
+    );
+
+    expect(projections.security.reviewScope).toEqual({ mode: 'delta', deltaHunks: [wholeFeatureOnlyHunk] });
+    expect(securityChangedHunks).toEqual(expect.arrayContaining([...projections.security.reviewScope.deltaHunks]));
+    expect(childHunks).not.toContainEqual(wholeFeatureOnlyHunk);
+    expect(projections.testQuality).toMatchObject({
+      mergeBase: 'child-parent', changedFiles: deriveChangedFileReferences(FIXTURE_DIFF),
+    });
+    expect(projections.implementationQuality).toMatchObject({
+      mergeBase: 'child-parent', changedFiles: deriveChangedFileReferences(FIXTURE_DIFF),
     });
   });
 
@@ -313,7 +422,7 @@ describe('build-review rubric projections', () => {
     expect(Object.keys(projections)).toEqual(['testQuality', 'security', 'implementationQuality']);
     expect(Object.keys(projection).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
-      'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',
+      'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'reviewScope', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',
     ]);
     expect(projection).toMatchObject({
       rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
@@ -333,7 +442,7 @@ describe('build-review rubric projections', () => {
     expect(Object.isFrozen(projection)).toBe(true);
     expect(Object.keys(projections.implementationQuality).sort()).toEqual([
       'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase',
-      'projectionVersion', 'rubric', 'snapshotDigest',
+      'projectionVersion', 'reviewScope', 'rubric', 'snapshotDigest',
     ]);
     const serializedImplementationQuality = JSON.stringify(projections.implementationQuality);
     for (const privateInput of ['# Approved plan', 'stories/private-story.md', 'private stories body', 'decisions/private-adr.md', 'private ADR body']) {

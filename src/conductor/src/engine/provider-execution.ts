@@ -172,7 +172,7 @@ export interface PreparedCandidateOperationContext {
   /** Candidate-local review policy may tighten prompt, cwd, or access after preparation. */
   invoke(
     overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
-    onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+    onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>,
   ): Promise<InvokeResult>;
   /** Candidate-owned cleanup, always run from the provider execution finally. */
   onTeardown(teardown: () => Promise<void>): void;
@@ -468,6 +468,11 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider read-only review mode is unavailable.',
     recoveryAction: 'Install or update the provider so its read-only review mode is available, then re-queue this feature.',
   };
+  if (result.systemPromptUndeliverable === true) return {
+    provider, capability: 'system-prompt-delivery',
+    reason: result.output ?? 'Provider cannot receive the engine system prompt.',
+    recoveryAction: 'Declare systemPromptCapability on the provider and deliver InvokeOptions.systemPrompt, then re-queue this feature.',
+  };
   if (result.providerUnavailable === true) return {
     provider, capability: 'synchronous-spawn-permit',
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider lifecycle capability is unavailable.',
@@ -673,7 +678,7 @@ export interface InvokeProviderCandidateInput {
   modelFallbackLadder?: readonly string[];
   /** Allocate invocation-only resources after any per-model cache lookup. */
   prepareInvocationOptions?: (options: InvokeOptions) => Promise<InvokeOptions>;
-  onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>;
+  onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>;
   onCandidateStart?: (model: string | undefined) => void | Promise<void>;
 }
 
@@ -760,11 +765,11 @@ export async function invokeProviderCandidate({
         invocationOptions,
         prepareFallback,
         (rungOptions) => onModelRung
-          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, () => invokeModel(rungOptions))
+          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, (overrides) => invokeModel({ ...rungOptions, ...overrides }))
           : invokeModel(rungOptions),
       )
     : onModelRung
-      ? { result: await onModelRung({ providerKey, ...resolved }, () => invokeModel(invocationOptions)), model: resolved.model }
+      ? { result: await onModelRung({ providerKey, ...resolved }, (overrides) => invokeModel({ ...invocationOptions, ...overrides })), model: resolved.model }
       : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback, invokeModel);
   return {
     result: invocation.result,
@@ -1060,7 +1065,7 @@ export async function executeProviderCandidates({
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     const invokeProvider = (
       overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
-      onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+      onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>,
     ): Promise<InvokeResult> => {
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
@@ -1330,7 +1335,10 @@ export async function executeProviderCandidates({
       };
     }
     // A prepared cache hit or cancellation did not consult provider availability.
-    if (result.providerUnavailable === true) {
+    if (
+      result.providerUnavailable === true ||
+      result.systemPromptUndeliverable === true
+    ) {
       setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     }
     const invokedModel = invocation?.invokedModel;

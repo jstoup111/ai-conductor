@@ -23,6 +23,8 @@ marker remains in place and no journal was created, so neither the route nor any
 **Recovery:** after reviewing the repeated repair, authorize one more restack with
 `ai-conductor kickback-budget raise --gate restack` and resume the feature. Slices merged before
 the routing flag flip route without re-validation; do not reopen them merely to clear this halt.
+Which child to name, and what to do when the resume stops silently, is covered in
+[Stacked feature manual recovery](stacked-feature-manual-recovery.md#2-restack-cascade-cap).
 
 ## Symptom
 
@@ -44,8 +46,8 @@ All daemon-level evidence lives at the main repo root: `.daemon/`.
 
 **Symptom:** A merged plan never dispatches, and `ai-conductor daemon status` lists it in `BLOCKED`
 with a reason and remedy. This is a discovery refusal, not a feature HALT: no feature worktree or
-`.pipeline/HALT` exists yet. The startup dashboard does not render this state
-([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)); use `daemon status`.
+`.pipeline/HALT` exists yet. The startup dashboard also lists it under `BLOCKED (<n>)` and counts it
+on the `NEEDS YOU:` line; `daemon status` reads the latest snapshot without a restart.
 
 **Diagnosis:** Read the `BLOCKED` line. Common reasons are `unresolvable-stories-ref`,
 `stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`, and
@@ -1292,6 +1294,12 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 | `replay-mismatch`, `verification-failed` | The replayed result failed path-ownership or post-move verification. |
 | `flatten_refused` | A content-bearing merge in the named child conflicts with its new parent. |
 
+A restack journal still owned by a live process halts `mechanical`, not `needs-human`, with
+`restack journal owned by live process <pid> on <host>` (or `journal owner unreadable`) and a
+`restack_refused` event with reason `journal-live-owner`. Another operation is mid-restack; let it
+finish. No halt record is committed, and the re-kick sweep clears the HALT on a base-branch
+advance; otherwise [clear the halt](#clear-a-halt-and-let-the-feature-resume) once the owner exits.
+
 A `restack conflict child <k>` HALT lists the conflicting commit and paths the resolver could not
 settle within the rebase resolution attempt budget.
 
@@ -1314,6 +1322,9 @@ settle within the rebase resolution attempt budget.
 
 **Verification:** the feature's next dispatch records `restack_recovered` or `restack_applied`
 events and no new restack HALT.
+
+For routed-round faults, silent preflight stops, and resolver escalations such as halt-record-only
+replay commits, see [Stacked feature manual recovery](stacked-feature-manual-recovery.md).
 
 ### The completed rebase halted for missing feature content
 
@@ -1721,6 +1732,9 @@ carries no `resolve with` command; this section does not cover it.
 until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds one
 `remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
 repeating this halt.
+
+On a stacked child, `build-review findings` and `accept` do not yet read the child's state; see
+[Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
 
 ### build_review halted on a recurrence limit
 

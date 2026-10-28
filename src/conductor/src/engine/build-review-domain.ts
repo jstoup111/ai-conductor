@@ -63,7 +63,15 @@ export function classifyBuildReviewPolicyIncompatibility(
   };
 }
 
-export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
+export interface BuildReviewContentRegionReference {
+  readonly path: string;
+  readonly contentHash: string;
+  readonly display: string;
+  readonly occurrence?: number;
+  /** Engine-bound source lines for test-quality regions; never reviewer-controlled identity. */
+  readonly startLine?: number;
+  readonly endLine?: number;
+}
 export type BuildReviewFindingAnchor =
   | { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference }
   | { readonly rubric: 'security'; readonly locus: BuildReviewContentRegionReference }
@@ -94,7 +102,7 @@ export interface BuildReviewCandidateScopeResolutionOutOfScope { readonly candid
 export interface BuildReviewCandidateScopeResolutionIndeterminate { readonly candidateId: string; readonly status: 'indeterminate'; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; readonly missingEvidenceReason: string; }
 export type BuildReviewCandidateScopeResolution = BuildReviewCandidateScopeResolutionResolved | BuildReviewCandidateScopeResolutionOutOfScope | BuildReviewCandidateScopeResolutionIndeterminate;
 export interface BuildReviewCandidateScopeResolutionContext { readonly candidates: readonly BuildReviewCandidateScopeCandidate[]; }
-export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; readonly confidence?: number; readonly severity?: BuildReviewSeverity; }
+export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; readonly causeHunk?: BuildReviewContentRegionReference; readonly confidence?: number; readonly severity?: BuildReviewSeverity; }
 export interface BuildReviewJudgedResult { readonly kind: 'judged'; readonly rubric: BuildReviewRubricId; readonly lapId: BuildReviewLapId; readonly snapshotDigest: string; readonly contractVersion: BuildReviewRubricContractVersion; readonly findings: readonly BuildReviewFinding[]; readonly scopeResolutions?: readonly BuildReviewCandidateScopeResolution[]; readonly counterfactualSensitivity?: CounterfactualSensitivity; readonly verdict: 'PASS' | 'FAIL'; }
 /** Parser identity selected from the effective catalog member, never enabled-map membership. */
 export type BuildReviewEffectiveResultDescriptor =
@@ -113,6 +121,7 @@ export interface BuildReviewCustomFinding {
   readonly severity?: BuildReviewSeverity;
   readonly evidenceLocations: readonly string[];
   readonly sourceRegions: readonly BuildReviewCandidateScopeSourceRegion[];
+  readonly causeHunk?: BuildReviewContentRegionReference;
 }
 /** Frozen source authority for a custom reviewer payload. */
 export interface BuildReviewCustomFindingReferenceContext {
@@ -131,8 +140,10 @@ export interface BuildReviewCustomUnsupportedPayload {
 }
 export type BuildReviewCustomReviewerPayload = BuildReviewCustomFindingsPayload | BuildReviewCustomUnsupportedPayload;
 export interface BuildReviewSkip { readonly kind: 'skipped'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewSkipReason; }
+/** A delta lap with no unsettled hunks is settled without a reviewer dispatch. */
+export interface BuildReviewScopeEmpty { readonly kind: 'scope-empty'; readonly rubric: BuildReviewRubricId; }
 export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; readonly rejection?: BuildReviewJudgedResultRejection; }
-export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewInfrastructureFailure;
+export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewScopeEmpty | BuildReviewInfrastructureFailure;
 /** A non-judgment coverage fault derived only from an already-valid judged result. */
 export interface BuildReviewScopeIncompleteFault {
   readonly rubric: BuildReviewRubricId;
@@ -218,6 +229,17 @@ function buildReviewJudgedV4Schema(rubric: BuildReviewRubricId): BuildReviewJudg
             evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
             confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
             severity: { type: 'string', enum: BUILD_REVIEW_SEVERITIES },
+            causeHunk: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['path', 'contentHash', 'display'],
+              properties: {
+                path: NON_BLANK_STRING,
+                contentHash: NON_BLANK_STRING,
+                display: NON_BLANK_STRING,
+                occurrence: { type: 'integer' },
+              },
+            },
             anchor: {
               type: 'object',
               additionalProperties: false,
@@ -436,8 +458,18 @@ export function parseBuildReviewRubricContractVersion(value: unknown): BuildRevi
 // `occurrence` is the 0-based ordinal among equal-content regions in one path;
 // 0 is the unique/first region and normalizes away so identities never differ
 // on an explicit-versus-omitted zero.
-function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalBuildReviewRepoRelativePath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined); }
-function contentRegionReference(path: string, contentHash: string, display: string, occurrence = 0): BuildReviewContentRegionReference { return { path, contentHash, display, ...(occurrence > 0 ? { occurrence } : {}) }; }
+function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalBuildReviewRepoRelativePath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0)) || ((source.startLine === undefined) !== (source.endLine === undefined)) || (source.startLine !== undefined && (!Number.isInteger(source.startLine) || (source.startLine as number) < 1 || !Number.isInteger(source.endLine) || (source.endLine as number) < (source.startLine as number)))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined, source.startLine as number | undefined, source.endLine as number | undefined); }
+function strictRegion(value: unknown): BuildReviewContentRegionReference | undefined {
+  const source = object(value);
+  const parsed = region(value);
+  const allowed = source?.occurrence === undefined
+    ? ['path', 'contentHash', 'display']
+    : ['path', 'contentHash', 'display', 'occurrence'];
+  return source && parsed && Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key))
+    ? parsed
+    : undefined;
+}
+function contentRegionReference(path: string, contentHash: string, display: string, occurrence = 0, startLine?: number, endLine?: number): BuildReviewContentRegionReference { return { path, contentHash, display, ...(occurrence > 0 ? { occurrence } : {}), ...(startLine === undefined ? {} : { startLine, endLine }) }; }
 function candidateScopeSourceRegion(value: unknown): BuildReviewCandidateScopeSourceRegion | undefined {
   const source = object(value);
   return source && parseBuildReviewCanonicalPathReference(source.path) &&
@@ -552,7 +584,7 @@ function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionRef
     // use the next free ordinal in that same namespace.
     const occurrence = reference.occurrence ?? next;
     seen.set(key, Math.max(next, occurrence + 1));
-    return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence);
+    return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence, reference.startLine, reference.endLine);
   });
 }
 function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewContentRegionReference): boolean { return left.path === right.path && left.contentHash === right.contentHash && left.occurrence === right.occurrence; }
@@ -564,9 +596,10 @@ function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewC
  * ordinal.
  */
 function resolveContentRegion(regions: readonly BuildReviewContentRegionReference[], locus: BuildReviewContentRegionReference): BuildReviewContentRegionReference | undefined {
-  if (regions.some((candidate) => sameRegion(candidate, locus))) return locus;
+  const exact = regions.find((candidate) => sameRegion(candidate, locus));
+  if (exact) return contentRegionReference(locus.path, locus.contentHash, locus.display, exact.occurrence, exact.startLine, exact.endLine);
   const sameContent = regions.filter((candidate) => candidate.path === locus.path && candidate.contentHash === locus.contentHash);
-  return sameContent.length === 1 ? contentRegionReference(locus.path, locus.contentHash, locus.display, sameContent[0]!.occurrence) : undefined;
+  return sameContent.length === 1 ? contentRegionReference(locus.path, locus.contentHash, locus.display, sameContent[0]!.occurrence, sameContent[0]!.startLine, sameContent[0]!.endLine) : undefined;
 }
 /**
  * adr-2026-08-18 fixes finding identity as `sha256(whitespace-normalized
@@ -593,13 +626,21 @@ function declaredHeadTestTarget(entry: unknown): {
   readonly path: string;
   readonly title: string;
   readonly occurrence: number;
+  readonly span?: { readonly start: number; readonly end: number };
 } | undefined {
-  const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source);
+  const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source); const span = declaration && object(declaration.span);
   const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
   const titleChain = declaration?.titleChain;
   const occurrence = declaration?.occurrence;
   if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) return undefined;
-  return { path, title: titleChain.join(' > '), occurrence: occurrence as number };
+  return {
+    path,
+    title: titleChain.join(' > '),
+    occurrence: occurrence as number,
+    ...(span && Number.isInteger(span.start) && Number.isInteger(span.end) && (span.start as number) >= 0 && (span.end as number) >= (span.start as number)
+      ? { span: { start: span.start as number, end: span.end as number } }
+      : {}),
+  };
 }
 
 function declaredTitleOccurrenceIndex(projection: TestQualityProjection): DeclaredTitleOccurrenceIndex {
@@ -647,13 +688,25 @@ function declaredTitleOccurrenceIndex(projection: TestQualityProjection): Declar
   }
   return { targets, candidatesById, candidates };
 }
+function targetLines(scope: Record<string, unknown>, target: { readonly path: string; readonly span?: { readonly start: number; readonly end: number } }): { readonly startLine: number; readonly endLine: number } | undefined {
+  if (!target.span || !Array.isArray(scope.evidence)) return undefined;
+  for (const entry of scope.evidence) {
+    const evidence = object(entry); const source = evidence && object(evidence.source); const region = evidence && object(evidence.region);
+    if (!evidence || source?.fileName !== target.path || source.side !== 'head' || region?.start !== target.span.start || region.end !== target.span.end) continue;
+    if (Number.isInteger(evidence.startLine) && (evidence.startLine as number) > 0 && Number.isInteger(evidence.endLine) && (evidence.endLine as number) >= (evidence.startLine as number)) {
+      return { startLine: evidence.startLine as number, endLine: evidence.endLine as number };
+    }
+  }
+  return undefined;
+}
 function targetRegions(projection: TestQualityProjection, declaredTitles: DeclaredTitleOccurrenceIndex): readonly BuildReviewContentRegionReference[] | undefined {
   const scope = object(projection.testScope);
   if (!scope || !Array.isArray(scope.targets)) return undefined;
   return scope.targets.flatMap((target) => {
     const declared = declaredHeadTestTarget(target);
     if (!declared || !declaredTitles.targets.get(`${declared.path}\u0000${declared.title}`)?.includes(declared.occurrence)) return [];
-    return [contentRegionReference(declared.path, normalizedTitleHash(declared.title), declared.title, declared.occurrence)];
+    const lines = targetLines(scope, declared);
+    return [contentRegionReference(declared.path, normalizedTitleHash(declared.title), declared.title, declared.occurrence, lines?.startLine, lines?.endLine)];
   });
 }
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
@@ -687,6 +740,8 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
       contentHash: declaredCandidate || occurrences ? normalizedTitleHash(title) : resolution.sourceRegion.contentHash,
       display: resolution.sourceRegion.display,
       ...(occurrence === undefined ? {} : { occurrence }),
+      startLine: resolution.sourceRegion.startLine,
+      endLine: resolution.sourceRegion.endLine,
     }];
   });
   const changedTestRegions = withOccurrenceOrdinals(targets !== undefined
@@ -695,20 +750,21 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
   return { changedTests: projection.changedTestSelectors, changedTestRegions, changedContentRegions: [], changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
 }
 function securityRegion(value: unknown): BuildReviewContentRegionReference | undefined {
-  const source = object(value);
-  const locus = region(value);
-  if (!locus || !source) return undefined;
-  const allowed = source.occurrence === undefined
-    ? ['path', 'contentHash', 'display']
-    : ['path', 'contentHash', 'display', 'occurrence'];
-  return Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && CUSTOM_SOURCE_REGION_CONTENT_HASH.test(locus.contentHash)
+  const locus = strictRegion(value);
+  return locus && CUSTOM_SOURCE_REGION_CONTENT_HASH.test(locus.contentHash)
     ? locus
     : undefined;
 }
 export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFindingAnchor | undefined {
   const source = object(value);
   const locus = source && region(source.locus);
-  if (source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus)))) return { rubric: 'testQuality', locus };
+  if (source?.rubric === 'testQuality' && locus) {
+    if (!references?.changedTestRegions) return { rubric: 'testQuality', locus };
+    const resolved = references.changedTestRegions.find((candidate) => sameRegion(candidate, locus));
+    return resolved
+      ? { rubric: 'testQuality', locus: contentRegionReference(locus.path, locus.contentHash, locus.display, resolved.occurrence, resolved.startLine, resolved.endLine) }
+      : undefined;
+  }
   const contentRubric = source?.rubric === 'security' || source?.rubric === 'implementationQuality'
     ? source.rubric
     : undefined;
@@ -716,7 +772,7 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
   const contentLocus = parsedLocus && references ? resolveContentRegion(references.changedContentRegions, parsedLocus) : parsedLocus;
   return contentLocus ? { rubric: contentRubric!, locus: contentLocus } : undefined;
 }
-function finding(value: unknown, rubric: BuildReviewRubricId, contractVersion: BuildReviewRubricContractVersion, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; const severity = contractVersion === 'v4' ? parseBuildReviewSeverity(source?.severity) : undefined; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) || (contractVersion === 'v4' && !severity)) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }), ...(severity === undefined ? {} : { severity }) }; }
+function finding(value: unknown, rubric: BuildReviewRubricId, contractVersion: BuildReviewRubricContractVersion, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const causeHunk = source?.causeHunk === undefined ? undefined : strictRegion(source.causeHunk); const confidence = source?.confidence; const severity = contractVersion === 'v4' ? parseBuildReviewSeverity(source?.severity) : undefined; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (source.causeHunk !== undefined && !causeHunk) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) || (contractVersion === 'v4' && !severity)) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(causeHunk === undefined ? {} : { causeHunk }), ...(confidence === undefined ? {} : { confidence: confidence as number }), ...(severity === undefined ? {} : { severity }) }; }
 const TEST_QUALITY_EVIDENCE_FIELDS = ['scopeResolutions', 'relocationAudit', 'counterfactualSensitivity'] as const;
 function judgedFindingIdentityId(rubric: BuildReviewRubricId, contractVersion: BuildReviewRubricContractVersion, concernKind: string, anchor: BuildReviewFindingAnchor): string {
   const locus = anchor.locus;
@@ -741,22 +797,25 @@ function hasDuplicateJudgedFindingIdentity(findings: readonly BuildReviewFinding
 
 export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if ((rubric === 'security' || rubric === 'implementationQuality') && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security' && rubric !== 'implementationQuality') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, contractVersion, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope') || (source.rubric === 'security' && source.reason === 'leaf-only')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
+export function parseBuildReviewScopeEmpty(value: unknown): BuildReviewScopeEmpty | undefined { const source = object(value); return source?.kind === 'scope-empty' && Object.keys(source).length === 2 && Object.hasOwn(source, 'rubric') && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') ? { kind: 'scope-empty', rubric: source.rubric } : undefined; }
 export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
 const CUSTOM_FINDINGS_PAYLOAD_KEYS: readonly string[] = ['kind', 'version', 'findings'];
-const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'confidence', 'severity'];
+const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'causeHunk', 'confidence', 'severity'];
 function customFinding(value: unknown, version: BuildReviewCustomFindingContractVersion): BuildReviewCustomFinding | undefined {
   const source = object(value);
   const requiredKeys = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'];
-  const optional = version === 'v2' ? ['confidence', 'severity'] : ['confidence'];
+  const optional = version === 'v2' ? ['confidence', 'severity', 'causeHunk'] : ['confidence'];
   if (!source || !Object.keys(source).every((key) => requiredKeys.includes(key) || optional.includes(key)) || !requiredKeys.every((key) => Object.hasOwn(source, key))) return undefined;
   const confidence = source.confidence;
   const evidenceLocations = source.evidenceLocations;
   const sourceRegions = source.sourceRegions;
+  const causeHunk = source.causeHunk === undefined ? undefined : strictRegion(source.causeHunk);
   const severity = version === 'v2' ? parseBuildReviewSeverity(source.severity) : undefined;
   if (!CUSTOM_CONCERN_ID.test(source.concernId as string) || !text(source.summary) || source.summary.length > MAX_CUSTOM_SUMMARY_LENGTH ||
     !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.length > MAX_CUSTOM_EVIDENCE_LOCATIONS ||
     evidenceLocations.some((location) => !text(location) || location.length > MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH) ||
     !Array.isArray(sourceRegions) || sourceRegions.length === 0 || sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS ||
+    (source.causeHunk !== undefined && !causeHunk) ||
     (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) || (version === 'v2' && severity === undefined)) return undefined;
   const parsedRegions = sourceRegions.map(customSourceRegion);
   if (parsedRegions.some((region) => !region)) return undefined;
@@ -765,6 +824,7 @@ function customFinding(value: unknown, version: BuildReviewCustomFindingContract
     summary: source.summary as string,
     evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
     sourceRegions: Object.freeze(parsedRegions as BuildReviewCandidateScopeSourceRegion[]),
+    ...(causeHunk === undefined ? {} : { causeHunk }),
     ...(confidence === undefined ? {} : { confidence: confidence as number }),
     ...(severity === undefined ? {} : { severity }),
   });
@@ -913,7 +973,7 @@ export function parseBuildReviewReviewerPayload(
   const judged = parseBuildReviewJudgedResult(value);
   return judged?.rubric === descriptor.rubric ? judged : undefined;
 }
-export function parseBuildReviewRubricResult(value: unknown): BuildReviewRubricResult | undefined { return parseBuildReviewJudgedResult(value) ?? parseBuildReviewSkip(value) ?? parseBuildReviewInfrastructureFailure(value); }
+export function parseBuildReviewRubricResult(value: unknown): BuildReviewRubricResult | undefined { return parseBuildReviewJudgedResult(value) ?? parseBuildReviewSkip(value) ?? parseBuildReviewScopeEmpty(value) ?? parseBuildReviewInfrastructureFailure(value); }
 /**
  * This deliberately consumes a typed judged result, never provider output.
  * A malformed scope response remains in the ordinary malformed-result repair
@@ -1004,6 +1064,7 @@ export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric:
       if (!text(item.summary)) problems.push(rejectionProblem(`findings[${index}].summary`, 'must be a non-empty string'));
       if (parseBuildReviewSeverity(item.severity) === undefined) problems.push(rejectionProblem(`findings[${index}].severity`, `must be one of ${BUILD_REVIEW_SEVERITIES.map((member) => `"${member}"`).join(', ')}`));
       if (!Array.isArray(item.evidenceLocations) || item.evidenceLocations.length === 0 || item.evidenceLocations.some((location) => !text(location))) problems.push(rejectionProblem(`findings[${index}].evidenceLocations`, 'must be a non-empty array of "path:line" strings'));
+      if (item.causeHunk !== undefined && !strictRegion(item.causeHunk)) problems.push(rejectionProblem(`findings[${index}].causeHunk`, 'must be a content-region reference {"path", "contentHash", "display", "occurrence"?}'));
       const anchor = object(item.anchor);
       if (!anchor) { problems.push(rejectionProblem(`findings[${index}].anchor`, `is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`)); return; }
       if (anchor.rubric !== rubric) problems.push(rejectionProblem(`findings[${index}].anchor.rubric`, `must be "${rubric}"`));

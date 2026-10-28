@@ -57,8 +57,8 @@ warnings until the spec is fixed.
 Run `ai-conductor daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
 machine-readable reason, remedy, and the latest scan age without invoking Git or the network. An
 empty snapshot reports that no specs are blocked; no valid snapshot means the blocked state is
-unknown until discovery completes. The startup dashboard does not yet render blocked specs;
-dashboard treatment is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
+unknown until discovery completes. The [startup dashboard](#read-the-startup-dashboard) also lists
+blocked specs under `BLOCKED (<n>)`.
 
 DECIDE artifacts are human-authored before merge. The daemon pre-seeds every DECIDE step (recording
 tier-skipped steps as skipped) and starts at BUILD; it never authors or reruns DECIDE work.
@@ -95,8 +95,7 @@ ai-conductor daemon status
 Sweeps the whole project registry and prints one badge line per repo — state, path, pid, since,
 engine version id, pause metadata, last log line and its mtime, and tmux session up/down. It then
 prints `GATED:`, `BLOCKED`, and `SHIPPED PRS:` sections plus an attribution-agreement line. `BLOCKED` reads the
-latest discovery snapshot and lists every blocked spec's reason and remedy; it is not yet part of
-the startup dashboard ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)). The nine
+latest discovery snapshot and lists every blocked spec's reason and remedy. The nine
 state badges and what each one means are in [cli reference](../reference/cli.md#daemon-status);
 `● running` is the one you want.
 
@@ -131,6 +130,32 @@ readable and greppable:
 Filter one feature's narrative with `ai-conductor daemon logs | grep '\[<slug>\]'`. Untagged `[daemon]`
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
+
+### Read the startup dashboard
+
+At startup the daemon prints an inherited-state dashboard built from its first discovery pass. Its
+first line is the attention summary: `NEEDS YOU: nothing`, or counts joined by ` · ` —
+`<n> halted`, `<n> blocked`, `<n> gated`, `<n> parked need review` (orphan or merged-ready), and
+`<n> retained need action` (any reason except `pr-open-awaiting-main`).
+
+Each slug lands in exactly one group, by precedence: PARKED, HALTED, IN-PROGRESS, RETAINED
+WORKTREES, PROCESSED, BLOCKED, GATED, WAITING, ELIGIBLE. Groups print in action order instead:
+HALTED, BLOCKED, GATED, IN-PROGRESS, WAITING, ELIGIBLE, PARKED, RETAINED WORKTREES, NEVER-STARTED,
+PROCESSED. Empty BLOCKED and WAITING groups are omitted.
+
+If the startup discovery pass did not complete, BLOCKED, GATED, WAITING, and ELIGIBLE each print
+`<GROUP>: unknown — discovery did not complete`, and the attention line ends with
+`· discovery state unknown`. Unknown is not empty.
+
+The dashboard goes to two sinks:
+
+| Sink | Render |
+| --- | --- |
+| `.daemon/daemon.log` | Full: every row of every group except PROCESSED. |
+| Console (default) | Compact: rows clipped to the terminal width (80 outside a TTY, minimum 40) with a trailing `…`. PARKED and RETAINED WORKTREES list only rows that need action; NEVER-STARTED and PROCESSED print counts only. HALTED, BLOCKED, GATED-spec, PARKED, and RETAINED rows put the reason and remedy on an indented second line. |
+| Console with `--completed`/`--all` | Full, including PROCESSED rows. |
+
+When a compact row is clipped, read the full row with `ai-conductor daemon logs`.
 
 ### Build-review rubric progress
 

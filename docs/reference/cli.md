@@ -199,7 +199,9 @@ not yet delivered; `--json` reports them under `carriedSources`, `operatorResolv
 `min_severity` threshold, or downgraded by the adjudicator — with its rubric, severity, reviewer summary,
 and any adjudicator rationale; `--json` reports them under `advisoryFindings` as `id`, `rubric`,
 `severity`, `threshold`, and `origin` (`threshold` or `adjudicated`), omitting summaries and rationales,
-and omits the key when empty. `accept` changes state only from an interactive terminal with
+and omits the key when empty. Human output also lists `Out-of-delta findings` — findings outside
+the lap's [review delta](../explanation/gates.md#later-laps-judge-only-the-unsettled-delta), which
+never block. `findings` reads the same shared effective-verdict resolver the live gate uses. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
@@ -474,7 +476,7 @@ ai-conductor daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-
 | `--idle-poll <seconds>` | integer | `60` | Seconds between polls when the backlog is empty. |
 | `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls; dispatching a feature restarts the count. |
 | `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. |
-| `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. |
+| `--completed`, `--all` | boolean | `false` | Print the full startup dashboard to the console, including already-processed features, instead of the compact width-clipped render. The persisted log sink never includes processed rows. See [read the startup dashboard](../guides/running-the-daemon.md#read-the-startup-dashboard). |
 
 Every integer flag reads the next token, and a token beginning with `--` is treated as absent. So
 `ai-conductor daemon --max-items --continuous` silently uses the default for `--max-items` rather than
@@ -504,8 +506,8 @@ the latest RSS as `mem <MB> at <timestamp>`. It then prints a `GATED:` section f
 reason, and remediation text, followed by the snapshot age. An empty valid snapshot prints that no
 specs are blocked. If the snapshot is missing, malformed, or unreadable, status reports blocked
 state unknown rather than implying an all-clear. This is a read-only local-file view: it does not
-invoke Git, GitHub, or the network. The daemon startup dashboard does not yet render this section;
-that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
+invoke Git, GitHub, or the network. The daemon startup dashboard lists the same specs under
+`BLOCKED (<n>)` from its own startup discovery pass.
 
 A `SHIPPED PRS:` section follows `BLOCKED`. It reads the newest `shipped_pr_readiness` event per PR
 from `.daemon/events.jsonl` and lists each PR still in `.daemon/mergeable-watch.jsonl` whose verdict

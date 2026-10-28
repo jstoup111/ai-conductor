@@ -733,6 +733,48 @@ conformance.
 Kickback counting is untouched by the consolidation — a `build_review` FAIL routed to `build` counts
 against the per-gate cap like any other.
 
+### Later laps judge only the unsettled delta
+
+The engine decides each rubric's review scope before it derives the rubric's projection. Each lap's
+branch artifact, `.pipeline/build-review/<lap>/<rubric>.json`, records that decision as `reviewScope`:
+`mode` (`full` or `delta`), `reason`, `sequence`, `mergeBase`, `headSha`, `policyIdentity`,
+`predecessorLapId`, `reviewedHunks`, `deltaHunks`, `outOfDeltaSourceIds`, and `unreadableLapIds`. A
+hunk is identified by its path and a content hash of its `+`/`-` lines only, so line shifts and pure
+rebases do not change it. The decision is persisted as `build_review_review_scope` with `mode`,
+`reason`, `deltaHunkCount`, and `settledHunkCount`.
+
+A rubric runs a **full** lap, judging every current hunk, for the first matching reason:
+
+| Reason | Cause |
+|---|---|
+| `record-unreadable` | A prior record cannot be parsed and no readable record already lists its lap. One corrupt record costs one full lap. |
+| `first-lap` | The rubric has no readable prior record. |
+| `merge-base-changed` | The merge base differs from the latest record's, whatever caused the rebase. |
+| `version-changed` | The rubric's policy identity changed: contract or projection version, declaration fingerprint, skill or policy bundle digest, provider, model, effort, or the `testQuality` test-scope identity. An engine rebuild alone does not count. |
+| `open-source-unmapped` | An open case whose action is not applied owns a source on a path with no current hunk. |
+
+Otherwise the lap is a **delta** lap (reason `delta`) over every hunk that is not settled. A hunk is
+settled when an earlier lap at the same merge base and policy identity judged it, no finding from those
+laps that maps to it still blocks, no open, `failed`, or `reserved` action case owns a source on it,
+and, for `testQuality`, no indeterminate scope candidate maps to it. Hunks owned by an open case
+therefore always stay in scope. A re-lap at the same lap id, such as a mechanical retry or a
+disposition-only rejoin, reuses that lap's recorded scope.
+
+The projection's `changedFiles` stays the whole diff as context, and gains `reviewScope: { mode,
+deltaHunks }`. Rubrics still receive no history. A rubric whose delta is empty is not dispatched and
+runs no `testQuality` preflight; its outcome is `scope-empty`, announced on
+`build_review_rubric_skipped` with reason `scope-empty`. It contributes no findings, does not fail
+the aggregate, and is never evidence that a source is no longer raised.
+
+In a delta lap, a finding whose mapped hunks are all settled is **out of delta**, unless its
+reviewer severity is `critical` or its optional `causeHunk` names a hunk in this lap's delta. The
+engine verifies only that the named hunk is in the delta; causality is the reviewer's judgement. A
+full lap classifies nothing as out of delta. Out-of-delta findings sit after settled and carried
+findings in the effective verdict. They never block, are never judged, never route BUILD, never charge
+a kickback, and are never accepted risk. They are durable in `reviewScope.outOfDeltaSourceIds`,
+counted as `outOfDeltaCount` on `build_review_outer_verdict`, and listed by
+[`build-review findings`](../reference/cli.md#ai-conductor-build-review).
+
 ### Post-join build-review adjudication
 
 For a current aggregate FAIL, the daemon normally runs one `remediate` judgement after the rubric
@@ -754,6 +796,14 @@ admission after the expansion round, or one naming an id absent from the plan, h
 provider name and its bounded exit facts, suffixed `(expansion round)` on the second round. The plan
 index is capped at 1,024 entries; a larger plan halts as an adjudication context `field-overflow`.
 
+Prior case sources may carry a `finding` digest read from the lap artifact that raised them: `rubric`,
+`concernKind`, a `summary` of at most 1,000 bytes, up to 8 `evidenceLocations`, and `lapId`. Only the
+latest 4 sources of each case carry one. All digests share a budget of the smaller of 64 KiB and the
+headroom left under the context size limit after cases, current sources, and plan context; it is
+recomputed for an expansion round. Oldest digests drop first, the count is reported as
+`priorDigestsOmitted`, and digests never cause an overflow. A source whose lap artifact is missing has
+no digest. Digests are binding context for the judge, not report text.
+
 The engine validates the judgement as a complete source-to-case mapping, assigns durable case and
 effect identities, and records the feature-local state before applying an effect. An action publishes
 a durable BUILD work order and returns to `build`; a justified deferral files or reuses its marked
@@ -771,8 +821,12 @@ Only open cases own a source. A later judgement may re-raise a source that resol
 links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the
 `build_review` kickback cap like any other. An unbound `act` re-raise over a resolved action case is a
 recurrence: the new case records that owner in `recurrenceOf`, unless the judgement declares it
-distinct through `distinctFrom` with a non-empty reason. A declaration naming any other case is
-ignored. A recurrence lineage — the case and its `recurrenceOf` ancestry — gets three applied BUILD
+distinct through `distinctFrom` with a non-empty reason. A new unbound `act` case with no such owner,
+one of whose sources maps to a delta hunk, may instead continue a repair: its provenance candidates
+are act cases with an applied action that own a source raised in the predecessor lap on the same
+path. The engine stamps `recurrenceOf` with the candidate whose lineage has the most applied attempts,
+breaking ties by lowest case id, unless `distinctFrom` names that candidate with a reason. A
+declaration naming any other case is ignored. A recurrence lineage — the case and its `recurrenceOf` ancestry — gets three applied BUILD
 attempts. A re-raise whose lineage already holds three halts `needs-human` before BUILD dispatch, binds
 the new source to the latest owner, and emits `remediation_semantic_repeat_halt` with reason
 `recurrence-limit` and `lineageCaseIds`; see

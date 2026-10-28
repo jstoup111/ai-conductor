@@ -217,6 +217,11 @@ export interface ProviderNativeSchemaCapability {
   nativeOutputSchema: true;
 }
 
+/** Declares that an adapter delivers the engine-owned system prompt to the model. */
+export interface ProviderSystemPromptCapability {
+  deliversSystemPrompt: true;
+}
+
 /** The synchronous authority decision made immediately before process creation. */
 export type SpawnPermitDecision =
   | { permitted: true }
@@ -248,6 +253,8 @@ export interface InvokeResult {
   structuredResultFailure?: 'missing' | 'malformed';
   /** A requested native schema could not be enforced by the selected adapter. */
   nativeSchemaUnsupported?: true;
+  /** A provider cannot deliver the engine-owned system prompt to the model. */
+  systemPromptUndeliverable?: true;
   /** Candidate setup established that its provider cannot enforce read-only review. */
   readOnlyReviewUnavailable?: true;
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
@@ -436,6 +443,8 @@ export interface LLMProvider {
   lifecycleCapability?: ProviderLifecycleCapability;
   /** Declares native output-schema support; absence is an explicit unsupported capability. */
   nativeSchemaCapability?: ProviderNativeSchemaCapability;
+  /** Declares engine-owned system-prompt delivery; absence is an explicit unsupported capability. */
+  systemPromptCapability?: ProviderSystemPromptCapability;
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;
