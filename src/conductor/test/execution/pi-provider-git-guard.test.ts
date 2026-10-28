@@ -122,14 +122,15 @@ describe('PiProvider git guard dispatch environment', () => {
     ]);
   });
 
-  it('fails before launch when the git guard cannot be verified', async () => {
+  // Covers: task:8
+  it('marks a git-guard failure as not started before launch', async () => {
     const error = 'git guard repair failed: /prepared/.pipeline/bin/git: guard is not a regular executable file';
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(error));
 
     const result = await provider.invoke(baseOptions);
 
     expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
-    expect(result).toEqual({ success: false, output: error, exitCode: 1 });
+    expect(result).toEqual({ success: false, output: error, exitCode: 1, executionDisposition: 'not-started' });
     expect(spawn).not.toHaveBeenCalled();
   });
 

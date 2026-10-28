@@ -2,6 +2,7 @@ import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
 // Covers: task:2
 // Covers: task:5
+// Covers: task:7
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -203,7 +204,26 @@ describe('ClaudeProvider', () => {
       const result = await provider.invoke({ ...baseOptions, cwd: '/prepared' });
 
       expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
-      expect(result).toEqual({ success: false, output: `git guard repair failed: ${guardPath}`, exitCode: 1 });
+      expect(result).toEqual({
+        success: false,
+        output: `git guard repair failed: ${guardPath}`,
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      });
+      expect(mockExeca).not.toHaveBeenCalled();
+    });
+
+    it('marks an entry-aborted invocation as not started without spawning', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await provider.invoke({ ...baseOptions, abortSignal: controller.signal });
+
+      expect(result).toMatchObject({
+        success: false,
+        executionDisposition: 'not-started',
+      });
+      expect(mockEnsureGitGuardForDispatch).not.toHaveBeenCalled();
       expect(mockExeca).not.toHaveBeenCalled();
     });
 
@@ -351,9 +371,25 @@ describe('ClaudeProvider', () => {
         expect(result).toMatchObject({
           success: false,
           nativeSchemaUnsupported: true,
+          executionDisposition: 'not-started',
         });
         expect(result.output).toContain('unsupported for interactive Claude invocation');
         expect(mockExeca).not.toHaveBeenCalled();
+      });
+
+      it('leaves a spawned non-zero subprocess failure without an execution disposition', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({ type: 'result', is_error: true, result: 'provider failure' }),
+          stderr: '',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
+
+        expect(mockExeca).toHaveBeenCalledOnce();
+        expect(result).toMatchObject({ success: false, exitCode: 1 });
+        expect(result.executionDisposition).toBeUndefined();
       });
 
       it('keeps a no-schema invocation on its existing argument and result path', async () => {

@@ -513,14 +513,19 @@ export class PiProvider implements LLMProvider {
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     options = enforceFreshSessionOptions(options, 'pi');
     const { abortSignal } = options;
-    if (abortSignal?.aborted) return abortedInvocationResult();
+    if (abortSignal?.aborted) return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
     const permit = validateSpawnPermit(options.spawnPermit);
     if (!permit.permitted) {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
     let guardDir: string | null;
     try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
 
     const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
@@ -533,6 +538,7 @@ export class PiProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        executionDisposition: 'not-started',
       };
     }
 
@@ -555,6 +561,7 @@ export class PiProvider implements LLMProvider {
           exitCode: 1,
           commandUnresolved: true,
           commandUnresolvedName: name,
+          executionDisposition: 'not-started',
         };
       }
     }
@@ -597,7 +604,12 @@ export class PiProvider implements LLMProvider {
         args.push('-e', extensionPath);
       }
     } catch (error) {
-      return { success: false, output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
+      return {
+        success: false,
+        output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     if (options.readOnlyReview) {
       // Read-only review: no discovered extensions, no project resources (whatever
@@ -621,6 +633,7 @@ export class PiProvider implements LLMProvider {
           providerUnavailable: true,
           providerUnavailableScope: 'run',
           providerUnavailableReason: reason,
+          executionDisposition: 'not-started',
         };
       }
       args.push(...piSubagentsArgs(packageDir));
@@ -638,7 +651,7 @@ export class PiProvider implements LLMProvider {
     if (options.effort) args.push('--thinking', options.effort);
     // Filesystem preflight is asynchronous. An abort that arrives during it
     // must not create an unobservable subprocess after the signal fired.
-    if (abortSignal?.aborted) return abortedInvocationResult();
+    if (abortSignal?.aborted) return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
 
     // Apply the marker after the self-host overlay, then explicitly mask
     // tmux's implicit target variables so execa cannot inherit the daemon

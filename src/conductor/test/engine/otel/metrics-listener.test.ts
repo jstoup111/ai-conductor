@@ -501,17 +501,83 @@ describe('MetricsListener dispatch dimensions', () => {
         { tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' },
         { tier: 'S', project: 'project', worker: 'worker', feature: 'partial' },
       ]);
-      expect(tiered('conductor.feature.duration.active')).toEqual([{ tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      expect(tiered('conductor.feature.duration.active')).toEqual([{ tier: 'S', state: 'exact', project: 'project', worker: 'worker', feature: 'tiered' }]);
       expect(untiered('conductor.feature.dispatches')).toEqual([{ kind: 'initial', project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.shipped')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.duration.wall')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
-      expect(untiered('conductor.feature.duration.active')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.feature.duration.active')).toEqual([{ state: 'exact', project: 'project', worker: 'worker', feature: 'untiered' }]);
     } finally {
       listener.stop();
       await provider.shutdown();
     }
+  });
+});
+
+// Covers: task:2
+describe('Task 2: feature active-duration projection', () => {
+  it('records finite exact and partial active durations with their bounded state and reason', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('task-2-measured'), { project: 'project', worker: 'worker' }), () => 200);
+    listener.start(emitter);
+    try {
+      await emitter.emit({ type: 'feature_shipped', slug: 'exact', tier: 'M', runStartedAt: 100, active: { state: 'exact', activeMs: 5_000 } });
+      await emitter.emit({ type: 'feature_shipped', slug: 'partial', tier: 'M', runStartedAt: 100, active: { state: 'partial', activeMs: 23_907_699, reason: 'provider-evidence-incomplete' } });
+      await provider.forceFlush();
+      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active').map((point) => ({
+        attributes: point.attributes, value: (point.value as { sum: number }).sum,
+      }))).toEqual(expect.arrayContaining([
+        { attributes: { tier: 'M', state: 'exact', project: 'project', worker: 'worker', feature: 'exact' }, value: 5_000 },
+        { attributes: { tier: 'M', state: 'partial', reason: 'provider-evidence-incomplete', project: 'project', worker: 'worker', feature: 'partial' }, value: 23_907_699 },
+      ]));
+      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active.missing')).toEqual([]);
+    } finally { listener.stop(); await provider.shutdown(); }
+  });
+
+  it('counts unmeasured active durations without suppressing wall duration', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('task-2-missing'), { project: 'project', worker: 'worker' }), () => 200);
+    listener.start(emitter);
+    try {
+      const cases = [
+        ['evidence', { state: 'partial' as const, reason: 'active-evidence-incomplete' as const }],
+        ['open', { state: 'partial' as const, reason: 'open-executions' as const }],
+        ['ledger', { state: 'partial' as const, reason: 'ledger-unreadable' as const }],
+        ['unavailable', { state: 'unavailable' as const }],
+        ['non-finite', { state: 'partial' as const, activeMs: Number.NaN }],
+      ] as const;
+      for (const [slug, active] of cases) await emitter.emit({ type: 'feature_shipped', slug, tier: 'M', runStartedAt: 100, active });
+      await provider.forceFlush();
+      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active')).toEqual([]);
+      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active.missing').map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual(expect.arrayContaining([
+        { attributes: { tier: 'M', state: 'partial', reason: 'active-evidence-incomplete', project: 'project', worker: 'worker', feature: 'evidence' }, value: 1 },
+        { attributes: { tier: 'M', state: 'partial', reason: 'open-executions', project: 'project', worker: 'worker', feature: 'open' }, value: 1 },
+        { attributes: { tier: 'M', state: 'partial', reason: 'ledger-unreadable', project: 'project', worker: 'worker', feature: 'ledger' }, value: 1 },
+        { attributes: { tier: 'M', state: 'unavailable', project: 'project', worker: 'worker', feature: 'unavailable' }, value: 1 },
+        { attributes: { tier: 'M', state: 'partial', project: 'project', worker: 'worker', feature: 'non-finite' }, value: 1 },
+      ]));
+      expect(pointsForInstrument(exporter, 'conductor.feature.duration.wall')).toHaveLength(cases.length);
+    } finally { listener.stop(); await provider.shutdown(); }
+  });
+
+  it('projects legacy reason-free partial active duration without a placeholder reason', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('task-2-legacy'), { project: 'project', worker: 'worker' }));
+    listener.start(emitter);
+    try {
+      await emitter.emit({ type: 'feature_shipped', slug: 'legacy', active: { state: 'partial', activeMs: 10 } });
+      await provider.forceFlush();
+      expect(pointsForInstrument(exporter, 'conductor.feature.duration.active').map((point) => ({
+        attributes: point.attributes, value: (point.value as { sum: number }).sum,
+      }))).toEqual([{ attributes: { state: 'partial', project: 'project', worker: 'worker', feature: 'legacy' }, value: 10 }]);
+    } finally { listener.stop(); await provider.shutdown(); }
   });
 });
 

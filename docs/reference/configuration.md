@@ -1000,14 +1000,26 @@ The `conductor.run.outcomes` counter increments once when an opened root run rea
 terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
 so dashboards can chart terminal runs without deriving counts from trace-query metrics.
 
-All nine D14 instruments carry an optional raw `tier` label when the producing event
+All ten D14 instruments carry an optional raw `tier` label when the producing event
 resolved one: `conductor.feature.dispatches`, `conductor.feature.halts`, `conductor.run.outcomes`,
 `conductor.feature.shipped`, `conductor.feature.duration.wall`, `conductor.feature.duration.active`,
-`conductor.feature.cost`, `conductor.feature.step.cost`, and `conductor.feature.step.tokens`.
+`conductor.feature.duration.active.missing`, `conductor.feature.cost`, `conductor.feature.step.cost`,
+and `conductor.feature.step.tokens`.
 Unresolved tiers are omitted rather than defaulted. Re-tiering creates a new cumulative series while
 the earlier tier's last value remains available. Query cumulative feature totals by both dimensions,
 for example `max by (feature, tier) (...)`; summing those cross-tier series can double-count a
 feature that was re-tiered.
+
+Each `feature_shipped` records feature duration from the ship-time timing rollup. Its `active`
+object carries `state` (`exact`, `partial`, or `unavailable`), `activeMs` when measured, and, for
+`partial`, a bounded `reason`: `empty-active-union`, `active-evidence-incomplete`,
+`open-executions` (execution ids stripped), `provider-outside-active-union`,
+`provider-evidence-incomplete`, or `ledger-unreadable`. When `activeMs` is a finite number,
+`conductor.feature.duration.active` records it, including for `partial` rollups. Otherwise
+`conductor.feature.duration.active.missing` increments once instead; no zero or placeholder is
+recorded. Both carry `state` and, when present, `reason`. Filter on `state="exact"` to exclude
+partial measurements; replayed events from older ledgers have no `reason` attribute.
+`conductor.feature.duration.wall` is unaffected and carries only `tier`.
 
 The `conductor.gate.verdicts` counter (`step`, `outcome` = `pass` or `fail`) and the
 `conductor.gate.kickbacks` counter (`from`, `to`) carry the same optional raw `tier` label, taken
