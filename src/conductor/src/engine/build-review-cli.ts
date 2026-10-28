@@ -454,6 +454,16 @@ type CliAggregateReadResult =
   | { readonly ok: true; readonly aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>> }
   | { readonly ok: false; readonly path: string; readonly cause: 'missing' | 'unreadable' | 'malformed'; readonly detail?: string };
 
+type CliAggregateFailure = Extract<CliAggregateReadResult, { readonly ok: false }>;
+
+type CliAggregateFailureDescription = {
+  readonly path: string;
+  readonly predicate: 'is missing' | 'is malformed' | 'could not be read';
+  /** Parenthesized diagnostic, which follows the command-specific feature framing. */
+  readonly trailingDetail: string;
+  readonly stackedChildHint: string;
+};
+
 function aggregateRelativePath(child: ChildId | undefined): string {
   return child === undefined ? '.pipeline/build-review.json' : `.pipeline/children/${child}/build-review.json`;
 }
@@ -507,6 +517,31 @@ async function defaultListChildAggregates(worktree: string): Promise<readonly Ch
     }
   }));
   return aggregates.filter((child): child is ChildId => child !== undefined);
+}
+
+/**
+ * Describes an unreadable CLI aggregate consistently for findings and accept.
+ * Only an omitted root aggregate can direct the operator to child aggregates.
+ */
+async function describeCliAggregateFailure(
+  failure: CliAggregateFailure,
+  worktree: string,
+  child: ChildId | undefined,
+  listChildAggregates: (worktree: string) => Promise<readonly ChildId[]>,
+): Promise<CliAggregateFailureDescription> {
+  const children = failure.cause === 'missing' && child === undefined
+    ? await listChildAggregates(worktree)
+    : [];
+  const predicate = failure.cause === 'missing'
+    ? 'is missing'
+    : failure.cause === 'malformed'
+      ? 'is malformed'
+      : 'could not be read';
+  const trailingDetail = failure.detail === undefined ? '' : ` (${failure.detail})`;
+  const stackedChildHint = children.length === 0
+    ? ''
+    : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${children.join(', ')}).`;
+  return { path: failure.path, predicate, trailingDetail, stackedChildHint };
 }
 
 async function resolveCliMinConfidence(
@@ -564,19 +599,10 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
     if (!aggregateRead.ok) {
-      if (aggregateRead.cause === 'missing') {
-        const childAggregates = child === undefined
-          ? await (deps.listChildAggregates ?? defaultListChildAggregates)(worktree)
-          : [];
-        const hint = childAggregates.length === 0
-          ? ''
-          : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${childAggregates.join(', ')}).`;
-        print(`build-review findings: ${aggregateRead.path} is missing for '${command.feature}'.${hint}`);
-      } else if (aggregateRead.cause === 'malformed') {
-        print(`build-review findings: ${aggregateRead.path} is malformed for '${command.feature}' (${aggregateRead.detail}).`);
-      } else {
-        print(`build-review findings: ${aggregateRead.path} could not be read for '${command.feature}' (${aggregateRead.detail}).`);
-      }
+      const failure = await describeCliAggregateFailure(
+        aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+      );
+      print(`build-review findings: ${failure.path} ${failure.predicate} for '${command.feature}'${failure.trailingDetail}.${failure.stackedChildHint}`);
       return 1;
     }
     const aggregate = aggregateRead.aggregate;
@@ -722,15 +748,10 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   // to the operator reading the refusal (#1769).
   const aggregateRead = await readAggregate();
   if (!aggregateRead.ok) {
-    const stackedHint = aggregateRead.cause === 'missing' && child === undefined
-      ? await (deps.listChildAggregates ?? defaultListChildAggregates)(worktree)
-      : [];
-    const message = aggregateRead.cause === 'missing'
-      ? `${aggregateRead.path} is missing.${stackedHint.length === 0 ? '' : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${stackedHint.join(', ')}).`}`
-      : aggregateRead.cause === 'malformed'
-        ? `${aggregateRead.path} is malformed (${aggregateRead.detail}).`
-        : `${aggregateRead.path} could not be read (${aggregateRead.detail}).`;
-    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; ${message}`);
+    const failure = await describeCliAggregateFailure(
+      aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+    );
+    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; ${failure.path} ${failure.predicate}${failure.trailingDetail}.${failure.stackedChildHint}`);
   }
   const aggregate = aggregateRead.aggregate;
   if (aggregate.lapId !== requestedLap) {
