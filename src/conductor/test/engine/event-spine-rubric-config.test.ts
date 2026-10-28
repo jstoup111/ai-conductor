@@ -49,7 +49,7 @@ describe('repository-local event-spine build-review rubric', () => {
       rawMinimumConfidence: loaded.config.build_review?.custom_rubrics?.eventSpine?.min_confidence,
       eventSpine,
     }).toEqual({
-      catalog: ['testQuality', 'security', 'eventSpine'],
+      catalog: ['testQuality', 'security', 'implementationQuality', 'eventSpine'],
       adjudication: true,
       rawMinimumConfidence: undefined,
       eventSpine: [expect.objectContaining({
