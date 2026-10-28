@@ -198,6 +198,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A conflict while carrying a routed repair up a stacked feature is now handed to the configured conflict resolver instead of halting immediately. ([implementation PR #3447](https://github.com/jstoup111/ai-conductor/pull/3447)).
 - Operators see actionable daemon startup state in a compact dashboard. ([implementation PR #3440](https://github.com/jstoup111/ai-conductor/pull/3440)).
 - Daemon operators receive durable, actionable HALTs when stack preflight refuses to proceed. ([implementation PR #3470](https://github.com/jstoup111/ai-conductor/pull/3470)).
+- The destructive-git guard recognizes Git 2.56 `git branch --delete-merged`, `--dry-run` and `--forked`. ([implementation PR #3485](https://github.com/jstoup111/ai-conductor/pull/3485)).
 
 ## Migration
 
