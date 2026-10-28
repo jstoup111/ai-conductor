@@ -17,7 +17,7 @@ import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js'
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import { isRegisteredRubric } from './build-review-registry.js';
-import { parseChildId, type ChildId } from './child-context.js';
+import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -35,8 +35,8 @@ export interface BuildReviewFindingsDeps {
   readonly readCurrentLapChangedFiles?: import('./build-review-effective.js').BuildReviewEffectiveResolverDeps['readCurrentLapChangedFiles'];
   readonly createStore?: (worktree: string) => DispositionStore;
   readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreReader;
-  readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
-  readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
+  readonly readKickbackGateEntry?: (worktree: string, child?: ChildId) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
+  readonly readMechanicalFaults?: (worktree: string, child?: ChildId) => Promise<number | undefined>;
   readonly loadConfig?: (worktree: string) => Promise<ConfigResult>;
   readonly print?: (output: string) => void;
 }
@@ -435,6 +435,15 @@ type ResolvedCliFeature = {
   readonly feature: BuildReviewFeatureIdentity;
 };
 
+/** Reads the root or selected child's aggregate through the one path constructor. */
+async function readCliBuildReviewAggregate(
+  worktree: string,
+  child: ChildId | undefined,
+  readFile: (path: string) => Promise<string>,
+): Promise<ReturnType<typeof parseBuildReviewAggregate>> {
+  return parseBuildReviewAggregate(JSON.parse(await readFile(pipelinePathFor(worktree, 'build-review.json', child))));
+}
+
 async function resolveCliMinConfidence(
   worktree: string,
   deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>,
@@ -485,7 +494,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     if (!resolved) throw new Error('feature identity is unavailable');
     const { worktree, feature } = resolved;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
-    const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
+    const aggregate = await readCliBuildReviewAggregate(worktree, child, readFile);
     if (!aggregate) throw new Error('aggregate is malformed');
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const listed = await store.list(feature);
@@ -503,11 +512,11 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
     const minSeverity = await resolveCliMinSeverity(worktree, deps);
     const gateEntry = deps.readKickbackGateEntry
-      ? await deps.readKickbackGateEntry(worktree)
+      ? await deps.readKickbackGateEntry(worktree, child)
       : deps.readMechanicalFaults
-        ? { mechanicalFaults: await deps.readMechanicalFaults(worktree) }
+        ? { mechanicalFaults: await deps.readMechanicalFaults(worktree, child) }
         : await (async () => {
-          const ledger = await readKickbackLedger(worktree);
+          const ledger = await readKickbackLedger(worktree, child);
           if (isUnreadableKickbackGate(ledger, 'build_review')) {
             throw new Error("kickback ledger gate 'build_review' is unreadable");
           }

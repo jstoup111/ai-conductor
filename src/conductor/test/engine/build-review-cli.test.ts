@@ -1,6 +1,6 @@
-// Covers: task:2, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
+// Covers: task:1, task:2, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { joinBuildReviewRubricOutcomes, parseBuildReviewAggregate, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
@@ -117,6 +117,89 @@ describe('build-review findings CLI', () => {
 
   afterEach(() => {
     caseRead.mockRestore();
+  });
+
+  // Covers: S1.1, S1.2, S1.3, S1.4, S1.5
+  it('reads only child 2 aggregate, case state, and ledger when scoped to child 2', async () => {
+    const childLapId = parseBuildReviewLapId('lap-child-2')!;
+    const childAggregate = joinBuildReviewRubricOutcomes({
+      lapId: childLapId,
+      snapshotDigest: 'sha256:child-2',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId: childLapId, snapshotDigest: 'sha256:child-2',
+          contractVersion: 'v3', findings: [finding], verdict: 'FAIL',
+        },
+      },
+    });
+    const rootFinding = {
+      ...finding,
+      summary: 'Root-only finding.',
+      anchor: {
+        rubric: 'testQuality' as const,
+        locus: { ...finding.anchor.locus, path: 'test/root-only.test.ts' },
+      },
+    };
+    const rootAggregate = joinBuildReviewRubricOutcomes({
+      lapId: parseBuildReviewLapId('lap-root')!,
+      snapshotDigest: 'sha256:root',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-root')!, snapshotDigest: 'sha256:root',
+          contractVersion: 'v3', findings: [rootFinding], verdict: 'FAIL',
+        },
+      },
+    });
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const childCase = { ...refutedCaseStore.cases[0]!, id: 'C2' };
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-child-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'build-review.json'), JSON.stringify(childAggregate));
+    await writeFile(join(worktree, '.pipeline', 'build-review.json'), JSON.stringify(rootAggregate));
+    const accepted = {
+      version: 'v1' as const,
+      feature: { version: 'v1' as const, repository: root, feature: 'review-rubrics' },
+      finding: identity, sourceLapId: childLapId, summary: finding.summary, rationale: 'Accepted child risk.', operator: 'operator', acceptedAt: '2026-10-28T12:00:00.000Z',
+    };
+    const trackedReadFile = vi.fn(async (path: string) => readFile(path, 'utf8'));
+    const createCaseStore = vi.fn((_worktree: string, _feature: unknown, child?: ChildId) => ({
+      read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: child === 2 ? [childCase] : [{ ...childCase, id: 'C0' }] } }),
+    }));
+    const readKickbackGateEntry = vi.fn(async () => ({
+      mechanicalFaults: 1,
+      lastMechanicalFault: { rubric: 'testQuality' as const, reason: 'malformed-artifact' as const, detail: 'child fault', lapId: 'lap-child-2' },
+    }));
+    const json = vi.fn();
+    const human = vi.fn();
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: trackedReadFile, createStore: () => ({ list: async () => ({ ok: true as const, records: [accepted] }), append: vi.fn() }),
+      createCaseStore, readKickbackGateEntry,
+    };
+
+    try {
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'json' }, { ...deps, cwd: root, resolveMainRoot: async () => root, print: json })).resolves.toBe(0);
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'human' }, { ...deps, cwd: root, resolveMainRoot: async () => root, print: human })).resolves.toBe(0);
+
+      expect({
+        json: JSON.parse(json.mock.calls[0]![0] as string),
+        human: human.mock.calls[0]![0],
+        readChildAggregate: trackedReadFile.mock.calls.some(([path]) => path === join(worktree, '.pipeline', 'children', '2', 'build-review.json')),
+        readRootAggregate: trackedReadFile.mock.calls.some(([path]) => path === join(worktree, '.pipeline', 'build-review.json')),
+        childCaseOnly: createCaseStore.mock.calls.every(([, , child]) => child === 2),
+        childLedgerOnly: readKickbackGateEntry.mock.calls.every(([, child]) => child === 2),
+      }).toMatchObject({
+        json: {
+          lapId: 'lap-child-2', unresolvedFindingIds: [], acceptedFindingIds: [identity.id],
+          acceptedDispositions: [{ findingId: identity.id }], lastMechanicalFault: { lapId: 'lap-child-2' },
+        },
+        human: expect.stringContaining('Autonomous case outcome: C2'),
+        readChildAggregate: true, readRootAggregate: false, childCaseOnly: true, childLedgerOnly: true,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:19
