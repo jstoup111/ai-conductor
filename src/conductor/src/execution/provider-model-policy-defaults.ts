@@ -91,6 +91,6 @@ export const CODEX_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
     coherence_check: { L: { model: 'gpt-5.6-sol' } },
   },
   effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
-  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-astra'],
   modelFallbackLadder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
 });

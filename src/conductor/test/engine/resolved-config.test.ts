@@ -53,6 +53,10 @@ type EffectiveReviewCatalogMember = {
 };
 
 describe('engine/resolved-config', () => {
+  it('retains Astra as the cap of the default Codex escalation policy', () => {
+    expect(resolveProviderModelPolicy('codex').modelEscalationOrder.at(-1)).toBe('gpt-6-astra');
+  });
+
   describe('Pi provider model policy resolution', () => {
     const piConfig = {
       llm_providers: {

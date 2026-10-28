@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:6, task:13, task:14
+// Covers: task:1, task:2, task:3, task:6, task:13, task:14
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -83,11 +83,13 @@ describe('built-in provider catalog', () => {
 
     expect({
       configuredModelRequirements: policies.map((policy) => policy.requiresConfiguredModels),
+      codexModelEscalationCap: policies[1]!.modelEscalationOrder.at(-1),
       piModelEscalationOrder: piPolicy.modelEscalationOrder,
       piModelFallbackLadder: piPolicy.modelFallbackLadder,
       piHasNonEmptyStepModel: Object.values(piPolicy.stepModels).some(Boolean),
     }).toEqual({
       configuredModelRequirements: [false, false, true],
+      codexModelEscalationCap: 'gpt-6-astra',
       piModelEscalationOrder: [],
       piModelFallbackLadder: [],
       piHasNonEmptyStepModel: false,

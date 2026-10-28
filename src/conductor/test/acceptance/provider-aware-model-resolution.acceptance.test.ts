@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * RED acceptance specs for provider-aware model and effort resolution (#902).
  *
@@ -179,7 +180,7 @@ const CODEX_POLICY: AcceptancePolicy = {
     conflict_check: { L: { model: 'gpt-5.6-sol' } },
   },
   effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
-  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-astra'],
   modelFallbackLadder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
 };
 
@@ -318,7 +319,7 @@ describe('#902 provider-native retry escalation', () => {
       effort: 'medium',
     });
     expect(escalateAttempt('gpt-5.6-sol', 'max', 8, true, CODEX_POLICY)).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-astra',
       effort: 'max',
     });
     expect(escalateAttempt('custom-model', 'high', 8, true, CODEX_POLICY)).toEqual({
