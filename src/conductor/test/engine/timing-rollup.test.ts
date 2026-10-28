@@ -474,6 +474,7 @@ describe('computeTimingRollup', () => {
     });
   });
 
+  // Covers: task:4
   it('does not make an uninvoked failed provider attempt incomplete evidence', async () => {
     const measured = await writeFeatureEvents([
       { type: 'provider_attempt', step: 'plan', outcome: 'failure', invoked: false },

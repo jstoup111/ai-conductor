@@ -153,6 +153,7 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  // Covers: task:4
   it('records a not-started provider failure as not invoked without caching or suppressing it', async () => {
     const invoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: false,
@@ -190,6 +191,7 @@ describe('executeProviderCandidates', () => {
     expect(providerAvailability.suppress).not.toHaveBeenCalled();
   });
 
+  // Covers: task:4
   it('retains invoked evidence for failures after provider execution', () => {
     const interval = { startedAtMs: 100, durationMs: 20 };
 
