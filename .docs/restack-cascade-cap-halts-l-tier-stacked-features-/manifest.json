@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "restack-cascade-cap-halts-l-tier-stacked-features-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-28-restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/restack-cascade-cap-halts-l-tier-stacked-features-.md"
+    }
+  ]
+}
