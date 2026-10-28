@@ -459,6 +459,81 @@ describe('build-review adjudication context', () => {
     ]));
   });
 
+  it('lists the dispositions that each prior case can bind in this lap', () => {
+    const caseA = priorCase('case-A');
+    const caseJ: RemediationCaseRecord = {
+      ...priorCase('case-J'), disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' },
+      sources: [{ sourceId: 'testQuality:case-J', outcome: 'rejected', recordedAt: '2026-08-30T12:00:00.000Z' }],
+    };
+    const caseC: RemediationCaseRecord = {
+      ...priorCase('case-C'), resolution: 'resolved',
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:case-C', lapId: 'lap-prior' }] },
+    };
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [caseA, caseJ, caseC], attemptedCaseIds: ['case-A'],
+      carryInput: { currentLapId: lapId, effectiveAcceptedSourceIds: new Set(['testQuality:case-C']) },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases.map(({ id, bindableDispositions }) => ({ id, bindableDispositions }))).toEqual([
+      { id: 'case-A', bindableDispositions: ['act', 'defer', 'refute'] },
+      { id: 'case-C', bindableDispositions: ['act', 'advisory', 'defer', 'refute', 'reject'] },
+      { id: 'case-J', bindableDispositions: ['reject'] },
+    ]);
+    expect(Object.isFrozen(result.context.priorCases[0]!.bindableDispositions)).toBe(true);
+  });
+
+  it('does not offer refutation or rejection where prior-case state cannot admit either', () => {
+    const caseR = {
+      ...priorCase('case-R'),
+      effect: { id: 'effect-case-R', kind: 'action' as const, status: 'reserved' as const },
+    };
+    const caseU = priorCase('case-U');
+    const caseF = priorRefutedCase('case-F');
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [caseR, caseU, caseF], attemptedCaseIds: ['case-A'],
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases.map(({ id, bindableDispositions }) => ({ id, bindableDispositions }))).toEqual([
+      { id: 'case-F', bindableDispositions: ['refute'] },
+      { id: 'case-R', bindableDispositions: ['act'] },
+      { id: 'case-U', bindableDispositions: ['act', 'defer'] },
+    ]);
+  });
+
+  it('emits binding corrections only for a correction round and accounts for their bytes', () => {
+    const correction = {
+      caseRef: 'case-ref-1', existingCaseId: 'case-A', disposition: 'reject' as const,
+      bindableDispositions: ['act', 'defer', 'refute'] as const,
+    };
+    const withoutCorrections = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [],
+    });
+    const emptyCorrections = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [], bindingCorrections: [],
+    });
+    const corrected = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [], bindingCorrections: [correction],
+    });
+    const overflowing = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [],
+      bindingCorrections: [{ ...correction, caseRef: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes) }],
+    });
+
+    expect(withoutCorrections).toMatchObject({ ok: true });
+    expect(emptyCorrections).toMatchObject({ ok: true });
+    expect(corrected).toMatchObject({ ok: true });
+    if (!withoutCorrections.ok || !emptyCorrections.ok || !corrected.ok) return;
+    expect(withoutCorrections.context).not.toHaveProperty('bindingCorrections');
+    expect(emptyCorrections.context).not.toHaveProperty('bindingCorrections');
+    expect(corrected.context.bindingCorrections).toEqual([correction]);
+    expect(Buffer.byteLength(JSON.stringify(corrected.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+    expect(overflowing).toMatchObject({ ok: false, stop: { code: 'serialized-byte-overflow' } });
+  });
+
   it('does not expose operator details and preserves the prior-case overflow rule for marked cases', () => {
     const resolvedByOperator = {
       ...priorCase('case-operator-resolved'),
@@ -521,7 +596,7 @@ describe('build-review adjudication context', () => {
     if (!result.ok) return;
     expect(result.context.priorCases).toEqual([{
       id: 'stop-a', disposition: 'escalate', priority: 'high', rationale: stop.rationale, confidence: 'high',
-      resolution: 'open', sources: stop.sources, effect: { kind: 'none' },
+      resolution: 'open', bindableDispositions: [], sources: stop.sources, effect: { kind: 'none' },
       escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
     }]);
     expect(result.context.effectPointers).toEqual([]);
