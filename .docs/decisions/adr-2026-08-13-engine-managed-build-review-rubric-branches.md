@@ -135,6 +135,8 @@ results must repeat the lap ID and snapshot digest; a mismatch is an infrastruct
 
 > **Amended 2026-10-24 by #3294:** The snapshot still excludes prior grader prose and accepted dispositions. From the second lap on, each projection also carries an engine-derived `reviewScope` (`mode`, `deltaHunks`), with `changedFiles` kept as the whole-diff reference context. It is computed before projection from prior lap `reviewScope` records and the case store, and rubrics never receive those records. Under D2.1 the scope is an identity in the projection digest, so §7's cache invalidates mechanically (see the #3294 note on §7). Built-in projections move to v5 (adr-2026-10-24-lap-monotonic-build-review-scope D1, D3, D4).
 
+> **Amended 2026-10-24 by #3294 (operator decision during BUILD):** Built-in projections stay at v4 rather than moving to v5. v4 has not shipped in any release, and the scope's place in the projection digest already invalidates earlier v4 cache entries, so no version bump is needed (adr-2026-10-24-lap-monotonic-build-review-scope D4).
+
 ### 3. Reuse green test evidence and preflight only Tautology's RED side
 
 The preceding `test_suite` gate is the authoritative proof that the current HEAD is green.

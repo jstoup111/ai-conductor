@@ -544,7 +544,7 @@ describe('recoverRestackJournal (real local Git)', () => {
       slug: 'demo',
       events,
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     expect(refusals).toEqual([expect.objectContaining({
       reason: 'replay-mismatch', child: 1, detail: 'base.txt',

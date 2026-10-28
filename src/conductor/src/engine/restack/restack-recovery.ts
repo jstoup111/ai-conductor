@@ -14,6 +14,7 @@ import {
   stagingRefFor,
   updateRestackChildStatus,
   writeRestackJournalBlob,
+  type RestackJournalOwner,
   type StoredRestackJournal,
 } from './restack-journal.js';
 import {
@@ -55,7 +56,7 @@ import {
 /** Result of attempting recovery of the one durable journal for a feature. */
 export type RecoverRestackJournalResult =
   | { readonly kind: 'none' }
-  | { readonly kind: 'live-owner' }
+  | { readonly kind: 'live-owner'; readonly owner?: RestackJournalOwner }
   | { readonly kind: 'halted' }
   | { readonly kind: 'recovered'; readonly fromState: Exclude<JournalState, 'applied' | 'aborted'> }
   | { readonly kind: 'cleaned' }
@@ -623,7 +624,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   // that owner at its next dispatch, so liveness must not block the cleanup.
   if (read.journal.state !== 'aborted'
     && !(read.journal.state === 'applied' && options.suppressFollowOn)
-    && await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
+    && await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner', owner: read.journal.owner };
 
   let journal: StoredRestackJournal | undefined = { slug: read.slug, blob: read.blob, journal: read.journal };
   let moves: RestackMoveRef[] = [];
@@ -665,7 +666,11 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         if (result.kind === 'unavailable') return { kind: 'unavailable', detail: result.detail };
         // Losing the follow-on replacement means another live operation now
         // owns the journal; recovery must not report it as cleaned.
-        return result.kind === 'refused' ? { kind: 'live-owner' } : { kind: 'cleaned' };
+        if (result.kind !== 'refused') return { kind: 'cleaned' };
+        const current = await readRestackJournal(options.worktree, options.slug, { git });
+        return current.kind === 'journal'
+          ? { kind: 'live-owner', owner: current.journal.owner }
+          : { kind: 'live-owner' };
       }
       return await cleanJournal(options.worktree, journal, git) ? { kind: 'cleaned' } : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
     }

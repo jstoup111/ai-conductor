@@ -274,7 +274,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await subject.isAncestor(subject.closedOne, 'feat/c1/demo')).toBe(false);
       const c2Before = await subject.rev('feat/c2/demo');
       const { result, records } = await preflight(subject);
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.stringContaining('closed-child-rewritten') });
       expect(runRestack).not.toHaveBeenCalled();
       expect(ofType(records, 'restack_planned')).toEqual([]);
       expect(ofType(records, 'restack_refused')).toEqual([expect.objectContaining({ reason: 'closed-child-rewritten', child: 1 })]);
@@ -292,7 +292,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', rebuiltTwo]);
       const closedBefore = await subject.rev('refs/conductor/demo/closed/c1');
       const { result, records } = await preflight(subject);
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(runRestack).not.toHaveBeenCalled();
       expect(ofType(records, 'restack_planned')).toEqual([]);
       expect(ofType(records, 'restack_refused')).toEqual([expect.objectContaining({ reason: 'range-not-ancestor', child: 2 })]);
@@ -442,7 +442,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
       const consumed: string[] = [];
       const { result, records } = await preflight(subject, { baseRefreshDue: true, consumeRekick: async () => { consumed.push('x'); } });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['cascade-cap', 'deferred-base-refresh']);
       expect(consumed).toEqual([]);
       await expectNoBaseRefresh(subject, records, advanced);
@@ -456,7 +456,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'base.txt', 'X\n'));
       await writeFile(join(subject.repo, 'base.txt'), 'operator wip\n');
       const { result, records } = await preflight(subject, { baseRefreshDue: true });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['dirty-overlap', 'deferred-base-refresh']);
       await expectNoBaseRefresh(subject, records, advanced);
       vi.mocked(runRestack).mockClear();
@@ -469,7 +469,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       const { result, records } = await preflight(subject, {
         baseRefreshDue: true, resolver: async () => ({ resolved: false, reason: 'cannot resolve' }), resolverCap: 1,
       });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(ofType(records, 'restack_conflict').length).toBeGreaterThan(0);
       expect(ofType(records, 'restack_refused').map((record) => record.reason)).toContain('deferred-base-refresh');
       expect(ofType(records, 'restack_applied')).toEqual([]);
@@ -486,7 +486,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await rm(elsewhere, { recursive: true, force: true });
       await subject.git(['worktree', 'add', '-q', elsewhere, 'feat/c1/demo']);
       const { result, records } = await preflight(subject, { baseRefreshDue: true });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(await subject.rev('refs/conductor/demo/closed/c1')).toBe(x);
       expect(ofType(records, 'restack_applied').map((record) => record.cause)).toContain('feature-repair');
       expect(ofType(records, 'restack_applied').map((record) => record.cause)).not.toContain('base-refresh');

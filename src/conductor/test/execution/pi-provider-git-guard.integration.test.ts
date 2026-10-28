@@ -21,6 +21,7 @@ function fakePiEnvironment(): PiEnvironment {
       error.code = 'ENOENT';
       throw error;
     },
+    access: async () => {},
     env: { PATH: '/usr/local/bin:/usr/bin' },
     homeDir: () => '/test-home',
     cwd: () => '/test-project',

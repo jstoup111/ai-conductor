@@ -15,7 +15,25 @@ import {
   type BuildReviewCustomFindingIdentity,
 } from './build-review-finding-identity.js';
 import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
+import type { BuildReviewProjectionReviewScope } from './build-review-projections.js';
 import type { ProviderWith } from '../execution/provider-catalog.js';
+
+/**
+ * Custom reviewers receive the computed hunk frontier, never the durable
+ * bookkeeping from which the engine derived it.
+ */
+export function projectBuildReviewCustomReviewerScope(
+  reviewScope: BuildReviewProjectionReviewScope | undefined,
+): BuildReviewProjectionReviewScope | undefined {
+  if (reviewScope === undefined) return undefined;
+  return Object.freeze({
+    mode: reviewScope.mode,
+    deltaHunks: Object.freeze(reviewScope.deltaHunks.map((hunk) => Object.freeze({
+      path: hunk.path,
+      contentHash: hunk.contentHash,
+    }))),
+  });
+}
 
 /** One engine-owned contract shared by every resolved custom-v1 rubric. */
 export const BUILD_REVIEW_CUSTOM_V2_CONTRACT = Object.freeze({
@@ -23,7 +41,12 @@ export const BUILD_REVIEW_CUSTOM_V2_CONTRACT = Object.freeze({
     version: 'v1',
     // Custom review receives the frozen-input view already built by the
     // containment boundary; it must not synthesize a second projection.
-    build: (scope: BuildReviewFrozenInputScope) => scope,
+    build: (scope: BuildReviewFrozenInputScope) => Object.freeze({
+      ...scope,
+      ...(scope.reviewScope === undefined
+        ? {}
+        : { reviewScope: projectBuildReviewCustomReviewerScope(scope.reviewScope) }),
+    }),
   }),
   output: Object.freeze({
     version: 'v2',
