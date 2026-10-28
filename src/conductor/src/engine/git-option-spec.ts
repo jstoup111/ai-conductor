@@ -28,7 +28,7 @@ const required = (name: string, short?: string, negatable = true): GitSubcommand
 const optional = (name: string, short?: string, negatable = true): GitSubcommandOption => ({ name, ...(short === undefined ? {} : { short }), arity: 'optional', negatable });
 
 /**
- * Git 2.53.0 option grammar for commands guarded by ai-conductor.
+ * Git 2.53.0 option grammar (plus Git 2.56 branch options) for commands guarded by ai-conductor.
  *
  * This is deliberately data only: both guard implementations consume it to
  * generate their normalizers, while the completion-helper test detects drift.
@@ -79,6 +79,8 @@ export const GIT_OPTION_SPEC: GitOptionSpec = {
       no('list', 'l'), no('show-current'), no('create-reflog'), no('edit-description'), no('force', 'f'),
       required('merged'), optional('column'), required('sort'), required('points-at'),
       no('ignore-case', 'i'), no('recurse-submodules'), required('format'),
+      // Git 2.56: --delete-merged never force-deletes; --force does not apply to it.
+      required('delete-merged', undefined, false), no('dry-run'), required('forked', undefined, false),
     ],
     clean: [
       no('quiet', 'q'), no('dry-run', 'n'), no('interactive', 'i'), required('exclude', 'e'),
