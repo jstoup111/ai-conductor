@@ -52,6 +52,13 @@ Concretely:
    > `adr-2026-08-12-operator-reseal-as-second-scope-justification`. Decisions 1 and 2 above are
    > unaffected and this ADR remains APPROVED.
 
+   > **Amended 2026-10-28 by #3418:** for a feature with an artifact manifest, a self-amendment is a
+   > changed listed artifact of a protected kind (plan, stories, prd, architecture, decision),
+   > wherever it lives, not a file whose stem names the feature. The sub-rule names those listed
+   > artifacts instead of the folder list. The manifest itself is never a self-amendment. Features
+   > without a manifest are unchanged. See
+   > `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest` decisions 4 and 7.
+
 No new module, no new persisted state, no new gate, no new human checkpoint.
 
 ## Why this option

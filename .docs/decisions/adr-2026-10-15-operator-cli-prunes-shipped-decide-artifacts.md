@@ -71,6 +71,13 @@ shipment audit reads every historical plan, though, so it needs the lookup routi
      family's existing `normalized-stem` identity. When an undated form matches more than one plan
      stem on `origin/main`, files that match only by that undated form are excluded and reported, the
      same way discovery treats a colliding undated marker as ambiguous.
+
+     > **Amended 2026-10-28 by #3418:** for a stem whose `.docs/<stem>/manifest.json` is on
+     > `origin/main`, the manifest decides membership instead of stem matching. The selection is the
+     > manifest's entries of prunable kinds plus the manifest itself. Halted and plan-review records
+     > keep stem matching because the manifest does not list them. A malformed manifest skips the
+     > stem with reason `malformed-manifest`. Stems without a manifest are unchanged. See
+     > `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest` decision 9.
    - **Never touched:** repository-wide files (`audit`, `audits`, `baselines`, `observation`, and
      top-level `.docs/*.md`).
    - **Single source:** the policy is one exported constant. No caller hard-codes a family list.
@@ -144,6 +151,10 @@ shipment audit reads every historical plan, though, so it needs the lookup routi
      `.docs/stories/abandoned-specs-are-kept-in-git-instead-of-the-iss.md` Story 3, are therefore
      classified from their pre-deletion plan rather than reported as missing at the audit head.
    - **Rest unchanged:** `spec_hash` and shipment evidence are not changed.
+
+   > **Amended 2026-10-28 by #3418:** when the stem's manifest was pruned, the lookup reads the plan
+   > path from the manifest at the deleting commit's parent rather than assuming `.docs/plans/`.
+   > See `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest` decision 9.
 
 ## Assumptions
 
