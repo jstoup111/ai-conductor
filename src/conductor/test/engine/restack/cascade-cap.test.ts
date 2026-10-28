@@ -3,6 +3,7 @@
 // Covers: task:rem-prd-audit-R19
 // Covers: task:3
 // Covers: task:4
+// Covers: task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -118,6 +119,56 @@ describe('restack cascade cap (real local Git)', () => {
     await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
       kind: 'counts', counts: { counts: { 1: 8, 2: 0 } },
     });
+  });
+
+  it('names the default tier-L allowance and exhausted budget in a cascade-cap halt', async () => {
+    const subject = await fixture({ tier: 'L' });
+    await writeCascadeCounts(subject.repo, { 1: 8 });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('originating child 1 reached 8/8 cascades — tier L allowance 8 (default)');
+    expect(halt).toContain('Kickback budget (restack): 8/8 consumed; 0 remaining');
+  });
+
+  it('names a raised cascade limit after the tier allowance in a cascade-cap halt', async () => {
+    const subject = await fixture({ tier: 'L' });
+    await writeCascadeCounts(subject.repo, { 1: 10 }, { 1: 10 });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toContain('originating child 1 reached 10/10 cascades — tier L allowance 8 (default); raised to 10');
+  });
+
+  it('names configured and unrecorded-M allowances in cascade-cap halts', async () => {
+    const configured = await fixture({
+      tier: 'M',
+      config: 'stacked_prs:\n  max_restack_cascades:\n    M: 4\n',
+    });
+    await writeCascadeCounts(configured.repo, { 2: 4 });
+    await expect(runRestack({
+      worktree: configured.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      originatingChildren: [child(2)],
+      git: makeGitRunner(configured.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(configured.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toContain('originating child 2 reached 4/4 cascades — tier M allowance 4 (configured)');
+
+    const unrecorded = await fixture();
+    await writeCascadeCounts(unrecorded.repo, { 1: 3 });
+    await expect(runRestack({
+      worktree: unrecorded.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(unrecorded.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(unrecorded.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toContain('tier unrecorded, treated as M; allowance 3 (default)');
   });
 
   it.each(['M', 'S', undefined] as const)('halts at the default allowance for tier %s', async (tier) => {
