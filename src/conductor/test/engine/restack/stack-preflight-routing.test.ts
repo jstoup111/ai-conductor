@@ -167,6 +167,38 @@ describe('stack preflight routing', () => {
     }
   });
 
+  it('escalates to needs-human when the routing-stall attempt cannot be persisted', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events, undefined, {
+      appendFile: () => { throw new Error('injected routing-stall persistence failure'); },
+    });
+    const stalled = {
+      kind: 'stalled' as const,
+      detail: 'test reconciliation stall',
+      rounds: [{ roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } }],
+    };
+
+    persister.start();
+    try {
+      await expect(runStackPreflight({
+        worktree: subject.repo,
+        slug: 'demo',
+        events,
+        git: makeGitRunner(subject.repo),
+        reconcileRounds: async () => stalled,
+        hasMatchingResumeAuthorization: async () => true,
+      })).resolves.toMatchObject({ kind: 'halted' });
+
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('counts only consecutive identical routing stalls', async () => {
     const subject = await fixture();
     const child = parseChildId(1)!;
@@ -285,24 +317,31 @@ describe('stack preflight routing', () => {
     const child = parseChildId(1)!;
     const roundId = parseRoundId('r1')!;
     const refsBefore = await refNames(subject.repo);
-    for (const next of [
-      { detail: 'routing round r1 could not admit host 1', rounds: [{ roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } }] },
-      { detail: 'routing round r1 is unreadable', rounds: [{ roundId, readable: false as const }] },
-      { detail: 'routing rounds r1 and r2 include unreadable r2', rounds: [
-        { roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } },
-        { roundId: parseRoundId('r2')!, readable: false as const },
-      ] },
-    ]) {
-      await rm(join(subject.repo, '.pipeline', 'HALT'), { force: true });
-      await rm(join(subject.repo, '.pipeline', 'HALT.class'), { force: true });
-      await expect(runStackPreflight({
-        worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo),
-        reconcileRounds: async () => ({ kind: 'resume-exit', roundId, host: child }),
-        exitRoutedHostAndReconcile: async () => ({ kind: 'continued', next: { kind: 'stalled', ...next } }),
-      })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
-      await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(next.detail);
-      await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
-      expect(await refNames(subject.repo)).toBe(refsBefore);
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      for (const next of [
+        { detail: 'routing round r1 could not admit host 1', rounds: [{ roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } }] },
+        { detail: 'routing round r1 is unreadable', rounds: [{ roundId, readable: false as const }] },
+        { detail: 'routing rounds r1 and r2 include unreadable r2', rounds: [
+          { roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } },
+          { roundId: parseRoundId('r2')!, readable: false as const },
+        ] },
+      ]) {
+        await rm(join(subject.repo, '.pipeline', 'HALT'), { force: true });
+        await rm(join(subject.repo, '.pipeline', 'HALT.class'), { force: true });
+        await expect(runStackPreflight({
+          worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+          reconcileRounds: async () => ({ kind: 'resume-exit', roundId, host: child }),
+          exitRoutedHostAndReconcile: async () => ({ kind: 'continued', next: { kind: 'stalled', ...next } }),
+        })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+        await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(next.detail);
+        await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+        expect(await refNames(subject.repo)).toBe(refsBefore);
+      }
+    } finally {
+      persister.stop();
     }
   });
 

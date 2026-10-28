@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChildId } from '../child-context.js';
 import { ConductorEventEmitter } from '../conductor-event-emitter.js';
-import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
+import { emitOnActiveEventSpineOrThrow, FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
 import { makeGitRunner } from '../rebase.js';
 import { operatorRoundEvent, remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
 import {
@@ -165,7 +165,7 @@ export async function recordRoundStall(
   worktree: string,
   _slug: string,
   stall: Extract<ReconcileRoundsResult, { readonly kind: 'stalled' }>,
-  events: ConductorEventEmitter | undefined,
+  events: ConductorEventEmitter,
 ): Promise<RecordedRoundStall> {
   const rounds = stall.rounds.map((round) => round.readable
     ? { roundId: round.roundId, readable: true as const, unsettledHosts: round.unsettledHosts }
@@ -195,7 +195,13 @@ export async function recordRoundStall(
     : `${round.roundId} (unreadable)`)
     .join('; ');
   const detail = `routing rounds stalled: ${rendered}; ${stall.detail}`;
-  await events?.emit({ type: 'routing_rounds_stalled', rounds, detail, attempt });
+  try {
+    await emitOnActiveEventSpineOrThrow(events, { type: 'routing_rounds_stalled', rounds, detail, attempt });
+  } catch {
+    // A retryable halt without its attempt in the event spine could retry
+    // forever, so leave the class unset for the caller's needs-human halt.
+    return { detail };
+  }
   return attempt <= 2 ? { detail, haltClass: 'mechanical' } : { detail };
 }
 

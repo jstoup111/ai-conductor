@@ -68,6 +68,7 @@ import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 
@@ -329,6 +330,7 @@ describe('Conductor routed acceptance verify-green path', () => {
       acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
     }));
     const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
     const observed: unknown[] = [];
     events.on('routing_rounds_stalled', (event) => {
       observed.push(event);
@@ -355,11 +357,16 @@ describe('Conductor routed acceptance verify-green path', () => {
       },
     });
 
-    await conductor.run();
+    persister.start();
+    try {
+      await conductor.run();
 
-    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
-    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routing rounds stalled: r1 (1: pending)');
-    expect(observed).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
+      await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+      await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routing rounds stalled: r1 (1: pending)');
+      expect(observed).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
+    } finally {
+      persister.stop();
+    }
   });
 
   it('hands the step runner conflict resolver to the routed exit restack', async () => {

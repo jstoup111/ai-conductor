@@ -125,6 +125,9 @@ async function haltForLiveJournalOwner(
  * stack cannot be flattened by lost worktree metadata.
  */
 async function runStackPreflightInner(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
+  // A routing stall cannot be retryable unless its attempt reaches the active
+  // event spine. A direct caller without an emitter therefore fails closed.
+  const stallEvents = options.events ?? new ConductorEventEmitter();
   // Establish whether the feature is stacked before touching routing state.
   // A journal itself establishes durable child state, so this still recovers
   // interrupted stacks while keeping N=1 features on their historical path.
@@ -231,7 +234,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       // set; queue admission remains unreachable after a failed drain.
       const afterFailedDrain = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
       if (afterFailedDrain.kind === 'stalled') {
-        const recorded = await recordRoundStall(options.worktree, options.slug, afterFailedDrain, options.events);
+        const recorded = await recordRoundStall(options.worktree, options.slug, afterFailedDrain, stallEvents);
         return { kind: 'halted', ...recorded };
       }
       return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
@@ -245,7 +248,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
     let reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
     if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
     if (reconciled.kind === 'stalled') {
-      const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, options.events);
+      const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, stallEvents);
       return { kind: 'halted', ...recorded };
     }
     if (reconciled.kind === 'resume-exit') {
@@ -266,7 +269,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       reconciled = exited.next;
       if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
       if (reconciled.kind === 'stalled') {
-        const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, options.events);
+        const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, stallEvents);
         return { kind: 'halted', ...recorded };
       }
     }
@@ -288,7 +291,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
         // existing routing-stall event spine.
         const stalled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
         if (stalled.kind === 'stalled') {
-          const recorded = await recordRoundStall(options.worktree, options.slug, stalled, options.events);
+          const recorded = await recordRoundStall(options.worktree, options.slug, stalled, stallEvents);
           return { kind: 'halted', ...recorded };
         }
         return { kind: 'halted', detail: consumed.detail ?? 'routing queue consumption stalled', haltClass: 'mechanical' };
