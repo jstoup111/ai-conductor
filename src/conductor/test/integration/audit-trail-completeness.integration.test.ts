@@ -97,6 +97,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   restack_planned: 'not-audited-by-design',
   restack_applied: 'not-audited-by-design',
   restack_conflict: 'not-audited-by-design',
+  restack_resolution: 'not-audited-by-design',
   restack_refused: 'not-audited-by-design',
   restack_recovered: 'not-audited-by-design',
   push_lease_refused: 'not-audited-by-design',
@@ -430,6 +431,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   restack_conflict: {
     type: 'restack_conflict', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
     commit: parseCommitSha('c'.repeat(40))!, paths: ['src/feature.ts'],
+  },
+  restack_resolution: {
+    type: 'restack_resolution', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
+    action: 'recorded', tip: parseCommitSha('d'.repeat(40))!, operator: 'operator',
   },
   restack_refused: { type: 'restack_refused', reason: 'dirty-overlap', child: parseChildId(1)!, detail: 'src/feature.ts' },
   restack_recovered: { type: 'restack_recovered', opId: 'restack-1' as RestackOpId, fromState: 'ready' },

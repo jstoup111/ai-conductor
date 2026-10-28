@@ -160,6 +160,7 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'journal-live-owner'
   | 'published-stack'
   | 'deferred-base-refresh'
+  | 'restack-resolution-stale'
 >>;
 const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
 void restackRefusalReasonContract;

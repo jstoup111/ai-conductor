@@ -450,7 +450,17 @@ describe('routed exit (real local Git)', () => {
       roundId,
       host,
       git: subject.gitRunner,
-      resolver: async () => ({ resolved: false, reason: 'provider setup failed', providerSetupExhaustion: true }),
+      resolver: async () => ({
+        resolved: false,
+        reason: 'provider setup failed',
+        providerSetupExhaustion: {
+          candidates: [{
+            provider: 'codex',
+            reason: 'provider setup failed',
+            recoveryAction: 'Restore Codex setup, then retry the routed exit.',
+          }],
+        },
+      }),
       resolverCap: 1,
     })).resolves.toMatchObject({
       kind: 'halted',
