@@ -202,6 +202,95 @@ describe('build-review findings CLI', () => {
     }
   });
 
+  // Covers: task:2
+  it('names a missing root aggregate and lists stacked children with aggregates', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-stacked-missing-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    const print = vi.fn();
+    await mkdir(join(worktree, '.pipeline', 'children', '1'), { recursive: true });
+    await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'children', '1', 'build-review.json'), JSON.stringify(aggregate));
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'build-review.json'), JSON.stringify(aggregate));
+
+    try {
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path) => path, print,
+      })).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith("build-review findings: .pipeline/build-review.json is missing for 'review-rubrics'. This feature is stacked; pass --child <k> (children with a build-review aggregate: 1, 2).");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('names missing root and child aggregates without a stacked hint', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-missing-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    const rootPrint = vi.fn();
+    const childPrint = vi.fn();
+    await mkdir(worktree, { recursive: true });
+
+    try {
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path) => path, print: rootPrint,
+      })).resolves.toBe(1);
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '3', format: 'human' }, {
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path) => path, print: childPrint,
+      })).resolves.toBe(1);
+
+      expect(rootPrint).toHaveBeenCalledWith("build-review findings: .pipeline/build-review.json is missing for 'review-rubrics'.");
+      expect(childPrint).toHaveBeenCalledWith("build-review findings: .pipeline/children/3/build-review.json is missing for 'review-rubrics'.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('names a malformed child aggregate', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-malformed-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    const print = vi.fn();
+    await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'build-review.json'), '{bad json');
+
+    try {
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'human' }, {
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path) => path, print,
+      })).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith("build-review findings: .pipeline/children/2/build-review.json is malformed for 'review-rubrics' (invalid JSON).");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('names an unreadable child aggregate', async () => {
+    const print = vi.fn();
+    const unreadable = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => { throw unreadable; }, print,
+    })).resolves.toBe(1);
+
+    expect(print).toHaveBeenCalledWith("build-review findings: .pipeline/children/2/build-review.json could not be read for 'review-rubrics' (EACCES).");
+  });
+
+  // Covers: task:2
+  it.each(['0', 'x'])('refuses invalid child id %j before reading an aggregate', async (child) => {
+    const readFile = vi.fn(async () => JSON.stringify(aggregate));
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child, format: 'human' }, {
+      readFile, print,
+    })).resolves.toBe(1);
+
+    expect(print).toHaveBeenCalledWith(`build-review findings: invalid child id '${child}'.`);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
   // Covers: task:19
   it('reports an out-of-delta finding from the shared resolver using the persisted lap scope', async () => {
     const raw = aggregateWithTestQuality({

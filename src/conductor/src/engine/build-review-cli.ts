@@ -1,4 +1,4 @@
-import { readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
+import { access, readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,7 +17,7 @@ import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js'
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import { isRegisteredRubric } from './build-review-registry.js';
-import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
+import { listExistingChildren, parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -31,6 +31,8 @@ export interface BuildReviewFindingsDeps {
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
+  /** Lists children that currently have a build-review aggregate for a missing-root hint. */
+  readonly listChildAggregates?: (worktree: string) => Promise<readonly ChildId[]>;
   /** Reads the exact diff named by a persisted lap scope for shared verdict resolution. */
   readonly readCurrentLapChangedFiles?: import('./build-review-effective.js').BuildReviewEffectiveResolverDeps['readCurrentLapChangedFiles'];
   readonly createStore?: (worktree: string) => DispositionStore;
@@ -435,13 +437,59 @@ type ResolvedCliFeature = {
   readonly feature: BuildReviewFeatureIdentity;
 };
 
+type CliAggregateReadResult =
+  | { readonly ok: true; readonly aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>> }
+  | { readonly ok: false; readonly path: string; readonly cause: 'missing' | 'unreadable' | 'malformed'; readonly detail?: string };
+
+function aggregateRelativePath(child: ChildId | undefined): string {
+  return child === undefined ? '.pipeline/build-review.json' : `.pipeline/children/${child}/build-review.json`;
+}
+
+function readErrorDetail(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') return error.code;
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Reads the root or selected child's aggregate through the one path constructor. */
 async function readCliBuildReviewAggregate(
   worktree: string,
   child: ChildId | undefined,
   readFile: (path: string) => Promise<string>,
-): Promise<ReturnType<typeof parseBuildReviewAggregate>> {
-  return parseBuildReviewAggregate(JSON.parse(await readFile(pipelinePathFor(worktree, 'build-review.json', child))));
+): Promise<CliAggregateReadResult> {
+  const path = pipelinePathFor(worktree, 'build-review.json', child);
+  const relativePath = aggregateRelativePath(child);
+  let source: string;
+  try {
+    source = await readFile(path);
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+    return code === 'ENOENT'
+      ? { ok: false, path: relativePath, cause: 'missing' }
+      : { ok: false, path: relativePath, cause: 'unreadable', detail: readErrorDetail(error) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return { ok: false, path: relativePath, cause: 'malformed', detail: 'invalid JSON' };
+  }
+  const aggregate = parseBuildReviewAggregate(parsed);
+  return aggregate
+    ? { ok: true, aggregate }
+    : { ok: false, path: relativePath, cause: 'malformed', detail: 'does not match the build-review aggregate schema' };
+}
+
+async function defaultListChildAggregates(worktree: string): Promise<readonly ChildId[]> {
+  const children = await listExistingChildren(worktree);
+  const aggregates = await Promise.all(children.map(async (child) => {
+    try {
+      await access(pipelinePathFor(worktree, 'build-review.json', child));
+      return child;
+    } catch {
+      return undefined;
+    }
+  }));
+  return aggregates.filter((child): child is ChildId => child !== undefined);
 }
 
 async function resolveCliMinConfidence(
@@ -487,15 +535,34 @@ async function resolveCliFeature(
 /** Read only current feature artifacts; this deliberately never constructs a pipeline or state lease. */
 export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCommand, deps: BuildReviewFindingsDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
+  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  if (command.child !== undefined && child === undefined) {
+    print(`build-review findings: invalid child id '${command.child}'.`);
+    return 1;
+  }
   try {
-    const child = command.child === undefined ? undefined : parseChildId(command.child);
-    if (command.child !== undefined && child === undefined) throw new Error('child scope is invalid');
     const resolved = await resolveCliFeature(command, deps);
     if (!resolved) throw new Error('feature identity is unavailable');
     const { worktree, feature } = resolved;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
-    const aggregate = await readCliBuildReviewAggregate(worktree, child, readFile);
-    if (!aggregate) throw new Error('aggregate is malformed');
+    const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
+    if (!aggregateRead.ok) {
+      if (aggregateRead.cause === 'missing') {
+        const childAggregates = child === undefined
+          ? await (deps.listChildAggregates ?? defaultListChildAggregates)(worktree)
+          : [];
+        const hint = childAggregates.length === 0
+          ? ''
+          : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${childAggregates.join(', ')}).`;
+        print(`build-review findings: ${aggregateRead.path} is missing for '${command.feature}'.${hint}`);
+      } else if (aggregateRead.cause === 'malformed') {
+        print(`build-review findings: ${aggregateRead.path} is malformed for '${command.feature}' (${aggregateRead.detail}).`);
+      } else {
+        print(`build-review findings: ${aggregateRead.path} could not be read for '${command.feature}' (${aggregateRead.detail}).`);
+      }
+      return 1;
+    }
+    const aggregate = aggregateRead.aggregate;
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const listed = await store.list(feature);
     if (!listed.ok) throw new Error(listed.message);
