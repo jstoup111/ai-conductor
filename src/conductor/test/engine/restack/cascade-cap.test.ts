@@ -2,6 +2,7 @@
 // Covers: task:22
 // Covers: task:rem-prd-audit-R19
 // Covers: task:3
+// Covers: task:4
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -41,7 +42,7 @@ function child(value: number) {
   return parsed;
 }
 
-async function fixture() {
+async function fixture(options: { tier?: 'S' | 'M' | 'L'; config?: string } = {}) {
   const repo = await mkdtemp(join(tmpdir(), 'cascade-cap-'));
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -61,6 +62,11 @@ async function fixture() {
   await commit('repair child', 'repair.txt');
   await git(['checkout', '-qb', 'feat/daemon-demo', closed]);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
+  if (options.tier !== undefined) {
+    await writeFile(join(repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: options.tier }));
+  }
+  await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), options.config ?? '{}\n');
   await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
@@ -80,6 +86,98 @@ async function writeCascadeCounts(repo: string, counts: Record<string, number>, 
 }
 
 describe('restack cascade cap (real local Git)', () => {
+  it.each([
+    { charged: 7, expected: 8 },
+    { charged: 3, expected: 4 },
+  ])('uses the unconfigured tier-L allowance when child 1 has $charged charged cascades', async ({ charged, expected }) => {
+    const subject = await fixture({ tier: 'L' });
+    await writeCascadeCounts(subject.repo, { 1: charged });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts', counts: { counts: { 1: expected } },
+    });
+  });
+
+  it('uses the tier-L cap before creating a journal and leaves every origin unchanged', async () => {
+    const subject = await fixture({ tier: 'L' });
+    await writeCascadeCounts(subject.repo, { 1: 8, 2: 0 });
+    const records: Array<{ type: string; reason?: string; child?: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('restack_refused', (event) => { records.push(event); });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [child(1), child(2)], events, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+    await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts', counts: { counts: { 1: 8, 2: 0 } },
+    });
+  });
+
+  it.each(['M', 'S', undefined] as const)('halts at the default allowance for tier %s', async (tier) => {
+    const subject = await fixture(tier === undefined ? {} : { tier });
+    await writeCascadeCounts(subject.repo, { 1: 3 });
+    const records: Array<{ type: string; reason?: string; child?: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('restack_refused', (event) => { records.push(event); });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+    await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('lets another originating child consume the tier-M allowance independently', async () => {
+    const subject = await fixture({ tier: 'M' });
+    await writeCascadeCounts(subject.repo, { 1: 3, 2: 2 });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [child(2)], git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts', counts: { counts: { 1: 3, 2: 3 } },
+    });
+  });
+
+  it('uses a configured tier-L allowance', async () => {
+    const config = 'stacked_prs:\n  max_restack_cascades:\n    L: 10\n';
+    const proceeding = await fixture({ tier: 'L', config });
+    await writeCascadeCounts(proceeding.repo, { 1: 9 });
+    await expect(runRestack({
+      worktree: proceeding.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(proceeding.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(readCascadeCounts(proceeding.repo, 'demo')).resolves.toMatchObject({ kind: 'counts', counts: { counts: { 1: 10 } } });
+
+    const halted = await fixture({ tier: 'L', config });
+    await writeCascadeCounts(halted.repo, { 1: 10 });
+    const events = new ConductorEventEmitter();
+    const records: Array<{ type: string; reason?: string; child?: number }> = [];
+    events.on('restack_refused', (event) => { records.push(event); });
+    await expect(runRestack({
+      worktree: halted.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(halted.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+  });
+
+  it('does not enforce or charge a cascade cap for a base refresh', async () => {
+    const subject = await fixture({ tier: 'M' });
+    await writeCascadeCounts(subject.repo, { 1: 3 });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: (await subject.git(['rev-parse', 'main'])).stdout.trim(), git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'repair-pending' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'counts', counts: { counts: { 1: 3 } } });
+  });
+
   it('keeps per-originating-child counters in a ref-backed blob and prepares a single CAS update', async () => {
     const subject = await fixture();
     const first = await cascadeUpdateLines(subject.repo, 'demo', [child(1), child(2)], { git: makeGitRunner(subject.repo) });

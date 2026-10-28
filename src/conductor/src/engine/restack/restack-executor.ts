@@ -43,7 +43,7 @@ import {
   cascadeUpdateLines,
   checkCascadeCap,
 } from './cascade-cap.js';
-import { RESTACK_CASCADE_TIER_DEFAULTS } from './cascade-allowance.js';
+import { resolveCascadeAllowanceForWorktree } from './cascade-allowance.js';
 import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
@@ -565,7 +565,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
 
     if (options.cause === 'feature-repair') {
-      const cap = await checkCascadeCap(options.worktree, options.slug, originating, RESTACK_CASCADE_TIER_DEFAULTS.M, { git });
+      const allowance = await resolveCascadeAllowanceForWorktree(options.worktree);
+      const cap = await checkCascadeCap(options.worktree, options.slug, originating, allowance.limit, { git });
       if (cap.kind === 'exhausted') {
         const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
           consumed: cap.count,
