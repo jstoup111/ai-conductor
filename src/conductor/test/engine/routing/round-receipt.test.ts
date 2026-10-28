@@ -160,6 +160,8 @@ describe('round receipt settlement', () => {
           kind: 'exhausted', gate: 'prd_audit', allowance: 'growth', round: {
             roundId: 'r8', findingIds: ['S1.1', 'S3.1'], remTaskIds: ['rem-prd-audit-6.r1', 'rem-prd-audit-6.r2'], existingTaskIds: [], pendingAsBuiltFindings: [],
             charges: { prd_audit: { laps: 1, growth: 2 } }, settledAdded: 13, growthCap: 14,
+            growthCapSource: 'raised', growthAuthored: 1, growthAuthoredSource: 'plan', settledGrowthByGate: {},
+            capEvidence: { consumed: 13, limit: 14 },
           },
         });
     } finally { await rm(subject.root, { recursive: true, force: true }); }

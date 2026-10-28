@@ -47,6 +47,11 @@ export interface RefusedRoundDetail {
   readonly charges: Readonly<Record<string, { readonly laps: number; readonly growth: number }>>;
   readonly settledAdded: number;
   readonly growthCap: number;
+  readonly growthCapSource: 'config-derived' | 'raised';
+  readonly growthAuthored: number;
+  readonly growthAuthoredSource: 'plan' | 'ledger' | 'unresolved';
+  readonly settledGrowthByGate: Readonly<Record<string, number>>;
+  readonly capEvidence: { readonly consumed: number; readonly limit: number };
 }
 
 type RouteReceiptRecord =
@@ -147,7 +152,7 @@ export type RoundSettlementResult =
   /** Revalidation and operator rounds acknowledge without a receipt settlement. */
   | { readonly kind: 'acknowledged'; readonly settlementId?: string }
   | { readonly kind: 'refused'; readonly reason: 'not-current-host' }
-  | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth'; readonly round?: RefusedRoundDetail }
+  | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth'; readonly round: RefusedRoundDetail }
   | { readonly kind: 'halted'; readonly reason: string };
 
 export interface SettleRoundAtDispatchInput {
@@ -237,7 +242,7 @@ function nextLedgerForReceipt(
   const next = applySettledReceiptToLedger(ledger, record);
   const growthCap = next.effectiveGrowthCap ?? budgets[0]?.growthCap ?? 0;
   const owner = WHOLE_FEATURE_BUDGET_GATES.find((gate) => charges.laps[gate] !== undefined) ?? 'prd_audit';
-  const round: RefusedRoundDetail = {
+  const round = {
     roundId: record.roundId,
     findingIds: record.items.map((item) => item.findingId),
     remTaskIds: Object.entries(record.allocation)
@@ -251,18 +256,28 @@ function nextLedgerForReceipt(
     })),
     settledAdded: ledger.growth?.added ?? 0,
     growthCap,
+    growthCapSource: next.effectiveGrowthCap === undefined ? 'config-derived' as const : 'raised' as const,
+    growthAuthored: next.growth?.authored ?? record.sealedAuthored ?? 0,
+    growthAuthoredSource: budgets[0]?.authoredSource ?? 'unresolved',
+    settledGrowthByGate: ledger.growth?.byGate ?? {},
   };
+  const exhausted = (
+    gate: string,
+    allowance: 'laps' | 'growth',
+    consumed: number,
+    limit: number,
+  ) => ({ ledger, exhausted: { gate, allowance, round: { ...round, capEvidence: { consumed, limit } } } });
   for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
     const laps = charges.laps[gate];
     if (laps === undefined) continue;
     const budget = budgetByGate.get(gate);
-    if (!budget) return { ledger, exhausted: { gate, allowance: 'laps', round } };
+    if (!budget) return exhausted(gate, 'laps', next.gates[gate]?.laps ?? 0, 0);
     const entry = next.gates[gate] ?? defaultGateEntry();
     const lapCap = entry.effectiveLapCap ?? budget.lapCap;
-    if ((entry.laps ?? 0) > lapCap) return { ledger, exhausted: { gate, allowance: 'laps', round } };
+    if ((entry.laps ?? 0) > lapCap) return exhausted(gate, 'laps', entry.laps ?? 0, lapCap);
   }
   if ((next.growth?.added ?? 0) > growthCap) {
-    return { ledger, exhausted: { gate: owner, allowance: 'growth', round } };
+    return exhausted(owner, 'growth', round.settledAdded, growthCap);
   }
   return { ledger: next };
 }
