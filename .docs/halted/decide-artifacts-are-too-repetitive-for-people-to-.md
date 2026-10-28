@@ -2,19 +2,20 @@
 
 Status: resolved
 Resolution cause: operator
-Resolved at: 2026-10-26T10:57:11.457Z
+Resolved at: 2026-10-27T00:27:04.250Z
 Slug: decide-artifacts-are-too-repetitive-for-people-to-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
-Branch: feat/c2/decide-artifacts-are-too-repetitive-for-people-to-
-Head SHA: c9b099491b3f79c2958d85c2b162078cfa9e1d58
-Halted at: 2026-10-26T06:57:55.233Z
+Branch: feat/daemon-decide-artifacts-are-too-repetitive-for-people-to-
+Child: 3
+Head SHA: 3bf6492bb081e9ec4ed3454da8116aff352bb343
+Halted at: 2026-10-26T23:13:34.429Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-child BUILD region refused: routed exit host 2: halted
+gate 'rebase' selected 7 times without satisfying: routed leaf return requires fresh whole-feature validation for child 3
 ```

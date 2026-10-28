@@ -79,6 +79,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Command rejection telemetry is persisted but has no audit-trail projection.
   land_gate_rejected: 'not-audited-by-design',
   land_dependency_decided: 'not-audited-by-design',
+  feature_artifacts_registered: 'not-audited-by-design',
   dependency_drift_swept: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
@@ -285,7 +286,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   stack_member_lifecycle: 'not-audited-by-design',
   stack_members_unreachable: 'not-audited-by-design',
   stack_tip_diverged: 'not-audited-by-design',
-  feature_artifacts_registered: 'not-audited-by-design',
   provider_transcripts_captured: 'not-audited-by-design',
   provider_transcripts_harvest_failed: 'not-audited-by-design',
   provider_transcripts_retained: 'not-audited-by-design',
@@ -374,6 +374,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   land_dependency_decided: {
     type: 'land_dependency_decided', repository: 'owner/repo', sourceRef: 'owner/repo#1',
     proposals: [], accepted: [], declined: [], skipped: null, writes: [],
+  },
+  feature_artifacts_registered: {
+    type: 'feature_artifacts_registered', slug: 'feature', added: [],
   },
   dependency_drift_swept: {
     type: 'dependency_drift_swept', repository: 'owner/repo', status: 'swept',
@@ -1062,11 +1065,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   stack_members_unreachable: { type: 'stack_members_unreachable', child: parseChildId(1)!, pr: 101 },
   stack_tip_diverged: { type: 'stack_tip_diverged', prs: [101] },
-  feature_artifacts_registered: {
-    type: 'feature_artifacts_registered',
-    slug: 'f',
-    added: [{ kind: 'plan', path: '.docs/plans/f.md' }],
-  },
 };
 
 async function loadWriter(): Promise<Record<string, any>> {
