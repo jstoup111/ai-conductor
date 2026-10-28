@@ -116,7 +116,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — except a matching, one-use `kickback-budget` authorization for a budget-cap halt. |
 | `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
 | `plan-gap` | A BUILD task reported a Done-when check the approved plan cannot satisfy, or `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
-| `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member's remote tip no longer matches its recorded tip; the detail begins `published stack tip diverged` and names the positions. | No — skipped on every sweep. |
+| `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member no longer matches what the engine recorded: its remote tip moved, it was closed or merged, or its base or stack membership changed. The body names the diverged positions or PRs; see [a published stack halted on `stack-tip-diverged`](#a-published-stack-halted-on-stack-tip-diverged). | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
@@ -1295,6 +1295,8 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 | `lock-unavailable`, `stack-ref-changed` | Another Git operation held or moved a stack ref during the move. |
 | `replay-mismatch`, `verification-failed` | The replayed result failed path-ownership or post-move verification. |
 | `flatten_refused` | A content-bearing merge in the named child conflicts with its new parent. |
+| `published-stack` | The stack is published and frozen; see [what the published-stack freeze blocks](#what-the-published-stack-freeze-blocks). Only a local-work restack halts with it; a base refresh refuses and continues. |
+| `deferred-base-refresh` | A routed round or revalidation queue is open, so the base refresh was deferred. It appears only as a `restack_refused` event, never as a HALT; the re-kick retries later. |
 
 A restack journal still owned by a live process halts `mechanical`, not `needs-human`, with
 `restack journal owned by live process <pid> on <host>` (or `journal owner unreadable`) and a
@@ -1315,6 +1317,9 @@ settle within the rebase resolution attempt budget.
 
   The daemon consumes the authorization on its next loop iteration. See the
   [CLI reference](../reference/cli.md#ai-conductor-kickback-budget).
+- **`published-stack`:** the engine cannot carry local work onto a published child. Follow
+  [what the published-stack freeze blocks](#what-the-published-stack-freeze-blocks); do not clear the
+  halt to retry the restack.
 - **Every other reason:** park the feature, remove the named condition (commit the overlapping
   changes, move the colliding untracked file, release the other checkout, let the concurrent Git operation finish,
   or settle the conflict on the named child's branch), then
@@ -1327,6 +1332,101 @@ events and no new restack HALT.
 
 For routed-round faults, silent preflight stops, and resolver escalations such as halt-record-only
 replay commits, see [Stacked feature manual recovery](stacked-feature-manual-recovery.md).
+
+### A published stack halted on `stack-tip-diverged`
+
+**Symptom:** `.pipeline/HALT.class` is `stack-tip-diverged`. The HALT begins `A published stack
+member no longer matches its recorded tip.` and its `Detail:` names the diverged positions or PRs,
+for example `published stack tip diverged at positions: 2`. The re-kick sweep never clears it.
+
+**Diagnosis:** FINISH publication found that a
+[published stack](../reference/configuration.md#stacked-publication) no longer matches the engine's
+record. A member's remote tip moved, a member was closed or merged, or a base or the stack's
+membership or order changed. The usual causes are GitHub's server-side rebase of the remaining
+members after you merge only the bottom of the stack, and a human push to a member PR. The engine
+stops rather than write over the change. Find which members diverged:
+
+```bash
+cat .worktrees/<slug>/.pipeline/HALT
+grep '"stack_tip_diverged"' .worktrees/<slug>/.pipeline/events.jsonl | tail -1
+git -C .worktrees/<slug> cat-file -p refs/conductor/<slug>/publication
+```
+
+The event lists the diverged PR numbers. The publication record maps each position to its branch
+(`feat/c<k>/<slug>` for a child, `feat/daemon-<slug>` for the leaf) and its PR. For each named
+member, compare the engine's recorded tip with GitHub's:
+
+```bash
+git -C .worktrees/<slug> rev-parse refs/conductor/<slug>/pushed/<branch>
+git -C .worktrees/<slug> ls-remote origin refs/heads/<branch>
+gh pr view <pr> --json state,isDraft,baseRefName,headRefOid
+```
+
+A different SHA means the tip moved. A state other than `OPEN`, or an unexpected base, means the
+member was merged, closed, or retargeted.
+
+**Recovery:** choose one. Do not clear the halt first: the next FINISH entry observes the same
+mismatch and halts again.
+
+- **Merge the remaining stack.** Use this when the divergence is an expected server-side rebase or
+  a human push you have reviewed and want to keep.
+  1. Review each diverged member's new commits in GitHub.
+  2. Merge the rest of the stack in GitHub, bottom up through the leaf, in one go if you can. Every
+     member still needs its required checks and approval. The engine never merges a member.
+  3. Confirm the leaf merged and the feature's shipped record reached the default branch:
+
+     ```bash
+     gh pr view <leaf-pr> --json state
+     git fetch origin && git cat-file -e origin/main:.docs/shipped/<slug>.md && echo shipped
+     ```
+
+  4. Clear the halt:
+
+     ```bash
+     ai-conductor halt clear --feature <slug> --rationale "merged the remaining stack after tip divergence at <positions>"
+     ```
+
+- **Close the stack and park the feature.** Use this when the stack should not ship as it stands.
+  1. Park first, so nothing re-dispatches while you change GitHub:
+     `ai-conductor daemon park <slug>`.
+  2. Close every open member PR in GitHub, the leaf included.
+  3. Leave the feature parked and the halt in place. Unparking re-enters FINISH, which observes the
+     closed members and halts again. Adopting a changed stack is #3268's `conduct stack adopt`, which
+     is not yet available.
+
+**Never edit recorded tips by hand.** Do not update, delete, or re-create
+`refs/conductor/<slug>/pushed/<branch>` or `refs/conductor/<slug>/publication` to make the halt go
+away. The tip guard lets the engine write to a published member only while every recorded tip
+matches GitHub. A hand-recorded tip makes the guard accept a stack the engine never verified, so the
+next engine push or retarget could undo GitHub's rewrite or a human's commits.
+
+**Verification:** after a merge, the daemon log shows `skip <slug>: shipped dedup — implementation
+already merged (base-branch shipped record found); not re-dispatching.`, and the mergeable sweep
+reaps the worktree and deletes the merged child branches (see
+[retained worktrees](../guides/running-the-daemon.md#retained-worktrees)). If
+`ai-conductor daemon status` still lists the feature under `RETAINED WORKTREES`, follow its
+`remedy:` line. After a close, `.daemon/parked/<slug>` exists and the feature is not dispatched.
+
+#### What the published-stack freeze blocks
+
+Once a stack is published, the engine rewrites none of its members.
+
+| Engine action | On a published stack |
+| --- | --- |
+| Base refresh (the FINISH `rebase` step, the re-kick base refresh) | Refuses with `restack_refused` reason `published-stack` and continues on the current base. No HALT. |
+| Local-work restack (stack-preflight feature repair, routed-exit restack) | Halts `needs-human` with `restack refused (published-stack)`, naming the child. |
+| Routed-repair admission | Halts `needs-human` with `routing admission refused: published-stack`. |
+| CI fix or open-PR autoresolve on the leaf | CI fix logs `skipped(published-stack)`. Both label the leaf PR `needs-remediation` and comment `published stacked feature requires manual resolution (#2945)`. |
+| Best-effort pushes | The halt-record push is skipped and emits `halt_record_push_failed` with reason `stack-tip-mismatch`. The post-FINISH shipped-record refresh logs its skip. Agent `github-operation` writes are refused `stack-tip-mismatch`. |
+
+**When `main` moves:** the stack stays on its old base. If GitHub can still merge the bottom member,
+merge the stack as above. If it conflicts with `main`, resolve the conflict yourself on that member's
+branch in GitHub. That moves the member's tip, so plan to merge the whole stack straight afterwards;
+any later engine write to it halts `stack-tip-diverged`.
+
+**When CI goes red on a member:** the engine does not fix it. Fix the failure yourself on that
+member's branch and then merge the stack, or close the stack and park the feature as above.
+Engine-driven refresh of a published stack is #3268.
 
 ### A closed stacked child needs an operator landing
 
