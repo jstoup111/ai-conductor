@@ -409,7 +409,7 @@ export function makeRunFeature(
     let featureRun: FeatureRunScope | undefined;
     let featureLog = log;
     let providerExecution: ProviderExecutionContext | undefined;
-    let endDispatch: ((outcome: 'complete' | 'halted' | 'terminated') => Promise<void>) | undefined;
+    let endDispatch: (outcome: 'complete' | 'halted' | 'terminated') => Promise<FeatureOutcome['halt'] | undefined> = async () => undefined;
     let dispatchEnded = false;
     let haltingStep: string | undefined;
     try {
@@ -433,18 +433,24 @@ export function makeRunFeature(
       });
       endDispatch = async (
         outcome: 'complete' | 'halted' | 'terminated',
-      ): Promise<void> => {
+      ): Promise<FeatureOutcome['halt'] | undefined> => {
         if (dispatchEnded) return;
         dispatchEnded = true;
         const event: Extract<import('../types/events.js').ConductorEvent, { type: 'feature_dispatch_ended' }> = {
           type: 'feature_dispatch_ended', slug: item.slug, outcome,
           ...(item.tier !== undefined && { tier: item.tier }),
         };
+        let halt: FeatureOutcome['halt'];
         if (outcome === 'halted') {
-          event.haltClass = await readHaltSidecarClassification(worktree!.path);
-          event.step = haltingStep ?? 'unknown';
+          halt = {
+            haltClass: await readHaltSidecarClassification(worktree!.path),
+            step: haltingStep ?? 'unknown',
+          };
+          event.haltClass = halt.haltClass;
+          event.step = halt.step;
         }
         await (featureRun?.rootEvents ?? featureRun?.events)?.emit(event);
+        return halt;
       };
       const emitShipped = async (): Promise<void> => {
         const state = await readState(join(worktree!.path, '.pipeline', 'conduct-state.json'));
@@ -647,19 +653,20 @@ export function makeRunFeature(
 
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
-        await endDispatch('halted');
+        const halt = await endDispatch('halted');
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
           slug: item.slug,
           status: 'halted',
           reason,
+          ...(halt ? { halt } : {}),
           costTokens: outcome.costTokens,
           ...(terminalEffects ? { terminalEffects } : {}),
         };
       }
 
       if (outcome.halted) {
-        await endDispatch('halted');
+        const halt = await endDispatch('halted');
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
@@ -667,6 +674,7 @@ export function makeRunFeature(
           slug: item.slug,
           status: 'halted',
           reason: outcome.reason,
+          ...(halt ? { halt } : {}),
           costTokens: outcome.costTokens,
           ...(terminalEffects ? { terminalEffects } : {}),
         };

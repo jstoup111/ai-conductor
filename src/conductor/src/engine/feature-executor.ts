@@ -1,4 +1,5 @@
 import type { WorkOrder } from './work-order.js';
+import type { HaltDisposition } from './halt-marker.js';
 
 /** Dispatcher-owned effects requested by an executor after its feature work ends. */
 export interface FeatureTerminalEffects {
@@ -33,6 +34,7 @@ export interface FeatureExecutionOutcome {
   status: 'done' | 'halted' | 'error' | 'parked';
   prUrl?: string;
   reason?: string;
+  halt?: { step: string; haltClass: HaltDisposition };
   costTokens?: number;
   terminalEffects?: FeatureTerminalEffects;
 }

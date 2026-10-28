@@ -198,6 +198,8 @@ export interface FeatureOutcome {
   prUrl?: string;
   /** Why, for halted/error outcomes. */
   reason?: string;
+  /** Terminal loop-halt details, when this feature halted. */
+  halt?: { step: string; haltClass: HaltDisposition };
   /** Output tokens this feature spent, for the global cost ceiling. */
   costTokens?: number;
   terminalEffects?: FeatureTerminalEffects;

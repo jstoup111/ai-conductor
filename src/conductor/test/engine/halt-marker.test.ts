@@ -82,6 +82,55 @@ describe('writeHaltMarker', () => {
     })]);
   });
 
+  // Covers: task:1
+  it('records an explicit halting step instead of the active phase step', async () => {
+    ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'phase-active'), 'step: prd_audit\nphase: SHIP\n');
+
+    await expect(writeHaltMarker(
+      root,
+      'as-built review halted\n',
+      'plan-gap',
+      undefined,
+      undefined,
+      'architecture_review_as_built',
+    )).resolves.toEqual({ status: 'written' });
+
+    const record = await readFile(join(root, '.docs', 'halted', 'operator-decision.md'), 'utf8');
+    expect(record).toContain('Halting step: architecture_review_as_built');
+    expect(record).not.toContain('Halting step: prd_audit');
+  });
+
+  // Covers: task:1
+  it('uses the active phase step when no explicit halting step is supplied', async () => {
+    ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'phase-active'), 'step: prd_audit\nphase: SHIP\n');
+
+    await expect(writeHaltMarker(root, 'audit halted\n', 'plan-gap')).resolves.toEqual({ status: 'written' });
+
+    await expect(readFile(join(root, '.docs', 'halted', 'operator-decision.md'), 'utf8')).resolves.toContain(
+      'Halting step: prd_audit',
+    );
+  });
+
+  // Covers: task:1
+  it('does not record a mechanical halt even with an explicit halting step', async () => {
+    ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
+
+    await expect(writeHaltMarker(
+      root,
+      'retry automatically\n',
+      'mechanical',
+      undefined,
+      undefined,
+      'architecture_review_as_built',
+    )).resolves.toEqual({ status: 'written' });
+
+    await expect(stat(join(root, '.docs', 'halted'))).rejects.toThrow();
+  });
+
   it('uses the marker emitter for a halt-record push credential fallback', async () => {
     ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
     const emitter = new ConductorEventEmitter();

@@ -798,6 +798,7 @@ export class Conductor {
   private async writeHaltMarker(
     body: string,
     haltClass: Parameters<typeof writeHaltMarker>[2] | KickbackCapHaltClass | OverScopeHaltClass,
+    haltingStep?: StepName,
   ) {
     // `kickback-cap` is an operator-owned remediation halt. Older readers
     // conservatively treat an unknown class as operator action, so introducing
@@ -807,6 +808,8 @@ export class Conductor {
       body,
       haltClass as Parameters<typeof writeHaltMarker>[2],
       this.events,
+      undefined,
+      haltingStep,
     );
   }
 
@@ -1085,12 +1088,11 @@ export class Conductor {
       `record refused ${input.judgingStep} step`,
       changes,
     );
-    // A join can reject several admitted members.  Close every owned scope
-    // exactly once; the lifecycle resolver suppresses stale/duplicate
-    // terminals. Preserve the legacy single judging-step event when this
-    // caller has no execution-aware member context.
-    const contextSteps = [...refused].filter((step) => input.executionContexts?.has(step));
-    for (const refusedStep of contextSteps.length > 0 ? contextSteps : [input.judgingStep]) {
+    // A join can reject several members. Emit one member-scoped refusal for
+    // every rejected member, whether or not its execution context survived
+    // to this late group decision; the lifecycle resolver suppresses stale
+    // terminals for contexts that have already settled.
+    for (const refusedStep of refused) {
       const executionContext = input.executionContexts?.get(refusedStep);
       await this.emitExecutionEvent({
         type: 'step_refused',
@@ -3897,6 +3899,7 @@ export class Conductor {
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
     plannerFault?: string,
+    haltingStep?: StepName,
   ): Promise<string> {
     const refusedReason = renderPrdAuditScopeHalt(
       detail,
@@ -3909,7 +3912,7 @@ export class Conductor {
     const reason = plannerFault === undefined
       ? refusedReason
       : `${refusedReason}\n\nRemediation planner fault: ${plannerFault}`;
-    await this.writeHaltMarker(reason + '\n', OVER_SCOPE_HALT_CLASS);
+    await this.writeHaltMarker(reason + '\n', OVER_SCOPE_HALT_CLASS, haltingStep);
     return reason;
   }
 
@@ -3927,8 +3930,9 @@ export class Conductor {
     refused: readonly OverScopeRenderableFinding[],
     blocker: RefusalReworkAllowanceBlocker,
     tier: ConductState['complexity_tier'],
+    haltingStep?: StepName,
   ): Promise<string> {
-    if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused);
+    if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused, undefined, haltingStep);
     const refusedBlock = renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, []));
     const findings = `Findings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
     let generation: string | undefined;
@@ -3944,7 +3948,7 @@ export class Conductor {
     } catch {
       // Without durable evidence a raise cannot bind to this halt; keep the
       // refused block actionable as today.
-      return this.writeRefusalReworkHalt(detail, refused);
+      return this.writeRefusalReworkHalt(detail, refused, undefined, haltingStep);
     }
     const reason = this.withActiveChild(
       `Refusal rework halted: prd_audit ${blocker.allowance} allowance exhausted.\n` +
@@ -3964,6 +3968,7 @@ export class Conductor {
     await this.writeHaltMarker(
       `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
       KICKBACK_CAP_HALT_CLASS,
+      haltingStep,
     );
     return reason;
   }
@@ -5754,11 +5759,15 @@ export class Conductor {
   }
 
   /** Emit a HALT event with the most recently advanced conductor step. */
-  private async emitLoopHalt(reason: string, prUrl?: string): Promise<void> {
+  private async emitLoopHalt(
+    reason: string,
+    prUrl?: string,
+    haltingStep?: StepName,
+  ): Promise<void> {
     // While the loop is active, the breadcrumb identifies the step that is
     // actually halting. Persisted state can still name the previously settled
     // step, so use it only when no active breadcrumb is available.
-    const candidate = this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
+    const candidate = haltingStep ?? this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
     const step =
       ALL_STEPS.some(({ name }) => name === candidate) ||
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
@@ -5782,11 +5791,15 @@ export class Conductor {
   }
 
   /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
-  private async haltForValidatorFault(state: ConductState, reason: string): Promise<void> {
+  private async haltForValidatorFault(
+    state: ConductState,
+    reason: string,
+    haltingStep?: StepName,
+  ): Promise<void> {
     await this.closeOpenExecutions();
-    await this.writeHaltMarker(reason + '\n', 'mechanical');
+    await this.writeHaltMarker(reason + '\n', 'mechanical', haltingStep);
     await this.persistPendingStateChanges(state, 'persist conductor transition');
-    await this.emitLoopHalt(reason);
+    await this.emitLoopHalt(reason, undefined, haltingStep);
   }
 
   /**
@@ -8815,11 +8828,12 @@ export class Conductor {
                   : undefined,
               );
               if (park.disposition === 'halt') {
+                const failedMember = membership.dispatchable[authFailureIdxs[0]!]!;
                 await closeSettledMembers(outcomes, park.haltReason);
-                await this.writeHaltMarker(park.haltReason + '\n', 'needs-human');
+                await this.writeHaltMarker(park.haltReason + '\n', 'needs-human', failedMember.name as StepName);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
-                await this.emitLoopHalt(park.haltReason, prUrl);
+                await this.emitLoopHalt(park.haltReason, prUrl, failedMember.name as StepName);
                 process.off('SIGINT', sigintHandler);
                 if (!this.daemon) {
                   process.off('SIGTERM', sigterm);
@@ -8877,10 +8891,10 @@ export class Conductor {
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
                     `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`;
                   await closeSettledMembers(outcomes, haltReason);
-                  await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+                  await this.writeHaltMarker(haltReason + '\n', 'needs-human', failedMember.name as StepName);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(haltReason);
-                  await this.emitLoopHalt(haltReason, prUrl);
+                  await this.emitLoopHalt(haltReason, prUrl, failedMember.name as StepName);
                   process.off('SIGINT', sigintHandler);
                   if (!this.daemon) process.off('SIGTERM', sigterm);
                   return;
@@ -8933,10 +8947,10 @@ export class Conductor {
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
               await closeSettledMembers(outcomes, haltReason);
-              await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              await this.writeHaltMarker(haltReason + '\n', 'needs-human', member.name as StepName);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
-              await this.emitLoopHalt(haltReason, prUrl);
+              await this.emitLoopHalt(haltReason, prUrl, member.name as StepName);
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
               return;
@@ -9107,7 +9121,11 @@ export class Conductor {
                     `${err instanceof Error ? err.message : String(err)}`,
                 );
               }
-              await this.haltForValidatorFault(state, mechanicalFault.reason);
+              await this.haltForValidatorFault(
+                state,
+                mechanicalFault.reason,
+                mechanicalFaultMember.name as StepName,
+              );
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9134,7 +9152,7 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after ${attemptsSpent} attempts (${noVerdictOutcome.reason}).`;
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              await this.writeHaltMarker(haltReason + '\n', 'needs-human', noVerdictMember.name as StepName);
               // Story 3, negative path: a no-verdict outcome is the validator's
               // own runner dying (thrown branch, terminal error, or exhausted
               // retry budget) — a work failure, not a judgement awaiting a
@@ -9178,7 +9196,7 @@ export class Conductor {
               // green. Close that scope without mutating the group's state or
               // granting a gate verdict; only the single-writer join owns that.
               await closeClassifiedPassingMembers();
-              await this.emitLoopHalt(haltReason);
+              await this.emitLoopHalt(haltReason, undefined, noVerdictMember.name as StepName);
               await emitTracked({
                 type: 'parallel_failure',
                 step: step.name,
@@ -9195,10 +9213,10 @@ export class Conductor {
             if (prdAuditRoute?.kind === 'projection-halt') {
               const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.writeHaltMarker(reason + '\n', 'needs-human', 'prd_audit');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9214,10 +9232,10 @@ export class Conductor {
                 reason,
               });
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass, 'prd_audit');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9240,10 +9258,10 @@ export class Conductor {
                 reason,
               });
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass, 'prd_audit');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9294,16 +9312,18 @@ export class Conductor {
                   prdAuditRoute.route.refused,
                   blocker,
                   state.complexity_tier,
+                  'prd_audit',
                 )
                 : await this.writeRefusalReworkHalt(
                   prdAuditRoute.route.detail,
                   prdAuditRoute.route.refused,
                   refusalRoundFault(outcome),
+                  'prd_audit',
                 );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               await closeClassifiedPassingMembers();
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return true;
@@ -9316,10 +9336,14 @@ export class Conductor {
                   `Validation group "${step.name}" halted: remediated as-built findings could not be ` +
                   `projected into the verdict artifact — ${projectionRefusal}`;
                 await this.closeOpenExecutions();
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.writeHaltMarker(
+                  reason + '\n',
+                  'needs-human',
+                  'architecture_review_as_built',
+                );
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.emitLoopHalt(reason, prUrl);
+                await this.emitLoopHalt(reason, prUrl, 'architecture_review_as_built');
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -9372,7 +9396,8 @@ export class Conductor {
                   .filter((member, idx) =>
                     outcomes[idx]?.kind !== 'verdict' ||
                     outcomes[idx]?.verdict !== 'pass' ||
-                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true) ||
+                    (member.name === 'manual_test' && manualTestFailRows.length > 0))
                   .map((member) => member.name as StepName);
               const prdAuditUnsatisfied = membership.dispatchable.some((member, idx) =>
                 member.name === 'prd_audit' &&
@@ -9437,7 +9462,11 @@ export class Conductor {
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
                     renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
-                  await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    KICKBACK_CAP_HALT_CLASS,
+                    'architecture_review_as_built',
+                  );
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
@@ -9449,7 +9478,7 @@ export class Conductor {
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, 'architecture_review_as_built');
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9539,7 +9568,11 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    remediationOutcome.haltClass ?? 'needs-human',
+                    'architecture_review_as_built',
+                  );
                   await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
                     state,
@@ -9550,7 +9583,7 @@ export class Conductor {
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, 'architecture_review_as_built');
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9655,6 +9688,7 @@ export class Conductor {
                 await this.writeHaltMarker(
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+                  'architecture_review_as_built',
                 );
                 await closeClassifiedPassingMembers();
                 await this.recordGroupRefusal({
@@ -9672,7 +9706,7 @@ export class Conductor {
                   executionContexts: memberExecutionContexts,
                   reason,
                 });
-                await this.emitLoopHalt(reason);
+                await this.emitLoopHalt(reason, undefined, 'architecture_review_as_built');
                 process.off('SIGINT', sigintHandler);
                 if (!this.daemon) process.off('SIGTERM', sigterm);
                 return;
@@ -9861,9 +9895,22 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  const judgingStep = gapMemberNamesForMerge[0]!;
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    remediationOutcome.haltClass ?? 'needs-human',
+                    judgingStep,
+                  );
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep,
+                    refusedSteps: ['manual_test', ...gapMemberNamesForMerge],
+                    executionContexts: memberExecutionContexts,
+                    reason,
+                  });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, judgingStep);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9939,9 +9986,9 @@ export class Conductor {
                   const gapEscalation = await checkKickbackToBuildEscalation(gapName);
                   if (gapEscalation.halt) {
                     const reason = `${gapName} kickback-to-build no-op: ${gapEscalation.reason}`;
-                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.writeHaltMarker(reason + '\n', 'needs-human', gapName);
                     const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.emitLoopHalt(reason, prUrl);
+                    await this.emitLoopHalt(reason, prUrl, gapName);
                     process.off('SIGINT', sigintHandler);
                     if (!this.daemon) {
                       process.off('SIGTERM', sigterm);
@@ -10033,9 +10080,22 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  const judgingStep = gapMemberNames[0]!;
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    remediationOutcome.haltClass ?? 'needs-human',
+                    judgingStep,
+                  );
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep,
+                    refusedSteps: gapMemberNames,
+                    executionContexts: memberExecutionContexts,
+                    reason,
+                  });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, judgingStep);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -10097,8 +10157,9 @@ export class Conductor {
                   (remediationNoPlanReason
                     ? ` — remediation did not route: ${remediationNoPlanReason}`
                     : '');
+            const judgingStep = (failedMembers[0]?.name as StepName | undefined) ?? step.name;
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
-              await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
+              await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human', judgingStep);
             }
             await closeClassifiedPassingMembers();
             // Attribute the refusal to the first member that actually failed
@@ -10107,12 +10168,12 @@ export class Conductor {
             await this.recordGroupRefusal({
               state,
               groupStep: step.name,
-              judgingStep: (failedMembers[0]?.name as StepName | undefined) ?? step.name,
+              judgingStep,
               refusedSteps: failedMembers.map((member) => member.name as StepName),
               executionContexts: memberExecutionContexts,
               reason: groupHaltReason,
             });
-            await this.emitLoopHalt(groupHaltReason);
+            await this.emitLoopHalt(groupHaltReason, undefined, judgingStep);
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);

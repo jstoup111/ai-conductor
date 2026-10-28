@@ -52,7 +52,7 @@ describe('engine/feature-executor', () => {
     ]);
   });
 
-  it('keeps the executor module order-only and free of daemon root-state imports', async () => {
+  it('keeps the executor module limited to boundary types and free of daemon root-state imports', async () => {
     const executorSource = await readFile(
       fileURLToPath(new URL('../../src/engine/feature-executor.ts', import.meta.url)),
       'utf8',
@@ -61,7 +61,7 @@ describe('engine/feature-executor', () => {
       .map((match) => match[1]);
     const executableSource = executorSource.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
 
-    expect(imports).toEqual(['./work-order.js']);
+    expect(imports).toEqual(['./work-order.js', './halt-marker.js']);
     expect(executableSource).toMatch(/execute\(order: WorkOrder\)/);
     expect(executableSource).not.toMatch(/(?:daemon|park-marker|\.daemon)/);
   });

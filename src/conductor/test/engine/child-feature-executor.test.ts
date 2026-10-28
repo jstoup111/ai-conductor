@@ -1,4 +1,4 @@
-// Covers: task:17, task:18, task:19, task:20
+// Covers: task:7, task:17, task:18, task:19, task:20
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -108,6 +108,8 @@ describe('child feature executor dispatch lifecycle', () => {
       expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION, pinFallbackReason: 'publish-incomplete' }),
       expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'complete' }),
     ]);
+    expect(emitted[1]).not.toHaveProperty('step');
+    expect(emitted[1]).not.toHaveProperty('haltClass');
   });
 
   it.each([
@@ -144,6 +146,8 @@ describe('child feature executor dispatch lifecycle', () => {
       expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION }),
       expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'terminated' }),
     ]);
+    expect(lifecycle[1]).not.toHaveProperty('step');
+    expect(lifecycle[1]).not.toHaveProperty('haltClass');
   });
 
   it('closes the supervisor-owned lifecycle when fork fails before a child exists', async () => {
@@ -213,6 +217,119 @@ describe('child feature executor dispatch lifecycle', () => {
     await vi.waitFor(() => expect(kills).toEqual(['SIGTERM']));
     await expect(execution).resolves.toEqual(firstOutcome);
     expect(log).toHaveBeenCalledWith(`[executor ${order.slug}] ignored duplicate outcome`);
+  });
+
+  it('preserves a child halt disposition on the single supervisor dispatch end', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const events = new ConductorEventEmitter();
+    const ended: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_ended', (event) => { ended.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 702,
+        send() { return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill() { return true; },
+      }),
+    });
+    const outcome = {
+      slug: order.slug,
+      status: 'halted' as const,
+      reason: 'as-built review requires human decision',
+      halt: { step: 'architecture_review_as_built', haltClass: 'plan-gap' as const },
+    };
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    messages[0]!({ kind: 'outcome', outcome });
+    exit?.(0, null);
+
+    await expect(execution).resolves.toEqual(outcome);
+    expect(ended).toEqual([
+      expect.objectContaining({
+        type: 'feature_dispatch_ended', slug: order.slug, outcome: 'halted',
+        step: 'architecture_review_as_built', haltClass: 'plan-gap',
+      }),
+    ]);
+  });
+
+  it('keeps a legacy halted child outcome non-error without halt fields', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const events = new ConductorEventEmitter();
+    const ended: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_ended', (event) => { ended.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 703,
+        send() { return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill() { return true; },
+      }),
+    });
+    const outcome = { slug: order.slug, status: 'halted' as const, reason: 'legacy halt' };
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    messages[0]!({ kind: 'outcome', outcome });
+    exit?.(0, null);
+
+    await expect(execution).resolves.toEqual(outcome);
+    expect(ended).toEqual([expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'halted' })]);
+    expect(ended[0]).not.toHaveProperty('step');
+    expect(ended[0]).not.toHaveProperty('haltClass');
+  });
+
+  it('terminates a child error outcome without halt fields', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const events = new ConductorEventEmitter();
+    const ended: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_ended', (event) => { ended.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 704,
+        send() { return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill() { return true; },
+      }),
+    });
+    const outcome = { slug: order.slug, status: 'error' as const, reason: 'child failure' };
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    messages[0]!({ kind: 'outcome', outcome });
+    exit?.(1, null);
+
+    await expect(execution).resolves.toEqual(outcome);
+    expect(ended).toEqual([expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'terminated' })]);
+    expect(ended[0]).not.toHaveProperty('step');
+    expect(ended[0]).not.toHaveProperty('haltClass');
   });
 
   it('fans a stop request to every live child, then SIGKILLs survivors only after the scaled shutdown budget', async () => {
