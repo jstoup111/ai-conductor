@@ -202,6 +202,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The destructive-git guard recognizes Git 2.56 `git branch --delete-merged`, `--dry-run` and `--forked`. ([implementation PR #3485](https://github.com/jstoup111/ai-conductor/pull/3485)).
 - Telemetry users receive an explicit missing-active-duration counter instead of dropped duration data. ([implementation PR #3486](https://github.com/jstoup111/ai-conductor/pull/3486)).
 - A stacked feature whose leaf is already current with the default branch now passes the rebase gate after a routed leaf return, instead of halting after repeated no-op rebases. ([implementation PR #3488](https://github.com/jstoup111/ai-conductor/pull/3488)).
+- build_review semantic case repeat and regression halts now name their recovery command (resolve-case for a repeat; accept, or a fix on a stacked child, for a regression), and the stalled-or-stuck-feature runbook documents them. ([implementation PR #3491](https://github.com/jstoup111/ai-conductor/pull/3491)).
 
 ## Migration
 
