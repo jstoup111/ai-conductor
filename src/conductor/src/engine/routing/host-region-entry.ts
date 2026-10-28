@@ -283,9 +283,17 @@ export async function restageHostRegion(
       const restageSteps = operator.origin === 'land'
         ? (['acceptance_specs', 'test_suite', 'build_review'] as const)
         : orderedSteps.slice(orderedSteps.indexOf(operator.entryStep));
-      const mutations = restageSteps
+      const missingPriorSteps = operator.origin === 'rewind'
+        ? orderedSteps.slice(0, orderedSteps.indexOf(operator.entryStep))
+          .filter((step) => current.value[step] === undefined)
+          .map((step) => ({ field: step, expected: undefined, next: 'done', intent: `restore closed rewind host ${host} ${step}` } as StateMutation<ConductState>))
+        : [];
+      const mutations = [
+        ...missingPriorSteps,
+        ...restageSteps
         .filter((step) => current.value[step] !== 'pending')
-        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage operator host ${host} ${step}` } as StateMutation<ConductState>));
+        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage operator host ${host} ${step}` } as StateMutation<ConductState>)),
+      ];
       if (mutations.length === 0) return { kind: 'restaged' };
       const result = await state.applyBatch({ name: `restage operator host ${host} region`, mutations });
       return 'message' in result ? { kind: 'refused', detail: `cannot restage operator host ${host}: ${result.message}` } : { kind: 'restaged' };

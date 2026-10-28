@@ -108,7 +108,7 @@ describe('recovery CLIs default to the active child', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
-      expect(error).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
+      expect(error).toHaveBeenCalledWith('rewind: a live .pipeline/HALT and HALT.class are required before rewinding a closed child.');
       expect(await readFile(childOnePath, 'utf8')).toBe(before);
     } finally {
       error.mockRestore();
@@ -181,7 +181,7 @@ describe('recovery CLIs default to the active child', () => {
       await expect(readFile(join(worktree, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8'))
         .resolves.toContain('"build": "stale"');
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
-      expect(error).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
+      expect(error).toHaveBeenCalledWith('rewind: a live .pipeline/HALT and HALT.class are required before rewinding a closed child.');
       expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
       expect(refsBefore).not.toContain('refs/conductor/feature/restack');
       await expect(git(worktree, ['for-each-ref', '--format=%(refname) %(objectname)'])).resolves.toBe(refsBefore);

@@ -127,7 +127,9 @@ async function runLanding(subject: Awaited<ReturnType<typeof fixture>>, options:
   const dispatched: StepName[] = [];
   const started: StepName[] = [];
   const events = new ConductorEventEmitter();
-  events.on('step_started', (event) => { if (event.type === 'step_started') started.push(event.step); });
+  events.on('step_started', (event) => {
+    if (event.type === 'step_started') started.push(event.step);
+  });
   const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never }));
   const conductor = new Conductor({
     projectRoot: subject.repo, stateFilePath: subject.rootStatePath, featureSlug: 'demo', resume: true,
@@ -175,7 +177,7 @@ async function sealedExitFixture(): Promise<SweepRepository & { readonly closure
   const tree = (await git(['rev-parse', `${closure}^{tree}`])).stdout.trim() as never;
   const leaf = (await git(['rev-parse', 'feat/daemon-demo'])).stdout.trim() as never;
   const record: RouteRecord = {
-    roundId, kind: 'operator', phase: 'open', items: [], allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
+    roundId, sealedAuthored: 1, kind: 'operator', phase: 'open', items: [], allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
     hosts: { [c1]: 'repairing' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [],
     entry: { host: c1, pinnedBase: closure, tree },
     operator: {
@@ -186,7 +188,7 @@ async function sealedExitFixture(): Promise<SweepRepository & { readonly closure
     },
   };
   const created = await createRouteRecord(subject.repo, 'demo', {
-    roundId, sealedAuthored: 1, kind: 'operator', items: [], allocation: record.allocation, operator: record.operator!,
+    roundId, sealedAuthored: record.sealedAuthored!, kind: 'operator', items: [], allocation: record.allocation, operator: record.operator!,
   }, { git });
   if (created.kind !== 'created') throw new Error(created.kind);
   const admitted = await admitRound(subject.repo, 'demo', created.record, c1, { git });

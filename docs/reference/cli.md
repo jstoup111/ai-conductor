@@ -1546,7 +1546,8 @@ the corrective restoration also failed and needs operator attention.
 
 With `--child <k>`, `--to` must be a child-region step: `acceptance_specs`, `build`, `test_suite`, or
 `build_review`; any other target exits 1. The target must be earlier than child `k`'s own `last_step`.
-For an open child, the command demotes child `k`'s region from the target, then the region steps of
+On a feature branch without durable stacked-child state, an explicit `--child` exits 1 with
+`rewind: --child is available only for a stacked feature.` For an open child, the command demotes child `k`'s region from the target, then the region steps of
 every existing child above `k` in ascending order, then every later whole-feature step in the flat
 state. It then clears those verdicts and the halt markers, emits `operator_rewind` with a `child`
 field, and prints `Rewound child <k> to <step>.` A failure restores every changed store and leaves
@@ -1599,6 +1600,9 @@ ai-conductor rewind --to <step> --child <k> --reason "<why>"
 For a closed child, `<step>` must be `acceptance_specs`, `build`, `test_suite`, or `build_review`.
 The command requires the live halt and opens a declared round on the closed host at that step; the
 daemon then resumes the host through the routed exit. `--done` is for `stack land` rounds only.
+
+With `stacked_prs.route_whole_feature_fixes: false`, `stack owners`, `stack land`, and the
+closed-child rewind refuse; see [child-by-child build](configuration.md#child-by-child-build).
 See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`

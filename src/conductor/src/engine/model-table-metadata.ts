@@ -302,6 +302,12 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: ExtraModelTableRowInput[] = [
     why: "Operator-invoked, read-only triage. Routing determinism lives in the skill's signal table, not the model; the model gathers evidence and matches rows.",
   },
   {
+    name: 'stack-land',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    why: 'Operator-invoked stack landing guidance: ownership is gathered mechanically, while the model presents the evidence and obtains the required confirmation before a mutation.',
+  },
+  {
     name: 'pr',
     claudeModel: 'sonnet',
     claudeEffort: '',

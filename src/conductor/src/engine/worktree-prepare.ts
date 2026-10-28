@@ -164,7 +164,7 @@ export const DISPATCH_START_SCRIPT = join('bin', 'dispatch-start');
  * the frontmatter agree in both directions, so drift fails the build rather
  * than silently un-suppressing a skill.
  */
-export const OPERATOR_ONLY_SKILLS: readonly string[] = ['daemon-triage'];
+export const OPERATOR_ONLY_SKILLS: readonly string[] = ['daemon-triage', 'stack-land'];
 
 /**
  * Thrown when `bin/setup` fails to run or exits non-zero. Carries the tail of

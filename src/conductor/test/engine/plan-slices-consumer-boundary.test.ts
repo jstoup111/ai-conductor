@@ -178,6 +178,7 @@ describe('plan-slices consumer boundary', () => {
       join('engine', 'routing', 'route-types.ts'),
       join('engine', 'slice-topology.ts'),
       join('engine', 'stack-land-cli.ts'),
+      join('engine', 'stack-owners-cli.ts'),
       join('types', 'config.ts'),
       ]);
   });

@@ -1,4 +1,4 @@
-// Covers: task:10, task:rem-as-built-rem-as-built-r10, task:rem-as-built-rem-as-built-r16
+// Covers: task:10, task:rem-as-built-rem-as-built-r10, task:rem-as-built-rem-as-built-r16, task:31
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -46,6 +46,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     resolveWorktree: vi.fn().mockResolvedValue('/worktree'),
     loadConfig: vi.fn().mockResolvedValue({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: true } } }),
     hasDurableChildState: vi.fn().mockResolvedValue(true),
+    loadTopology: vi.fn().mockResolvedValue({ kind: 'sliced', positions: [1, 2, 3] }),
     checkOpen: vi.fn().mockResolvedValue(accepted()),
     readRepairMarker: vi.fn(),
     readRouteRecord: vi.fn(),
@@ -478,11 +479,12 @@ describe('stack land CLI open path', () => {
     }));
   });
 
-  it('refuses predicate failures before identity, lease, or park mutation', async () => {
-    const deps = dependencies({ checkOpen: vi.fn().mockResolvedValue({ kind: 'refused', refusal: { kind: 'not-stacked', text: 'not stacked' } }) });
+  it('refuses a flat feature before the routing predicate, identity, lease, or park mutation', async () => {
+    const deps = dependencies({ loadTopology: vi.fn().mockResolvedValue({ kind: 'unsliced' }) });
 
     await expect(dispatchStackLandCommand(command, deps as never)).resolves.toBe(1);
 
+    expect(deps.checkOpen).not.toHaveBeenCalled();
     expect(deps.resolveOperator).not.toHaveBeenCalled();
     expect(deps.acquireLease).not.toHaveBeenCalled();
     expect(deps.createPark).not.toHaveBeenCalled();
