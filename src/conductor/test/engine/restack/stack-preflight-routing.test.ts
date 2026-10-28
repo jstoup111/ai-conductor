@@ -83,7 +83,7 @@ describe('stack preflight routing', () => {
       consumeRekick: async () => { consumed.push('consume'); },
       events,
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'clear' });
+    })).resolves.toMatchObject({ kind: 'navigate-leaf-to-build', roundId: 'r1', host: 1 });
 
     expect(refusals).toHaveLength(1);
     expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'deferred-base-refresh' })]);

@@ -14,6 +14,7 @@ import { RESTACK_CASCADE_TIER_DEFAULTS } from '../../../src/engine/restack/casca
 import { journalRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRevalidationQueue, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { exitRoutedHostAndReconcile } from '../../../src/engine/routing/round-admission.js';
 import { routedRepairPhaseEvent } from '../../../src/engine/routing/routing-events.js';
 vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/routed-exit.js')>();
@@ -133,6 +134,74 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  // Covers: task:4
+  it('drains routing outboxes before reconciling a restacked exit', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...addOutbox(record),
+      hosts: { [host]: 'restacked', [childTwo]: 'pending' },
+    }));
+    const order: string[] = [];
+    const exit = vi.fn(async () => {
+      order.push('exit');
+      return { kind: 'restacked' as const };
+    });
+    const persist = vi.fn(async () => {
+      order.push('persist');
+      return 'persisted' as const;
+    });
+    const recorded = recordingRunner(subject.gitRunner);
+    const git: GitRunner = async (args, options) => {
+      const result = await recorded.git(args, options);
+      if (args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(repairMarkerRefFor('demo'))) order.push('reconcile');
+      return result;
+    };
+
+    await expect(exitRoutedHostAndReconcile({
+      worktree: subject.repo, slug: 'demo', roundId, host, exit, persist, git,
+    })).resolves.toEqual({ kind: 'continued', next: { kind: 'navigate-host', roundId, host: childTwo } });
+
+    expect(order).toEqual(['exit', 'persist', 'reconcile']);
+    expect(exit).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:4
+  it.each(['refused', 'rolled-back'] as const)('preserves routed state when the exit is %s', async (outcome) => {
+    const subject = await fixture(true);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { ...record.hosts, [host]: 'built', [childTwo]: 'pending' } }));
+    const before = (await subject.gitRunner(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout;
+    const marker = (await subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).stdout.trim();
+    const exit = vi.fn(async () => ({ kind: 'halted' as const, detail: `${outcome} exit` }));
+
+    await expect(exitRoutedHostAndReconcile({
+      worktree: subject.repo, slug: 'demo', roundId, host, exit, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'exit-halted', detail: `${outcome} exit` });
+
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'built', 2: 'pending' } },
+    });
+    await expect(subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).resolves.toMatchObject({ stdout: `${marker}\n` });
+    await expect(subject.gitRunner(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:4
+  it.each(['no-commit-done', 'noop'] as const)('reconciles after a %s exit', async (kind) => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'done', [childTwo]: 'pending' },
+    }));
+    await subject.gitRunner(['update-ref', '-d', repairMarkerRefFor('demo')]);
+    const exit = vi.fn(async () => ({ kind }));
+
+    await expect(exitRoutedHostAndReconcile({
+      worktree: subject.repo, slug: 'demo', roundId, host, exit, persist: async () => 'persisted', git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'continued', next: { kind: 'navigate-host', roundId, host: childTwo } });
+
+    expect(exit).toHaveBeenCalledOnce();
+  });
+
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
   it('distinguishes a final leaf return from a close that yields to an open round or queue', async () => {
     const leafReturn = await fixture(false);

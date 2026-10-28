@@ -1,8 +1,13 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ChildId } from '../child-context.js';
+import { ConductorEventEmitter } from '../conductor-event-emitter.js';
+import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
 import { makeGitRunner } from '../rebase.js';
 import { operatorRoundEvent, remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
 import {
   drainOutbox,
+  drainRoutingOutboxes,
   readRepairMarker,
   readRouteRecord,
   transitionHost,
@@ -13,7 +18,7 @@ import {
 import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type HostState, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { advanceRound, selectNextHost } from './routed-exit.js';
+import { advanceRound, requestRoutedExit, selectNextHost, type RequestRoutedExitInput } from './routed-exit.js';
 import { readRevalidationQueue } from './route-record-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
 
@@ -149,6 +154,62 @@ export type ReconcileRoundsResult =
 export interface RoundStallEntry {
   readonly roundId: RoundId;
   readonly unsettledHosts: Readonly<Record<ChildId, HostState>>;
+}
+
+export interface RecordedRoundStall {
+  readonly detail: string;
+  readonly haltClass?: 'mechanical';
+}
+
+/** Persist a bounded, progress-resetting reconciliation failure on the event spine. */
+export async function recordRoundStall(
+  worktree: string,
+  _slug: string,
+  stall: Extract<ReconcileRoundsResult, { readonly kind: 'stalled' }>,
+  events: ConductorEventEmitter | undefined,
+): Promise<RecordedRoundStall> {
+  const rounds = stall.rounds.map(({ roundId, unsettledHosts }) => ({ roundId, unsettledHosts }));
+  const key = JSON.stringify(rounds);
+  let prior = 0;
+  try {
+    const lines = (await readFile(join(worktree, FEATURE_EVENT_LOG_PATH), 'utf8')).trim().split('\n').reverse();
+    for (const line of lines) {
+      let event: unknown;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (!event || typeof event !== 'object') continue;
+      const typed = event as { type?: string; rounds?: unknown };
+      if (typed.type === 'routed_repair_phase' || typed.type === 'remediation_routed') break;
+      if (typed.type !== 'routing_rounds_stalled') break;
+      if (JSON.stringify(typed.rounds) !== key) break;
+      prior += 1;
+    }
+  } catch { /* no earlier feature log is the first attempt */ }
+  const attempt = prior + 1;
+  const rendered = rounds.map(({ roundId, unsettledHosts }) => `${roundId} (${Object.entries(unsettledHosts).map(([host, state]) => `${host}: ${state}`).join(', ') || 'unreadable'})`).join('; ');
+  const detail = `routing rounds stalled: ${rendered}; ${stall.detail}`;
+  await events?.emit({ type: 'routing_rounds_stalled', rounds, detail, attempt });
+  return attempt <= 2 ? { detail, haltClass: 'mechanical' } : { detail };
+}
+
+export type ExitRoutedHostAndReconcileResult =
+  | { readonly kind: 'exit-halted'; readonly detail: string }
+  | { readonly kind: 'continued'; readonly next: ReconcileRoundsResult };
+
+/** The sole production continuation after a routed host exit. */
+export async function exitRoutedHostAndReconcile(
+  input: RequestRoutedExitInput & {
+    readonly exit?: typeof requestRoutedExit;
+    readonly reconcile?: typeof reconcileRounds;
+  },
+): Promise<ExitRoutedHostAndReconcileResult> {
+  const exited = await (input.exit ?? requestRoutedExit)(input);
+  if (exited.kind === 'halted') return { kind: 'exit-halted', detail: exited.detail };
+  const persist = input.persist ?? (input.events === undefined ? undefined : (event: Parameters<typeof persistOnActiveEventSpine>[1]) => persistOnActiveEventSpine(input.events!, event));
+  if (persist !== undefined) {
+    const drained = await drainRoutingOutboxes(input.worktree, input.slug, persist, { ...(input.git === undefined ? {} : { git: input.git }) });
+    if (drained.kind !== 'drained') return { kind: 'exit-halted', detail: `routing round ${input.roundId} outbox refused: ${drained.kind}` };
+  }
+  return { kind: 'continued', next: await (input.reconcile ?? reconcileRounds)(input.worktree, input.slug, { ...(input.git === undefined ? {} : { git: input.git }) }) };
 }
 
 function unsettledHosts(record: RouteRecord): Readonly<Record<ChildId, HostState>> {

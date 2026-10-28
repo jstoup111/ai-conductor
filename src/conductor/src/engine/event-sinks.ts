@@ -77,6 +77,7 @@ export const EVENT_SINKS = {
   remediation_routed: { render: false, persist: true, audit: false, otel: false },
   remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
   routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+  routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
   operator_round: { render: false, persist: true, audit: false, otel: false },
   child_revalidated: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },

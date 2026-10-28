@@ -15,10 +15,9 @@ import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
-import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
+import { exitRoutedHostAndReconcile, reconcileRounds, recordRoundStall, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
-import { requestRoutedExit } from '../routing/routed-exit.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
@@ -227,12 +226,15 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
     // consume the queue) before this deferral is observed.
     if (options.baseRefreshDue && await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
       await deferredBaseRefresh(options.events);
-      return { kind: 'clear' };
     }
-    const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
+    let reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
     if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
+    if (reconciled.kind === 'stalled') {
+      const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, options.events);
+      return { kind: 'halted', ...recorded };
+    }
     if (reconciled.kind === 'resume-exit') {
-      const exited = await requestRoutedExit({
+      const exited = await exitRoutedHostAndReconcile({
         worktree: options.worktree,
         slug: options.slug,
         roundId: reconciled.roundId,
@@ -242,10 +244,15 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
         ...(options.events === undefined ? {} : { events: options.events }),
         ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
         ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
+        ...(options.reconcileRounds === undefined ? {} : { reconcile: options.reconcileRounds }),
       });
-      return exited.kind === 'restacked' || exited.kind === 'no-commit-done' || exited.kind === 'noop'
-        ? { kind: 'repaired' }
-        : { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
+      if (exited.kind === 'exit-halted') return { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
+      reconciled = exited.next;
+      if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
+      if (reconciled.kind === 'stalled') {
+        const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, options.events);
+        return { kind: 'halted', ...recorded };
+      }
     }
     // Queue admission is marker-first and happens before any leaf return.
     // A closed audit round may therefore yield to its lowest invalidated child.
@@ -259,6 +266,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       const consumed = await consumeLowestQueued(options.worktree, options.slug, { git: options.git });
       if (consumed.kind === 'admitted') return { kind: 'navigate-host', roundId: consumed.roundId, host: consumed.host };
       if (consumed.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
+      if (consumed.kind === 'stalled') return { kind: 'halted', detail: consumed.detail ?? 'routing queue consumption stalled', haltClass: 'mechanical' };
     }
     if (reconciled.kind === 'navigate-leaf-to-build' || reconciled.kind === 'navigate-host') return reconciled;
   }
