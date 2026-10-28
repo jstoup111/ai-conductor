@@ -56,6 +56,41 @@ describe('phase-marker', () => {
     expect(lines).toContain('allow: .docs/shipped/');
   });
 
+  it('writePhaseMarker writes one own and protect line per manifest ownership path', () => {
+    writePhaseMarker(root, {
+      step: 'build',
+      phase: 'BUILD',
+      allow: ['.docs/release-waivers/'],
+      own: ['.docs/f/review/stories.md', '.docs/f/plan.md'],
+      protect: ['.docs/f/review/stories.md', '.docs/f/plan.md', '.docs/f/manifest.json'],
+    });
+    const lines = readFileSync(phaseMarkerPath(root), 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+
+    expect(lines.filter((line) => line.startsWith('own: '))).toEqual([
+      'own: .docs/f/review/stories.md',
+      'own: .docs/f/plan.md',
+    ]);
+    expect(lines.filter((line) => line.startsWith('protect: '))).toEqual([
+      'protect: .docs/f/review/stories.md',
+      'protect: .docs/f/plan.md',
+      'protect: .docs/f/manifest.json',
+    ]);
+  });
+
+  it('writePhaseMarker omits ownership lines when no manifest ownership is supplied', () => {
+    writePhaseMarker(root, {
+      step: 'build',
+      phase: 'BUILD',
+      allow: ['.docs/release-waivers/'],
+    });
+    const content = readFileSync(phaseMarkerPath(root), 'utf8');
+
+    expect(content).not.toContain('own: ');
+    expect(content).not.toContain('protect: ');
+  });
+
   it('removePhaseMarker deletes an existing marker', () => {
     writePhaseMarker(root, { step: 'build', phase: 'BUILD', allow: [] });
     expect(existsSync(phaseMarkerPath(root))).toBe(true);

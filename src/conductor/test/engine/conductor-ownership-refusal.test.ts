@@ -81,10 +81,18 @@ async function seedState(root: string, target: 'build' | 'manual_test'): Promise
 async function runStep(
   root: string,
   target: 'build' | 'manual_test',
-  options: { baseBranch?: string; maxRetries?: number; runnerResult?: { success: boolean; output?: string } } = {},
+  options: {
+    baseBranch?: string;
+    maxRetries?: number;
+    runnerResult?: { success: boolean; output?: string };
+    onMarker?: (content: string) => void;
+  } = {},
 ) {
   await seedState(root, target);
-  const run = vi.fn(async () => options.runnerResult ?? { success: false, output: 'unexpected provider dispatch' });
+  const run = vi.fn(async () => {
+    options.onMarker?.(await readFile(join(root, '.pipeline', 'phase-active'), 'utf8'));
+    return options.runnerResult ?? { success: false, output: 'unexpected provider dispatch' };
+  });
   const runner: StepRunner = { run };
   const conductor = new Conductor({
     stateFilePath: join(root, 'conduct-state.json'),
@@ -108,6 +116,89 @@ afterEach(async () => {
 });
 
 describe('conductor manifest ownership refusal at BUILD and SHIP entry', () => {
+  it('writes manifest ownership lines into the BUILD phase marker', async () => {
+    const root = await fixture();
+    await git(root, ['checkout', '-qb', 'feature']);
+    await addManifestFeature(root, [
+      { kind: 'plan', path: '.docs/f/plan.md' },
+      { kind: 'stories', path: '.docs/f/review/stories.md' },
+      { kind: 'coherence', path: '.docs/coherence/f.md' },
+    ]);
+    let marker = '';
+
+    const run = await runStep(root, 'build', {
+      maxRetries: 1,
+      runnerResult: { success: true },
+      onMarker: (content) => { marker = content; },
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(marker).toContain('own: .docs/f/plan.md');
+    expect(marker).toContain('own: .docs/f/review/stories.md');
+    expect(marker).not.toContain('own: .docs/f/manifest.json');
+    expect(marker).toContain('protect: .docs/f/plan.md');
+    expect(marker).toContain('protect: .docs/f/review/stories.md');
+    expect(marker).toContain('protect: .docs/f/manifest.json');
+    expect(marker).not.toContain('protect: .docs/coherence/f.md');
+  });
+
+  it('keeps legacy marker ownership lines absent', async () => {
+    const root = await fixture();
+    await git(root, ['checkout', '-qb', 'feature']);
+    await write(root, '.docs/plans/f.md');
+    await commit(root, 'legacy plan');
+    let marker = '';
+
+    const run = await runStep(root, 'build', {
+      maxRetries: 1,
+      runnerResult: { success: true },
+      onMarker: (content) => { marker = content; },
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(marker).not.toContain('own: ');
+    expect(marker).not.toContain('protect: ');
+    expect(marker.match(/^allow: .+$/gm)).toEqual(['allow: .docs/release-waivers/']);
+  });
+
+  it('narrows a manifest-backed remediate marker allowlist to its listed plan path', async () => {
+    const root = await fixture();
+    await git(root, ['checkout', '-qb', 'feature']);
+    await addManifestFeature(root, [
+      { kind: 'plan', path: '.docs/f/plan.md' },
+      { kind: 'stories', path: '.docs/f/review/stories.md' },
+    ]);
+    let marker = '';
+    const runner: StepRunner = {
+      run: async (step) => {
+        expect(step).toBe('remediate');
+        marker = await readFile(join(root, '.pipeline', 'phase-active'), 'utf8');
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, 'conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      baseBranch: 'main',
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+
+    await (conductor as unknown as {
+      runRemediateWithPhaseMarker(
+        state: { feature_desc: string },
+        options: Record<string, never>,
+      ): Promise<unknown>;
+    }).runRemediateWithPhaseMarker({ feature_desc: 'f' }, {});
+
+    expect(marker.match(/^allow: .+$/gm)).toEqual([
+      'allow: .docs/release-waivers/',
+      'allow: .docs/f/plan.md',
+    ]);
+    expect(marker).not.toContain('allow: .docs/plans/');
+  });
+
   it('refuses BUILD before provider dispatch when an artifact is missing and another is committed but unlisted', async () => {
     const root = await fixture();
     await git(root, ['checkout', '-qb', 'feature']);

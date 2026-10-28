@@ -176,7 +176,12 @@ import {
   detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
 } from './attribution-telemetry.js';
-import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './phase-marker.js';
+import {
+  removePhaseMarker,
+  writePhaseMarker,
+  resolveDocsAllowlist,
+  type WritePhaseMarkerOptions,
+} from './phase-marker.js';
 import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
@@ -186,6 +191,7 @@ import {
   computeFeatureOwnership,
   renderOwnershipRefusal,
   worktreeFeatureOwnershipSource,
+  type FeatureOwnership,
 } from './feature-ownership.js';
 import { describeResealRecovery } from './reseal-cli.js';
 import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
@@ -3681,7 +3687,7 @@ export class Conductor {
       // judge. A restart consequently reuses committed relations without a
       // second semantic remediate dispatch.
       judge: async () => {
-        const judgement = await this.stepRunner.run('remediate', state, {
+        const judgement = await this.runRemediateWithPhaseMarker(state, {
           remediationRequest: {
             mode: 'prd-widening-reconciliation',
             projection: JSON.stringify(context.value),
@@ -4124,7 +4130,7 @@ export class Conductor {
     let lastFault = 'remediation planner produced no current typed plan';
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const attemptId = randomUUID();
-      const dispatch = await this.stepRunner.run('remediate', state, {
+      const dispatch = await this.runRemediateWithPhaseMarker(state, {
         runId: attemptId,
         retryReason: dispatchContext,
         remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
@@ -6772,6 +6778,60 @@ export class Conductor {
     return checkStepCompletion(this.projectRoot, 'build', { ...ctx, unverifiedDoneWhenNudgeSpent: true });
   }
 
+  private async phaseMarkerOptions(
+    stepName: string,
+    phase: WritePhaseMarkerOptions['phase'],
+    state: ConductState,
+    ownership?: FeatureOwnership,
+  ): Promise<WritePhaseMarkerOptions> {
+    const ownershipSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    const hasCommit = ownership === undefined && ownershipSlug !== undefined
+      ? await currentCommitSha(this.projectRoot)
+      : undefined;
+    const resolvedOwnership = ownership ?? (ownershipSlug === undefined || hasCommit === undefined
+      ? { kind: 'legacy' as const }
+      : await computeFeatureOwnership(
+          worktreeFeatureOwnershipSource(this.projectRoot),
+          ownershipSlug,
+          this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
+        ));
+    let allow = resolveDocsAllowlist(stepName);
+
+    if (resolvedOwnership.kind === 'manifest' && stepName === 'remediate') {
+      const planPath = await resolveFeaturePlanPath(this.projectRoot, ownershipSlug);
+      if (planPath === undefined) {
+        throw new Error('Manifest-backed remediate marker could not resolve its required plan path.');
+      }
+      const listedPlanPath = relative(this.projectRoot, planPath).replaceAll('\\', '/');
+      allow = [
+        ...allow.filter((path) => path !== '.docs/plans/'),
+        listedPlanPath,
+      ];
+    }
+
+    return {
+      step: stepName,
+      phase,
+      allow,
+      ...(resolvedOwnership.kind === 'manifest' ? {
+        own: resolvedOwnership.ownedPaths,
+        protect: [...resolvedOwnership.protectedPaths, resolvedOwnership.manifestPath],
+      } : {}),
+    };
+  }
+
+  private async runRemediateWithPhaseMarker(
+    state: ConductState,
+    options: StepRunOptions,
+  ): Promise<StepRunResult> {
+    writePhaseMarker(this.projectRoot, await this.phaseMarkerOptions('remediate', 'SHIP', state));
+    try {
+      return await this.stepRunner.run('remediate', state, options);
+    } finally {
+      removePhaseMarker(this.projectRoot);
+    }
+  }
+
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
     await this.transcriptRetention.ready();
@@ -8453,11 +8513,10 @@ export class Conductor {
             // it needs its own phase-active marker write/clear around the
             // whole round rather than relying on the single-step code path.
             if (step.phase === 'BUILD' || step.phase === 'SHIP') {
-              writePhaseMarker(this.projectRoot, {
-                step: step.name,
-                phase: step.phase,
-                allow: resolveDocsAllowlist(step.name),
-              });
+              writePhaseMarker(
+                this.projectRoot,
+                await this.phaseMarkerOptions(step.name, step.phase, state),
+              );
             }
             try {
             await emitTracked({
@@ -11048,6 +11107,7 @@ export class Conductor {
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
           let protectedArtifactIssue: string | null = null;
+          let phaseMarkerOwnership: FeatureOwnership = { kind: 'legacy' };
           if (step.phase === 'BUILD' || step.phase === 'SHIP') {
             const currentCommit = await currentCommitSha(this.projectRoot);
             const baselineCommit = step.phase === 'BUILD' ? currentCommit : undefined;
@@ -11063,6 +11123,7 @@ export class Conductor {
                     ownershipSlug,
                     this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
                   );
+              phaseMarkerOwnership = ownership;
               if (ownership.kind === 'drift' || ownership.kind === 'malformed') {
                 protectedArtifactIssue = renderOwnershipRefusal(ownership);
               } else {
@@ -11104,11 +11165,10 @@ export class Conductor {
           // changed mid-BUILD/SHIP" from DECIDE-phase edits. Independent of
           // written for every BUILD/SHIP step, not just `build`.
           if (step.phase === 'BUILD' || step.phase === 'SHIP') {
-            writePhaseMarker(this.projectRoot, {
-              step: step.name,
-              phase: step.phase,
-              allow: resolveDocsAllowlist(step.name),
-            });
+            writePhaseMarker(
+              this.projectRoot,
+              await this.phaseMarkerOptions(step.name, step.phase, state, phaseMarkerOwnership),
+            );
           }
 
           // Native gates and the finish coordinator precede the self-host
@@ -14072,7 +14132,7 @@ export class Conductor {
                         ((context as { mode?: unknown }).mode === 'case-v1' || (context as { mode?: unknown }).mode === 'case-v2')
                         ? (context as { mode: 'case-v1' | 'case-v2' }).mode
                         : 'case-v1';
-                      const dispatched = await this.stepRunner.run('remediate', state, {
+                      const dispatched = await this.runRemediateWithPhaseMarker(state, {
                         retryReason: `Adjudicate this complete build-review context only; write ${requestedMode} remediation output.\n${JSON.stringify(context)}`,
                       });
                       if (!dispatched.success) {
