@@ -7,7 +7,8 @@ import { loadConfig } from './config.js';
 import { parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveMainRepoRoot } from './park-marker.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 import {
   customStepsInPerChildRegion,
   deriveStoryOwnership,
@@ -231,7 +232,7 @@ export async function loadSliceTopology(
     )),
     titles: validation.slices.map((slice) => slice.title),
   };
-  const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
+  const storiesPath = await resolveFeatureStoriesRef(worktreeManifestSource(worktree), planRepoPath, planText);
   if (storiesPath === null) {
     return unavailable('plan-invalid', {
       planPath: planRepoPath,
@@ -264,8 +265,22 @@ export async function loadSliceTopology(
   });
   const configResult = await loadConfig(dependencies.projectRoot ?? await resolveMainRepoRoot(worktree));
   const config = configResult.ok ? configResult.config : undefined;
-  const complexityPath = join(worktree, '.docs', 'complexity', `${basename(planPath, '.md')}.md`);
-  const complexityContent = await readFile(complexityPath, 'utf8').catch(() => null);
+  const planStem = basename(planPath, '.md');
+  const complexity = await resolveFeatureArtifact(
+    worktreeManifestSource(worktree),
+    slug,
+    'complexity',
+    async () => [`.docs/complexity/${planStem}.md`],
+  );
+  const complexityRepoPath = complexity.paths.find((path) =>
+    complexity.origin === 'legacy' || !complexity.missing.includes(path),
+  );
+  const complexityPath = complexityRepoPath === undefined
+    ? join(worktree, '.docs', 'complexity', `${planStem}.md`)
+    : join(worktree, complexityRepoPath);
+  const complexityContent = complexityRepoPath === undefined
+    ? null
+    : await readFile(complexityPath, 'utf8').catch(() => null);
   const eligibility = evaluateStackEligibility({
     tier: parseComplexityTier(complexityContent),
     signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
