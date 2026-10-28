@@ -1024,7 +1024,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   routing_rounds_stalled: {
     type: 'routing_rounds_stalled',
-    rounds: [{ roundId: parseRoundId('r1')!, unsettledHosts: { [parseChildId(1)!]: 'pending' } }],
+    rounds: [{ roundId: parseRoundId('r1')!, readable: true, unsettledHosts: { [parseChildId(1)!]: 'pending' } }],
     detail: 'routing rounds stalled: r1 (1: pending); test',
     attempt: 1,
   },

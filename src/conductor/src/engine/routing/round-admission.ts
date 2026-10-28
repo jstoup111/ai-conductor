@@ -151,10 +151,9 @@ export type ReconcileRoundsResult =
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 /** Durable round context supplied to the bounded routing-stall recorder. */
-export interface RoundStallEntry {
-  readonly roundId: RoundId;
-  readonly unsettledHosts: Readonly<Record<ChildId, HostState>>;
-}
+export type RoundStallEntry =
+  | { readonly roundId: RoundId; readonly readable: false }
+  | { readonly roundId: RoundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> };
 
 export interface RecordedRoundStall {
   readonly detail: string;
@@ -168,7 +167,9 @@ export async function recordRoundStall(
   stall: Extract<ReconcileRoundsResult, { readonly kind: 'stalled' }>,
   events: ConductorEventEmitter | undefined,
 ): Promise<RecordedRoundStall> {
-  const rounds = stall.rounds.map(({ roundId, unsettledHosts }) => ({ roundId, unsettledHosts }));
+  const rounds = stall.rounds.map((round) => round.readable
+    ? { roundId: round.roundId, readable: true as const, unsettledHosts: round.unsettledHosts }
+    : { roundId: round.roundId, readable: false as const });
   const key = JSON.stringify(rounds);
   let prior = 0;
   try {
@@ -183,7 +184,10 @@ export async function recordRoundStall(
     }
   } catch { /* no earlier feature log is the first attempt */ }
   const attempt = prior + 1;
-  const rendered = rounds.map(({ roundId, unsettledHosts }) => `${roundId} (${Object.entries(unsettledHosts).map(([host, state]) => `${host}: ${state}`).join(', ') || 'unreadable'})`).join('; ');
+  const rendered = rounds.map((round) => round.readable
+    ? `${round.roundId} (${Object.entries(round.unsettledHosts).map(([host, state]) => `${host}: ${state}`).join(', ')})`
+    : `${round.roundId} (unreadable)`)
+    .join('; ');
   const detail = `routing rounds stalled: ${rendered}; ${stall.detail}`;
   await events?.emit({ type: 'routing_rounds_stalled', rounds, detail, attempt });
   return attempt <= 2 ? { detail, haltClass: 'mechanical' } : { detail };
@@ -226,9 +230,9 @@ async function stalledRounds(
   for (const roundId of roundIds) {
     const stored = await readRouteRecord(worktree, slug, roundId, { git });
     if (stored.kind !== 'record') {
-      rounds.push({ roundId, unsettledHosts: {} });
+      rounds.push({ roundId, readable: false });
     } else if (stored.record.phase !== 'closed') {
-      rounds.push({ roundId, unsettledHosts: unsettledHosts(stored.record) });
+      rounds.push({ roundId, readable: true, unsettledHosts: unsettledHosts(stored.record) });
     }
   }
   return rounds;

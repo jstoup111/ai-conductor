@@ -100,7 +100,7 @@ describe('stack preflight routing', () => {
     const stalled = {
       kind: 'stalled' as const,
       detail: 'test reconciliation stall',
-      rounds: [{ roundId, unsettledHosts: { [child]: 'pending' as const } }],
+      rounds: [{ roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } }],
     };
     const options = {
       worktree: subject.repo,
@@ -137,6 +137,42 @@ describe('stack preflight routing', () => {
         .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number })
         .filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt);
       expect(attempts).toEqual([1, 2, 3, 1]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('distinguishes unreadable stalls from readable rounds with no unsettled hosts', async () => {
+    const subject = await fixture();
+    const roundId = parseRoundId('r1')!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    let rounds: readonly ({ readonly roundId: typeof roundId; readonly readable: false } | { readonly roundId: typeof roundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<number, never>> })[] = [
+      { roundId, readable: false },
+    ];
+    const options = {
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({ kind: 'stalled' as const, detail: 'test reconciliation stall', rounds }),
+      hasMatchingResumeAuthorization: async () => true,
+    };
+
+    persister.start();
+    try {
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('r1 (unreadable)') });
+      rounds = [{ roundId, readable: true, unsettledHosts: {} }];
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('r1 ()') });
+
+      const stalls = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number; detail?: string })
+        .filter((event) => event.type === 'routing_rounds_stalled');
+      expect(stalls.map((event) => event.attempt)).toEqual([1, 1]);
+      expect(stalls.map((event) => event.detail)).toEqual([
+        expect.stringContaining('r1 (unreadable)'),
+        expect.stringContaining('r1 ()'),
+      ]);
     } finally {
       persister.stop();
     }

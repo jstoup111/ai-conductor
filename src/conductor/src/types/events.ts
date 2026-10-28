@@ -2333,7 +2333,10 @@ type ConductorEventBody =
   | {
       /** A reconciliation could not safely advance a durable routing round. */
       type: 'routing_rounds_stalled';
-      rounds: readonly { readonly roundId: RoundId; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> }[];
+      rounds: readonly (
+        | { readonly roundId: RoundId; readonly readable: false }
+        | { readonly roundId: RoundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> }
+      )[];
       detail: string;
       attempt: number;
     }

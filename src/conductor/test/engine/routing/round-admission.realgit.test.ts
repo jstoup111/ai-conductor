@@ -335,8 +335,7 @@ describe('routed-round admission (real local Git)', () => {
         kind: 'stalled',
         detail: expect.stringContaining('r4'),
         rounds: expect.arrayContaining([
-          expect.objectContaining({ roundId: 'r3' }),
-          expect.objectContaining({ roundId: 'r4' }),
+          expect.objectContaining({ roundId: 'r4', readable: false }),
         ]),
       });
       expect(await routingRefSnapshot(subject)).toBe(before);
@@ -359,7 +358,7 @@ describe('routed-round admission (real local Git)', () => {
         : subject.git(args, options);
 
       await expect(reconcileRounds(subject.repo, 'demo', { git: contested })).resolves.toMatchObject({
-        kind: 'stalled', detail: expect.stringContaining('r3'), rounds: [expect.objectContaining({ roundId: 'r3', unsettledHosts: { 2: 'pending' } })],
+        kind: 'stalled', detail: expect.stringContaining('r3'), rounds: [expect.objectContaining({ roundId: 'r3', readable: true, unsettledHosts: { 2: 'pending' } })],
       });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });

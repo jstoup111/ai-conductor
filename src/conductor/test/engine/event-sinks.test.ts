@@ -673,7 +673,7 @@ const routingEvents = [
   },
   {
     type: 'routing_rounds_stalled',
-    rounds: [{ roundId: routingRoundId, unsettledHosts: { [routingChild]: 'pending' } }],
+    rounds: [{ roundId: routingRoundId, readable: true, unsettledHosts: { [routingChild]: 'pending' } }],
     detail: 'routing rounds stalled: r1 (1: pending); test refusal',
     attempt: 1,
   },
