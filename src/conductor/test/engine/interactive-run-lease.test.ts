@@ -132,6 +132,10 @@ if [ "$1" = "--version" ]; then
   printf 'codex-test 1.0\\n'
   exit 0
 fi
+if [ "$1" = "debug" ] && [ "$2" = "models" ]; then
+  printf '{"models":[]}\\n'
+  exit 0
+fi
 : > "$FAKE_PROVIDER_DISPATCHED"
 count=0
 if [ -f "$FAKE_PROVIDER_COUNT" ]; then count=$(cat "$FAKE_PROVIDER_COUNT"); fi

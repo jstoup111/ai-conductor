@@ -1,7 +1,4 @@
-import {
-  CODEX_MODEL_POLICY,
-  type ProviderModelPolicy,
-} from './provider-model-policy-defaults.js';
+import type { ProviderModelPolicy } from './provider-model-policy-defaults.js';
 
 const TIERED_MODEL_ID = /^gpt-(\d+(?:\.\d+)*)-(luna|terra|sol|astra)$/;
 
@@ -100,14 +97,13 @@ export function materializeModelTierPolicy(
 
 const resolvedPolicies = new Map<string, ProviderModelPolicy>();
 
-/** Installs the process-local, materialized Codex policy for dispatching consumers. */
+/** Installs a process-local, materialized policy for dispatching consumers. */
 export function installResolvedModelTiers(
   providerKey: string,
+  policy: ProviderModelPolicy,
   resolvedIds: ReadonlyMap<string, string>,
 ): void {
-  if (providerKey === 'codex') {
-    resolvedPolicies.set(providerKey, materializeModelTierPolicy(CODEX_MODEL_POLICY, resolvedIds));
-  }
+  resolvedPolicies.set(providerKey, materializeModelTierPolicy(policy, resolvedIds));
 }
 
 export function resolvedModelTierPolicy(providerKey: string): ProviderModelPolicy | undefined {

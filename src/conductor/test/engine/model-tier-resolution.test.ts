@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 it('uses the newest same-tier catalog models for Codex step resolution', () => {
-  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  installResolvedModelTiers('codex', CODEX_MODEL_POLICY, resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
 
   const policy = resolveProviderModelPolicy('codex');
 
@@ -55,7 +55,7 @@ it('uses the newest same-tier catalog models for Codex step resolution', () => {
 });
 
 it('materializes tier overrides and model ladders from the same catalog map', () => {
-  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  installResolvedModelTiers('codex', CODEX_MODEL_POLICY, resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
 
   const policy = resolveProviderModelPolicy('codex');
 
@@ -99,7 +99,7 @@ it('leaves opaque floor ids unchanged and preserves the static policy without a 
 });
 
 it('does not introduce non-tier catalog entries into a materialized policy', () => {
-  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), [
+  installResolvedModelTiers('codex', CODEX_MODEL_POLICY, resolveModelTierFloors(codexFloorIds(), [
     ...FULL_LISTING,
     'gpt-6-chat-thinking',
     'gpt-reserve',
@@ -122,7 +122,7 @@ it('does not introduce non-tier catalog entries into a materialized policy', () 
 });
 
 it('keeps an operator-configured Codex default model opaque after catalog resolution', () => {
-  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  installResolvedModelTiers('codex', CODEX_MODEL_POLICY, resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
   const config: HarnessConfig = {
     llm_providers: { codex: { model: 'gpt-5.6-sol' } },
   };
@@ -133,7 +133,7 @@ it('keeps an operator-configured Codex default model opaque after catalog resolu
 });
 
 it('keeps an operator-configured Codex step model opaque after catalog resolution', () => {
-  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  installResolvedModelTiers('codex', CODEX_MODEL_POLICY, resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
   const config: HarnessConfig = {
     steps: { build_review: { llm_provider: 'codex', model: 'gpt-5.6-terra' } },
   };
@@ -147,7 +147,7 @@ it('keeps an operator-configured Codex step model opaque after catalog resolutio
 });
 
 it('keeps operator-configured Codex model ladders opaque after catalog resolution', () => {
-  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  installResolvedModelTiers('codex', CODEX_MODEL_POLICY, resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
   const config: HarnessConfig = {
     llm_providers: {
       codex: {

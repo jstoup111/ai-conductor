@@ -107,7 +107,7 @@ export interface ResolveProviderModelTiersOptions {
 export async function resolveProviderModelTiers(
   options: ResolveProviderModelTiersOptions,
 ): Promise<void> {
-  const descriptor = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'codex');
+  const descriptor = BUILT_IN_PROVIDERS.find((provider) => provider.modelTierCatalog !== undefined);
   if (
     tierCatalogProbed
     || descriptor === undefined
@@ -141,7 +141,7 @@ export async function resolveProviderModelTiers(
     }
 
     const resolvedIds = resolveModelTierFloors(policyModelIds(descriptor), parsed.modelIds);
-    installResolvedModelTiers(descriptor.id, resolvedIds);
+    installResolvedModelTiers(descriptor.id, descriptor.modelPolicy, resolvedIds);
 
     // Resolution is deliberately ephemeral, but an upgraded id cannot be
     // silently estimated as free.  Keep this warning at the one-shot probe
