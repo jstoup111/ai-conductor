@@ -289,3 +289,11 @@ Task 7 (independent)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: In src/conductor/src/engine/routing/round-receipt.ts nextLedgerForReceipt, record lap-exhaustion capEvidence.consumed from the settled ledger (ledger.gates[gate]?.laps ?? 0) rather than the projected `next` entry, for both the missing-budget and lap-cap-exceeded branches. Keep the projected value only as the cap comparison. Add a RED-first test in src/conductor/test/engine/routing/round-receipt.test.ts: with 2 settled laps, a lap cap of 2, and a receipt charging 1 lap, the result is exhausted with capEvidence.consumed 2, the flat ledger stays byte-identical, and a raise/reset recovery against that evidence is accepted by kickback-ledger's evidence-match check.
+**Gate:** as-built
+**Rationale:** Confirmed (99%, verified): in round-receipt.ts nextLedgerForReceipt, the lap-exhaustion branch calls exhausted(gate, 'laps', entry.laps ?? 0, lapCap), and the missing-budget branch calls it with next.gates[gate]?.laps. Both values come from the projected ledger `next`, which already includes the refused round's lap charge. The refusal returns the unchanged `ledger`, so capEvidence.consumed ends up one lap higher than the settled count. kickback-ledger.ts recovery requires evidence.consumed === entry.laps, so ordinary raise/reset recovery fails. ADR-2026-08-29 D2 stays authoritative and needs no new decision. This is clear conforming implementation drift. Approved Task 1 (Settlement's exhausted result describes the refused round; files round-receipt.ts and round-receipt.test.ts) covers the repair. The growth branch already uses settled round.settledAdded, so only the laps branches change. Siblings were checked: conductor.ts:10467–10475 just persists the evidence and is fixed once the source is fixed, so it needs no separate change.
+**Governing clause:** adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 2
+**Done when:**
+- adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
