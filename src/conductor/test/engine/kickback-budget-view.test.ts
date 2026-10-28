@@ -1,12 +1,21 @@
 // Covers: task:3, task:5, task:6, task:8, task:10, task:12
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { kickbackBudgetView, renderKickbackBudgetView, renderKickbackRecoveryHint, withPendingGrowth } from '../../src/engine/kickback-budget-view.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { projectPendingGrowth } from '../../src/engine/kickback-ledger.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import { loadConfig } from '../../src/engine/config.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
+
+const execFile = promisify(execFileCallback);
 
 async function makeFeature(ledger: unknown, config?: string): Promise<{ root: string; worktree: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kickback-budget-view-'));
@@ -14,10 +23,48 @@ async function makeFeature(ledger: unknown, config?: string): Promise<{ root: st
   await mkdir(join(worktree, '.pipeline'), { recursive: true });
   await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify(ledger));
   if (config) {
-    await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
-    await writeFile(join(worktree, '.ai-conductor', 'config.yml'), config);
+    await Promise.all([
+      mkdir(join(root, '.ai-conductor'), { recursive: true }),
+      mkdir(join(worktree, '.ai-conductor'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(root, '.ai-conductor', 'config.yml'), config),
+      writeFile(join(worktree, '.ai-conductor', 'config.yml'), config),
+    ]);
   }
   return { root, worktree };
+}
+
+async function makeDivergingGrowthFixture(options: { effectiveGrowthCap?: number; mainConfig?: string } = {}): Promise<{ root: string; worktree: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'kickback-growth-main-config-'));
+  const worktree = join(root, '.worktrees', 'feature');
+  const mainConfig = options.mainConfig ?? 'prd_audit:\n  max_appended_tasks: 8\n  max_appended_ratio: 0.8\n';
+  try {
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    if (mainConfig) await writeFile(join(root, '.ai-conductor', 'config.yml'), mainConfig);
+    await writeFile(join(root, '.gitignore'), '.pipeline/\n');
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await execFile('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
+    await execFile('git', ['config', 'user.name', 'Test User'], { cwd: root });
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-qm', 'fixture'], { cwd: root });
+    await execFile('git', ['worktree', 'add', '-qb', 'feature', worktree], { cwd: root });
+    await Promise.all([
+      mkdir(join(worktree, '.ai-conductor'), { recursive: true }),
+      mkdir(join(worktree, '.pipeline'), { recursive: true }),
+    ]);
+    await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n');
+    await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {},
+      growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+      ...(options.effectiveGrowthCap === undefined ? {} : { effectiveGrowthCap: options.effectiveGrowthCap }),
+    }));
+    return { root, worktree };
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function inspectFeature(fixture: { root: string }): Promise<{
@@ -468,6 +515,105 @@ describe('kickback budget view', () => {
       const parsed = JSON.parse(output[0]) as { gates: Array<{ gate: string; adjustments: unknown }> };
       expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toBe('unavailable');
     } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('derives inspect plan growth from the main checkout config rather than the linked worktree config', async () => {
+    const fixture = await makeDivergingGrowthFixture();
+    try {
+      const human: string[] = [];
+      const json: string[] = [];
+      for (const [format, output] of [['human', human], ['json', json]] as const) {
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format },
+          { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+        )).toBe(0);
+      }
+
+      for (const gate of ['prd_audit', 'architecture_review_as_built']) {
+        const block = human[0].split('\n\n').find((candidate) => candidate.includes(`Kickback budget (${gate}):`));
+        expect(block).toContain('Plan growth: 6/8 added; 2 remaining (config-derived cap)');
+      }
+      const views = (JSON.parse(json[0]) as { gates: Array<{ gate: string; planGrowth?: { cap: number } }> }).gates;
+      expect(views.find((view) => view.gate === 'prd_audit')?.planGrowth?.cap).toBe(8);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('keeps a raised growth cap ahead of both checkout configurations', async () => {
+    const fixture = await makeDivergingGrowthFixture({ effectiveGrowthCap: 9 });
+    try {
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+      expect(output[0]).toContain('Plan growth: 6/9 added; 3 remaining (raised cap)');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('uses the no-config default from the main checkout rather than the linked worktree config', async () => {
+    const fixture = await makeDivergingGrowthFixture({ mainConfig: '' });
+    try {
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+      expect(output[0]).toContain('Plan growth: 6/5 added; 0 remaining (config-derived cap)');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('matches the BUILD halt cap from a Conductor constructed with the main checkout config', async () => {
+    const fixture = await makeDivergingGrowthFixture();
+    try {
+      const inspected: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => inspected.push(line) },
+      )).toBe(0);
+      await Promise.all([
+        writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({
+          ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
+          build: 'pending', feature_desc: 'feature', session_started_at: Date.now() - 1_000, run_started_at: Date.now() - 1_000,
+        })),
+        writeFile(join(fixture.worktree, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: 'rem-1', status: 'pending' }] })),
+        mkdir(join(fixture.worktree, '.docs', 'plans'), { recursive: true }),
+      ]);
+      await writeFile(join(fixture.worktree, '.docs', 'plans', 'feature.md'), Array.from(
+        { length: 26 }, (_, index) => `### Task ${index + 1}: work`,
+      ).join('\n'));
+      await writeFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+        version: 1, gates: {}, growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+        pendingRepair: { receiptId: 'repair-1', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 3 } } },
+      }));
+      const config = await loadConfig(fixture.root);
+      if (!config.ok) throw new Error('fixture main config must load');
+      vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+        ok: true, seal: undefined, selfAmendments: [],
+      });
+      const conductor = new Conductor({
+        stateFilePath: join(fixture.worktree, '.pipeline', 'conduct-state.json'), projectRoot: fixture.worktree,
+        stepRunner: { run: async () => ({ success: true }) }, events: new ConductorEventEmitter(),
+        mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1, baseBranch: 'main', config: config.config,
+      });
+      await conductor.run();
+      const halt = await (await import('node:fs/promises')).readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8');
+      expect(halt.match(/Plan growth: \d+\/(\d+) added/)?.[1]).toBe(
+        inspected[0].match(/Plan growth: \d+\/(\d+) added/)?.[1],
+      );
+    } finally {
+      vi.restoreAllMocks();
       await rm(fixture.root, { recursive: true, force: true });
     }
   });
