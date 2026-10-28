@@ -455,7 +455,7 @@ describe('restack kickback budget storage', () => {
     })).toBe(1);
     expect(printed.join('\n')).toContain('current cap evidence is missing or no longer matches the live halt');
     await expect(readCascadeCounts(stale.repo, 'demo')).resolves.toMatchObject({ kind: 'counts', blob: before.blob });
-    await expect(readKickbackLedger(stale.repo, child(2))).resolves.not.toMatchObject({
+    await expect(readKickbackLedger(stale.repo, child(1))).resolves.not.toMatchObject({
       gates: { restack: { resumeAuthorization: expect.anything() } },
     });
   });
