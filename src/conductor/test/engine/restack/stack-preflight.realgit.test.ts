@@ -99,7 +99,7 @@ describe('runStackPreflight (real local Git)', () => {
     events.on('restack_refused', (event) => { refusals.push(event); });
 
     await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('closed-child-rewritten') });
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(subject.closedOne);
     expect(refusals).toEqual([expect.objectContaining({ reason: 'closed-child-rewritten', child: 1 })]);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -193,7 +193,7 @@ describe('runStackPreflight (real local Git)', () => {
       consumeRekick: async () => { consumed.push('consume'); }, events, git: makeGitRunner(subject.repo),
     }));
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
     expect(records.filter((record) => record.type === 'restack_refused').map((record) => record.reason))
       .toEqual(['dirty-overlap', 'deferred-base-refresh']);
     expect(records.filter((record) => record.type === 'restack_planned').map((record) => record.cause))
@@ -216,7 +216,7 @@ describe('runStackPreflight (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', baseRefreshDue: true, events, git: makeGitRunner(subject.repo),
     }));
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
     // The repair applied: child 1's closure moved to the operator commit and the leaf carries it.
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(operatorTip);
     expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');

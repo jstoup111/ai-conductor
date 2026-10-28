@@ -87,7 +87,7 @@ describe('runStackPreflight unlanded closed-child commits (real local Git)', () 
 
     const { result, planned } = await preflight(subject);
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe([
       'unlanded-closed-child-commits: child 1',

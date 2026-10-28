@@ -125,7 +125,7 @@ describe('operator branch tip checks (real local Git)', () => {
       return subject.git(args, options);
     };
 
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: recording })).resolves.toEqual({ kind: 'halted' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: recording })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(`${reason}\n`);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('feat/daemon-demo');
     expect(calls.some((args) => args[0] === 'update-ref')).toBe(false);

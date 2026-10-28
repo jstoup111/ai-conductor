@@ -1311,7 +1311,7 @@ export async function runDaemonRekickStackPreflight(
 ): Promise<StackPreflightResult> {
   const result = await runStackPreflight(options);
   if (result.kind === 'halted' || result.kind === 'unavailable') {
-    log(`stack preflight ${options.slug}: ${result.kind}`);
+    log(`stack preflight ${options.slug}: ${result.kind} — ${result.detail}`);
   }
   return result;
 }

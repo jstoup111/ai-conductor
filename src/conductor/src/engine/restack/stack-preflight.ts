@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { hasDurableChildState, resolveActiveChild, resolveSealedFirst } from '../child-cursor.js';
@@ -10,7 +10,7 @@ import { checkCascadeCap } from './cascade-cap.js';
 import { defaultTip, runRestack } from './restack-executor.js';
 import type { RestackResolver } from './restack-resolver.js';
 import { emitRestackRefused } from './restack-events.js';
-import { readRestackJournal } from './restack-journal.js';
+import { readRestackJournal, type RestackJournalOwner } from './restack-journal.js';
 import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
@@ -29,7 +29,7 @@ import { formatStackCursorRefusal, type StackCursorFailureCause } from '../stack
 export type StackPreflightResult =
   | { readonly kind: 'no-stack' | 'clear' | 'recovered' | 'repaired' }
   | Extract<ReconcileRoundsResult, { readonly kind: 'navigate-leaf-to-build' | 'navigate-host' }>
-  | { readonly kind: 'halted' }
+  | { readonly kind: 'halted'; readonly detail: string; readonly haltClass?: 'mechanical' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 export interface RunStackPreflightOptions {
@@ -69,7 +69,7 @@ export interface RunStackPreflightOptions {
 async function haltUnresolvableCursor(
   options: RunStackPreflightOptions,
   cause: StackCursorFailureCause,
-  detail: string,
+  refusalDetail: string,
   topology: {
     readonly planPath?: string;
     readonly positionsRef?: string;
@@ -77,12 +77,10 @@ async function haltUnresolvableCursor(
     readonly planPositions?: readonly number[];
   } = {},
 ): Promise<Extract<StackPreflightResult, { kind: 'halted' }>> {
-  const body = `cannot resolve stack cursor: ${cause}: ${await formatStackCursorRefusal(
-    options.worktree, options.slug, cause, detail, topology,
-  )}\n`;
-  await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
-  await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
-  return { kind: 'halted' };
+  const detail = `cannot resolve stack cursor: ${cause}: ${await formatStackCursorRefusal(
+    options.worktree, options.slug, cause, refusalDetail, topology,
+  )}`;
+  return { kind: 'halted', detail };
 }
 
 async function deferredBaseRefresh(events: ConductorEventEmitter | undefined): Promise<void> {
@@ -106,12 +104,27 @@ function unlandedClosedChildCommitsHalt(slug: string, children: readonly number[
   ].join('\n');
 }
 
+function stageDetail(stage: string, detail: string): string {
+  return detail.trim() || `stack preflight: ${stage} refused`;
+}
+
+async function haltForLiveJournalOwner(
+  options: RunStackPreflightOptions,
+  owner: RestackJournalOwner | undefined,
+): Promise<Extract<StackPreflightResult, { kind: 'halted' }>> {
+  const detail = owner === undefined
+    ? 'journal owner unreadable'
+    : `restack journal owned by live process ${owner.pid} on ${owner.host}`;
+  await options.events?.emit(emitRestackRefused({ reason: 'journal-live-owner', detail }));
+  return { kind: 'halted', detail, haltClass: 'mechanical' };
+}
+
 /**
  * Make the durable stack coherent before an entry point judges the active
  * child. Durable-state detection includes the journal, so an interrupted
  * stack cannot be flattened by lost worktree metadata.
  */
-export async function runStackPreflight(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
+async function runStackPreflightInner(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
   // Establish whether the feature is stacked before touching routing state.
   // A journal itself establishes durable child state, so this still recovers
   // interrupted stacks while keeping N=1 features on their historical path.
@@ -129,7 +142,8 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // base-refresh follow-on must not move published member refs.
   const published = await publishedStackRefusal(options.worktree, options.slug, { git: options.git });
   const recovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
-  if (recovery.kind === 'live-owner' || recovery.kind === 'halted') return { kind: 'halted' };
+  if (recovery.kind === 'live-owner') return haltForLiveJournalOwner(options, recovery.owner);
+  if (recovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
   if (recovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', recovery.detail);
 
   // Recovery is safe while a feature is parked; changing closure refs is not.
@@ -140,7 +154,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   const hasLiveHalt = options.hasLiveHalt ?? (() => liveHaltExists(options.worktree));
   if (await hasLiveHalt()) {
     if (options.hasMatchingResumeAuthorization === undefined || !await options.hasMatchingResumeAuthorization()) {
-      return { kind: 'halted' };
+      return { kind: 'halted', detail: 'live HALT without resume authorization' };
     }
   }
 
@@ -153,7 +167,8 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // aborted journal collectible. Task 31.1 adds live-HALT gating around this
   // entry point; until then recovery remains the sole owner of cleanup.
   const secondRecovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
-  if (secondRecovery.kind === 'live-owner' || secondRecovery.kind === 'halted') return { kind: 'halted' };
+  if (secondRecovery.kind === 'live-owner') return haltForLiveJournalOwner(options, secondRecovery.owner);
+  if (secondRecovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
   if (secondRecovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', secondRecovery.detail);
 
   // The hook cannot see a --no-verify commit or a ref move made elsewhere.
@@ -178,9 +193,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
         const reason = formatOperatorHaltReason('operator-round-branch-moved', stored.record.roundId);
         const details = tips.branches.map(({ branch, recorded, current }) => `${branch} (recorded ${recorded}, current ${current})`).join(', ');
         const body = `${reason}\noperator round ${stored.record.roundId} branch moved: ${details}\n`;
-        await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
-        await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
-        return { kind: 'halted' };
+        return { kind: 'halted', detail: body.trimEnd() };
       }
       // An abandon has already durably chosen its host reset; it must reach
       // round reconciliation even though it has no landing declaration.
@@ -190,9 +203,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
           // ai-conductor:session-command-context=operator-only
           'ai-conductor stack land --done or ai-conductor stack land --abandon\n';
           // /ai-conductor:session-command-context
-        await writeHaltMarker(options.worktree, body, 'needs-human', options.events);
-        await options.events?.emit({ type: 'loop_halt', reason: body.trim() });
-        return { kind: 'halted' };
+        return { kind: 'halted', detail: body.trimEnd() };
       }
     }
   }
@@ -220,7 +231,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
       return { kind: 'clear' };
     }
     const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
-    if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: reconciled.detail };
+    if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
     if (reconciled.kind === 'resume-exit') {
       const exited = await requestRoutedExit({
         worktree: options.worktree,
@@ -233,9 +244,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
         ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
         ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
       });
-      return exited.kind === 'restacked' || exited.kind === 'no-commit-done'
+      return exited.kind === 'restacked' || exited.kind === 'no-commit-done' || exited.kind === 'noop'
         ? { kind: 'repaired' }
-        : { kind: 'halted' };
+        : { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
     }
     // Queue admission is marker-first and happens before any leaf return.
     // A closed audit round may therefore yield to its lowest invalidated child.
@@ -257,7 +268,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   if (cursor.kind === 'no-child') return { kind: 'no-stack' };
   if (cursor.kind === 'divergent') {
     await haltRestack(options.worktree, cursor.check, options.events, { child: cursor.child });
-    return { kind: 'halted' };
+    return { kind: 'halted', detail: `stack cursor divergent: ${cursor.check}` };
   }
   if (cursor.kind !== 'repair-pending') {
     if (cursor.kind === 'topology-unavailable') {
@@ -272,8 +283,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
 
   if (cursor.foreignRoundChildren?.length) {
     const details = cursor.foreignRoundChildren.map((child) => `child ${child} round ${cursor.foreignRounds?.[child] ?? 'unknown'}`).join(', ');
-    await writeHaltMarker(options.worktree, `routing foreign-round commit: ${details}\n`, 'needs-human', options.events);
-    return { kind: 'halted' };
+    return { kind: 'halted', detail: `routing foreign-round commit: ${details}` };
   }
 
   // A routed repair rewrites closure refs. Once those refs back published
@@ -281,19 +291,13 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   const publishedChild = cursor.repairChildren[0];
   if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
     await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
-    return { kind: 'halted' };
+    return { kind: 'halted', detail: 'published stack refused restack repair' };
   }
 
   // A raw closed-child commit needs an operator landing to declare it done;
   // routing must never silently replay it into a routed feature repair.
   if (marker?.kind === 'absent' && config.ok && routingEligible(cursor, config.config)) {
-    await writeHaltMarker(
-      options.worktree,
-      unlandedClosedChildCommitsHalt(options.slug, cursor.repairChildren),
-      'needs-human',
-      options.events,
-    );
-    return { kind: 'halted' };
+    return { kind: 'halted', detail: unlandedClosedChildCommitsHalt(options.slug, cursor.repairChildren).trimEnd() };
   }
 
   // Check every origin before creating a journal. runRestack repeats the
@@ -321,7 +325,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   });
   if (repair.kind !== 'applied') {
     if (baseRefreshDue) await deferredBaseRefresh(options.events);
-    return repair.kind === 'unavailable' ? repair : { kind: 'halted' };
+    return repair.kind === 'unavailable'
+      ? { kind: 'unavailable', detail: stageDetail('feature-repair restack', repair.detail) }
+      : { kind: 'halted', detail: 'feature-repair restack halted' };
   }
   if (!baseRefreshDue) {
     if (options.baseRefreshDue) await options.consumeRekick?.();
@@ -365,9 +371,53 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   });
   if (followOn.kind !== 'applied') {
     await deferredBaseRefresh(options.events);
-    return followOn.kind === 'unavailable' ? followOn : { kind: 'halted' };
+    return followOn.kind === 'unavailable'
+      ? { kind: 'unavailable', detail: stageDetail('base-refresh restack', followOn.detail) }
+      : { kind: 'halted', detail: 'base-refresh restack halted' };
   }
   return { kind: 'repaired' };
+}
+
+/**
+ * Make every preflight stop durable at its public boundary. Inner operations
+ * may already have written a more specific marker; preserve it, but always
+ * publish the terminal event exactly once from this wrapper.
+ */
+export async function runStackPreflight(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
+  const haltPath = join(options.worktree, HALT_MARKER);
+  const entryHalt = await readFile(haltPath).catch(() => undefined);
+  let crossedHaltUnderAuthorization = false;
+  const hasMatchingResumeAuthorization = options.hasMatchingResumeAuthorization === undefined
+    ? undefined
+    : async () => {
+      const authorized = await options.hasMatchingResumeAuthorization!();
+      crossedHaltUnderAuthorization ||= authorized;
+      return authorized;
+    };
+  const result = await runStackPreflightInner({ ...options, hasMatchingResumeAuthorization });
+  if (result.kind !== 'halted' && result.kind !== 'unavailable') return result;
+
+  const existing = await readFile(haltPath).catch(() => undefined);
+  const replaceEntryHalt = crossedHaltUnderAuthorization
+    && entryHalt !== undefined
+    && existing?.equals(entryHalt) === true;
+  if (existing === undefined || replaceEntryHalt) {
+    const write = await writeHaltMarker(
+      options.worktree,
+      `${result.detail}\n`,
+      result.kind === 'halted' ? result.haltClass ?? 'needs-human' : 'needs-human',
+      options.events,
+    );
+    if (write.status === 'failed') {
+      throw new Error(`stack preflight stopped (${result.detail}) but its HALT could not be written: ${write.reason}`);
+    }
+  }
+  const firstLine = replaceEntryHalt ? undefined : existing?.toString('utf8').split('\n', 1)[0]?.trim();
+  await options.events?.emit({
+    type: 'loop_halt',
+    reason: firstLine === undefined || firstLine === '' ? result.detail : `${result.detail}: ${firstLine}`,
+  });
+  return result;
 }
 
 async function defaultAlreadyInStack(worktree: string, slug: string, git: GitRunner): Promise<boolean> {

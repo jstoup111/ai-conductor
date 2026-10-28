@@ -315,7 +315,9 @@ describe('routed exit (real local Git)', () => {
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('tree mismatch for child 2');
 
     vi.mocked(requestRoutedExit).mockClear();
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner })).resolves.toEqual({ kind: 'halted' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'halted', detail: expect.stringContaining('live HALT without resume authorization'),
+    });
     expect(requestRoutedExit).not.toHaveBeenCalled();
   });
 

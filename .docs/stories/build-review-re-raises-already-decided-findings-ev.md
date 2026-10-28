@@ -50,7 +50,7 @@ narrowing a later lap never hides unreviewed code.
 - Given L1's scope record for R is missing because the worktree's pipeline state was recreated, when L2 decides R's scope, then R's mode is `full` with reason `first-lap` and every current hunk is reviewed.
 - Given L1's branch artifact for R exists but its scope record cannot be parsed, when L2 decides R's scope, then R's mode is `full` with reason `record-unreadable`, and the unreadable artifact is neither rewritten nor deleted.
 - Given L2 ran a `record-unreadable` full lap for L1's unreadable record of R, when L3 decides R's scope, then L1's record is ignored and L3 is not `full` because of it.
-- Given L1 recorded R under projection v5 and L2 runs under a different projection or contract version, when L2 decides R's scope, then R's mode is `full` with reason `version-changed`.
+- Given L1 recorded R under projection v4 and L2 runs under a different projection or contract version, when L2 decides R's scope, then R's mode is `full` with reason `version-changed`.
 - Given L1 failed R with an infrastructure fault and so recorded no scope for R, when L2 decides R's scope, then L1 contributes no reviewed hunks for R and only earlier successful laps of R at merge base M can settle anything.
 - Given a rebase that moved the merge base of a stacked child whose kickback cause is `feature-repair`, when the child's next lap decides scope, then no rubric of that child is delta-scoped against records from the old merge base.
 - Given R already has a readable scope record at the current lap id, merge base and policy identity, as after a mechanical retry, a halt-clear re-dispatch or a disposition-only rejoin, when the lap decides R's scope, then it reuses that record's scope unchanged and R's earlier reviewed hunks are not lost.
@@ -107,10 +107,10 @@ decisions.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given L2 is a delta lap for R, when R's projection is derived, then it is projection v5 with `changedFiles` listing the whole diff and a `reviewScope` naming mode `delta` and exactly R's delta hunks.
+- Given L2 is a delta lap for R, when R's projection is derived, then it is projection v4 with `changedFiles` listing the whole diff and a `reviewScope` naming mode `delta` and exactly R's delta hunks.
 - Given L2 is a delta lap for a custom rubric, when its input is assembled, then the input carries the same `reviewScope` with mode and delta hunks.
 - Given L2 is a delta lap for R and R's delta is empty, when the coordinator reaches R, then R is not dispatched and runs no preflight, its branch outcome is `scope-empty` with no findings and with its scope record, `build_review_rubric_skipped` is emitted with reason `scope-empty`, and R counts as non-failing in the aggregate.
-- Given an earlier lap of R with the same v5 projection digest, covering the whole-diff references and the delta, and with the same engine identity and policy, when L2 looks up R's cache, then the earlier judged result is reused as a cache hit.
+- Given an earlier lap of R with the same v4 projection digest, covering the whole-diff references and the delta, and with the same engine identity and policy, when L2 looks up R's cache, then the earlier judged result is reused as a cache hit.
 - Given the rubric and remediate skill contracts, when a Claude dispatch and a Codex dispatch render R, then both read the same skill text, which tells the rubric to judge the delta hunks, to treat the whole diff as context only, and to name a cause hunk in the delta for any finding outside it.
 
 #### Negative Paths
@@ -122,7 +122,7 @@ decisions.
 - Given R is `scope-empty` in L2, when judged-rate metrics and absence retirement are computed for L2, then R is counted as a skip with reason `scope-empty` and never as judged, and R gives no evidence that any of its sources is no longer raised.
 
 ### Done When
-- [ ] Projection tests prove v5 projections carry the whole-diff `changedFiles` and the exact delta, and carry none of the excluded history fields.
+- [ ] Projection tests prove v4 projections carry the whole-diff `changedFiles` and the exact delta, and carry none of the excluded history fields.
 - [ ] Coordinator tests prove the `scope-empty` result is recorded without dispatch, and that a changed delta misses the cache.
 - [ ] A test proves the testQuality preflight input is unchanged by delta scoping.
 - [ ] The build-review rubric skills and the custom rubric prompt state the delta contract in one provider-neutral text.

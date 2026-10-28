@@ -89,6 +89,11 @@ are:
   stable finding id, anchor, summary, and evidence locations.
 - `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
   resolution evidence.
+  - A prior source may carry `finding`, a bounded digest of the earlier finding: `rubric`,
+    `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`.
+  - Treat a supplied `finding` digest as binding context when deciding whether a current finding is
+    an equivalent re-raise of that prior source. It is never report text: do not copy, quote, or
+    treat it as a new finding; use it only to bind or distinguish the current source and case.
 - `planContract`: the active approved-plan contract that determines whether work is admitted.
 - `taskStatus`: the engine-supplied task-status evidence.
 - `effectPointers`: the engine-supplied prior effect and BUILD-attempt pointers.
@@ -132,7 +137,8 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   `{ "caseId": "...", "reason": "..." }` entries declaring it distinct from resolved action
   owners of its sources. A reason must be non-empty. A re-raise over a resolved action case is
   a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
-  A malformed `distinctFrom` shape rejects the artifact. An entry not naming a resolved action owner of a row source is ignored.
+  A malformed `distinctFrom` shape rejects the artifact. An entry may name either a provenance
+  candidate of the row or a resolved act owner of a row source; an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.

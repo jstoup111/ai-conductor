@@ -199,7 +199,9 @@ not yet delivered; `--json` reports them under `carriedSources`, `operatorResolv
 `min_severity` threshold, or downgraded by the adjudicator — with its rubric, severity, reviewer summary,
 and any adjudicator rationale; `--json` reports them under `advisoryFindings` as `id`, `rubric`,
 `severity`, `threshold`, and `origin` (`threshold` or `adjudicated`), omitting summaries and rationales,
-and omits the key when empty. `accept` changes state only from an interactive terminal with
+and omits the key when empty. Human output also lists `Out-of-delta findings` — findings outside
+the lap's [review delta](../explanation/gates.md#later-laps-judge-only-the-unsettled-delta), which
+never block. `findings` reads the same shared effective-verdict resolver the live gate uses. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
