@@ -459,6 +459,7 @@ describe('build-review adjudication context', () => {
     ]));
   });
 
+  // Covers: task:2
   it('lists the dispositions that each prior case can bind in this lap', () => {
     const caseA = priorCase('case-A');
     const caseJ: RemediationCaseRecord = {
@@ -484,6 +485,7 @@ describe('build-review adjudication context', () => {
     expect(Object.isFrozen(result.context.priorCases[0]!.bindableDispositions)).toBe(true);
   });
 
+  // Covers: task:2
   it('does not offer refutation or rejection where prior-case state cannot admit either', () => {
     const caseR = {
       ...priorCase('case-R'),
@@ -504,6 +506,7 @@ describe('build-review adjudication context', () => {
     ]);
   });
 
+  // Covers: task:2
   it('emits binding corrections only for a correction round and accounts for their bytes', () => {
     const correction = {
       caseRef: 'case-ref-1', existingCaseId: 'case-A', disposition: 'reject' as const,
