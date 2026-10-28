@@ -414,6 +414,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_planned',
   'restack_applied',
   'restack_conflict',
+  'restack_resolution',
   'restack_refused',
   'restack_recovered',
   'push_lease_refused',

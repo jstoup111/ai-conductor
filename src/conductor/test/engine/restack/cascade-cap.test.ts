@@ -302,7 +302,7 @@ describe('restack cascade cap (real local Git)', () => {
       git: makeGitRunner(subject.repo),
     });
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
     expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
@@ -351,7 +351,7 @@ describe('restack cascade cap (real local Git)', () => {
       git: makeGitRunner(subject.repo),
     });
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
     expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');

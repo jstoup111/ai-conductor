@@ -307,7 +307,7 @@ describe('restack halt seam, sweep (real local Git)', () => {
     const result = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.advancedDefault, git, events });
 
     expect(perturbed).toBe(true);
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(refusals).toEqual(['verification-failed']);
     // The journal had already left `moved` when the halt record was committed,
     // and the record's parent is the rolled-back leaf tip.

@@ -958,6 +958,12 @@ export function createProgram(): Command {
     .requiredOption('--slug <slug>', 'Feature worktree slug')
     .option('--close <round>', 'Superseded audit round to close')
     .option('--reason <text>', 'Operator reason required with --close');
+  stack
+    .command('restack-resolve')
+    .description('Record an operator-resolved restack conflict and resume the stack')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--child <n>', 'Conflicted stack child')
+    .requiredOption('--tip <sha>', 'Resolved linear commit tip');
 
   const buildReview = program
     .command('build-review')

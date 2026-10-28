@@ -654,7 +654,7 @@ describe('routed exit (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [childTwo],
       routed: { roundId, host, routeOld: route.blob, markerOld: marker }, git: subject.gitRunner,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('child 1');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     expect(await refExists(subject.gitRunner, journalRefFor('demo'))).toBe(false);

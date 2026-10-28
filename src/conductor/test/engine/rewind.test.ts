@@ -89,7 +89,7 @@ describe('rewindState', () => {
     rebase: 'done', finish: 'done', last_step: 'finish',
   };
 
-  it('limits rewind-module consumers to the CLI dispatcher and stack landing halt cleanup', () => {
+  it('limits rewind-module consumers to the CLI dispatcher and stack halt cleanup commands', () => {
     const sourceRoot = resolve(import.meta.dirname, '../../src');
     const rewindModule = resolve(sourceRoot, 'engine/rewind.ts');
     const configPath = resolve(import.meta.dirname, '../../tsconfig.json');
@@ -107,6 +107,7 @@ describe('rewindState', () => {
 
     expect(importers).toEqual([
       resolve(sourceRoot, 'engine/stack-land-cli.ts'),
+      resolve(sourceRoot, 'engine/stack-restack-resolve-cli.ts'),
       resolve(sourceRoot, 'index.ts'),
     ]);
   });

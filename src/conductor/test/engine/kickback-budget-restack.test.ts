@@ -158,7 +158,7 @@ describe('restack kickback budget storage', () => {
       slug: 'demo',
       cause: 'feature-repair',
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     await mkdir(join(subject.repo, '.ai-conductor'), { recursive: true });
     await writeFile(join(subject.repo, '.ai-conductor', 'config.yml'), [
       'stacked_prs:', '  enabled: true', '  route_whole_feature_fixes: true', '',
@@ -326,7 +326,7 @@ describe('restack kickback budget storage', () => {
       cause: 'feature-repair',
       originatingChildren: [child(2)],
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(await dispatchKickbackBudgetCommand(
       {
@@ -468,7 +468,7 @@ describe('restack kickback budget storage', () => {
       slug: 'demo',
       cause: 'feature-repair',
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     const activeLedger = await readFile(join(subject.repo, '.pipeline', 'children', '2', 'kickback-ledger.json'));
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'));

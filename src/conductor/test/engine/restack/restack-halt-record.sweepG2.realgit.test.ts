@@ -81,7 +81,7 @@ describe('restack halt-record conflicts sweep (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, resolver, resolverCap: 1, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(dispatched).toEqual([['.docs/halted/demo.md', 'src/c.ts']]);
     expect(conflicts).toHaveLength(1);

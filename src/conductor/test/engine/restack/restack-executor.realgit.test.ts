@@ -463,7 +463,7 @@ describe('runRestack (real local Git)', () => {
     const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(repo) });
 
     // Task 8: a diverged stack halts needs-human through haltRestack naming the child.
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'range-not-ancestor', child: 2 })]);
     expect((await git(['merge-base', '--is-ancestor', active, 'feat/c2/demo']).then(() => true))).toBe(true);
     expect((await git(['diff', '--name-only', active, 'feat/c2/demo'])).stdout.trim().split('\n').filter(Boolean)

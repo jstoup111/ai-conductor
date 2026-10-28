@@ -118,7 +118,7 @@ describe('runRestack flatten refusal (real local Git)', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(resolverCalls).toBe(0);
     expect(await stackRefs(subject)).toBe(before);
     expect(refusals).toContainEqual(expect.objectContaining({
