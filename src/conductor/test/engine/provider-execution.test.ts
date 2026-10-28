@@ -38,6 +38,7 @@ import { parseEvents } from '../../src/engine/report-renderer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import {
   createCandidateSafetyBoundary,
+  buildProviderAttemptMetadata,
   executeAuxiliaryProviderCandidates,
   executeProviderCandidates,
   formatProviderCapabilityGapMessages,
@@ -152,6 +153,68 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('records a not-started provider failure as not invoked without caching or suppressing it', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'native schema setup failed',
+      exitCode: 1,
+      executionDisposition: 'not-started',
+    }));
+    const providerAvailability: ProviderAvailability = {
+      isAvailable: vi.fn(() => true),
+      suppress: vi.fn(),
+    };
+    const providerRuntime = runtime('codex', { invoke });
+    const runtimes = new ProviderRuntimeSet([providerRuntime]);
+    const input = {
+      step: 'build' as const,
+      configuredProviders: ['codex'],
+      preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' as const },
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability,
+      options: { prompt: 'build', cwd: '/workspace' },
+    };
+
+    const first = await executeProviderCandidates(input);
+    const second = await executeProviderCandidates(input);
+
+    expect(first.attempts).toMatchObject([{
+      provider: 'codex', outcome: 'failure', invoked: false,
+      reason: 'native schema setup failed',
+    }]);
+    expect(second.attempts?.[0]).toMatchObject({ invoked: false });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(providerRuntime.runWideUnavailable).toBeUndefined();
+    expect(providerAvailability.suppress).not.toHaveBeenCalled();
+  });
+
+  it('retains invoked evidence for failures after provider execution', () => {
+    const interval = { startedAtMs: 100, durationMs: 20 };
+
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      resolvedModel: 'gpt-5.6-terra',
+      result: {
+        success: false,
+        output: 'spawned command failed',
+        exitCode: 1,
+        observedIntervals: [interval],
+      },
+    })).toMatchObject({ invoked: true, observedIntervals: [interval] });
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      resolvedModel: 'gpt-5.6-terra',
+      result: {
+        success: false,
+        output: 'post-spawn abort',
+        exitCode: 1,
+        tokenUsage: { input: 3, output: 2 },
+      },
+    })).toMatchObject({ invoked: true, tokenUsage: { input: 3, output: 2 } });
+  });
+
   it('classifies an undeliverable system prompt as setup-unavailable without suppressing the provider', async () => {
     const invoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,

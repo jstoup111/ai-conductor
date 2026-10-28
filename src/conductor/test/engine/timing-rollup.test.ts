@@ -474,6 +474,32 @@ describe('computeTimingRollup', () => {
     });
   });
 
+  it('does not make an uninvoked failed provider attempt incomplete evidence', async () => {
+    const measured = await writeFeatureEvents([
+      { type: 'provider_attempt', step: 'plan', outcome: 'failure', invoked: false },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+    const incomplete = await writeFeatureEvents([
+      { type: 'provider_attempt', step: 'plan', outcome: 'failure', invoked: true },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+
+    await expect(computeTimingRollup(measured)).resolves.toEqual({
+      state: 'measured', activeMs: 100, providerActiveMs: 0, noProviderActiveMs: 100,
+    });
+    await expect(computeTimingRollup(incomplete)).resolves.toEqual({
+      state: 'partial', activeMs: 100, reason: 'provider-evidence-incomplete',
+    });
+  });
+
   it('consumes provider intervals from the merged feature-event stream', async () => {
     const directory = await writeFeatureEvents([
       { type: 'step_completed', step: 'build', activeInterval: { startedAtMs: 0, durationMs: 100 } },

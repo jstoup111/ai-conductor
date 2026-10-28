@@ -821,7 +821,8 @@ export function buildProviderAttemptMetadata({
   setupUnavailable,
   cachedUnavailable,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
-  const invoked = result.providerInvocationSkipped !== true;
+  const invoked = result.providerInvocationSkipped !== true
+    && result.executionDisposition !== 'not-started';
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
