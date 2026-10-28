@@ -48,7 +48,7 @@ As an operator who accepted a build_review finding, I want a later lap that re-r
 - Given the #3211 sequence replayed with a custom eventSpine rubric finding whose finding id differs on every lap, when the second lap binds the re-raised finding to the accepted case, then that lap settles with no halt.
 
 #### Negative Paths
-- Given resolved action case C with an `applied` or `failed` effect that holds no acceptance origin and no operator resolution, when lap L2 binds F2 to C by `existingCaseId` with disposition `act`, then the lap halts `semantic remediation case regression C` exactly as today and persists no carried link.
+- Given resolved action case C with a `failed` effect, or with an `applied` effect where the binding row declares a `reRaise` of kind `repeat`, that holds no acceptance origin and no operator resolution, when lap L2 binds F2 to C by `existingCaseId` with disposition `act`, then the lap halts `semantic remediation case regression C` exactly as today and persists no carried link.
 - Given C's only acceptance origin was recorded on the current lap, when the same lap's judgement binds another finding to C, then that finding is not carried and today's reuse rule applies to it.
 - Given lap L2 binds F2 to carry-eligible C and also raises an unbound content finding G, when the lap settles, then only F2 is carried and G routes exactly as it would without F2.
 - Given lap L2 has an infrastructure failure beside carried F2, when the effective verdict is derived, then the infrastructure result still blocks until it heals or has an exact reduced-coverage decision.

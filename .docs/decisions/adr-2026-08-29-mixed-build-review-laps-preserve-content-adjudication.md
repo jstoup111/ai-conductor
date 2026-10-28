@@ -289,6 +289,39 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 
 > **Amended 2026-10-24 by #3294:** D5.1's exact-id rule remains the only admitted equivalence. Out-of-delta classification is a scope rule, not an equivalence: in a delta lap, a finding whose mapped hunks are all settled is `outOfDelta` unless its `causeHunk` names a delta hunk (adr-2026-10-24-lap-monotonic-build-review-scope D5, D6). D5.8's recurrence owner gains a provenance source. An unbound `act` case with no exact-source owner, and with a source mapped to a delta hunk, is stamped `recurrenceOf` the applied act case that owns a source raised in the predecessor lap on the same path. Among several candidates, the one with the most applied lineage attempts wins, ties going to the lowest case id. D5.8's counting rule admits a `distinctFrom` entry that names a provenance candidate of the row, as well as a resolved `act` owner of a row source, and still drops every other entry. A provenance candidate may be an open or a resolved case with an applied action effect. D5.10's lineage limit of 3 applies unchanged (adr-2026-10-24-lap-monotonic-build-review-scope D7).
 
+> **Amended 2026-10-28 by #3362:** A bound `act` re-raise of a resolved action case is routed by the
+> judge's declared progress verdict, not halted unconditionally. D5.6 kept the predecessor D7
+> regression halt for every explicit `existingCaseId` rebind with disposition `act` of a resolved
+> action case. On 2026-10-22 that halted feature `shipped-features-decide-artifacts-accumulate-in-do`
+> needs-human: a repair left a narrower residual gap, the judge bound the new finding to the repaired
+> case with concrete in-scope tasks, and the operator had to hand-apply them. Whether a re-raise is
+> progress or a repeat is a judgement, so the judge declares it and the engine bounds it. This
+> amendment narrows that D5.6 sentence and adds the decisions below.
+>
+> - **D5.12 — The judge declares a bound re-raise's kind.** A case row with disposition `act` whose
+>   `existingCaseId` names a resolved `act` case with an `applied` action effect may carry
+>   `reRaise: { kind, reason }`, where `kind` is `residual-gap` or `repeat` and `reason` is a
+>   non-empty bounded string. A malformed `reRaise` shape rejects the artifact. On any other row the
+>   validator drops the declaration and halts on none. The declaration is reported, never persisted
+>   on a case.
+> - **D5.13 — A residual rebind is a recurrence of the bound case.** A row of D5.12 whose `reRaise`
+>   is `residual-gap`, or that carries no `reRaise` (reported as `undeclared`), does not halt as a
+>   regression. Before reconciliation reserves any effect, it joins the D5.10 lineage check with the
+>   bound case among its recurrence owners. At the limit it halts as `recurrence-limit` exactly as
+>   D5.10 prescribes. Under the limit it is reconciled as a new `act` case stamped `recurrenceOf` the
+>   bound case (and any D5.9 exact-source owners) and is charged exactly as D5.6 prescribes. The
+>   resolved bound row stays byte-identical, and the store version is unchanged.
+> - **D5.14 — A declared repeat still halts, naming its attempts.** A row of D5.12 whose `reRaise`
+>   is `repeat` halts before reconciliation as the predecessor D7 regression, as before. Its halt
+>   detail and its `remediation_semantic_repeat_halt` event also name the bound case's D5.10 lineage
+>   and its applied attempt count.
+> - **D5.15 — The routing kind is reported on the existing spine.** `remediation_case_reconciled`
+>   for a case minted by D5.13 carries the declared kind (`residual-gap` or `undeclared`) and the
+>   bound case id. `remediation_semantic_repeat_halt` carries the kind for both a D5.13 limit halt and
+>   a D5.14 repeat halt. No new event type, sink entry, store field or sidecar is added. Open-case
+>   repeats (`already-attempted`), non-`act` bindings, carry, the refute and defer lanes, unbound
+>   recurrence and `distinctFrom`, and the cumulative kickback cap are unchanged.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced
