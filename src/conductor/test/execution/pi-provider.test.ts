@@ -689,6 +689,20 @@ describe('PiProvider', () => {
     });
 
     expect(spawn).not.toHaveBeenCalled();
+
+    const packageUnavailable = await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({
+      ...invokeOptions,
+      subagents: true,
+    });
+
+    expect(packageUnavailable).toMatchObject({
+      success: false,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      executionDisposition: 'not-started',
+    });
+    expect(packageUnavailable.output).toContain('pi install npm:pi-subagents');
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each([
