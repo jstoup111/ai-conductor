@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "successful-stacked-restack-halts-on-a-stale-reopen",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/successful-stacked-restack-halts-on-a-stale-reopen.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/successful-stacked-restack-halts-on-a-stale-reopen.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/successful-stacked-restack-halts-on-a-stale-reopen.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/successful-stacked-restack-halts-on-a-stale-reopen.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/successful-stacked-restack-halts-on-a-stale-reopen.md"
+    }
+  ]
+}
