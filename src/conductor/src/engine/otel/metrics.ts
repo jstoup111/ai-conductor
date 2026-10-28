@@ -9,6 +9,7 @@
  *  - conductor.feature.cost   — Gauge (authoritative cumulative feature total)
  *  - conductor.feature.step.cost — Gauge (cumulative feature cost per dimension)
  *  - conductor.feature.step.tokens — Gauge (cumulative feature tokens per dimension)
+ *  - conductor.feature.duration.active.missing — Counter (ships without measured active duration)
  *  - conductor.run.outcomes   — Counter (once per opened run, by terminal outcome)
  *
  * All record/add calls are synchronous (enqueue to PeriodicExportingMetricReader).
@@ -234,10 +235,22 @@ export class MetricsRecorder {
     const attrs = tier === undefined ? {} : { tier };
     this.instruments.featureShippedCounter.add(1, this.withIdentity(attrs));
   }
-  onFeatureDuration(wallMs?: number, activeMs?: number, tier?: string): void {
-    const attrs = tier === undefined ? {} : { tier };
-    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(attrs));
-    if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity(attrs));
+  onFeatureDuration(
+    wallMs: number | undefined,
+    active: Extract<ConductorEvent, { type: 'feature_shipped' }>['active'],
+    tier?: string,
+  ): void {
+    const attrs: Attributes = {
+      ...(tier === undefined ? {} : { tier }),
+      state: active.state,
+      ...(active.reason === undefined ? {} : { reason: active.reason }),
+    };
+    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(tier === undefined ? {} : { tier }));
+    if (typeof active.activeMs === 'number' && Number.isFinite(active.activeMs)) {
+      this.instruments.featureActiveHistogram.record(active.activeMs, this.withIdentity(attrs));
+    } else {
+      this.instruments.featureActiveMissingCounter.add(1, this.withIdentity(attrs));
+    }
   }
   onGateVerdict(step: string, outcome: 'pass' | 'fail', tier?: string): void {
     this.instruments.gateVerdictsCounter.add(1, this.withIdentity(tier === undefined ? { step, outcome } : { step, outcome, tier }));
@@ -286,7 +299,7 @@ interface MetricInstruments {
   daemonBacklogGauge: Gauge; daemonOldestAgeGauge: Gauge; daemonSlotsGauge: Gauge; daemonInflightGauge: Gauge;
   daemonUpGauge: Gauge; daemonBlockedGauge: Gauge; daemonPollHistogram: Histogram; daemonStallsCounter: Counter;
   featureDispatchesCounter: Counter; featureHaltsCounter: Counter; featureShippedCounter: Counter;
-  featureWallHistogram: Histogram; featureActiveHistogram: Histogram; gateVerdictsCounter: Counter; gateKickbacksCounter: Counter;
+  featureWallHistogram: Histogram; featureActiveHistogram: Histogram; featureActiveMissingCounter: Counter; gateVerdictsCounter: Counter; gateKickbacksCounter: Counter;
   stepApplicabilityCounter: Counter;
 }
 
@@ -317,6 +330,7 @@ function createInstruments(meter: Meter): MetricInstruments {
     featureShippedCounter: counter('conductor.feature.shipped', 'Feature shipments'),
     featureWallHistogram: histogram('conductor.feature.duration.wall', 'Feature wall duration in milliseconds'),
     featureActiveHistogram: histogram('conductor.feature.duration.active', 'Feature active duration in milliseconds'),
+    featureActiveMissingCounter: counter('conductor.feature.duration.active.missing', 'Feature shipments without a measured active duration'),
     gateVerdictsCounter: counter('conductor.gate.verdicts', 'Gate verdicts'),
     gateKickbacksCounter: counter('conductor.gate.kickbacks', 'Gate kickbacks'),
     stepApplicabilityCounter: counter('conductor.step.applicability', 'Step applicability declarations honored, ignored, or refused'),

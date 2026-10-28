@@ -58,7 +58,11 @@ export class MetricsListener {
       const shipped = event as Extract<OtelEvent, { type: 'feature_shipped' }>;
       const metric = listener.recorder.forFeature(shipped.slug);
       metric.onFeatureShipped(shipped.tier);
-      metric.onFeatureDuration(typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined, shipped.active.state === 'exact' ? shipped.active.activeMs : undefined, shipped.tier);
+      metric.onFeatureDuration(
+        typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined,
+        shipped.active,
+        shipped.tier,
+      );
     },
     step_started: (listener, event) => {
       const step = event as Extract<OtelEvent, { type: 'step_started' }>;
