@@ -76,6 +76,12 @@ describe('N=1 golden renderings', () => {
     // run-root marker rather than forwarding that mutable value, otherwise
     // this nested Vitest run can create shell fixtures in the real /tmp.
     const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    // The nested runner must allocate its own root under a short parent. The
+    // worktree's package-local `.vitest-tmp` path can exceed Unix socket-path
+    // limits, which makes Vitest's config loader fall back to an unguarded
+    // `/tmp/tmp.*` directory. Its global setup still snapshots and owns the
+    // child root created below this original system temp directory.
+    const childTmpBase = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
     const result = await execFile(process.execPath, [
       'scripts/run-vitest.mjs',
       'run',
@@ -89,6 +95,9 @@ describe('N=1 golden renderings', () => {
       env: {
         ...process.env,
         [N1_GOLDEN_SUITE_CHILD]: '1',
+        ...(childTmpBase === undefined ? {} : {
+          AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
+        }),
         ...(runTmpRoot === undefined ? {} : {
           TMPDIR: runTmpRoot,
           TMP: runTmpRoot,
