@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-27
+## [1.7.0] - 2026-10-28
 
 ### Added
 
@@ -76,6 +76,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The plan and composer skills ask for the stacked-delivery decision before a plan declares slices, so a missing sign-off no longer surfaces only at land. ([implementation PR #3422](https://github.com/jstoup111/ai-conductor/pull/3422)).
 - Stacked features resume reliably after operator interruptions without re-running completed child work. ([implementation PR #3411](https://github.com/jstoup111/ai-conductor/pull/3411)).
 - `/pipeline` has a single mode that runs up to three independent tasks at once, sized to the host's free sub-agent slots, and runs sequentially instead of halting when slots are short; `/bootstrap` suggests the Codex and Claude Code settings that raise the cap. ([implementation PR #3437](https://github.com/jstoup111/ai-conductor/pull/3437)).
+- Build reviews now retain resolved findings across reconsideration laps. ([implementation PR #3414](https://github.com/jstoup111/ai-conductor/pull/3414)).
 
 ### Removed
 
@@ -195,6 +196,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Routed repairs no longer halt on the engine's own plan remediation append, and a refused routed exit keeps its specific halt reason instead of a generic one. ([implementation PR #3444](https://github.com/jstoup111/ai-conductor/pull/3444)).
 - A conflict while carrying a routed repair up a stacked feature is now handed to the configured conflict resolver instead of halting immediately. ([implementation PR #3447](https://github.com/jstoup111/ai-conductor/pull/3447)).
 - Operators see actionable daemon startup state in a compact dashboard. ([implementation PR #3440](https://github.com/jstoup111/ai-conductor/pull/3440)).
+- Daemon operators receive durable, actionable HALTs when stack preflight refuses to proceed. ([implementation PR #3470](https://github.com/jstoup111/ai-conductor/pull/3470)).
 
 ## Migration
 
