@@ -41,6 +41,14 @@ export interface ReconcileRemediationCasesInput {
     readonly caseRefs: readonly string[];
     readonly lapId: string;
   };
+  /**
+   * Coordinator-selected repair provenance. Exact source ownership still wins;
+   * this data is used only for an unbound act with no exact owner.
+   */
+  readonly provenanceByCaseRef?: ReadonlyMap<string, {
+    readonly selectedCaseId: string;
+    readonly candidateCaseIds: readonly string[];
+  }>;
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -274,9 +282,27 @@ function reconcileState(
         ? undefined
         : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
-      const recurrence = caseRow.disposition === 'act'
+      const exactRecurrence = caseRow.disposition === 'act'
         ? classifyBuildReviewRecurrence(state.cases, sources.map((source) => source.sourceId), caseRow.distinctFrom ?? [])
         : undefined;
+      const provenance = exactRecurrence !== undefined && exactRecurrence.recurrenceOf.length === 0 && exactRecurrence.distinctFrom.length === 0
+        ? input.provenanceByCaseRef?.get(caseRow.caseRef)
+        : undefined;
+      const provenanceDistinctFrom = provenance === undefined
+        ? []
+        : (caseRow.distinctFrom ?? []).filter((entry) => provenance.candidateCaseIds.includes(entry.caseId));
+      const selectedProvenanceIsDistinct = provenance !== undefined &&
+        provenanceDistinctFrom.some((entry) => entry.caseId === provenance.selectedCaseId);
+      const recurrenceOf = exactRecurrence === undefined
+        ? []
+        : exactRecurrence.recurrenceOf.length > 0
+          ? exactRecurrence.recurrenceOf
+          : provenance !== undefined && !selectedProvenanceIsDistinct
+            ? [provenance.selectedCaseId]
+            : [];
+      const distinctFrom = exactRecurrence === undefined
+        ? []
+        : [...exactRecurrence.distinctFrom, ...provenanceDistinctFrom];
       claimed.add(caseId);
       caseIdsByRef.set(caseRow.caseRef, caseId);
       additions.push({
@@ -295,8 +321,8 @@ function reconcileState(
         })),
         effect: effectFor(caseRow, effectId),
         ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
-        ...(recurrence === undefined || recurrence.recurrenceOf.length === 0 ? {} : { recurrenceOf: recurrence.recurrenceOf }),
-        ...(recurrence === undefined || recurrence.distinctFrom.length === 0 ? {} : { distinctFrom: recurrence.distinctFrom }),
+        ...(recurrenceOf.length === 0 ? {} : { recurrenceOf }),
+        ...(distinctFrom.length === 0 ? {} : { distinctFrom }),
       });
       continue;
     }

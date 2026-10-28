@@ -682,6 +682,14 @@ Operator decisions (2026-10-10):
         `verification-failed`, `replay-mismatch`, `range-not-ancestor`,
         `closed-child-rewritten`, `flatten_refused`, `restack-outstanding`,
         `published-stack` or `deferred-base-refresh`.
+
+        > **Amended 2026-10-27 by #3446:** The reason set also includes `journal-live-owner`. It
+        > is emitted when the stack preflight stops because journal recovery returns `live-owner`
+        > on either recovery pass, with `detail` naming the owner as
+        > `restack journal owned by live process <pid> on <host>`, or `journal owner unreadable`
+        > when no owner was read. The preflight then writes a `mechanical` HALT. It stays distinct
+        > from `restack-outstanding`, which a competing planner receives, because only this reason
+        > ends the run on a live owner (operator decision 2026-10-26).
       - `restack_recovered` {opId, fromState}, emitted only when recovery drives a journal out of
         `planned`, `ready`, `moved`, `rolling-back` or `synced`. Deleting a leftover `applied` or
         `aborted` journal emits nothing;

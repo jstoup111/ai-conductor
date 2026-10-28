@@ -145,7 +145,7 @@ describe('custom build-review convergence', () => {
     });
     const source = { identity: { snapshotDigest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head' }, baselinePath: join(projectRoot, 'baseline'), headPath: join(projectRoot, 'head') };
     await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
-    const inputs = { sourceSnapshot: { digest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head', sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } };
+    const inputs = { sourceSnapshot: { digest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head', diff: '', sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } };
     const resolved = resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY);
     const first = await (runner as unknown as { runRubricBuildReview(inputs: unknown, config: unknown, tier: 'M'): Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolved, 'M');
     expect(first).toMatchObject({ success: false, output: expect.stringContaining('read-only-review-unavailable') });
