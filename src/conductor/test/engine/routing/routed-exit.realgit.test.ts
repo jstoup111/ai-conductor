@@ -144,6 +144,7 @@ describe('routed exit (real local Git)', () => {
     const order: string[] = [];
     const exit = vi.fn(async () => {
       order.push('exit');
+      await subject.gitRunner(['update-ref', '-d', repairMarkerRefFor('demo')]);
       return { kind: 'restacked' as const };
     });
     const persist = vi.fn(async () => {
@@ -181,7 +182,7 @@ describe('routed exit (real local Git)', () => {
     await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
       kind: 'record', record: { hosts: { 1: 'built', 2: 'pending' } },
     });
-    await expect(subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).resolves.toMatchObject({ stdout: `${marker}\n` });
+    await expect(subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).resolves.toMatchObject({ stdout: marker });
     await expect(subject.gitRunner(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).resolves.toMatchObject({ stdout: before });
   });
 
@@ -340,7 +341,8 @@ describe('routed exit (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', roundId, host,
       persist: async () => { throw new Error('crash after built'); },
     })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('outbox') });
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner })).resolves.toEqual({ kind: 'repaired' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'navigate-host', roundId: parseRoundId('r2')!, host: childTwo });
     const afterFirst = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
     expect(afterFirst).toMatchObject({ kind: 'record', record: { hosts: { 1: 'restacked' } } });
     const recorded = recordingRunner(subject.gitRunner);

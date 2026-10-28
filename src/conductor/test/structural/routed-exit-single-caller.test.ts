@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const productionRoot = join(process.cwd(), 'src/conductor/src');
+const productionRoot = join(dirname(fileURLToPath(import.meta.url)), '../..', 'src');
 
 function importsRoutedExit(source: string): boolean {
   return /^import\s+(?!type\s)\{[^}]*\brequestRoutedExit\b[^}]*\}\s+from\s+['"][^'"]*routed-exit\.js['"];?$/m.test(source);
