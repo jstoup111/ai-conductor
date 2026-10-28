@@ -39,6 +39,7 @@ import {
   runRestack,
 } from './restack-executor.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { writeConflictRecord } from './restack-conflict-record.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { routedRoundOpen } from '../routing/round-admission.js';
@@ -716,7 +717,24 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           paths: [...resumed.paths],
         });
         const detail = `commit ${resumed.commit}; paths: ${resumed.paths.join(', ')}${resumed.detail === undefined ? '' : `\n${resumed.detail}`}`;
-        await haltRestackConflict(options.worktree, resumed.child, detail, options.events);
+        const range = journal.journal.ranges.find((candidate) => candidate.child === resumed.child)!;
+        let recordFailure = '';
+        if (journal.journal.cause === 'feature-repair') {
+          try {
+            const tree = await git(['rev-parse', '--verify', `${range.oldParent}^{tree}`]);
+            const newParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+            if (!newParentTree) throw new Error('cannot read replay parent tree');
+            const written = await writeConflictRecord(options.worktree, options.slug, {
+              opId: journal.journal.opId, child: resumed.child, oldParent: range.oldParent, oldTip: range.oldTip,
+              newParent: range.oldParent, newParentTree, candidateSubjects: [], commit: resumed.commit, paths: resumed.paths,
+            }, { git });
+            if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
+          } catch (error) { recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`; }
+        }
+        await haltRestackConflict(options.worktree, resumed.child, `${detail}${recordFailure}`, options.events,
+          journal.journal.cause === 'feature-repair'
+            ? { slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: range.oldParent, oldParent: range.oldParent }
+            : undefined);
         return { kind: 'halted' };
       }
       if (resumed.kind === 'ownership-refused') {
