@@ -437,12 +437,28 @@ type ResolvedCliFeature = {
   readonly feature: BuildReviewFeatureIdentity;
 };
 
+class FindingsDispositionStoreError extends Error {
+  constructor(readonly kind: string, readonly detail: string) {
+    super(detail);
+  }
+}
+
+class FindingsLedgerGateError extends Error {
+  constructor(readonly path: string) {
+    super("kickback ledger gate 'build_review' is unreadable");
+  }
+}
+
 type CliAggregateReadResult =
   | { readonly ok: true; readonly aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>> }
   | { readonly ok: false; readonly path: string; readonly cause: 'missing' | 'unreadable' | 'malformed'; readonly detail?: string };
 
 function aggregateRelativePath(child: ChildId | undefined): string {
   return child === undefined ? '.pipeline/build-review.json' : `.pipeline/children/${child}/build-review.json`;
+}
+
+function ledgerRelativePath(child: ChildId | undefined): string {
+  return child === undefined ? '.pipeline/kickback-ledger.json' : `.pipeline/children/${child}/kickback-ledger.json`;
 }
 
 function readErrorDetail(error: unknown): string {
@@ -565,7 +581,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const aggregate = aggregateRead.aggregate;
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const listed = await store.list(feature);
-    if (!listed.ok) throw new Error(listed.message);
+    if (!listed.ok) throw new FindingsDispositionStoreError(listed.kind, listed.message);
     const records = listed.records;
     const caseStore = (deps.createCaseStore ?? ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
       new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild })))(worktree, feature, child);
@@ -575,7 +591,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const reducedCoverage = store.listReducedCoverage
       ? await store.listReducedCoverage(feature)
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
-    if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
+    if (!reducedCoverage.ok) throw new FindingsDispositionStoreError(reducedCoverage.kind, reducedCoverage.message);
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
     const minSeverity = await resolveCliMinSeverity(worktree, deps);
     const gateEntry = deps.readKickbackGateEntry
@@ -585,7 +601,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
         : await (async () => {
           const ledger = await readKickbackLedger(worktree, child);
           if (isUnreadableKickbackGate(ledger, 'build_review')) {
-            throw new Error("kickback ledger gate 'build_review' is unreadable");
+            throw new FindingsLedgerGateError(ledgerRelativePath(child));
           }
           return ledger.gates.build_review;
         })();
@@ -641,11 +657,20 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, advisories, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
     return 0;
   } catch (error) {
+    if (error instanceof FindingsDispositionStoreError) {
+      print(`build-review findings: .pipeline/build-review-dispositions.json is ${error.kind} for '${command.feature}' (${error.detail}).`);
+      return 1;
+    }
+    if (error instanceof FindingsLedgerGateError) {
+      print(`build-review findings: ${error.path} gate 'build_review' is unreadable for '${command.feature}'.`);
+      return 1;
+    }
     if (error instanceof Error && error.message.startsWith('remediation case store is ')) {
       print(`build-review findings: ${error.message} for '${command.feature}'.`);
       return 1;
     }
-    print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);
+    const detail = error instanceof Error ? error.message : String(error);
+    print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}' (${detail}).`);
     return 1;
   }
 }

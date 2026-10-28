@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
+// Covers: task:1, task:2, task:3, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -289,6 +289,58 @@ describe('build-review findings CLI', () => {
 
     expect(print).toHaveBeenCalledWith(`build-review findings: invalid child id '${child}'.`);
     expect(readFile).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:3
+  it('names an unreadable disposition store', async () => {
+    const print = vi.fn();
+    const store = {
+      list: async () => ({ ok: false as const, kind: 'unreadable' as const, message: 'store is corrupt' }),
+      append: vi.fn(),
+    };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => store, print,
+    })).resolves.toBe(1);
+
+    expect(print).toHaveBeenCalledWith("build-review findings: .pipeline/build-review-dispositions.json is unreadable for 'review-rubrics' (store is corrupt).");
+  });
+
+  // Covers: task:3
+  it('names an unreadable child build-review ledger gate', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-unreadable-ledger-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    const print = vi.fn();
+    await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'build-review.json'), JSON.stringify(aggregate));
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'), JSON.stringify({
+      version: 1, gates: { build_review: { laps: 'unreadable' } },
+    }));
+
+    try {
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'human' }, {
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path) => path, print,
+      })).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith("build-review findings: .pipeline/children/2/kickback-ledger.json gate 'build_review' is unreadable for 'review-rubrics'.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:3
+  it('includes an unavailable configuration error in the fallback refusal', async () => {
+    const print = vi.fn();
+    const store = { list: async () => ({ ok: true as const, records: [] }), append: vi.fn() };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => store,
+      loadConfig: async () => ({ ok: false as const, error: { message: 'config is broken' } as never }), print,
+    })).resolves.toBe(1);
+
+    expect(print).toHaveBeenCalledWith("build-review findings: current feature state is invalid or unavailable for 'review-rubrics' (config is broken).");
   });
 
   // Covers: task:19
@@ -1065,7 +1117,7 @@ describe('build-review findings CLI', () => {
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path, readFile, print,
     })).resolves.toBe(1);
-    expect(print).toHaveBeenCalledWith(expect.stringMatching(/invalid or unavailable/i));
+    expect(print).toHaveBeenCalledWith("build-review findings: .pipeline/build-review.json is malformed for 'review-rubrics' (invalid JSON).");
     expect(readFile).toHaveBeenCalledTimes(1);
   });
 
@@ -1076,7 +1128,7 @@ describe('build-review findings CLI', () => {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
       readFile: async () => JSON.stringify(aggregate), createStore: () => malformedStore, print: malformedPrint,
     })).resolves.toBe(1);
-    expect(malformedPrint).toHaveBeenCalledWith(expect.stringMatching(/invalid or unavailable/i));
+    expect(malformedPrint).toHaveBeenCalledWith("build-review findings: .pipeline/build-review-dispositions.json is invalid for 'review-rubrics' (dispositions are malformed).");
 
     const print = vi.fn();
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };
