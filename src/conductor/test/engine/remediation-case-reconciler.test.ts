@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  bindableDispositions,
   classifyRemediationCaseReuse,
   isCarryEligibleRemediationCase,
   reconcileRemediationCases,
@@ -182,6 +183,39 @@ describe('remediation case reconciler', () => {
     ['an open action with an acceptance origin', { ...acceptedOnPriorLap, resolution: 'open' as const }, 'resume'],
   ] as const)('classifies %s bindings before ordinary reuse', (_label, record, expected) => {
     expect(classifyRemediationCaseReuse(record, new Set<string>(), carryInput)).toBe(expected);
+  });
+
+  it.each([
+    ['case-A', durableAction({ id: 'case-A' }), new Set(['case-A']), undefined, ['act', 'defer', 'refute']],
+    ['case-U', durableAction({ id: 'case-U' }), new Set<string>(), undefined, ['act', 'defer']],
+    ['case-R', durableAction({ id: 'case-R', effect: { id: 'effect-R', kind: 'action', status: 'reserved' } }), new Set<string>(), undefined, ['act']],
+    ['case-J', durableAction({ id: 'case-J', disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' } }), new Set<string>(), undefined, ['reject']],
+    ['case-F', durableAction({ id: 'case-F', disposition: 'refute', resolution: 'resolved', effect: { kind: 'none' }, refutation: REFUTATION }), new Set<string>(), undefined, ['refute']],
+    ['case-C', acceptedOnPriorLap, new Set<string>(), carryInput, ['act', 'advisory', 'defer', 'refute', 'reject']],
+  ] as const)('lists only the dispositions bindable to %s', (_label, record, attemptedCaseIds, carry, expected) => {
+    expect(bindableDispositions(record, attemptedCaseIds, carry)).toEqual(expected);
+  });
+
+  it('refuses a rejected binding to a reserved action without changing durable state', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: {
+      ...state,
+      cases: [durableAction({ id: 'case-R', effect: { id: 'effect-R', kind: 'action', status: 'reserved' } })],
+    } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({
+        caseRef: 'rejected-reserved', existingCaseId: 'case-R', disposition: 'reject', priority: 'low',
+        rationale: 'The reserved action cannot be rejected.', confidence: 'low', effect: { kind: 'none' },
+      }, [{ sourceId: 'testQuality:F2', outcome: 'rejected', caseRef: 'rejected-reserved' }]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'must-not-be-used',
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      { ok: false, reason: 'illegal-disposition-transition' }, before,
+    ]);
   });
 
   // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
