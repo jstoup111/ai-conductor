@@ -25,6 +25,11 @@ identifies a finding outside the delta, set `causeHunk` to the delta hunk that c
 Report one finding per independent concrete defect. Anchor it to the changed hunk that introduces
 the defect; name related unchanged code only in `evidenceLocations`.
 
+A `duplication` or `excess-complexity` finding must be complete, because its repair consolidates in
+one pass. Its summary names every repeated behavior or tangled flow the delta introduces for that
+defect, and `evidenceLocations` lists every site that shares it. Do not report the most visible
+instance and leave the remainder for a later lap.
+
 - `duplication` — newly repeated behavior creates divergent maintenance paths. **Non-finding:** a
   declared exact pattern replication or incidental short syntax repetition.
 - `excess-complexity` — a changed control/data flow is unnecessarily difficult to follow, including

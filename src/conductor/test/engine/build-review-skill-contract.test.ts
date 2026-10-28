@@ -175,6 +175,8 @@ describe('build-review implementation-quality skill contract', () => {
     expect(skill).not.toMatch(/scopeResolutions|counterfactualSensitivity|testScopeEvidence|relocationAudit/);
     expect(skill).toMatch(/acceptance-criteria compliance.*prd_audit/i);
     expect(skill).toMatch(/ADR conformance.*as-built architecture review/i);
+    expect(judgementSection(skill)).toMatch(/`duplication` or `excess-complexity` finding must be complete/i);
+    expect(judgementSection(skill)).toMatch(/`evidenceLocations` lists every site that shares it/i);
   });
 
   it.each([
