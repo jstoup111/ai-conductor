@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "path-policy-still-decides-feature-ownership-by-fol",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-15-operator-cli-prunes-shipped-decide-artifacts.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-24-per-feature-artifact-manifest.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/path-policy-still-decides-feature-ownership-by-fol.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/path-policy-still-decides-feature-ownership-by-fol.md"
+    }
+  ]
+}
