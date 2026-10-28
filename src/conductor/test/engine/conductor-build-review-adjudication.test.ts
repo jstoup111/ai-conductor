@@ -779,10 +779,10 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(prompt).toBeDefined();
     const context = JSON.parse(prompt!.slice(prompt!.indexOf('\n') + 1)) as {
       readonly priorDigestsOmitted: number;
-      readonly priorCases: readonly { readonly sources: readonly { readonly finding?: { readonly summary: string }[] }[] }[];
+      readonly priorCases: readonly { readonly sources: readonly { readonly finding?: { readonly summary: string } }[] }[];
     };
     expect(context.priorDigestsOmitted).toBeGreaterThan(0);
-    expect(context.priorCases.some((prior) => prior.sources.some((source) => source.finding?.some((finding) => finding.summary.startsWith('Historical finding'))))).toBe(true);
+    expect(context.priorCases.some((prior) => prior.sources.some((source) => source.finding?.summary.startsWith('Historical finding')))).toBe(true);
   });
 
   it.each([
