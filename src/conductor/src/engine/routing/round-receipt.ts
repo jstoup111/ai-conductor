@@ -277,12 +277,15 @@ export async function reconcileReceiptLedgerUnlocked(
   slug: string,
   routing: ReceiptRoutingScope,
   git: GitRunner = makeGitRunner(projectRoot),
-): Promise<{ readonly kind: 'reconciled' | 'malformed' | 'unreadable' }> {
+): Promise<
+  | { readonly kind: 'reconciled' }
+  | { readonly kind: 'malformed' | 'unreadable'; readonly ref?: string }
+> {
   const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
   let ledger = await readKickbackLedger(projectRoot);
   let changed = false;
   for (const item of records) {
-    if (item.kind !== 'ok') return { kind: item.kind };
+    if (item.kind !== 'ok') return { kind: item.kind, ref: item.ref };
     if (item.record.receipt.settlementId === undefined || ledger.settlementReceipts?.[item.record.receipt.settlementId]) continue;
     // Reconciliation deliberately uses the receipt's durable numbers rather
     // than current caps: the admission was already settled by the ref CAS.
@@ -304,11 +307,9 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await withKickbackLedgerLease(input.projectRoot, async () => {
       const stored = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
-      // A malformed route receipt is a budget-boundary refusal.  Returning an
-      // exhausted result lets the conductor persist the normal, flat cap
-      // evidence and halt before a provider receives BUILD; a generic error
-      // would otherwise bypass that evidence path.
-      if (stored.kind !== 'record') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
+      if (stored.kind !== 'record') return {
+        kind: 'halted', reason: `route record ${input.roundId} is ${stored.kind}`,
+      } as const;
       if (currentHostOf(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
       // Revalidation replays an already-accounted child contribution. An
       // operator round is likewise charged only through its host-local caps;
@@ -323,7 +324,9 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
       }
       if (stored.record.kind !== 'audit') return assertNever(stored.record.kind);
       const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
-      if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
+      if (reconciled.kind !== 'reconciled') return {
+        kind: 'halted', reason: `route record ${reconciled.ref ?? input.roundId} is ${reconciled.kind}`,
+      } as const;
       const receipt = stored.record.receipt;
       if (receipt.settlementId !== undefined) {
         if (receipt.acks[input.dispatchingChild]) return { kind: 'acknowledged', settlementId: receipt.settlementId } as const;
@@ -378,7 +381,7 @@ export async function readRoutedGrowthSnapshot(
   const ids = new Set<string>();
   let sealedAuthored: number | undefined;
   for (const item of records) {
-    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
+    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}${item.ref ? `: ${item.ref}` : ''}`);
     if (!item.record.receipt.settlementId) for (const allocation of Object.values(item.record.allocation)) for (const taskId of allocation.remTaskIds) ids.add(taskId);
     // A revalidate round authors no remediation tasks and has no denominator;
     // rounds written before #3389's placeholder was removed still carry 0.
