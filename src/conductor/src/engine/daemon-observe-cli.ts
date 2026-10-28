@@ -749,11 +749,12 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       ? ` child ${activeChild.child}/${activeChild.total}${activeChild.taskIds.length ? `; tasks ${activeChild.taskIds.join(', ')}` : ''}`
       : stackStatus && 'cause' in stackStatus ? ` stack unavailable: ${stackStatus.cause}` : '';
     const config = await loadConfig(featureRoot);
+    const growthConfig = await loadConfig(repoPath);
     const ledger = await readKickbackLedger(featureRoot, child);
     try {
       const { growth, cap, capSource, authoredSource } = await readPlanGrowthBudget(
         featureRoot,
-        config.ok ? config.config : ({} as HarnessConfig),
+        growthConfig.ok ? growthConfig.config : ({} as HarnessConfig),
         { persist: false },
       );
       const byGate = Object.entries(growth.byGate)
