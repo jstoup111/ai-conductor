@@ -6,10 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
+import { renderKickbackBudgetView } from '../../../src/engine/kickback-budget-view.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -42,14 +43,18 @@ afterEach(async () => {
 async function subject(options: {
   added?: number;
   allocation?: Record<number, { remTaskIds: string[]; blockBodies: string[] }>;
+  authored?: number;
   cap?: number;
+  configGrowthCap?: number;
   growth?: number;
   items?: RouteRecord['items'];
   laps?: number;
-  receiptLaps?: Record<'prd_audit' | 'architecture_review_as_built', number>;
+  receiptLaps?: Partial<Record<'prd_audit' | 'architecture_review_as_built', number>>;
   effectiveLapCap?: number;
   pendingAsBuiltFindings?: { gate: 'architecture_review_as_built'; finding: string; class: 'REMEDIABLE'; governingClause: string; summary: string; outcome: 'remediated' }[];
+  omitEffectiveGrowthCap?: boolean;
   roundId?: string;
+  settledEarlierGrowth?: number;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
@@ -66,13 +71,13 @@ async function subject(options: {
     build: 'pending', feature_desc: 'demo', session_started_at: Date.now() - 1_000, run_started_at: Date.now() - 1_000,
   }));
   await writeKickbackLedger(root, {
-    version: 1, effectiveGrowthCap: options.cap ?? 14,
+    version: 1, ...(options.omitEffectiveGrowthCap ? {} : { effectiveGrowthCap: options.cap ?? 14 }),
     gates: { prd_audit: { count: 0, cumulative: 0, laps: options.laps ?? 0, ...(options.effectiveLapCap === undefined ? {} : { effectiveLapCap: options.effectiveLapCap }), treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 } },
-    growth: { authored: 1, added: options.added ?? 13, byGate: {} },
+    growth: { authored: options.authored ?? 1, added: options.added ?? 13, byGate: {} },
   });
   const routeRoundId = parseRoundId(options.roundId ?? 'r8')!;
   const created = await createRouteRecord(root, 'demo', {
-    roundId: routeRoundId, sealedAuthored: 1, kind: 'audit',
+    roundId: routeRoundId, sealedAuthored: options.authored ?? 1, kind: 'audit',
     items: options.items ?? [
       { findingId: 'S1.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] },
       { findingId: 'S3.1', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] },
@@ -82,6 +87,23 @@ async function subject(options: {
     receipt: { ...emptyUnsettledReceipt(), laps: options.receiptLaps ?? { prd_audit: 1 }, growth: options.growth ?? 2 },
   });
   if (created.kind !== 'created') throw new Error(`route fixture: ${created.kind}`);
+  if (options.settledEarlierGrowth !== undefined) {
+    const earlierRoundId = parseRoundId('r4')!;
+    const earlier = await createRouteRecord(root, 'demo', {
+      roundId: earlierRoundId, sealedAuthored: options.authored ?? 1, kind: 'audit',
+      items: [{ findingId: 'earlier', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
+      allocation: { [child]: { remTaskIds: ['rem-earlier-1', 'rem-earlier-2'], blockBodies: ['### Task rem-earlier-1\n', '### Task rem-earlier-2\n'] } },
+      receipt: { ...emptyUnsettledReceipt(), laps: { prd_audit: 1 }, growth: options.settledEarlierGrowth },
+    });
+    if (earlier.kind !== 'created') throw new Error(`earlier route fixture: ${earlier.kind}`);
+    const storedEarlier = await readRouteRecord(root, 'demo', earlierRoundId, { git });
+    if (storedEarlier.kind !== 'record') throw new Error('earlier route fixture missing');
+    const updated = await writeRouteRecord(root, storedEarlier, {
+      ...storedEarlier.record,
+      receipt: { ...storedEarlier.record.receipt, settlementId: 'r4-settled', acks: { [child]: true } },
+    }, { git });
+    if (updated.kind !== 'updated') throw new Error(`earlier route fixture settlement: ${updated.kind}`);
+  }
   if ((await admitRound(root, 'demo', created.record, child, { git })).kind !== 'admitted') {
     throw new Error('route fixture admission failed');
   }
@@ -96,7 +118,7 @@ async function subject(options: {
     mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
     events: new ConductorEventEmitter(), stepRunner: runner,
     operatorParkBoundary: async () => parkAfterBuild,
-    config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+    config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: options.configGrowthCap ?? 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
       resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/demo', routedRepair: { child, roundId: routeRoundId } }) as never,
       enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
@@ -136,6 +158,45 @@ describe('routed BUILD settlement cap halt', () => {
     await expect(readKickbackLedger(fixture.root)).resolves.toMatchObject({
       gates: { prd_audit: { capEvidence: { allowance: 'growth', consumed: 13, limit: 14 } } },
       growth: { added: 13 },
+    });
+  });
+
+  it('renders an as-built-only refused receipt against its config-derived growth cap', async () => {
+    const fixture = await subject({
+      added: 0, authored: 3, configGrowthCap: 3, growth: 4, omitEffectiveGrowthCap: true,
+      receiptLaps: { architecture_review_as_built: 1 },
+    });
+    await fixture.conductor.run();
+
+    expect(fixture.build).not.toHaveBeenCalled();
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Plan growth: 0/3 added; 0 remaining (config-derived cap)\nPending growth: 4 (architecture_review_as_built 4); would reach 4/3 when build dispatches; minimum raise 1');
+    expect(halt).toContain('kickback-budget raise --feature demo --gate architecture_review_as_built --by 1');
+  });
+
+  it('renders joined-round growth once under prd audit at the routed BUILD boundary', async () => {
+    const fixture = await subject({
+      added: 6, cap: 8, growth: 3,
+      receiptLaps: { prd_audit: 1, architecture_review_as_built: 1 },
+    });
+    await fixture.conductor.run();
+
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Pending growth: 3 (prd_audit 3); would reach 9/8 when build dispatches; minimum raise 1');
+  });
+
+  it('renders reconciled earlier receipt growth against a config-derived cap', async () => {
+    const fixture = await subject({
+      added: 6, authored: 10, configGrowthCap: 10, growth: 3, omitEffectiveGrowthCap: true, settledEarlierGrowth: 2,
+    });
+    await fixture.conductor.run();
+
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Plan growth: 8/10 added; 0 remaining (config-derived cap)');
+    expect(halt).toContain('would reach 11/10 when build dispatches; minimum raise 1');
+    await expect(readKickbackLedger(fixture.root)).resolves.toMatchObject({
+      gates: { prd_audit: { capEvidence: { consumed: 8, limit: 10 } } },
+      growth: { added: 8 },
     });
   });
 
@@ -207,6 +268,33 @@ describe('routed BUILD settlement cap halt', () => {
     expect(halt).toContain('Routed round r3 repairs existing tasks: 4, 7');
     expect(halt).not.toContain('Routed round r3 remediation tasks:');
     expect(halt).not.toContain('repair record is malformed');
+    expect(halt).not.toContain('Pending growth:');
+    const planGrowthLine = halt.split('\n').find((line) => line.startsWith('Plan growth:'));
+    const noPendingLine = renderKickbackBudgetView(undefined, 'prd_audit', 2, {
+      authored: 1, added: 0, byGate: {}, remaining: 10, cap: 10,
+      capSource: 'raised', authoredSource: 'plan',
+    }).split('\n').find((line) => line.startsWith('Plan growth:'));
+    expect(planGrowthLine).toBe(noPendingLine);
+  });
+
+  it('refuses an oversized routed round without dispatching or settling it', async () => {
+    const fixture = await subject({ added: 0, cap: 16, growth: 17 });
+    const before = await readKickbackLedger(fixture.root);
+    await fixture.conductor.run();
+
+    expect(fixture.build).not.toHaveBeenCalled();
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Plan growth: 0/16 added; 0 remaining (raised cap)');
+    expect(halt).toContain('would reach 17/16 when build dispatches; minimum raise 1');
+    const after = await readKickbackLedger(fixture.root);
+    expect(after).toMatchObject(before);
+    expect(after).toMatchObject({
+      effectiveGrowthCap: 16,
+      growth: { authored: 1, added: 0, byGate: {} },
+    });
+    const record = await readRouteRecord(fixture.root, 'demo', fixture.roundId, { git: fixture.git });
+    expect(record).toMatchObject({ kind: 'record' });
+    if (record.kind === 'record') expect(record.record.receipt).not.toHaveProperty('settlementId');
   });
 
   it('names remediation tasks before existing task repairs when both are routed', async () => {
