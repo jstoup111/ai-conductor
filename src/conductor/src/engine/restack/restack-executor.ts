@@ -722,7 +722,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         continue;
       }
       if (options.cause === 'feature-repair') {
-        const recorded = await consumeRecordedResolution({ slug: options.slug, range, parent, committer: journal.journal.committer, git });
+        const recorded = await consumeRecordedResolution({
+          slug: options.slug, range, parent, committer: journal.journal.committer, git,
+          replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
+            replayRange, replayParent, replayCommitter, replayGit, { comparisonCommits: [] },
+          ),
+        });
         if (recorded.kind === 'stale') {
           await abortJournal(options.worktree, journal, git, moves);
           await haltRestack(options.worktree, 'restack-resolution-stale', options.events, { child: range.child, detail: recorded.field });

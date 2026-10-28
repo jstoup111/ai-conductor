@@ -1,9 +1,14 @@
+import { execa } from 'execa';
 import { parseChildId, type ChildId } from '../child-context.js';
-import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { parseCommitSha, type ChildRange, type CommitSha, type RefName, type RestackOpId } from './restack-types.js';
 
 const ZERO_SHA = '0'.repeat(40) as CommitSha;
+
+interface GitRunner {
+  (args: string[], opts?: { input?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+}
+
+interface CommitterStamp { readonly name: string; readonly email: string; readonly date: string; }
 
 /** Durable hand-off data for one unresolved feature-repair replay conflict. */
 export interface RestackConflictRecord {
@@ -64,6 +69,14 @@ export interface ConsumeRecordedResolutionInput {
   readonly parent: CommitSha;
   readonly committer: CommitterStamp;
   readonly git: GitRunner;
+  readonly replay: (range: ChildRange, parent: CommitSha, committer: CommitterStamp, git: GitRunner) => Promise<{ tip: CommitSha; rewrites: ReadonlyMap<CommitSha, CommitSha> }>;
+}
+
+function makeGitRunner(worktree: string): GitRunner {
+  return async (args, opts) => {
+    const result = await execa('git', args, { cwd: worktree, input: opts?.input, reject: false });
+    return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+  };
 }
 
 export function conflictRecordRefFor(slug: string): RefName {
@@ -270,7 +283,7 @@ export async function consumeRecordedResolution(
     oldParent: stored.record.newParent,
     oldTip: tip,
   };
-  const replay = await replayChildRange(replayRange, input.parent, input.committer, input.git, { comparisonCommits: [] });
+  const replay = await input.replay(replayRange, input.parent, input.committer, input.git);
   const [originals, resolutions] = await Promise.all([
     subjectsByCommit(input.git, `${input.range.oldParent}..${input.range.oldTip}`),
     subjectsByCommit(input.git, `${stored.record.newParent}..${tip}`),
