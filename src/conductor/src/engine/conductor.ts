@@ -10346,6 +10346,7 @@ export class Conductor {
           let settlementGrowth: PlanGrowth | undefined;
           let growthCap: number | undefined;
           let settlementAuthoredSource: 'plan' | 'ledger' | 'unresolved' | undefined;
+          let routedSettlement = false;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
             if (
@@ -10357,6 +10358,7 @@ export class Conductor {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
             const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
+            routedSettlement = execution?.source === 'routed-host';
             // A routed round owns a receipt instead of a flat pendingRepair.
             // Either durable admission shape needs its budget settled before
             // the provider can receive BUILD.
@@ -10423,7 +10425,9 @@ export class Conductor {
               ? prdAuditCriteria
               : asBuiltFindingIds;
             const findings = refusedRound === undefined
-              ? haltingFindings.length > 0
+              ? settlementFailure !== undefined && routedSettlement
+                ? `Pending remediation findings are unavailable: ${settlementFailure}.`
+                : haltingFindings.length > 0
               ? `Findings (${gate}): ${haltingFindings.join(', ')}`
               : pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`

@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:5
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,12 +14,28 @@ import { emptyUnsettledReceipt, parseRoundId } from '../../../src/engine/routing
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
+
+const settlementSeam = vi.hoisted(() => ({
+  haltedReason: undefined as string | undefined,
+}));
+
+vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
+  return {
+    ...actual,
+    settleRoundAtDispatch: vi.fn(async (input) => settlementSeam.haltedReason === undefined
+      ? actual.settleRoundAtDispatch(input)
+      : { kind: 'halted' as const, reason: settlementSeam.haltedReason }),
+  };
+});
 
 const child = parseChildId(1)!;
 const roots: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  settlementSeam.haltedReason = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -88,6 +104,22 @@ async function subject(options: {
     },
   });
   return { root, build, conductor, git, roundId: routeRoundId };
+}
+
+async function enableRoutedGrowthSnapshot(root: string) {
+  await mkdir(join(root, '.pipeline', 'children'), { recursive: true });
+  await mkdir(join(root, '.ai-conductor'), { recursive: true });
+  await writeFile(join(root, '.ai-conductor', 'config.yml'), [
+    'stacked_prs:',
+    '  enabled: true',
+    '  max_slices: 2',
+    '  route_whole_feature_fixes: true',
+    '',
+  ].join('\n'));
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['First', 'Second'] },
+  });
 }
 
 describe('routed BUILD settlement cap halt', () => {
@@ -175,5 +207,38 @@ describe('routed BUILD settlement cap halt', () => {
     expect(halt).toContain('Routed round r3 repairs existing tasks: 4, 7');
     expect(halt).not.toContain('Routed round r3 remediation tasks:');
     expect(halt).not.toContain('repair record is malformed');
+  });
+
+  it('halts needs-human with the unreadable route ref before BUILD', async () => {
+    const fixture = await subject();
+    await enableRoutedGrowthSnapshot(fixture.root);
+    const malformed = await fixture.git(['hash-object', '-w', '--stdin'], { input: '{not-json' });
+    await fixture.git(['update-ref', `refs/conductor/demo/routes/${fixture.roundId}`, malformed.stdout.trim()]);
+
+    await fixture.conductor.run();
+
+    expect(fixture.build).not.toHaveBeenCalled();
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toMatch(new RegExp(`Pending remediation findings are unavailable: .*refs/conductor/demo/routes/${fixture.roundId}`));
+    expect(halt).not.toContain('Pending growth:');
+    expect(halt).toContain('--by «N»');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it.each([
+    'route record r8 is unreadable',
+    'route record r8 is absent',
+    'routing round r8 has an open restack journal',
+  ])('halts needs-human with a routed settlement failure reason: %s', async (reason) => {
+    settlementSeam.haltedReason = reason;
+    const fixture = await subject();
+
+    await fixture.conductor.run();
+
+    expect(fixture.build).not.toHaveBeenCalled();
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(`Pending remediation findings are unavailable: ${reason}.`);
+    if (reason.includes('restack')) expect(halt).not.toContain('malformed');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 });
