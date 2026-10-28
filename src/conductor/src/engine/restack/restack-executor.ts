@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { type ChildId } from '../child-context.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
@@ -88,7 +90,8 @@ export interface RunRestackOptions {
 
 export type RunRestackResult =
   | { readonly kind: 'applied'; readonly opId: RestackOpId }
-  | { readonly kind: 'halted' }
+  /** The exact durable halt body written for this terminal outcome. */
+  | { readonly kind: 'halted'; readonly detail: string }
   /** Another live operation owns the journal; this run did nothing durable. */
   | { readonly kind: 'refused'; readonly reason: 'restack-outstanding' }
   | { readonly kind: 'repair-pending'; readonly child: number }
@@ -106,6 +109,13 @@ async function runGit(git: GitRunner, args: string[], input?: string) {
 
 function transaction(lines: readonly string[]): string {
   return ['start', ...lines, 'prepare', 'commit', ''].join('\n');
+}
+
+/** Return the durable diagnostic rather than losing it at the routed boundary. */
+async function haltedResult(worktree: string): Promise<Extract<RunRestackResult, { readonly kind: 'halted' }>> {
+  const detail = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')
+    .catch(() => 'restack halt marker could not be read');
+  return { kind: 'halted', detail };
 }
 
 const EMPTY_REVALIDATION_QUEUE: RevalidationQueueRecord = { generation: 0, entries: [], outbox: [] };
@@ -515,7 +525,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     if (!seal.ok) {
       await writeSealHalt(options.worktree, seal.reason, options.events);
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
     // The caller has already superseded the committed halt record and consumed
     // any matching authorization.  Do one narrow, terminal-only recheck here
@@ -526,7 +536,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     if ('divergent' in active) {
       await haltRestack(options.worktree, active.divergent.check, options.events, { child: active.divergent.child });
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
     // A repair's default is unchanged. Resolve that local default before
     // planning instead of borrowing the active child's closure, which is an
@@ -544,7 +554,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     if (plan.kind === 'refused') {
       await haltRestack(options.worktree, plan.reason, options.events, { child: plan.child });
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
     if (plan.kind === 'repair-pending') {
       terminal = true;
@@ -561,7 +571,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         detail: `routed exit origin set is missing host ${options.routed.host}`,
       });
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
 
     if (options.cause === 'feature-repair') {
@@ -585,7 +595,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             `\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
         });
         terminal = true;
-        return { kind: 'halted' };
+        return haltedResult(options.worktree);
       }
     }
 
@@ -703,7 +713,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             commit: error.commit, paths: [error.path],
           }, options.events, git, 'conflict', `remediation block body mismatch: ${error.remId}`);
           terminal = true;
-          return { kind: 'halted' };
+          return haltedResult(options.worktree);
         }
         const conflict = await replayConflict(git, error);
         if (!conflict) throw error;
@@ -718,7 +728,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             detail: `merge ${merge}; resolve the conflict on child branch ${branchRefForRange(options.slug, range).slice('refs/heads/'.length)} and resume`,
           });
           terminal = true;
-          return { kind: 'halted' };
+          return haltedResult(options.worktree);
         }
         const resolution = await resolveRestackConflict({
           worktree: options.worktree,
@@ -734,13 +744,13 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           const detail = 'reason' in resolution.outcome ? resolution.outcome.reason : undefined;
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, 'conflict', detail);
           terminal = true;
-          return { kind: 'halted' };
+          return haltedResult(options.worktree);
         }
         const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
         if (ownership.kind === 'refused') {
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths }, options.events, git, 'replay-mismatch');
           terminal = true;
-          return { kind: 'halted' };
+          return haltedResult(options.worktree);
         }
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
@@ -762,7 +772,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           detail: ownership.paths.join(', '),
         });
         terminal = true;
-        return { kind: 'halted' };
+        return haltedResult(options.worktree);
       }
       overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
       parent = replay.tip;
@@ -796,20 +806,20 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       await abortJournal(options.worktree, journal, git, moves);
       await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
     if (preMove.kind === 'seal-refused') {
       await abortJournal(options.worktree, journal, git, moves);
       await writeSealHalt(options.worktree, preMove.detail, options.events);
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
     if (preMove.kind === 'unavailable') throw new Error(preMove.detail);
     const moved = await applyRestackMove(options.worktree, journal, moves, { git, events: options.events });
     // applyRestackMove normally aborts before returning a refusal. Keep this
     // frame live, however, so the finally path repairs a failed abort rather
     // than leaving a ready journal owned by this still-running process.
-    if (moved.kind === 'refused') return { kind: 'halted' };
+    if (moved.kind === 'refused') return haltedResult(options.worktree);
     if (moved.kind === 'unavailable') throw new Error(moved.detail);
     journal = moved.journal;
     // An unentered leaf can point into its owner's own range. The durable
@@ -826,7 +836,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (rolledBack.kind !== 'aborted') throw new Error(rolledBack.detail);
       await haltRestack(options.worktree, 'verification-failed', options.events, { detail: verified.detail });
       terminal = true;
-      return { kind: 'halted' };
+      return haltedResult(options.worktree);
     }
     if (verified.kind === 'unavailable') throw new Error(verified.detail);
 
@@ -856,7 +866,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (error instanceof RoutedApplyPlanRefChangedError) {
         await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: error.ref });
         terminal = true;
-        return { kind: 'halted' };
+        return haltedResult(options.worktree);
       }
       throw error;
     }
@@ -867,7 +877,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (changed !== undefined) {
         await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
         terminal = true;
-        return { kind: 'halted' };
+        return haltedResult(options.worktree);
       }
       throw new Error('cannot transition restack journal to applied');
     }

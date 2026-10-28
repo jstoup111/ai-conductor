@@ -454,5 +454,9 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
 }
 
 function restackDetail(result: Exclude<RunRestackResult, { readonly kind: 'applied' }>): string {
-  return result.kind === 'unavailable' ? result.detail : result.kind === 'refused' ? result.reason : result.kind;
+  return result.kind === 'halted' || result.kind === 'unavailable'
+    ? result.detail
+    : result.kind === 'refused'
+      ? result.reason
+      : result.kind;
 }
