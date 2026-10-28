@@ -48,7 +48,7 @@ own commits, so that no child replays its parent's history and no child loses it
 - Given a restack in which child 2's commit `C2` becomes empty because the new `closed/c1` already carries its change, when child 2 is replayed, then no commit for `C2` appears in the new child 2.
 - Given a repair restack whose originating commit `X` on child 1 was already cherry-picked into child 2 as `X2`, when child 2 is replayed, then `X2` does not appear in the new child 2.
 - Given the one-closed-one-active stack, when a restack runs, then `feat/daemon-demo` is not moved, and no branch is created for position 3.
-- Given the one-closed-one-active stack, where `feat/c1/demo` was created from a pre-region halt record `H` on the unentered leaf (the leaf still sits at `H`), when a `base-refresh` restack rewrites `H` to `H'`, then: the leaf moves to `H'` in the same move; no `refs/conductor/demo/leaf-moved` ref is written; when child 2 later closes, the leaf move succeeds with no stray-commit refusal.
+- Given the one-closed-one-active stack, where `feat/c1/demo` was created from a pre-region halt record `H` on the unentered leaf (the leaf still sits at `H`), when a `base-refresh` restack replays child 1 and leaves the halt-record-only commit `H` out as bookkeeping, then: the leaf moves in the same move to the single commit `H` maps to (the rewrite of the nearest earlier commit that has one, or the new default when none precedes it); no `refs/conductor/demo/leaf-moved` ref is written; when child 2 later closes, the leaf move succeeds with no stray-commit refusal.
 - Given the journaled old `closed/c1` is not an ancestor of `feat/c2/demo`'s tip (child 2 was rebased elsewhere), when a restack is planned, then it halts needs-human with `restack_refused` reason `range-not-ancestor`, naming child 2, and no ref moves.
 - Given the operator's git config sets `rebase.updateRefs=true`, `rebase.autoSquash=true` and `merge.renames=false`, when a restack, an N=1 rebase, or a resolver hand-off runs, then its result and resolver todo are identical to those produced with the keys unset.
 - Given a crash at `planned` after child 1 was replayed, when the next resume re-plans, then child 1's rewritten SHAs are identical to the first attempt's.
@@ -180,14 +180,14 @@ recoverable.
 - Given child 2's commit `C2` conflicts when replayed onto the new `closed/c1`, and the resolver resolves it, when the restack continues, then: the leaf is replayed onto the resolved child-2 tip; the restack applies; child 1 is not replayed again.
 - Given a resolver hand-off, when it ends (accepted, rejected or crashed), then: no real branch moved during it; its temporary worktree no longer appears in `git worktree list`.
 - Given child 2 has a started-empty commit `E` and a commit cherry-picked to main within the default advance, when its resolver hand-off runs, then the commits it replays include `E` and exclude the cherry-picked commit, matching the clean replay's list.
-- Given child 1's and child 2's ranges both contain halt-record commits that conflict only on `.docs/halted/demo.md`, when child 2 is replayed, then child 2's record is kept and no resolver is dispatched.
+- Given child 1's and child 2's ranges both contain halt-record commits with different `.docs/halted/demo.md` records, when child 2 is replayed, then child 2's halt-record-only commits are not replayed, child 2's new tip carries the newer of the two records (by `Resolved at:`, else `Halted at:`), and no resolver is dispatched.
 
 #### Negative Paths
 - Given child 2's commit `C2` conflicts on `src/c.ts` and the resolver exhausts its budget, when the restack ends, then: it halts needs-human, naming child 2, `C2` and `src/c.ts`; `restack_conflict` is persisted; no child branch or closure ref moved; the journal (`aborted`) and child 2's staging ref remain until that halt is cleared.
 - Given a resolver result missing one of child 2's own commit subjects, when acceptance is checked, then it is rejected, and the run halts as the unresolved conflict above.
 - Given a resolver result not based on the new `closed/c1`, when acceptance is checked, then it is rejected, and the run halts as the unresolved conflict above.
 - Given a resolver result changing a path child 2 never owned, when acceptance is checked, then it is rejected with reason `replay-mismatch`.
-- Given a conflict touching `.docs/halted/demo.md` and `src/c.ts` together, when child 2 is replayed, then it is not resolved mechanically, and goes to the resolver.
+- Given a conflict touching `.docs/halted/demo.md` and `src/c.ts` together, when child 2 is replayed, then `src/c.ts` goes to the resolver, and `.docs/halted/demo.md` is never handed to the resolver: it keeps the side being rebuilt.
 
 ### Done When
 - [ ] Only the conflicting child is handed off, and its replay list equals the clean replay's.

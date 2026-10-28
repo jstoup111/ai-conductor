@@ -157,6 +157,31 @@ Operator decisions (2026-10-10):
        and the branch's reflog keeps them. The live halt record is on the active branch.
      - Inside a range: replayed. A conflict confined to `.docs/halted/<slug>.md` resolves
        mechanically: the upper child's record wins.
+
+     > **Amended 2026-10-28 by #3451:** Inside a range, a halt-record-only commit is no longer
+     > replayed; it is bookkeeping. A halt-record-only commit is a non-merge commit whose changed
+     > paths are exactly `.docs/halted/<slug>.md`; a merge is never one. When a kept commit and the
+     > accumulator have both changed the halt record, the accumulator's record is kept, so a
+     > halt-record conflict never occurs.
+     >
+     > After the range replays, the replayed tip must carry the winning record:
+     >
+     > - **Range never touched the record** (the halt path is not among the child's owned paths, as
+     >   this decision's path-ownership rule computes them): the new parent's record wins.
+     > - **Range touched the record:** the newer of the new parent's record and the record at the
+     >   range's old tip wins. "Newer" compares each record's `Resolved at:`, or `Halted at:` when
+     >   unresolved. A tie, or a record that cannot be read on both sides, picks the new parent's.
+     >   When only one side can be read, that side wins.
+     >
+     > When the tip's record differs from the winner, one engine commit, `halt record: <slug>`, sets
+     > it. The commit's message is exactly that subject. Its author and committer are the journal's
+     > committer stamp, so a recovered replay produces the same commit. This also undoes an older
+     > record that a kept commit applied cleanly.
+     >
+     > Each omitted commit's rewrite is the rewrite of the nearest earlier commit in the range that
+     > has one, or the new parent. Omitted commits after the last commit that has a rewrite map to
+     > the final tip. This replaces "the upper child's record wins", which could replay an older
+     > record over a newer one.
    - **Patch-equivalent commits** are skipped only against commits that are **new to the stack in
      this operation**:
      - for a base refresh, `oldDefault..newDefault`;
@@ -397,6 +422,15 @@ Operator decisions (2026-10-10):
 > decision's FR-8, FR-9 and path-ownership guards. A later run consumes that resolution as the
 > resolver's output for the child when the range and the parent tree match, and halts
 > `restack-resolution-stale` otherwise (`adr-2026-10-25-operator-recorded-restack-conflict-resolution`).
+
+> **Amended 2026-10-28 by #3451:** The resolver's todo still lists exactly the commits the plumbing
+> replay would apply, so it omits halt-record-only commits (decision 2). When both sides changed
+> `.docs/halted/<slug>.md`, the rebase keeps the side being rebuilt, through a merge driver. The driver is set only
+> in the rebase's own environment, through `core.attributesFile` and `merge.<driver>.driver`, and
+> nothing is written to the repository's config or attributes. The provider resolver therefore
+> never receives a halt-record path. FR-9's expected subjects are the todo's subjects, so
+> omitted halt-record-only commits are not reported as lost. A resolved tip gets the same
+> newest-record bookkeeping commit as a replayed one before the path-ownership check.
 
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
