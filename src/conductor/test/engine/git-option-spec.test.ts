@@ -40,6 +40,9 @@ describe('git option spec', () => {
     expect(optionFor('reset', '--hard')?.negatable).toBe(false);
     expect(optionFor('reset', '--auto-advance')?.negatable).toBe(true);
     expect(optionFor('checkout', '--auto-advance')?.negatable).toBe(true);
+    expect(optionFor('branch', '--delete-merged')).toMatchObject({ arity: 'required', negatable: false });
+    expect(optionFor('branch', '--forked')).toMatchObject({ arity: 'required', negatable: false });
+    expect(optionFor('branch', '--dry-run')?.arity).toBe('none');
   });
 
   it('resolves every guarded option in the engine CLI argv table', async () => {
