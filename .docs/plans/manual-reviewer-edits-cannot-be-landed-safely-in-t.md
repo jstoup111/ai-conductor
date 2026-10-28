@@ -958,3 +958,63 @@ Slice 2: 4 ── 5
          25 (19, 22)
 Slice 3: 27 (9, 20) ── 28;  29 ── 30;  31 (10, 17, 27, 29)
 ```
+
+### Task rem-as-built-rem-as-built-r5: src/conductor/src/engine/daemon-runner.ts: acquire the feature dispatch lease (and re-check the park) before createWorktree/prepareWorktree for stacked features; extend daemon-dispatch-lease.test.ts to assert lease acquire is recorded before any git worktree add from worktree-shared.ts
+**Gate:** as-built
+**Rationale:** Verified 98%. Tasks 2 and 3 already require the lease to be acquired before prepareWorktree and before any interactive worktree or conduct-state mutation. The code acquires it after createWorktree (daemon-runner.ts:421 vs :427) and after session/context setup (index.ts:1916-1917 vs :2109). This is implementation drift from approved D2 and is admitted by Tasks 2 and 3.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r5 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r1
+### Task rem-as-built-rem-as-built-r6: src/conductor/src/index.ts interactive run: move stacked-feature lease acquisition ahead of session-state creation (~:1916) and managed-context preparation (~:1917); extend interactive-run-lease.test.ts to assert the lease is held before either mutation
+**Gate:** as-built
+**Rationale:** Verified 98%. Tasks 2 and 3 already require the lease to be acquired before prepareWorktree and before any interactive worktree or conduct-state mutation. The code acquires it after createWorktree (daemon-runner.ts:421 vs :427) and after session/context setup (index.ts:1916-1917 vs :2109). This is implementation drift from approved D2 and is admitted by Tasks 2 and 3.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r1
+
+### Task rem-prd-audit-rem-child-dispatch-lease: executor-child-runtime.ts + supervisor child dispatch (daemon-cli.ts executor path): acquire the stacked-feature dispatch lease from the root projectRoot before the supervisor creates or binds .worktrees/<slug>, re-check the park after acquiring, skip with reason feature-lease-held / parked-after-lease through the existing dispatch-skip outcome, and release at unit end. Leave flat features lock-free. Extend daemon-dispatch-lease.test.ts with child-mode cases for acquire-before-worktree order, live-owner skip with the operator record and worktree unchanged, park-after-lease skip, and no .daemon/leases access for flat features.
+**Gate:** prd-audit
+**Rationale:** Verified (99%): daemon-runner.ts:423 gates lease acquisition on deps.daemon && deps.projectRoot. The default child-executor runner builds its deps without projectRoot, and the supervisor creates or binds the worktree first. So a child-mode dispatch takes no lease. The approved design (task 2) already requires the lease before worktree preparation on every daemon dispatch path, so this is conforming implementation drift and needs no new decision.
+**Criterion:** S2.1
+**Parent task:** 2
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-child-dispatch-lease is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r2
+### Task rem-as-built-rem-remove-dead-interactive-wrapper: src/conductor/src/engine/interactive-run-lease.ts + src/conductor/src/index.ts:5: delete runInteractiveConductorWithLease and its re-export. Retarget interactive-run-lease.test.ts cases that exercised it to prepareInteractiveConductorRunWithLease, preserving the live-owner refusal and lease-before-mutation assertions.
+**Gate:** as-built
+**Rationale:** Verified: the only references to runInteractiveConductorWithLease are its definition (interactive-run-lease.ts:93), the index.ts:5 re-export, and tests. Production uses prepareInteractiveConductorRunWithLease. Removing the dead wrapper is in scope of the r6 task. Its test coverage must carry over to the production entry point so the lease-before-mutation behavior stays proven.
+**Parent task:** rem-as-built-rem-as-built-r6
+**Governing clause:** Task rem-as-built-rem-as-built-r6
+**Done when:**
+- Task rem-as-built-rem-as-built-r6 is satisfied by this task.
+- The repair for task rem-as-built-rem-remove-dead-interactive-wrapper is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r2
+### Task rem-as-built-rem-resume-lease-before-mkdir: src/conductor/src/index.ts bare --resume: after resolving the selected feature, acquire its stacked-feature lease before creating its .pipeline directory (~:1766) and before any other session-state write. Refuse a live owner without mutating. Extend interactive-run-lease.test.ts: bare --resume against a live owner, with a selected worktree lacking .pipeline, creates no .pipeline directory and names the owner.
+**Gate:** as-built
+**Rationale:** Verified (99%) residual of the prior r6 repair. Bare --resume creates the selected feature's pipeline directory (index.ts ~:1766) before acquiring its lease (~:1792). ADR decision 2 already requires the lease before any mutation, so this is conforming implementation work bound to the r6 task.
+**Governing clause:** adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2
+**Done when:**
+- adr-2026-10-24-operator-route-round-for-closed-stacked-children decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-resume-lease-before-mkdir is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r2
+
+### Task rem-as-built-rem-child-lease-release-on-worktree-failure: executor-child.ts: move `deps.createWorktree(order)` inside the try/finally that calls `admission?.release?.()`, so a rejected worktree creation still releases the dispatch lease and keeps acquire-before-worktree order. In daemon-dispatch-lease.test.ts (or the executor-child test), add a child-mode case where createWorktree rejects and assert release is called once and the error outcome is sent.
+**Gate:** as-built
+**Rationale:** Verified (99%): in src/conductor/src/engine/executor-child.ts:171, `await deps.createWorktree(order)` runs after admitDispatch acquires the lease. It sits outside the try/finally that calls admission.release. If createWorktree rejects, the outer catch sends an error outcome and the lease is never released. That breaks the approved 'release at unit end' requirement of task rem-prd-audit-rem-child-dispatch-lease. The approved architecture stays authoritative, so this is a conforming implementation fix: move the worktree creation inside the release-protected try. That keeps the existing acquire-before-worktree order and the skip behavior.
+**Parent task:** rem-prd-audit-rem-child-dispatch-lease
+**Governing clause:** Task rem-prd-audit-rem-child-dispatch-lease
+**Done when:**
+- Task rem-prd-audit-rem-child-dispatch-lease is satisfied by this task.
+- The repair for task rem-as-built-rem-child-lease-release-on-worktree-failure is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r3

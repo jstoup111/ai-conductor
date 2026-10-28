@@ -109,6 +109,10 @@ import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
+import {
+  prepareInteractiveConductorRunWithLease,
+  type InteractiveConductorRunLeaseAcquisition,
+} from './engine/interactive-run-lease.js';
 import { detectAutoResume } from './engine/auto-resume.js';
 import {
   verifyCompleteState,
@@ -849,7 +853,7 @@ async function dispatchCliCommand(): Promise<void> {
   if (process.argv[2] === 'executor-child') {
     const [
       { runExecutorChild, withExecutorBrokerProxies },
-      { makeExecutorChildRun },
+      { makeExecutorChildDispatchAdmission, makeExecutorChildRun },
       { createWorkOrderGitRunner },
       { makeFeatureRunnerDeps },
       { defaultSelfHostDetector },
@@ -862,6 +866,7 @@ async function dispatchCliCommand(): Promise<void> {
     ]);
     const projectRoot = process.cwd();
     await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
       // Reuse the daemon seam, which verifies the WorkOrder before its first
       // worktree side effect and performs the pinned-base create under the
       // brokered lifecycle lock.
@@ -1350,7 +1355,8 @@ async function dispatchCliCommand(): Promise<void> {
     const resolved = await resolveMainRepoRoot(process.cwd());
     if ('error' in resolved) {
       console.error(resolved.error);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
@@ -1456,17 +1462,17 @@ async function dispatchCliCommand(): Promise<void> {
   // state or initializing provider-facing runtime.
   const mode = deriveMode(opts);
 
+  let interactiveLease: InteractiveConductorRunLeaseAcquisition = { kind: 'unleased' };
+  let persister: EventPersister | undefined;
+  let sessionTail: ReturnType<typeof startSessionEventTail> | undefined;
+  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
+  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
+  try {
+
   let projectRoot = process.cwd();
   let pipelineDir = join(projectRoot, '.pipeline');
   let stateFilePath = join(pipelineDir, 'conduct-state.json');
-
-  // Ensure .pipeline/ exists
-  await mkdir(pipelineDir, { recursive: true });
-
-  // Preflight: ensure .claude/settings.json exists with project-scoped
-  // permissions. Solves the chicken-and-egg where bootstrap can't write its
-  // own permission file without permission. Idempotent — no-op if present.
-  await ensureClaudeSettings(projectRoot);
+  const resumeNeedsFeatureSelection = opts.resume && !opts.featureDesc;
 
   // Shared UI state: one live region, one prompt host. The host suspends the
   // region around each readline prompt so dashboard and prompts don't fight
@@ -1539,6 +1545,7 @@ async function dispatchCliCommand(): Promise<void> {
   // Handle --reset: clear state and exit
   if (opts.reset) {
     // Deliberate full clear — the one place a recorded pr_url is meant to go.
+    await mkdir(pipelineDir, { recursive: true });
     await replaceCommandState(stateFilePath, 'reset conductor state');
     console.log('State cleared.');
     return;
@@ -1591,6 +1598,25 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(1);
   }
 
+  // A stacked interactive run must own its feature before any foreground
+  // setup can create session state, managed context, or a worktree marker.
+  // Flat features deliberately keep the historical no-lease path. A bare
+  // --resume receives its feature identity from the selection below.
+  interactiveLease = await prepareInteractiveConductorRunWithLease({
+    projectRoot,
+    featureDesc: opts.featureDesc,
+    prepare: async () => {
+      if (!resumeNeedsFeatureSelection) {
+        await mkdir(pipelineDir, { recursive: true });
+        await ensureClaudeSettings(projectRoot);
+      }
+    },
+  });
+  if (interactiveLease.kind === 'refused') {
+    console.error(interactiveLease.message);
+    process.exitCode = 1;
+    return;
+  }
   // Auto-resume: if a feature description was provided and a worktree for its
   // slug already exists with in-progress state, silently redirect to that
   // worktree and enable resume. --fresh bypasses this.
@@ -1680,7 +1706,8 @@ async function dispatchCliCommand(): Promise<void> {
           `       feature branch — if it exists — is untouched).\n` +
           `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
       );
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -1690,7 +1717,8 @@ async function dispatchCliCommand(): Promise<void> {
     const features = await scanResumableFeatures(projectRoot);
     if (features.length === 0) {
       console.error('No active features found in .worktrees/');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
 
     let selected = selectFeature(features, undefined);
@@ -1710,7 +1738,10 @@ async function dispatchCliCommand(): Promise<void> {
     projectRoot = selected.path;
     pipelineDir = join(projectRoot, '.pipeline');
     stateFilePath = join(pipelineDir, 'conduct-state.json');
-    await mkdir(pipelineDir, { recursive: true });
+
+    if (!opts.featureDesc && selected.featureDesc) {
+      opts.featureDesc = selected.featureDesc;
+    }
 
     // Also check for state in worktree root (legacy location)
     const legacyStatePath = join(selected.path, 'conduct-state.json');
@@ -1726,9 +1757,24 @@ async function dispatchCliCommand(): Promise<void> {
     } catch {
       // No legacy state — use .pipeline
     }
+  }
 
-    if (!opts.featureDesc && selected.featureDesc) {
-      opts.featureDesc = selected.featureDesc;
+  // A bare --resume learns its stacked feature only after the non-mutating
+  // selection prompt. Acquire before materializing that selected worktree's
+  // pipeline or provider session state.
+  if (resumeNeedsFeatureSelection) {
+    interactiveLease = await prepareInteractiveConductorRunWithLease({
+      projectRoot,
+      featureDesc: opts.featureDesc,
+      prepare: async () => {
+        await mkdir(pipelineDir, { recursive: true });
+        await ensureClaudeSettings(projectRoot);
+      },
+    });
+    if (interactiveLease.kind === 'refused') {
+      console.error(interactiveLease.message);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -1762,15 +1808,12 @@ async function dispatchCliCommand(): Promise<void> {
   // Start persistence before boot discovery so the boot event is retained in
   // the same ledger as the dispatch it authorizes.
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
-  const persister = new EventPersister(eventsLogPath, events);
+  persister = new EventPersister(eventsLogPath, events);
   persister.start();
   // Foreground/project-prelude provider sessions have no daemon feature
   // scope. Own their same-schema producer tail alongside this persister so
   // every exit drains records before subscribers detach.
-  const sessionTail = startSessionEventTail(projectRoot, events);
-  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
-  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
-  try {
+  sessionTail = startSessionEventTail(projectRoot, events);
     subscriber = await bootDispatchingCliProviders({
     command: 'inline',
     registry,
@@ -1999,10 +2042,14 @@ async function dispatchCliCommand(): Promise<void> {
 
     await conductor.run();
   } finally {
-    await sessionTail.drain();
-    persister.stop();
+    await sessionTail?.drain();
+    persister?.stop();
     await stopVisualizers(visualizerList);
     await subscriber?.stop();
+    if (interactiveLease.kind === 'acquired') {
+      const released = await interactiveLease.lease.release();
+      if (!released.ok) throw new Error(released.message);
+    }
   }
 }
 

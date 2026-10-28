@@ -29,12 +29,15 @@ import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type Pr
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
+import { hasDurableChildState } from './child-cursor.js';
+import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
 import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { ConductState } from '../types/index.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
-import type { ExecutorChildRunInput } from './executor-child.js';
+import type { ExecutorChildDispatchAdmission, ExecutorChildRunInput } from './executor-child.js';
+import type { WorkOrder } from './work-order.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { startSessionEventTail } from './event-persister.js';
 
@@ -53,6 +56,41 @@ export interface MakeExecutorChildRunOptions {
   readonly projectRoot: string;
   readonly runFeature?: typeof runExecutorChildFeature;
   readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
+}
+
+/**
+ * Claim the root-owned stacked-feature lease before an isolated child creates
+ * or reuses its worktree. The child process runs with the supervisor's root as
+ * its cwd, so this remains the canonical lease and park-marker location.
+ */
+export async function makeExecutorChildDispatchAdmission(
+  { projectRoot }: Pick<MakeExecutorChildRunOptions, 'projectRoot'>,
+  order: WorkOrder,
+): Promise<ExecutorChildDispatchAdmission> {
+  if (await hasDurableChildState(projectRoot, order.slug) !== true) return { kind: 'admitted' };
+
+  const leaseResult = await acquireFeatureDispatchLease(projectRoot, order.slug, 'daemon dispatch');
+  if (leaseResult.kind !== 'acquired') {
+    return {
+      kind: 'skipped',
+      outcome: { slug: order.slug, status: 'parked', reason: 'feature-lease-held' },
+    };
+  }
+
+  try {
+    if (await isOperatorParked(projectRoot, order.slug)) {
+      await leaseResult.lease.release();
+      return {
+        kind: 'skipped',
+        outcome: { slug: order.slug, status: 'parked', reason: 'parked-after-lease' },
+      };
+    }
+  } catch (error) {
+    await leaseResult.lease.release();
+    throw error;
+  }
+
+  return { kind: 'admitted', release: () => leaseResult.lease.release() };
 }
 
 /**

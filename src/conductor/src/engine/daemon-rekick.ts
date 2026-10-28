@@ -32,6 +32,7 @@ import {
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { hasDurableChildState, resolveActiveChild } from './child-cursor.js';
+import type { FeatureDispatchLeaseAcquireResult } from './feature-dispatch-lease.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { listExistingChildren } from './child-context.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
@@ -424,6 +425,10 @@ export interface RekickSweepDeps {
    * slug's rebase or HALT marker.
    */
   isFeatureInFlight?: (slug: string) => boolean;
+  /** Whether this slug owns durable stacked-child state and needs a lease. */
+  hasDurableChildState?: (slug: string) => Promise<boolean | 'git-error'>;
+  /** Root-bound lease acquisition supplied by the daemon composition root. */
+  acquireFeatureDispatchLease?: (slug: string) => Promise<FeatureDispatchLeaseAcquireResult>;
 }
 
 export interface RekickSweepResult {
@@ -542,6 +547,44 @@ export async function rekickSweep(
       continue;
     }
 
+    // A stacked feature's re-kick mutates one shared history. Claim its
+    // durable root lease before touching either a paused rebase or its HALT
+    // marker, then re-check the operator's intent in the acquisition window.
+    let dispatchLease: Extract<FeatureDispatchLeaseAcquireResult, { kind: 'acquired' }>['lease'] | undefined;
+    if (deps.hasDurableChildState && await deps.hasDurableChildState(slug) === true) {
+      const leaseResult = deps.acquireFeatureDispatchLease
+        ? await deps.acquireFeatureDispatchLease(slug)
+        : undefined;
+      if (!leaseResult || leaseResult.kind !== 'acquired') {
+        skipped.push(slug);
+        if (leaseResult?.kind === 'live-owner') {
+          log(
+            `re-kick ${slug}: skipped — feature-lease-held ` +
+            `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
+          );
+        } else {
+          log(`re-kick ${slug}: skipped — feature-lease-held`);
+        }
+        continue;
+      }
+      dispatchLease = leaseResult.lease;
+      if (deps.isOperatorParked) {
+        try {
+          if (await deps.isOperatorParked(slug)) {
+            skipped.push(slug);
+            log(`re-kick ${slug}: skipped — parked-after-lease`);
+            await dispatchLease.release();
+            continue;
+          }
+        } catch (err) {
+          skipped.push(slug);
+          log(`re-kick ${slug}: operator-park check anomaly — FAILED (${errMsg(err)}); skipped`);
+          await dispatchLease.release();
+          continue;
+        }
+      }
+    }
+
     let reason = 'unknown';
     try {
       reason = await deps.readHaltReason(slug);
@@ -553,36 +596,43 @@ export async function rekickSweep(
         (haltClass !== undefined ? ` (halt class: ${haltClass})` : ''),
     );
 
-    // FR-7b: abort a paused rebase BEFORE clearing. A failed abort leaves the
-    // marker intact (no half-clear of a corrupt rebase state) and skips it.
     try {
-      if (await deps.hasRebaseInProgress(slug)) {
-        await deps.abortRebase(slug);
-        log(`re-kick ${slug}: aborted in-progress rebase before clearing`);
-      }
-    } catch (err) {
-      log(`re-kick ${slug}: rebase --abort FAILED (${errMsg(err)}); leaving marker intact`);
-      skipped.push(slug);
-      continue;
-    }
-
-    try {
-      await deps.clearMarker(slug);
-    } catch (err) {
-      log(`re-kick ${slug}: clear failed (${errMsg(err)}); skipped`);
-      skipped.push(slug);
-      continue;
-    }
-
-    deps.lastRekickSha.set(slug, sha);
-    if (deps.markRekicked) {
+      // FR-7b: abort a paused rebase BEFORE clearing. A failed abort leaves the
+      // marker intact (no half-clear of a corrupt rebase state) and skips it.
       try {
-        await deps.markRekicked(slug, sha);
+        if (await deps.hasRebaseInProgress(slug)) {
+          await deps.abortRebase(slug);
+          log(`re-kick ${slug}: aborted in-progress rebase before clearing`);
+        }
       } catch (err) {
-        log(`re-kick ${slug}: durable record anomaly — FAILED (${errMsg(err)})`);
+        log(`re-kick ${slug}: rebase --abort FAILED (${errMsg(err)}); leaving marker intact`);
+        skipped.push(slug);
+        continue;
+      }
+
+      try {
+        await deps.clearMarker(slug);
+      } catch (err) {
+        log(`re-kick ${slug}: clear failed (${errMsg(err)}); skipped`);
+        skipped.push(slug);
+        continue;
+      }
+
+      deps.lastRekickSha.set(slug, sha);
+      if (deps.markRekicked) {
+        try {
+          await deps.markRekicked(slug, sha);
+        } catch (err) {
+          log(`re-kick ${slug}: durable record anomaly — FAILED (${errMsg(err)})`);
+        }
+      }
+      cleared.push(slug);
+    } finally {
+      if (dispatchLease) {
+        const released = await dispatchLease.release();
+        if (!released.ok) log(`re-kick ${slug}: feature dispatch lease release failed (${released.message})`);
       }
     }
-    cleared.push(slug);
   }
 
   return { cleared, skipped };

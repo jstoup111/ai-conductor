@@ -34,6 +34,9 @@ import type { OperatorParkedTermination } from './conductor-options.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
 import type { GithubOperationRunner } from './github-operations.js';
+import { hasDurableChildState } from './child-cursor.js';
+import { acquireFeatureDispatchLease, type FeatureDispatchLease } from './feature-dispatch-lease.js';
+import { isOperatorParked } from './park-marker.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -410,9 +413,32 @@ export function makeRunFeature(
     let featureLog = log;
     let providerExecution: ProviderExecutionContext | undefined;
     let endDispatch: ((outcome: 'complete' | 'halted' | 'terminated') => Promise<void>) | undefined;
+    let dispatchLease: FeatureDispatchLease | undefined;
     let dispatchEnded = false;
     let haltingStep: string | undefined;
     try {
+      // A durable child stack has shared mutable state outside its disposable
+      // worktree. Inspect that state from the root and acquire before the
+      // first worktree mutation; flat features retain their lock-free path.
+      if (deps.daemon && deps.projectRoot && await hasDurableChildState(deps.projectRoot, item.slug) === true) {
+        const leaseResult = await acquireFeatureDispatchLease(deps.projectRoot, item.slug, 'daemon dispatch');
+        if (leaseResult.kind !== 'acquired') {
+          if (leaseResult.kind === 'live-owner') {
+            featureLog(
+              `[daemon-runner] dispatch skipped ${item.slug} — feature-lease-held ` +
+              `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
+            );
+          } else {
+            featureLog(`[daemon-runner] dispatch skipped ${item.slug} — feature-lease-held`);
+          }
+          return { slug: item.slug, status: 'parked', reason: 'feature-lease-held' };
+        }
+        dispatchLease = leaseResult.lease;
+        if (await isOperatorParked(deps.projectRoot, item.slug)) {
+          featureLog(`[daemon-runner] dispatch skipped ${item.slug} — parked-after-lease`);
+          return { slug: item.slug, status: 'parked', reason: 'parked-after-lease' };
+        }
+      }
       // The worktree is cut from the fast-forwarded default branch, so the vetted
       // stories+plan are already committed in it — no materialization/copy needed.
       worktree = await deps.createWorktree(item.slug);
@@ -731,6 +757,10 @@ export function makeRunFeature(
     } finally {
       await endDispatch?.('terminated');
       await featureRun?.stop();
+      if (dispatchLease) {
+        const released = await dispatchLease.release();
+        if (!released.ok) featureLog(`[daemon-runner] feature dispatch lease release failed: ${released.message}`);
+      }
     }
   };
 }
