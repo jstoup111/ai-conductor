@@ -4580,6 +4580,66 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect((result as { detail: string }).detail).toContain('case case-A bound as reject');
   });
 
+  it('fails closed instead of expanding after a binding-correction round', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(14), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2SourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!);
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-A', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The action remains reserved.', resolution: 'open',
+        sources: [{ sourceId: caseV2SourceId, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+        effect: { id: 'effect-A', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const rejectedBinding: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: caseV2SourceId, outcome: 'rejected', caseRef: 'reject-A' }],
+      cases: [{ caseRef: 'reject-A', existingCaseId: 'case-A', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'Reject the reserved action.', effect: { kind: 'none' } }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['reject-A'], rationale: 'The rejected action is internally consistent.' },
+    };
+    const indexOnly: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef: 'index-only' }],
+      cases: [{
+        caseRef: 'index-only', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Admit the indexed repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary.', admittedTaskIds: ['9', '14'], admissionRationale: 'The indexed plan tasks own this repair.' }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: ['index-only'], rationale: 'The indexed repair is internally consistent.' },
+    };
+    const contexts: unknown[] = [];
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judge = vi.fn(async (context: unknown) => {
+      contexts.push(context);
+      return contexts.length === 1 ? rejectedBinding : indexOnly;
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: caseV2Aggregate,
+      emit: async (event) => { events.push(event); },
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [
+        { id: '9', status: 'in_progress' }, { id: '14', status: 'pending' },
+      ] }),
+    });
+
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(contexts[1]).toMatchObject({ bindingCorrections: [{ existingCaseId: 'case-A', disposition: 'reject', bindableDispositions: ['act'] }] });
+    expect(contexts[1]).not.toMatchObject({ planContract: { admittedTaskContracts: expect.arrayContaining([expect.objectContaining({ id: '9' })]) } });
+    expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toEqual([
+      { type: 'remediation_adjudication_started', domain: 'build_review', lapId: caseV2Aggregate.lapId },
+      { type: 'remediation_adjudication_started', domain: 'build_review', lapId: caseV2Aggregate.lapId, bindingCorrectionCaseIds: ['case-A'] },
+    ]);
+    const failures = events.filter((event) => event.type === 'remediation_adjudication_failed');
+    expect(failures).toHaveLength(1);
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('unknown-admission-task') });
+    expect(failures[0]).toMatchObject({ reason: (result as { detail: string }).detail });
+  });
+
   it('bounds expansion at two calls and names a second index-only admission', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.docs/plans'), { recursive: true });

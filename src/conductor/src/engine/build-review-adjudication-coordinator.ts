@@ -1040,7 +1040,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const classification = dispatchContext.mode === 'case-v2' && graph.reason === 'unknown-admission-task'
       ? classifyIndexOnlyAdmission(dispatchSourceIds, judgement, validationReferences, graph)
       : undefined;
-    if (expansionTaskIds === undefined && classification?.kind === 'index-only') {
+    // Expansion is only a retry of the original judgement. Once a binding
+    // correction has been issued, its correction context is authoritative and
+    // an index-only response must fail closed instead of replacing it.
+    if (bindingCorrections === undefined && expansionTaskIds === undefined && classification?.kind === 'index-only') {
       expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
       const expandedContext = assembleBuildReviewAdjudicationContext({
         aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
