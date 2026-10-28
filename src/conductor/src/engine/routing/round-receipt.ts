@@ -37,6 +37,18 @@ export interface ReceiptRoutingScope {
   readonly config: { readonly stacked_prs?: StackedPrsConfig } | undefined;
 }
 
+/** Durable context for a routed receipt that cannot fit the current allowance. */
+export interface RefusedRoundDetail {
+  readonly roundId: string;
+  readonly findingIds: readonly string[];
+  readonly remTaskIds: readonly string[];
+  readonly existingTaskIds: readonly string[];
+  readonly pendingAsBuiltFindings: readonly NonNullable<RouteRecord['pendingAsBuiltFindings']>[number][];
+  readonly charges: Readonly<Record<string, { readonly laps: number; readonly growth: number }>>;
+  readonly settledAdded: number;
+  readonly growthCap: number;
+}
+
 type RouteReceiptRecord =
   | { readonly kind: 'ok'; readonly roundId: RoundId; readonly record: RouteRecord }
   | { readonly kind: 'malformed'; readonly ref: string }
@@ -135,7 +147,7 @@ export type RoundSettlementResult =
   /** Revalidation and operator rounds acknowledge without a receipt settlement. */
   | { readonly kind: 'acknowledged'; readonly settlementId?: string }
   | { readonly kind: 'refused'; readonly reason: 'not-current-host' }
-  | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth' }
+  | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth'; readonly round?: RefusedRoundDetail }
   | { readonly kind: 'halted'; readonly reason: string };
 
 export interface SettleRoundAtDispatchInput {
@@ -219,22 +231,38 @@ function nextLedgerForReceipt(
   ledger: KickbackLedger,
   record: RouteRecord,
   budgets: readonly PendingRepairSettlementBudget[],
-): { readonly ledger: KickbackLedger; readonly exhausted?: { gate: string; allowance: 'laps' | 'growth' } } {
+): { readonly ledger: KickbackLedger; readonly exhausted?: { gate: string; allowance: 'laps' | 'growth'; round: RefusedRoundDetail } } {
   const charges = receiptCharges(record);
   const budgetByGate = new Map(budgets.map((budget) => [budget.gate, budget]));
   const next = applySettledReceiptToLedger(ledger, record);
+  const growthCap = next.effectiveGrowthCap ?? budgets[0]?.growthCap ?? 0;
+  const owner = WHOLE_FEATURE_BUDGET_GATES.find((gate) => charges.laps[gate] !== undefined) ?? 'prd_audit';
+  const round: RefusedRoundDetail = {
+    roundId: record.roundId,
+    findingIds: record.items.map((item) => item.findingId),
+    remTaskIds: Object.entries(record.allocation)
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .flatMap(([, allocation]) => allocation.remTaskIds),
+    existingTaskIds: record.items.flatMap((item) => item.existingTask ? item.taskIds : []),
+    pendingAsBuiltFindings: record.pendingAsBuiltFindings ?? [],
+    charges: Object.fromEntries(WHOLE_FEATURE_BUDGET_GATES.flatMap((gate) => {
+      const laps = charges.laps[gate];
+      return laps === undefined ? [] : [[gate, { laps, growth: gate === owner ? charges.growth : 0 }]];
+    })),
+    settledAdded: ledger.growth?.added ?? 0,
+    growthCap,
+  };
   for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
     const laps = charges.laps[gate];
     if (laps === undefined) continue;
     const budget = budgetByGate.get(gate);
-    if (!budget) return { ledger, exhausted: { gate, allowance: 'laps' } };
+    if (!budget) return { ledger, exhausted: { gate, allowance: 'laps', round } };
     const entry = next.gates[gate] ?? defaultGateEntry();
     const lapCap = entry.effectiveLapCap ?? budget.lapCap;
-    if ((entry.laps ?? 0) > lapCap) return { ledger, exhausted: { gate, allowance: 'laps' } };
+    if ((entry.laps ?? 0) > lapCap) return { ledger, exhausted: { gate, allowance: 'laps', round } };
   }
-  const growthCap = next.effectiveGrowthCap ?? budgets[0]?.growthCap;
-  if ((next.growth?.added ?? 0) > (growthCap ?? 0)) {
-    return { ledger, exhausted: { gate: Object.keys(charges.laps)[0] ?? 'prd_audit', allowance: 'growth' } };
+  if ((next.growth?.added ?? 0) > growthCap) {
+    return { ledger, exhausted: { gate: owner, allowance: 'growth', round } };
   }
   return { ledger: next };
 }
