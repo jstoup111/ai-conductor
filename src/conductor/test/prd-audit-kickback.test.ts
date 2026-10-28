@@ -429,7 +429,7 @@ async function createAsBuiltRemediationCapFixture(input: {
   plannerFindingIds?: string[];
   /** Findings the planner dispositions `halt` (needs a human, no plan growth). */
   plannerHaltFindingIds?: string[];
-  /** Findings the planner escalates, task-free, to a non-build step (finding id -> step). */
+  /** Findings the planner escalates to a non-build step (finding id -> step); task-free unless plannerTasks names some. */
   plannerEscalations?: Record<string, string>;
   /** Decision 6 kill switch. Default true, matching production. */
   remediationEnabled?: boolean;
@@ -559,7 +559,7 @@ async function createAsBuiltRemediationCapFixture(input: {
           disposition,
           category: null,
           rationale: `${id} contradicts an approved ADR; more BUILD work would keep cycling.`,
-          tasks: [],
+          tasks: input.plannerTasks?.[id] ?? [],
           })),
           ...(input.plannerFindingIds ?? findings.map((finding) => finding.id))
             .filter((id) => !(input.plannerHaltFindingIds ?? []).includes(id))
@@ -2601,6 +2601,48 @@ describe('prd_audit kickback', () => {
 
     expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
     expect(fixture.outcome.detail).toContain('→plan (AB-1 contradicts');
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('halts an escalated as-built finding against a sealed artifact naming its step and rationale, not as missing', async () => {
+    // A task directing an edit of another feature's ADR puts the finding in the
+    // sealed-artifact set, whose early return credited only `halt` and
+    // `existing-task`. The #3320 escalation credit, which also required no
+    // tasks, was never reached, so the escalation halted as `Missing` (#3471).
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerEscalations: { 'AB-1': 'architecture_review' },
+      plannerTasks: {
+        'AB-1': [{
+          id: 'amend-adr',
+          title: 'Amend .docs/decisions/adr-2026-10-10-other-feature.md decision 12 to add the new reason.',
+        }],
+      },
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(fixture.outcome.detail).not.toContain('Missing');
+    expect(fixture.outcome.detail).not.toContain('do not exactly match');
+    expect(fixture.outcome.detail).toContain('escalated');
+    expect(fixture.outcome.detail).toContain(
+      '→architecture_review (AB-1 contradicts an approved ADR; more BUILD work would keep cycling.)',
+    );
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('halts a build repair redirected to plan by a sealed-artifact edit as an escalation, not as missing', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerTasks: {
+        'AB-1': [{
+          id: 'fix-ab-1',
+          title: 'Update .docs/decisions/adr-2026-10-10-other-feature.md decision 12 to name the guard.',
+        }],
+      },
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(fixture.outcome.detail).not.toContain('Missing');
+    expect(fixture.outcome.detail).toContain('escalated');
+    expect(fixture.outcome.detail).toContain('→plan (Repair AB-1.)');
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
 
