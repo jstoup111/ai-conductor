@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-28T00:21:31.257Z
 Slug: manual-reviewer-edits-cannot-be-landed-safely-in-t
 Class: needs-human
 Halting step: unknown
