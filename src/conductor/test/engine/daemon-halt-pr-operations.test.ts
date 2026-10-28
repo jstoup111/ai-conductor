@@ -163,6 +163,7 @@ describe('createDaemonHaltPrOperations child heads', () => {
     const git: GitRunner = async (args) => {
       gitCalls.push([...args]);
       if (args[0] === 'show-ref') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[1]?.endsWith('/manifest.json')) return { exitCode: 1, stdout: '', stderr: '' };
       if (args[0] === 'show') return { exitCode: 0, stdout: 'Owner: alice\n', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: '' };
     };
@@ -193,6 +194,7 @@ describe('createDaemonHaltPrOperations child heads', () => {
     expect(result).toMatchObject({ kind: 'executed' });
     expect(gitCalls.map((c) => c.join(' '))).toEqual([
       'show-ref --verify --quiet refs/heads/feat/daemon-x',
+      'show main:.docs/x/manifest.json',
       'show main:.docs/intake/x.md',
     ]);
     expect(ghCalls).toHaveLength(1);
@@ -367,6 +369,7 @@ describe('reconcileHaltPrs integration', () => {
     const opsGit: GitRunner = async (args) => {
       opsGitCalls.push([...args]);
       if (args[0] === 'show-ref') return { exitCode: 1, stdout: '', stderr: '' };
+      if (args[1]?.endsWith('/manifest.json')) return { exitCode: 1, stdout: '', stderr: '' };
       if (args[0] === 'show') return { exitCode: 0, stdout: 'Owner: alice\n', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: '' };
     };
@@ -390,7 +393,9 @@ describe('reconcileHaltPrs integration', () => {
     expect(opsGitCalls.map((c) => c.join(' '))).toEqual([
       'show-ref --verify --quiet refs/heads/feat/daemon-x',
       'show-ref --verify --quiet refs/remotes/origin/feat/daemon-x',
+      'show main:.docs/y/manifest.json',
       'show main:.docs/intake/y.md',
+      'show main:.docs/y/manifest.json',
       'show main:.docs/intake/y.md',
     ]);
 

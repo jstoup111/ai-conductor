@@ -1,4 +1,5 @@
-import { posix, win32 } from 'node:path';
+import { basename, posix, win32 } from 'node:path';
+import { resolveFeatureArtifact, type ManifestSource } from './feature-manifest-source.js';
 
 const STORIES_LINE = /^\s*\*\*Stories:\*\*\s*(.*?)\s*$/im;
 const MARKDOWN_LINK = /^\[[^\]]+\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)$/;
@@ -58,4 +59,29 @@ export function resolvePlanStoriesPath(
     return null;
   }
   return normalized;
+}
+
+/**
+ * Resolve the stories artifact for a plan. A feature manifest, when present,
+ * is authoritative over the plan's human-authored Stories reference.
+ */
+export async function resolveFeatureStoriesRef(
+  source: ManifestSource,
+  planRepoPath: string,
+  planContent: string,
+): Promise<string | null> {
+  const resolution = await resolveFeatureArtifact(
+    source,
+    // Same derivation as artifacts.planStem; importing artifacts.ts here would close a layer cycle.
+    basename(planRepoPath, '.md'),
+    'stories',
+    async () => {
+      const legacy = resolvePlanStoriesPath(planRepoPath, planContent);
+      return legacy === null ? [] : [legacy];
+    },
+  );
+  const path = resolution.paths.find((candidate) =>
+    resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
+  );
+  return path ?? null;
 }

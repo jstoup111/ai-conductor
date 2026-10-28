@@ -430,3 +430,80 @@ none. Daemon discovery finds specs by manifest. 17 tasks in three slices. No art
 - The repair for task rem-as-built-6 is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r1
+
+### Task rem-prd-audit-10: Restore the activePlanPath→featureDesc→featureIdentities fall-through in resolveFeaturePrdPaths legacy branch (artifacts.ts) and add a no-manifest test where the PRD stem differs from the plan stem (test/engine/feature-resolvers-manifest.test.ts)
+**Gate:** prd-audit
+**Rationale:** Verified at artifacts.ts:1091-1097: the legacy branch of resolveFeaturePrdPaths picks one rung with a nested ternary. It no longer falls through from activePlanPath to featureDesc to featureIdentities when a rung finds no match. That breaks Task 10's no-manifest parity criterion. Separately, the legacy git-show catch in remote-git-operations.ts/ship-draft-pr.ts readCommittedRecords returns [], which changes provenance-unreadable/timeout into missing-provenance. That breaks Task 12's parity for those ref readers. Both are implementation drift against approved architecture, so the existing tasks admit the fixes.
+**Criterion:** S2.3
+**Parent task:** 10
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-10 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-prd-audit-12: Stop readCommittedRecords in remote-git-operations.ts and ship-draft-pr.ts from swallowing legacy git-show failures, so readMutationProvenance again reports provenance-unreadable/provenance-timeout; add parity tests in manifest-routing-ship.test.ts
+**Gate:** prd-audit
+**Rationale:** Verified at artifacts.ts:1091-1097: the legacy branch of resolveFeaturePrdPaths picks one rung with a nested ternary. It no longer falls through from activePlanPath to featureDesc to featureIdentities when a rung finds no match. That breaks Task 10's no-manifest parity criterion. Separately, the legacy git-show catch in remote-git-operations.ts/ship-draft-pr.ts readCommittedRecords returns [], which changes provenance-unreadable/timeout into missing-provenance. That breaks Task 12's parity for those ref readers. Both are implementation drift against approved architecture, so the existing tasks admit the fixes.
+**Criterion:** S2.3
+**Parent task:** 10
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-12 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-prd-audit-11: Rethrow MalformedFeatureManifestError (naming the manifest path) instead of reporting absence in artifacts.ts coherenceArtifactHasCriterionRows, conductor.ts:1397 reader, and routing/owner-derivation.ts readCommittedPlanText; add malformed-manifest tests in manifest-routing-conduct.test.ts
+**Gate:** prd-audit
+**Rationale:** ADR D5 requires an explicit malformed-manifest failure. The seven routed readers catch-all and report absence. Confirmed at artifacts.ts:2108 (coherenceArtifactHasCriterionRows has a bare catch returning false). Each site belongs to the routing task that owns it: artifacts.ts, conductor.ts and owner-derivation.ts are Task 11; finish-presentation-repair.ts and run-provenance.ts are Task 12; halt-inventory.ts is Task 13; overlap-sources.ts is Task 14. This is conforming implementation work with no architectural decision open.
+**Governing clause:** adr-2026-10-24-per-feature-artifact-manifest decision 5
+**Done when:**
+- adr-2026-10-24-per-feature-artifact-manifest decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-11 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-prd-audit-13: Rethrow MalformedFeatureManifestError in monitor/halt-inventory.ts readSourceRef; add malformed-manifest test in manifest-routing-daemon.test.ts
+**Gate:** prd-audit
+**Rationale:** ADR D5 requires an explicit malformed-manifest failure. The seven routed readers catch-all and report absence. Confirmed at artifacts.ts:2108 (coherenceArtifactHasCriterionRows has a bare catch returning false). Each site belongs to the routing task that owns it: artifacts.ts, conductor.ts and owner-derivation.ts are Task 11; finish-presentation-repair.ts and run-provenance.ts are Task 12; halt-inventory.ts is Task 13; overlap-sources.ts is Task 14. This is conforming implementation work with no architectural decision open.
+**Governing clause:** adr-2026-10-24-per-feature-artifact-manifest decision 5
+**Done when:**
+- adr-2026-10-24-per-feature-artifact-manifest decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-13 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+### Task rem-prd-audit-14: Rethrow MalformedFeatureManifestError in engineer/intake/overlap-sources.ts reader; add malformed-manifest test in manifest-routing-engineer.test.ts
+**Gate:** prd-audit
+**Rationale:** ADR D5 requires an explicit malformed-manifest failure. The seven routed readers catch-all and report absence. Confirmed at artifacts.ts:2108 (coherenceArtifactHasCriterionRows has a bare catch returning false). Each site belongs to the routing task that owns it: artifacts.ts, conductor.ts and owner-derivation.ts are Task 11; finish-presentation-repair.ts and run-provenance.ts are Task 12; halt-inventory.ts is Task 13; overlap-sources.ts is Task 14. This is conforming implementation work with no architectural decision open.
+**Governing clause:** adr-2026-10-24-per-feature-artifact-manifest decision 5
+**Done when:**
+- adr-2026-10-24-per-feature-artifact-manifest decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-14 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r1
+
+### Task rem-prd-audit-rem-prd-audit-15: In src/conductor/src/engine/conductor.ts resolveIntakeSourceRef, rethrow MalformedFeatureManifestError (naming the manifest path) instead of returning undefined, keeping undefined for an absent/unreadable intake file; add a malformed-manifest test in src/conductor/test/engine/manifest-routing-conduct.test.ts
+**Gate:** prd-audit
+**Rationale:** Verified (99%, direct read): Conductor.resolveIntakeSourceRef (src/conductor/src/engine/conductor.ts:1381-1400) wraps resolveFeatureArtifact in a bare `catch { return undefined; }`, so a MalformedFeatureManifestError is reported as 'no source ref'. rem-prd-audit-11 named this site but its commit touched only artifacts.ts and owner-derivation.ts, and the task is marked completed. This is conforming implementation work under ADR D5 and the approved plan (conductor.ts is a Task 11 routed reader); no architectural decision is open. The fix must rethrow MalformedFeatureManifestError (naming the manifest path) while keeping the existing absent-intake / unreadable-intake-file -> undefined behaviour, so Task 11 parity coverage survives. finish-presentation-repair.ts and run-provenance.ts are covered by the task on as-built:9cdbafe4...:1.
+**Criterion:** S2.9
+**Parent task:** rem-prd-audit-11
+**Done when:**
+- [test] S2.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-15 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r3
+### Task rem-as-built-rem-as-built-7: Let MalformedFeatureManifestError (naming the manifest path) propagate from src/conductor/src/engine/finish-presentation-repair.ts intake read and src/conductor/src/engine/run-provenance.ts resolveRunSourceRef instead of swallowing it as absence; add malformed-manifest tests in src/conductor/test/engine/manifest-routing-ship.test.ts
+**Gate:** as-built
+**Rationale:** Verified (99%, direct read): finish-presentation-repair.ts:47 (`catch { /* floors remain valid ... */ }`) and run-provenance.ts resolveRunSourceRef (`catch { return undefined; }`, line ~65) swallow MalformedFeatureManifestError from resolveFeatureArtifact. Both are listed in Task 12 (createFinishPresentationRepair intake, resolveRunSourceRef intake), and the approved ADR D5 requires an explicit malformed-manifest failure, so this is conforming BUILD work with no architecture change. The conductor.ts:1397 site in this finding is repaired by rem-prd-audit-15. The repair must narrow the catches to let MalformedFeatureManifestError propagate (or surface it naming the manifest path) while preserving Task 12's no-manifest / omitted-kind parity behaviour and existing tests.
+**Governing clause:** adr-2026-10-24-per-feature-artifact-manifest decision 5
+**Done when:**
+- adr-2026-10-24-per-feature-artifact-manifest decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-7 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r3
+### Task rem-as-built-rem-as-built-8: Route the coherence-waiver read in src/conductor/src/engine/prd-audit-projection.ts buildPrdAuditProjection through resolveFeatureArtifact('coherence-waiver') so a manifest listing an alternative path is read and an omitted kind yields no waivedRequirements; add no-manifest parity, alternative-path, omitted-kind and malformed-manifest tests in src/conductor/test/engine/manifest-routing-ship.test.ts
+**Gate:** as-built
+**Rationale:** Verified (99%, direct read): prd-audit-projection.ts:537-540 reads `.docs/coherence-waivers/<plan-stem>.md` directly, bypassing resolveFeatureArtifact for the `coherence-waiver` kind (an ADR D5 manifest kind with a legacy location in MANIFEST_KIND_LOCATIONS). prd-audit-projection.ts is a Task 12 file (buildPrdAuditProjection) and is a SHIP reader, not the exempt pre-land coherence-waiver validator. Routing it through resolveFeatureArtifact is conforming BUILD work; no architectural decision is needed. The repair must preserve the no-manifest legacy-path result (existing waivedRequirements behaviour) and propagate MalformedFeatureManifestError.
+**Governing clause:** adr-2026-10-24-per-feature-artifact-manifest decision 5
+**Done when:**
+- adr-2026-10-24-per-feature-artifact-manifest decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-8 is committed and its targeted tests pass.
+**Child:** 2
+**Round:** r3

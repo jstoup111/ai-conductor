@@ -107,6 +107,11 @@ import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
 import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
 import { labelComposerPane, type PaneLabelRunner } from './engineer/pane-label.js';
+import {
+  gitRefManifestSource,
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+} from './feature-manifest-source.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -811,10 +816,14 @@ function parseGhRepo(remote: string): string | null {
 }
 
 function featureMarkerForSpecBranch(branch: string): string {
+  return `.docs/intake/${featureSlugForSpecBranch(branch)}.md`;
+}
+
+function featureSlugForSpecBranch(branch: string): string {
   const prefix = 'spec/';
   const slug = branch.startsWith(prefix) ? branch.slice(prefix.length) : '';
   if (!isSpecSlug(slug)) throw new Error(`engineer handoff: branch "${branch}" is not a canonical spec/<slug> branch.`);
-  return `.docs/intake/${slug}.md`;
+  return slug;
 }
 
 /**
@@ -835,6 +844,7 @@ export function initialSpecPublication(
     throw new Error('engineer handoff: remote GitHub repository could not be resolved for guarded publication.');
   }
   const featureMarker = featureMarkerForSpecBranch(branch);
+  const slug = featureSlugForSpecBranch(branch);
   const mutation = {
     provenance: {
       repository,
@@ -850,8 +860,26 @@ export function initialSpecPublication(
       resolveMachineOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd),
       provenanceDiscovery: {
         readCommittedRecords: async ({ ref }: { readonly ref: string }) => {
-          const { stdout } = await git(['show', `${ref}:${featureMarker}`], { cwd });
-          return [{ path: featureMarker, content: stdout }];
+          let paths: readonly string[];
+          try {
+            paths = (await resolveFeatureArtifact(
+              gitRefManifestSource(cwd, ref),
+              slug,
+              'intake',
+              async () => [featureMarker],
+            )).paths;
+          } catch (error) {
+            // A vanished or unavailable ref remains unreadable at the existing
+            // injected Git seam. Preserve malformed manifests as fail-closed.
+            if (error instanceof MalformedFeatureManifestError) throw error;
+            paths = [featureMarker];
+          }
+          return Promise.all(paths.map(async (path) => {
+            const { stdout } = await git(['show', `${ref}:${path}`], { cwd });
+            // The mutation-provenance request keeps the stable legacy identity,
+            // while this reader obtains its committed bytes from the manifest path.
+            return { path: featureMarker, content: stdout };
+          }));
         },
       },
     },

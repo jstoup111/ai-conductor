@@ -2,20 +2,19 @@
 
 Status: resolved
 Resolution cause: operator
-Resolved at: 2026-10-25T23:48:42.624Z
+Resolved at: 2026-10-26T10:57:11.457Z
 Slug: decide-artifacts-are-too-repetitive-for-people-to-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
-Branch: feat/c1/decide-artifacts-are-too-repetitive-for-people-to-
-Child: 3
-Head SHA: 92be855bd3fc9498386015ce475283e3afe64c45
-Halted at: 2026-10-25T18:47:54.129Z
+Branch: feat/c2/decide-artifacts-are-too-repetitive-for-people-to-
+Head SHA: c9b099491b3f79c2958d85c2b162078cfa9e1d58
+Halted at: 2026-10-26T06:57:55.233Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-child BUILD region refused: child 1 routed round reconciliation refused: round advance unavailable
+child BUILD region refused: routed exit host 2: halted
 ```

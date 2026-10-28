@@ -49,6 +49,12 @@ import {
 } from './task-progress.js';
 export { HALT_MARKER };
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
+import type { FeatureScopedKind } from './feature-manifest.js';
+import {
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+  worktreeManifestSource,
+} from './feature-manifest-source.js';
 import {
   FullSuiteVerifier,
   type FullSuiteInspectionResult,
@@ -145,6 +151,24 @@ export type ArtifactPatternContract =
       scope: Exclude<ArtifactLifecycleScope, 'feature'>;
       identity?: never;
     };
+
+const FEATURE_CONTRACT_PATTERN_KINDS: Partial<
+  Record<StepName, Readonly<Record<string, FeatureScopedKind>>>
+> = {
+  prd: { '.docs/specs/*.md': 'prd' },
+  stories: { '.docs/stories/**/*.md': 'stories' },
+  conflict_check: { '.docs/conflicts/*.md': 'conflicts' },
+  plan: { '.docs/plans/*.md': 'plan' },
+  coherence_check: { '.docs/coherence/*.md': 'coherence' },
+};
+
+/**
+ * Maps only the artifact contracts whose consumers resolve feature manifests.
+ * All other contracts retain their existing resolution path.
+ */
+export function contractPatternKind(step: StepName, pattern: string): FeatureScopedKind | null {
+  return FEATURE_CONTRACT_PATTERN_KINDS[step]?.[pattern] ?? null;
+}
 
 export function artifactMatchesFeatureIdentity(
   artifactPath: string,
@@ -667,7 +691,10 @@ export async function selectChangedArtifacts(
 export async function resolveArtifactFiles(
   dir: string,
   step: StepName,
-  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'>,
+  context: Pick<
+    ArtifactResolutionContext,
+    'planPath' | 'activePlanPath' | 'featureDesc' | 'featureIdentities' | 'changedPaths'
+  >,
   extraGlobs: string[] = [],
   includePatternResults = false,
 ): Promise<ArtifactResolutionResult> {
@@ -675,7 +702,13 @@ export async function resolveArtifactFiles(
   const patternResults: ArtifactPatternResolution[] = [];
   let featureCandidateCount = 0;
   let hasFeatureContract = false;
+  let hasManifestResolution = false;
   const activeIdentity = context.featureIdentities[0];
+  const manifestSlug = context.activePlanPath
+    ? planStem(context.activePlanPath)
+    : context.planPath
+      ? planStem(context.planPath)
+      : context.featureDesc;
   const identityLabel = activeIdentity
     ? `active feature "${activeIdentity}"`
     : 'the active feature (identity unavailable)';
@@ -740,12 +773,34 @@ export async function resolveArtifactFiles(
         )
       );
     });
-    if (associated.length > 0) {
-      associated.forEach((file) => files.add(file));
-      patternResults.push({ pattern: contract.pattern, files: associated });
-    } else if (candidates.length === 1) {
-      files.add(candidates[0]);
-      patternResults.push({ pattern: contract.pattern, files: [candidates[0]] });
+    const legacyFiles = associated.length > 0
+      ? associated
+      : candidates.length === 1
+        ? [candidates[0]]
+        : [];
+    const kind = contractPatternKind(step, contract.pattern);
+    if (kind !== null && manifestSlug) {
+      const manifestResolution = await resolveFeatureArtifact(
+        worktreeManifestSource(dir),
+        manifestSlug,
+        kind,
+        async () => legacyFiles.map((file) => relative(dir, file).replaceAll('\\', '/')),
+      );
+      if (manifestResolution.origin === 'manifest') {
+        hasManifestResolution = true;
+        const missing = new Set(manifestResolution.missing);
+        const manifestFiles = manifestResolution.paths
+          .filter((path) => !missing.has(path))
+          .map((path) => join(dir, path));
+        manifestFiles.forEach((file) => files.add(file));
+        patternResults.push({ pattern: contract.pattern, files: manifestFiles });
+        continue;
+      }
+    }
+
+    if (legacyFiles.length > 0) {
+      legacyFiles.forEach((file) => files.add(file));
+      patternResults.push({ pattern: contract.pattern, files: legacyFiles });
     } else {
       patternResults.push({
         pattern: contract.pattern,
@@ -763,7 +818,7 @@ export async function resolveArtifactFiles(
   const resolvedFiles = [...files];
   const withPatterns = (result: ArtifactResolutionResult): ArtifactResolutionResult =>
     includePatternResults ? { ...result, patternResults } : result;
-  if (resolvedFiles.length > 0 || !hasFeatureContract) {
+  if (resolvedFiles.length > 0 || !hasFeatureContract || hasManifestResolution) {
     return withPatterns({ files: resolvedFiles });
   }
 
@@ -925,7 +980,24 @@ export async function resolveFeaturePlanPath(
   featureDesc: string | undefined,
 ): Promise<string | undefined> {
   const selection = await selectFeaturePlan(projectRoot, featureDesc);
-  return selection.kind === 'resolved' ? selection.path : undefined;
+  const legacy = async (): Promise<readonly string[]> => selection.kind === 'resolved'
+    ? [relative(projectRoot, selection.path).replaceAll('\\', '/')]
+    : [];
+  const slug = featureDesc ? slugify(featureDesc) : selection.kind === 'resolved' ? planStem(selection.path) : undefined;
+  if (!slug) {
+    const path = (await legacy())[0];
+    return path === undefined ? undefined : join(projectRoot, path);
+  }
+  const resolution = await resolveFeatureArtifact(
+    worktreeManifestSource(projectRoot),
+    slug,
+    'plan',
+    legacy,
+  );
+  const path = resolution.paths.find((candidate) =>
+    resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
+  );
+  return path === undefined ? undefined : join(projectRoot, path);
 }
 
 /**
@@ -959,22 +1031,37 @@ export async function resolveFeatureStoriesPath(
   projectRoot: string,
   featureDesc: string | undefined,
 ): Promise<string | undefined> {
-  const storyFiles = await findArtifactFiles(projectRoot, 'stories');
-  if (storyFiles.length === 0) return undefined;
-  if (storyFiles.length === 1) return storyFiles[0];
+  const legacy = async (): Promise<readonly string[]> => {
+    const storyFiles = await findArtifactFiles(projectRoot, 'stories');
+    if (storyFiles.length === 0) return [];
+    if (storyFiles.length === 1) return storyFiles.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
 
-  if (featureDesc) {
-    const byDesc = storyFiles.find((s) => planStem(s) === featureDesc);
-    if (byDesc) return byDesc;
-  }
+    if (featureDesc) {
+      const byDesc = storyFiles.find((story) => planStem(story) === featureDesc);
+      if (byDesc) return [relative(projectRoot, byDesc).replaceAll('\\', '/')];
+    }
 
+    const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
+    if (!planPath) return [];
+    const byPlanStem = storyFiles.find((story) => planStem(story) === planStem(planPath));
+    return byPlanStem ? [relative(projectRoot, byPlanStem).replaceAll('\\', '/')] : [];
+  };
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
-  if (planPath) {
-    const stem = planStem(planPath);
-    const byPlanStem = storyFiles.find((s) => planStem(s) === stem);
-    if (byPlanStem) return byPlanStem;
+  const slug = featureDesc ? slugify(featureDesc) : planPath ? planStem(planPath) : undefined;
+  if (!slug) {
+    const path = (await legacy())[0];
+    return path === undefined ? undefined : join(projectRoot, path);
   }
-  return undefined;
+  const resolution = await resolveFeatureArtifact(
+    worktreeManifestSource(projectRoot),
+    slug,
+    'stories',
+    legacy,
+  );
+  const path = resolution.paths.find((candidate) =>
+    resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
+  );
+  return path === undefined ? undefined : join(projectRoot, path);
 }
 
 /**
@@ -988,30 +1075,44 @@ export async function resolveFeaturePrdPaths(
   projectRoot: string,
   context: ArtifactResolutionContext,
 ): Promise<string[]> {
-  const prdFiles = (await matchGlob(projectRoot, '.docs/specs/*.md')).filter(
-    (path) => !basename(path).startsWith('SUPERSEDED-'),
-  );
-  const prdIdentity = STEP_ARTIFACT_CONTRACTS.prd[0].identity;
-  const matchesIdentity = (identity: string): string[] =>
-    prdFiles.filter((path) =>
+  const legacy = async (): Promise<readonly string[]> => {
+    const prdFiles = (await matchGlob(projectRoot, '.docs/specs/*.md')).filter(
+      (path) => !basename(path).startsWith('SUPERSEDED-'),
+    );
+    const prdIdentity = STEP_ARTIFACT_CONTRACTS.prd[0].identity;
+    const matchesIdentity = (identity: string): string[] => prdFiles.filter((path) =>
       artifactMatchesFeatureIdentity(path, identity, prdIdentity),
     );
-
-  if (context.activePlanPath) {
-    const matches = matchesIdentity(planStem(context.activePlanPath));
-    if (matches.length > 0) return matches;
-  }
-
-  if (context.featureDesc) {
-    const matches = matchesIdentity(slugify(context.featureDesc));
-    if (matches.length > 0) return matches;
-  }
-
-  return prdFiles.filter((path) =>
-    context.featureIdentities.some((identity) =>
+    const identities = [
+      context.activePlanPath ? planStem(context.activePlanPath) : undefined,
+      context.featureDesc ? slugify(context.featureDesc) : undefined,
+    ];
+    for (const identity of identities) {
+      if (!identity) continue;
+      const matches = matchesIdentity(identity);
+      if (matches.length > 0) return matches.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
+    }
+    const matches = prdFiles.filter((path) => context.featureIdentities.some((identity) =>
       artifactMatchesFeatureIdentity(path, identity, prdIdentity),
-    ),
+    ));
+    return matches.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
+  };
+  const slug = context.activePlanPath
+    ? planStem(context.activePlanPath)
+    : context.planPath
+      ? planStem(context.planPath)
+      : context.featureDesc
+        ? slugify(context.featureDesc)
+        : undefined;
+  if (!slug) return (await legacy()).map((path) => join(projectRoot, path));
+  const resolution = await resolveFeatureArtifact(
+    worktreeManifestSource(projectRoot),
+    slug,
+    'prd',
+    legacy,
   );
+  const missing = new Set(resolution.origin === 'manifest' ? resolution.missing : []);
+  return resolution.paths.filter((path) => !missing.has(path)).map((path) => join(projectRoot, path));
 }
 
 /**
@@ -1366,7 +1467,7 @@ export interface CompletionContext {
   /** Prepared once by callers that need feature-aware generic artifact resolution. */
   artifactResolution?: Pick<
     ArtifactResolutionContext,
-    'featureIdentities' | 'changedPaths'
+    'planPath' | 'activePlanPath' | 'featureDesc' | 'featureIdentities' | 'changedPaths'
   >;
   /**
    * Resolved project config. The acceptance_specs gate reads
@@ -1989,11 +2090,23 @@ function dispositionGroundingRefusal(reason: string): CompletionResult {
 async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionContext): Promise<boolean> {
   const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
   if (!planPath) return false;
-  const coherencePath = join(dir, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
+  const stem = basename(planPath, '.md');
   try {
+    const coherence = await resolveFeatureArtifact(
+      worktreeManifestSource(dir),
+      ctx.featureDesc ? slugify(ctx.featureDesc) : stem,
+      'coherence',
+      async () => [`.docs/coherence/${stem}.md`],
+    );
+    const coherenceRepoPath = coherence.paths.find((path) =>
+      coherence.origin === 'legacy' || !coherence.missing.includes(path),
+    );
+    if (coherenceRepoPath === undefined) return false;
+    const coherencePath = join(dir, coherenceRepoPath);
     const text = await readFile(coherencePath, 'utf-8');
     return text.split(/\r?\n/).some((line) => /^\s*\|\s*criterion\s*\|/i.test(line));
-  } catch {
+  } catch (error) {
+    if (error instanceof MalformedFeatureManifestError) throw error;
     return false;
   }
 }
@@ -5426,7 +5539,10 @@ export interface ArtifactPatternStatus {
 export async function getArtifactStatus(
   dir: string,
   step: StepName,
-  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'> = {
+  context: Pick<
+    ArtifactResolutionContext,
+    'planPath' | 'activePlanPath' | 'featureDesc' | 'featureIdentities' | 'changedPaths'
+  > = {
     featureIdentities: [],
     changedPaths: new Set(),
   },
