@@ -16972,9 +16972,13 @@ export class Conductor {
       // The executor deliberately avoids a no-op transaction: replaying an
       // already-contained default would manufacture new commit identities.
       const current = await git(['merge-base', '--is-ancestor', target, previous]);
+      // A routed leaf return re-pends this gate with an unsatisfied verdict;
+      // the no-op and skip paths must refresh it like the unstacked path does.
+      const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
       let outcome: RebaseOutcome;
       if (current.exitCode === 0) {
         outcome = { kind: 'noop', baseSha: target, allChangedPaths: [] };
+        await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
       } else {
         // Preserve FINISH's existing mergeable-skip policy, but evaluate it
         // only after durable stack repair.  A base change that touches either
@@ -16986,6 +16990,7 @@ export class Conductor {
         if (skip?.skippable) {
           outcome = { kind: 'mergeable_skip', baseRef: base.ref, baseSha: skip.baseSha, baseKind: base.kind };
           this.lastRebaseOutcome = outcome;
+          await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
           await emitRebaseEvent(this.events, outcome);
           await recordRebaseStepCompletion(this.stateFilePath, outcome);
           return { success: true };
