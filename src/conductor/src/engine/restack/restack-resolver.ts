@@ -111,7 +111,7 @@ async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
   return rewrites;
 }
 
-async function candidateSubjects(git: GitRunner, candidates: readonly CommitSha[]): Promise<string[]> {
+export async function replayCandidateSubjects(git: GitRunner, candidates: readonly CommitSha[]): Promise<string[]> {
   const subjects: string[] = [];
   for (const candidate of candidates) {
     const result = await git(['show', '-s', '--format=%s', candidate]);
@@ -189,7 +189,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         kind: 'conflict_halt',
         conflicts,
         reason: started.stderr || 'restack resolver rebase failed',
-        expectedSubjects: await candidateSubjects(tempGit, candidates),
+        expectedSubjects: await replayCandidateSubjects(tempGit, candidates),
       },
       async (context) => options.resolver({ ...context, environment }),
       options.cap,

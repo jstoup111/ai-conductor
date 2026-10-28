@@ -11,7 +11,9 @@ import { makeGitRunner } from '../../../src/engine/rebase.js';
 import {
   conflictParentRefFor,
   conflictRecordRefFor,
+  consumeRecordedResolution,
   readConflictRecord,
+  resolutionRefFor,
   writeConflictRecord,
   type RestackConflictRecord,
 } from '../../../src/engine/restack/restack-conflict-record.js';
@@ -154,5 +156,53 @@ describe('restack conflict record (real local Git)', () => {
     await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/staging/c1'])).resolves.toMatchObject({ exitCode: 1 });
     await expect(subject.git(['rev-parse', conflictRecordRefFor('demo')])).resolves.toMatchObject({ stdout: `${recordBefore}\n` });
     await expect(subject.git(['rev-parse', conflictParentRefFor('demo')])).resolves.toMatchObject({ stdout: `${parentBefore}\n` });
+  });
+
+  // Covers: task:7
+  it('consumes a matching resolution onto an equivalent live parent tree', async () => {
+    const subject = await createRepo();
+    const commit = async (message: string, path?: string, contents?: string): Promise<CommitSha> => {
+      if (path !== undefined) {
+        await writeFile(join(subject.repo, path), contents ?? 'value\n');
+        await subject.git(['add', path]);
+      }
+      await subject.git(['commit', '-qm', message]);
+      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    };
+    const oldParent = subject.head;
+    const original = await commit('carry this subject', 'owned.txt', 'original\n');
+    const oldTip = original;
+    await subject.git(['checkout', '-q', '-b', 'resolution', oldParent]);
+    const recordedParent = await commit('new parent', 'base.txt', 'new parent\n');
+    const resolutionTip = await commit('carry this subject', 'owned.txt', 'resolved\n');
+    await subject.git(['checkout', '-q', recordedParent]);
+    await subject.git(['commit', '--allow-empty', '-qm', 'metadata parent']);
+    const liveParent = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const parentTree = sha((await subject.git(['rev-parse', `${recordedParent}^{tree}`])).stdout.trim());
+    const conflict: RestackConflictRecord = {
+      ...record(oldTip),
+      oldParent,
+      oldTip,
+      newParent: recordedParent,
+      newParentTree: parentTree,
+      candidateSubjects: ['carry this subject'],
+      commit: original,
+      paths: ['owned.txt'],
+    };
+    await expect(writeConflictRecord(subject.repo, 'demo', conflict)).resolves.toEqual({ kind: 'updated' });
+    await subject.git(['update-ref', resolutionRefFor('demo', child(2)), resolutionTip]);
+
+    const result = await consumeRecordedResolution({
+      slug: 'demo',
+      range: { child: child(2), oldParent, oldTip, kind: 'closed' },
+      parent: liveParent,
+      committer: { name: 'Restack', email: 'restack@example.test', date: '2030-01-01T00:00:00Z' },
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect(result).toMatchObject({ kind: 'consumed', resolution: { child: child(2), tip: resolutionTip } });
+    if (result.kind !== 'consumed') throw new Error('expected consumed resolution');
+    await subject.git(['diff', '--exit-code', `${resolutionTip}^{tree}`, `${result.tip}^{tree}`]);
+    expect(result.rewrites.get(original)).toBeDefined();
   });
 });

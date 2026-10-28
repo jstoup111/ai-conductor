@@ -271,8 +271,15 @@ export async function haltRestackConflict(
   child: ChildId,
   detail: string,
   events?: ConductorEventEmitter,
+  recipe?: { readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha },
 ): Promise<HaltMarkerWriteResult> {
-  return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}\n`, 'needs-human', events);
+  const instructions = recipe === undefined ? '' : [
+    `Restack-Conflict: ${child} ${recipe.opId}`,
+    `git switch -c restack-resolve/${recipe.slug}/c${child} ${recipe.oldTip}`,
+    `git rebase --onto ${recipe.newParent} ${recipe.oldParent}`,
+    `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --tip <sha>`,
+  ].join('\n');
+  return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}${instructions === '' ? '' : `\n${instructions}`}\n`, 'needs-human', events);
 }
 
 async function abortReadyMove(

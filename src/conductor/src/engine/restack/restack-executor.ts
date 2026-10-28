@@ -35,7 +35,8 @@ import {
 import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
-import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { writeConflictRecord } from './restack-conflict-record.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { emitRestackRefused } from './restack-events.js';
@@ -486,8 +487,10 @@ async function haltUnresolvedConflict(
   conflict: ReplayConflict,
   events: ConductorEventEmitter | undefined,
   git: GitRunner,
+  newParent: CommitSha,
   reason: 'conflict' | 'replay-mismatch',
   resolutionDetail?: string,
+  candidates: readonly CommitSha[] = [],
 ): Promise<void> {
   // The rejected resolver result is deliberately discarded. Keeping the
   // journaled own tip reachable gives the operator the exact child history
@@ -499,7 +502,24 @@ async function haltUnresolvedConflict(
   await events?.emit({ type: 'restack_conflict', opId: journal.journal.opId, child: range.child, commit: conflict.commit, paths: [...conflict.paths] });
   const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`;
   if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
-  else await haltRestackConflict(worktree, range.child, detail, events);
+  else {
+    let recordFailure = '';
+    if (journal.journal.cause === 'feature-repair') {
+      try {
+        const parentTree = await requiredSha(git, `${newParent}^{tree}`, 'conflict replay parent tree');
+        const written = await writeConflictRecord(worktree, slug, {
+          opId: journal.journal.opId, child: range.child, oldParent: range.oldParent, oldTip: range.oldTip,
+          newParent, newParentTree: parentTree,
+          candidateSubjects: await replayCandidateSubjects(git, candidates), commit: conflict.commit, paths: conflict.paths,
+        }, { git });
+        if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
+      } catch (error) { recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`; }
+    }
+    await haltRestackConflict(worktree, range.child, `${detail}${recordFailure}`, events,
+      journal.journal.cause === 'feature-repair'
+        ? { slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent, oldParent: range.oldParent }
+        : undefined);
+  }
 }
 
 /**
@@ -711,7 +731,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         if (error instanceof RemBlockBodyMismatchError) {
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, {
             commit: error.commit, paths: [error.path],
-          }, options.events, git, 'conflict', `remediation block body mismatch: ${error.remId}`);
+          }, options.events, git, parent, 'conflict', `remediation block body mismatch: ${error.remId}`);
           terminal = true;
           return haltedResult(options.worktree);
         }
@@ -742,13 +762,13 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         });
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
           const detail = 'reason' in resolution.outcome ? resolution.outcome.reason : undefined;
-          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, 'conflict', detail);
+          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, parent, 'conflict', detail, resolution.candidates);
           terminal = true;
           return haltedResult(options.worktree);
         }
         const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
         if (ownership.kind === 'refused') {
-          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths }, options.events, git, 'replay-mismatch');
+          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths }, options.events, git, parent, 'replay-mismatch');
           terminal = true;
           return haltedResult(options.worktree);
         }
