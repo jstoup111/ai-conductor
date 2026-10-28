@@ -2927,6 +2927,11 @@ export class DefaultStepRunner implements StepRunner {
             runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch('remediation-closure-judgement:judge'),
             config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
             nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build'),
+            nativeSchemaScratch: {
+              worktreeRoot: this.projectDir,
+              repository: this.projectDir,
+              featureSlug: this.featureDesc || basename(this.projectDir),
+            },
             providerAvailability: this.providerExecutionContext?.providerAvailability,
             withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
             onAttempt: this.providerAttempt, onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed,
