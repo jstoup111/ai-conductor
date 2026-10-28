@@ -57,6 +57,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Pi-backed steps now receive the engine-built system prompt reliably. ([implementation PR #3441](https://github.com/jstoup111/ai-conductor/pull/3441)).
 - Readers gain committed per-feature artifact manifests that make feature artifact discovery unambiguous. ([implementation PR #3426](https://github.com/jstoup111/ai-conductor/pull/3426)).
 - Stacked feature operators can safely land and recover closed-child changes with the `conduct stack land` workflow. ([implementation PR #3453](https://github.com/jstoup111/ai-conductor/pull/3453)).
+- Operators can inspect and accept build-review findings for stacked children from the CLI. ([implementation PR #3513](https://github.com/jstoup111/ai-conductor/pull/3513)).
 
 ### Changed
 
