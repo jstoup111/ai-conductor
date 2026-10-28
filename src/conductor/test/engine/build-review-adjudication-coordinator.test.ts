@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { coordinateBuildReviewAdjudication, selectAdmittedTaskContracts } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { coordinateBuildReviewAdjudication, RemediateDispatchError, selectAdmittedTaskContracts } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
@@ -499,6 +499,31 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).toHaveBeenCalledTimes(2);
     expect(events.filter((event) => event.type === 'remediation_adjudication_failed')).toEqual([expect.objectContaining({ reason: (result as { detail: string }).detail })]);
     expect(await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).toBe(bytes[0]);
+  });
+
+  // Covers: S2.4, task:4, task:5
+  it('names the correction round when its provider dispatch fails', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The action is reserved.', resolution: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }], effect: { id: 'effect-R', kind: 'action', status: 'reserved' },
+    }] });
+    const inadmissibleBinding: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'reject-R' }],
+      cases: [{ caseRef: 'reject-R', existingCaseId: 'case-R', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'Reject the reserved action.', effect: { kind: 'none' } }],
+    };
+    const judge = vi.fn(async () => {
+      if (judge.mock.calls.length === 1) return inadmissibleBinding;
+      throw new RemediateDispatchError('codex', { exitCode: 1 });
+    });
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('(correction round)') });
+    expect((result as { detail: string }).detail).not.toContain('(expansion round)');
   });
 
   // Covers: S2.4, task:5

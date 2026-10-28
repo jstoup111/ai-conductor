@@ -977,6 +977,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     readonly validation: { readonly ok: true; readonly graph: RemediationCaseGraph };
     readonly provenanceCandidatesByCaseRef: ReadonlyMap<string, readonly RemediationCaseRecord[]>;
   } | undefined;
+  let dispatchPurpose: 'initial' | 'expansion' | 'correction' = 'initial';
   for (let round = 0; round < 3; round += 1) {
     await input.emit?.({
       type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId,
@@ -991,7 +992,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       judgement = await input.judge(dispatchContext);
     } catch (error) {
       const detail = error instanceof RemediateDispatchError
-        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${round === 1 ? ' (expansion round)' : ''}`
+        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${dispatchPurpose === 'initial' ? '' : ` (${dispatchPurpose} round)`}`
         : `remediate judgement failed: ${error instanceof Error ? error.message : String(error)}`;
       return failUnlessAccepted(detail, { settleAbsentAttempted: true });
     }
@@ -1053,6 +1054,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       });
       if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = expandedContext.context;
+      dispatchPurpose = 'expansion';
       continue;
     }
     if (bindingCorrections === undefined && graph.reason === 'inadmissible-case-binding') {
@@ -1065,6 +1067,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       });
       if (!correctedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(correctedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = correctedContext.context;
+      dispatchPurpose = 'correction';
       continue;
     }
     return failUnlessAccepted(describeInvalidRemediationJudgement(
