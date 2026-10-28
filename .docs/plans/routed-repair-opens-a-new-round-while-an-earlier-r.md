@@ -378,3 +378,11 @@ Task 3 ──► Task 5 ──► Task 6 ──► Task 9
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-R1: In stack-preflight.ts, when the resume-exit continuation (or reconciliation) returns leaf-returned and the queue is empty, return the completed routed result after confirming terminal routing state instead of reusing the pre-exit receiptCursor and reaching the feature-repair restack; add a runStackPreflight test proving no second restack runs
+**Gate:** as-built
+**Rationale:** Verified (90%): after resume-exit, stack-preflight.ts uses the continuation's leaf-returned result only for queue consumption. It then falls through to the pre-exit receiptCursor and the automatic feature-repair restack with stale repairChildren. ADR D13 is authoritative and clear that every exit caller consumes the returned next step. This is conforming implementation drift and needs no architectural decision.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 13
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 13 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
