@@ -203,6 +203,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Telemetry users receive an explicit missing-active-duration counter instead of dropped duration data. ([implementation PR #3486](https://github.com/jstoup111/ai-conductor/pull/3486)).
 - A stacked feature whose leaf is already current with the default branch now passes the rebase gate after a routed leaf return, instead of halting after repeated no-op rebases. ([implementation PR #3488](https://github.com/jstoup111/ai-conductor/pull/3488)).
 - build_review semantic case repeat and regression halts now name their recovery command (resolve-case for a repeat; accept, or a fix on a stacked child, for a regression), and the stalled-or-stuck-feature runbook documents them. ([implementation PR #3491](https://github.com/jstoup111/ai-conductor/pull/3491)).
+- As-built remediation halts now name findings the planner escalated against a sealed artifact such as an approved ADR, with the target step and the planner's rationale, instead of reporting them as missing. ([implementation PR #3503](https://github.com/jstoup111/ai-conductor/pull/3503)).
+- Raising the restack cascade cap for one originating child no longer blocks raising it later for a different originating child, and the cascade-cap halt now reports the budget that actually refused. ([implementation PR #3504](https://github.com/jstoup111/ai-conductor/pull/3504)).
 
 ## Migration
 
