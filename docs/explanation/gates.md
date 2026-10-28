@@ -872,7 +872,10 @@ PR and shipped-record accepted-risk section lists carried findings and operator-
 operator names or rationales.
 
 Every built-in (contract `v4`) and custom (`custom-findings` `v2`) finding carries a reviewer-assigned
-`severity`: `critical`, `major`, `minor`, or `nit`. Severity is not part of finding identity. When a
+`severity`: `critical`, `major`, `minor`, or `nit`. The engine owns what each level means
+(`BUILD_REVIEW_SEVERITY_DEFINITIONS` in `src/conductor/src/engine/build-review-contract.ts`) and
+renders those definitions into every built-in and custom reviewer prompt; rubric skills and review
+policies do not restate them. Severity is not part of finding identity. When a
 rubric sets [`min_severity`](../reference/configuration.md#build_review), a finding ranked strictly below
 it is classified advisory after accepted, settled, replication, and suppressed findings, and before
 unresolved ones. Advisory findings never block, never reach the judgement, and charge no kickback; the
