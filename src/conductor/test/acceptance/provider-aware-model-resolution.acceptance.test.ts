@@ -301,7 +301,6 @@ describe('#902 built-in provider policy matrix', () => {
 });
 
 describe('#902 provider-native retry escalation', () => {
-  // Covers: task:3
   it('caps Codex sol escalation at Astra using the production policy', () => {
     expect(CODEX_MODEL_POLICY.modelEscalationOrder.at(-1)).toBe('gpt-6-astra');
 
