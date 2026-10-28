@@ -853,6 +853,33 @@ describe('remediation case reconciler', () => {
     }] } });
   });
 
+  // Covers: task:1
+  it('keeps the transition refusals and attempted-action refute/defer admissions', async () => {
+    const rejectedRecords = [
+      [durableAction(), []],
+      [durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } }), ['case-1']],
+      [durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'work order failed' } }), ['case-1']],
+      [durableAction({ disposition: 'defer', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: RECORDED_AT }], effect: { id: 'effect-1', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' } }), []],
+      [durableAction({ disposition: 'reject', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'rejected', recordedAt: RECORDED_AT }], effect: { kind: 'none' } }), []],
+    ];
+    for (const [record, attemptedCaseIds] of rejectedRecords) {
+      const root = await createProjectRoot();
+      const store = new RemediationCaseStore(root, FEATURE);
+      await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [record] } }));
+      await expect(reconcileRemediationCases(store, { graph: refuteGraph(), recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'unused', attemptedCaseIds }))
+        .resolves.toEqual({ ok: false, reason: 'illegal-disposition-transition' });
+    }
+    const refuteStore = new RemediationCaseStore(await createProjectRoot(), FEATURE);
+    await refuteStore.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+    await expect(reconcileRemediationCases(refuteStore, { graph: refuteGraph(), recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'unused', attemptedCaseIds: ['case-1'] }))
+      .resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ disposition: 'refute', resolution: 'resolved' })] } });
+    const deferStore = new RemediationCaseStore(await createProjectRoot(), FEATURE);
+    await deferStore.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+    const deferCase = { caseRef: 'defer-case', existingCaseId: 'case-1', disposition: 'defer' as const, priority: 'medium' as const, rationale: 'The remaining work is outside the plan.', confidence: 'medium' as const, effect: { kind: 'deferral' as const, title: 'Follow up', body: 'The change is outside this repair.', exclusionRationale: 'Outside the approved scope.' } };
+    await expect(reconcileRemediationCases(deferStore, { graph: graph(deferCase, [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', caseRef: 'defer-case' }]), recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds('defer-effect') }))
+      .resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ disposition: 'defer', effect: { id: 'defer-effect', kind: 'deferral', status: 'reserved' } })] } });
+  });
+
   it.each([
     ['an unattempted action case', durableAction(), [], 'illegal-disposition-transition'],
     ['a reserved action effect', durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } }), ['case-1'], 'illegal-disposition-transition'],

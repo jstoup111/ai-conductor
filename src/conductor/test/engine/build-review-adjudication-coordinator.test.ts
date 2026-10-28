@@ -465,10 +465,13 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(contexts[0]).not.toHaveProperty('bindingCorrections');
     expect(contexts[1]).toMatchObject({ bindingCorrections: [{ caseRef: 'rejected-A', existingCaseId: 'case-A', disposition: 'reject', bindableDispositions: ['act', 'defer', 'refute'] }] });
     expect(snapshots[1]).toEqual(snapshots[0]);
+    // correction-round start carries case-A and sits between judge calls
     const started = events.filter((event) => event.type === 'remediation_adjudication_started');
-    expect(started[0]).not.toHaveProperty('bindingCorrectionCaseIds');
-    expect(started[1]).toMatchObject({ bindingCorrectionCaseIds: ['case-A'] });
-    expect(timeline.slice(0, 4)).toEqual(['started:none', 'judge:1', 'started:case-A', 'judge:2']);
+    expect(started).toEqual([
+      expect.not.objectContaining({ bindingCorrectionCaseIds: expect.anything() }),
+      expect.objectContaining({ bindingCorrectionCaseIds: ['case-A'] }),
+    ]);
+    expect(timeline).toEqual(['started:none', 'judge:1', 'started:case-A', 'judge:2']);
     expect(events.map((event) => event.type)).not.toContain('remediation_adjudication_failed');
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'case-A', disposition: 'refute', resolution: 'resolved' })] } });
   });
