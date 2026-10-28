@@ -543,9 +543,11 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
 
     expect(build).not.toHaveBeenCalled();
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(allowance, 'i'));
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toMatch(new RegExp(allowance, 'i'));
+    expect(halt).not.toContain('Routed round');
     if (Object.hasOwn(charges, 'prd_audit')) {
-      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      expect(halt).toContain(
         _name.includes('as-built') ? 'Also pending (prd_audit): S2.1' : 'Findings (prd_audit): S2.1',
       );
     }
@@ -630,6 +632,8 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(halt).toContain('Pending remediation findings are unavailable because the repair record is malformed.');
     expect(halt).not.toContain('Findings (');
     expect(halt).not.toContain('Also pending (');
+    expect(halt).toContain('--by «N»');
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
   it('leads an as-built exhaustion with its findings and retains PRD findings as also pending', async () => {
