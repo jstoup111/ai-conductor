@@ -404,6 +404,7 @@ describe('appendTimingSection', () => {
     )).toBe(true);
   });
 
+  // Covers: task:1
   it('keeps an unreadable-ledger partial Time block reason-free', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'shipped-record-unreadable-timing-'));
     try {

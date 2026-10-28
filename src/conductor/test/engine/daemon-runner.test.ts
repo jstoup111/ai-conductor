@@ -338,6 +338,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
+  // Covers: task:1
   it.each([
     { item: { slug: 'feature-tiered', tier: 'M' as const }, expectedTier: 'M' },
     { item: { slug: 'feature-untiered' }, expectedTier: undefined },
@@ -448,6 +449,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
+  // Covers: task:1
   it('labels an unreadable timing ledger at the feature_shipped boundary', async () => {
     const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-unreadable-'));
     try {
@@ -477,6 +479,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
+  // Covers: task:1
   it('omits the timing reason for a measured feature shipment', async () => {
     const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-measured-'));
     try {
