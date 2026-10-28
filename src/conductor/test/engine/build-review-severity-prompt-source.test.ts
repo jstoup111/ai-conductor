@@ -12,18 +12,15 @@ vi.mock('../../src/engine/build-review-contract.js', async (importOriginal) => (
 }));
 
 import {
+  BUILD_REVIEW_SEVERITY_DEFINITIONS,
+} from '../../src/engine/build-review-contract.js';
+import {
   BUILD_REVIEW_RUBRIC_IDS,
   getBuildReviewRubricDescriptor,
 } from '../../src/engine/build-review-registry.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
-const meanings = [
-  'security exposure, data loss, or wrong results',
-  'a real defect or broken invariant',
-  'a real, low-impact quality issue',
-  'cosmetic, such as naming or style',
-];
 const policy = {
   enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
   model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
@@ -64,7 +61,9 @@ describe('build_review built-in severity prompt source', () => {
     const after = await Promise.all(skillPaths.map((path) => readFile(path)));
 
     expect(prompt.split(sentinel)).toHaveLength(2);
-    for (const meaning of meanings) expect(prompt).not.toContain(meaning);
+    for (const meaning of Object.values(BUILD_REVIEW_SEVERITY_DEFINITIONS)) {
+      expect(prompt).not.toContain(meaning);
+    }
     expect(after).toEqual(before);
   });
 });
