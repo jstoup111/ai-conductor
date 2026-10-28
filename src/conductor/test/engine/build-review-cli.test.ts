@@ -1,6 +1,6 @@
 // Covers: task:1, task:2, task:3, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { joinBuildReviewRubricOutcomes, parseBuildReviewAggregate, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
@@ -1010,37 +1010,55 @@ describe('build-review findings CLI', () => {
     expect(JSON.parse(print.mock.calls[0]![0]).exhaustedMechanicalFaults).toBeUndefined();
   });
 
-  it('keeps a report without a ledger fault byte-identical to the existing output', async () => {
+  // Covers: task:3
+  it('renders a flat-feature report without children byte-identically to the pre-change dispatcher', async () => {
     const faultFree = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: {
         testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
       },
     });
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-flat-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    const aggregatePath = join(worktree, '.pipeline', 'build-review.json');
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeFile(aggregatePath, JSON.stringify(faultFree));
     const machine = vi.fn();
     const human = vi.fn();
+    const trackedReadFile = vi.fn(async (path: string) => path === aggregatePath
+      ? readFile(path, 'utf8')
+      : JSON.stringify(faultFree));
     const deps = {
-      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
-      readFile: async () => JSON.stringify(faultFree), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+      readFile: trackedReadFile, createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
       readKickbackGateEntry: async () => ({ mechanicalFaults: 0 }),
     };
 
-    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
-      ...deps, print: machine,
-    })).resolves.toBe(0);
-    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
-      ...deps, print: human,
-    })).resolves.toBe(0);
+    try {
+      await expect(access(join(worktree, '.pipeline', 'children'))).rejects.toThrow();
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+        ...deps, print: machine,
+      })).resolves.toBe(0);
+      await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+        ...deps, print: human,
+      })).resolves.toBe(0);
 
-    expect(machine).toHaveBeenCalledWith(JSON.stringify({
-      feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [], acceptedDispositions: [],
-      cases: [],
-    }));
-    expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
-    expect(human).toHaveBeenCalledWith([
-      'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
-      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Out-of-delta findings: none', 'Advisory build-review findings: none', 'Skipped rubrics: security, implementationQuality', 'Infrastructure failures: none',
-    ].join('\n'));
+      expect(machine).toHaveBeenCalledWith(JSON.stringify({
+        feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
+        acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [], acceptedDispositions: [],
+        cases: [],
+      }));
+      expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
+      expect(human).toHaveBeenCalledWith([
+        'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
+        'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Out-of-delta findings: none', 'Advisory build-review findings: none', 'Skipped rubrics: security, implementationQuality', 'Infrastructure failures: none',
+      ].join('\n'));
+      expect(trackedReadFile.mock.calls
+        .map(([path]) => path)
+        .filter((path) => path.endsWith('/build-review.json')),
+      ).toEqual([aggregatePath, aggregatePath]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('does not publish uncovered scope routing state in machine findings output', async () => {
@@ -1221,20 +1239,23 @@ describe('build-review accept', () => {
   }
 
     // Covers: task:6
-    it('accepts a current test-quality finding through the real disposition store and reports it accepted', async () => {
+    it('accepts a current flat test-quality finding through the real disposition store and reports it accepted', async () => {
     const print = vi.fn();
     const appendEvent = vi.fn();
     const readAggregate = vi.fn(async () => JSON.stringify(testQualityAggregate));
+    const request = { kind: 'accept' as const, feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' };
+    expect(request).not.toHaveProperty('child');
 
     await expect(dispatchBuildReviewAccept(
-      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' },
+      request,
       deps({ print, appendEvent, readFile: readAggregate }),
     )).resolves.toBe(0);
 
     expect(print).toHaveBeenCalledWith(`build-review accept: accepted ${testQualityIdentity.id} for lap lap-current.`);
-    expect(readAggregate).toHaveBeenCalledTimes(2);
-    expect(readAggregate).toHaveBeenNthCalledWith(1, '/main/.worktrees/review-rubrics/.pipeline/build-review.json');
-    expect(readAggregate).toHaveBeenNthCalledWith(2, '/main/.worktrees/review-rubrics/.pipeline/build-review.json');
+    expect(readAggregate.mock.calls.map(([path]) => path)).toEqual([
+      '/main/.worktrees/review-rubrics/.pipeline/build-review.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review.json',
+    ]);
     expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', expect.objectContaining({
       type: 'build_review_disposition_accepted', findingId: testQualityIdentity.id,
     }));
