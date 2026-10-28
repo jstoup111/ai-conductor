@@ -3,6 +3,7 @@ import type { ComplexityTier, HarnessConfig } from '../../types/index.js';
 import { loadConfig } from '../config.js';
 import { resolveMainRepoRoot } from '../park-marker.js';
 import { readState } from '../state.js';
+import type { CascadeCounts } from './cascade-cap.js';
 
 /** Default restack cascades per feature complexity when configuration omits a cap. */
 export const RESTACK_CASCADE_TIER_DEFAULTS: Readonly<Record<ComplexityTier, number>> = {
@@ -60,4 +61,66 @@ export function formatCascadeAllowance(allowance: RestackCascadeAllowance): stri
     ? 'tier unrecorded, treated as M;'
     : `tier ${allowance.tier}`;
   return `${tier} allowance ${allowance.limit} (${allowance.source})`;
+}
+
+export interface CascadeSummaryChild {
+  child: number;
+  consumed: number;
+  limit: number;
+  remaining: number;
+  raised: boolean;
+}
+
+export interface CascadeSummary {
+  inspectLines: readonly string[];
+  statusFragment: string;
+  json: {
+    tier: ComplexityTier | null;
+    allowance: number;
+    source: RestackCascadeAllowance['source'];
+    children: readonly CascadeSummaryChild[];
+  };
+}
+
+/**
+ * Render the one cascade accounting view consumed by both inspect and status.
+ * Limits have a child-scoped raise precedence over the feature allowance.
+ */
+export function renderCascadeSummary(
+  counts: CascadeCounts,
+  allowance: RestackCascadeAllowance,
+): CascadeSummary {
+  const children = [...new Set([
+    ...Object.keys(counts.counts),
+    ...Object.keys(counts.limits ?? {}),
+  ])]
+    .map(Number)
+    .sort((left, right) => left - right)
+    .map((child): CascadeSummaryChild => {
+      const key = String(child);
+      const raised = counts.limits?.[key] !== undefined;
+      const limit = counts.limits?.[key] ?? allowance.limit;
+      const consumed = counts.counts[key] ?? 0;
+      return { child, consumed, limit, remaining: Math.max(0, limit - consumed), raised };
+    });
+  const allowanceText = formatCascadeAllowance(allowance);
+  const childInspectLines = children.map((child) =>
+    `child ${child.child}: ${child.consumed}/${child.limit} consumed; ${child.remaining} remaining${child.raised ? ' (raised)' : ''}`,
+  );
+  const childStatus = children.length === 0
+    ? 'none charged'
+    : children.map((child) => `child ${child.child} ${child.consumed}/${child.limit}${child.raised ? ' (raised)' : ''}`).join(', ');
+  return {
+    inspectLines: [
+      `Restack cascades — ${allowanceText}`,
+      ...(childInspectLines.length === 0 ? ['none charged'] : childInspectLines),
+    ],
+    statusFragment: `${allowanceText}; ${childStatus}`,
+    json: {
+      tier: allowance.tier ?? null,
+      allowance: allowance.limit,
+      source: allowance.source,
+      children,
+    },
+  };
 }

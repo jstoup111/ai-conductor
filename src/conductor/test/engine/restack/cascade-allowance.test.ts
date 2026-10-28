@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadMergedConfig } from '../../../src/engine/config.js';
 import {
   formatCascadeAllowance,
+  renderCascadeSummary,
   resolveCascadeAllowanceForWorktree,
   resolveRestackCascadeAllowance,
 } from '../../../src/engine/restack/cascade-allowance.js';
@@ -131,5 +132,49 @@ describe('resolveCascadeAllowanceForWorktree', () => {
     expect(formatCascadeAllowance({ limit: 3, tier: undefined, source: 'default' })).toBe(
       'tier unrecorded, treated as M; allowance 3 (default)',
     );
+  });
+});
+
+describe('renderCascadeSummary', () => {
+  it('renders inspect lines, a status fragment, and JSON for every counted or raised child', () => {
+    const summary = renderCascadeSummary({
+      version: 1,
+      counts: { 1: 4, 2: 3 },
+      limits: { 2: 10, 3: 9 },
+    }, { limit: 8, tier: 'L', source: 'default' });
+
+    expect(summary.inspectLines).toEqual([
+      'Restack cascades — tier L allowance 8 (default)',
+      'child 1: 4/8 consumed; 4 remaining',
+      'child 2: 3/10 consumed; 7 remaining (raised)',
+      'child 3: 0/9 consumed; 9 remaining (raised)',
+    ]);
+    expect(summary.statusFragment).toBe(
+      'tier L allowance 8 (default); child 1 4/8, child 2 3/10 (raised), child 3 0/9 (raised)',
+    );
+    expect(summary.json).toEqual({
+      tier: 'L',
+      allowance: 8,
+      source: 'default',
+      children: [
+        { child: 1, consumed: 4, limit: 8, remaining: 4, raised: false },
+        { child: 2, consumed: 3, limit: 10, remaining: 7, raised: true },
+        { child: 3, consumed: 0, limit: 9, remaining: 9, raised: true },
+      ],
+    });
+  });
+
+  it('renders an unrecorded-tier empty cascade view consistently', () => {
+    const summary = renderCascadeSummary(
+      { version: 1, counts: {} },
+      { limit: 3, tier: undefined, source: 'default' },
+    );
+
+    expect(summary.inspectLines).toEqual([
+      'Restack cascades — tier unrecorded, treated as M; allowance 3 (default)',
+      'none charged',
+    ]);
+    expect(summary.statusFragment).toBe('tier unrecorded, treated as M; allowance 3 (default); none charged');
+    expect(summary.json).toEqual({ tier: null, allowance: 3, source: 'default', children: [] });
   });
 });
