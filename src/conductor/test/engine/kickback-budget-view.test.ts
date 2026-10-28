@@ -600,7 +600,10 @@ describe('kickback budget view', () => {
       const config = await loadConfig(fixture.root);
       if (!config.ok) throw new Error('fixture main config must load');
       vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
-        ok: true, seal: undefined, selfAmendments: [],
+        ok: true,
+        seal: { version: 2, baselineCommit: 'approved-commit', protectedArtifacts: [], rebaselines: [] },
+        selfAmendments: [],
+        inheritedDeletions: [],
       });
       const conductor = new Conductor({
         stateFilePath: join(fixture.worktree, '.pipeline', 'conduct-state.json'), projectRoot: fixture.worktree,

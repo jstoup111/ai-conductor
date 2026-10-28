@@ -10,7 +10,7 @@ import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
-import { emptyUnsettledReceipt, parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
@@ -44,7 +44,7 @@ async function subject(options: {
   allocation?: Record<number, { remTaskIds: string[]; blockBodies: string[] }>;
   cap?: number;
   growth?: number;
-  items?: { findingId: string; kind: 'audit'; owner: typeof child; host: typeof child; reason: 'task-slice'; fallback: never[]; existingTask?: boolean; taskIds?: string[] }[];
+  items?: RouteRecord['items'];
   laps?: number;
   receiptLaps?: Record<'prd_audit' | 'architecture_review_as_built', number>;
   effectiveLapCap?: number;

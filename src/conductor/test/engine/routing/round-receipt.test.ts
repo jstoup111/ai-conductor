@@ -26,7 +26,7 @@ import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { settleRoundAtDispatch } from '../../../src/engine/routing/round-receipt.js';
-import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges, type RouteRecord, type SettledRoundReceipt } from '../../../src/engine/routing/route-types.js';
 
 const host = parseChildId(1)!;
 const leaf = parseChildId(2)!;
@@ -201,7 +201,12 @@ describe('round receipt settlement', () => {
       if (created.kind !== 'created') throw new Error('cannot create earlier record');
       const earlierStored = await readRouteRecord(subject.root, 'demo', earlierRoundId, { git: subject.git });
       if (earlierStored.kind !== 'record') throw new Error('missing earlier route record');
-      const settledEarlier = { ...earlierStored.record, receipt: { ...earlierStored.record.receipt, settlementId: 'r4-settled', acks: { [host]: true } } };
+      const settledReceipt: SettledRoundReceipt = {
+        ...earlierStored.record.receipt,
+        settlementId: 'r4-settled',
+        acks: { [host]: true } as Record<typeof host, true>,
+      };
+      const settledEarlier: RouteRecord = { ...earlierStored.record, receipt: settledReceipt };
       if ((await writeRouteRecord(subject.root, earlierStored, settledEarlier, { git: subject.git })).kind !== 'updated') throw new Error('cannot seed earlier record');
       await writeKickbackLedger(subject.root, { version: 1, effectiveGrowthCap: 10, gates: {}, growth: { authored: 1, added: 6, byGate: {} } });
 
