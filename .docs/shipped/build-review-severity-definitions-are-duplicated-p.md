@@ -7,23 +7,23 @@ engine_version: 20261028T113352Z-172d3daf40b7
 ---
 
 ## Cost
-input: 905676
-output: 68557
-cache_read: 9407413
+input: 921739
+output: 68802
+cache_read: 9439669
 cache_creation: 379636
-cost_usd: 9.4952
-dispatches: 30
+cost_usd: 9.5367
+dispatches: 31
 retries: 2
 halts: 1
 unmetered: count: 0, duration_ms: 0
 cost_unmetered: count: 0
 providers:
-  codex: input: 905590, output: 45232, cache_read: 8237824, cache_creation: 0, cost_usd: 5.7573, dispatches: 17, cost_unmetered: 0
+  codex: input: 921653, output: 45477, cache_read: 8270080, cache_creation: 0, cost_usd: 5.7989, dispatches: 18, cost_unmetered: 0
   claude: input: 86, output: 23325, cache_read: 1169589, cache_creation: 379636, cost_usd: 3.7378, dispatches: 13, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","25cb2171-5dfb-4087-a3cd-34c05da589d8","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 4
