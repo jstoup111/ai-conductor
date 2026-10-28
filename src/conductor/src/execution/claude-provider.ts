@@ -697,10 +697,17 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
-    if (options.abortSignal?.aborted) return abortedInvocationResult();
+    if (options.abortSignal?.aborted) {
+      return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
+    }
     let guardDir: string | null;
     try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     // Claude's native JSON-schema mode is a non-interactive print-mode
     // capability. A REPL cannot return its terminal result envelope, so never
@@ -711,6 +718,7 @@ export class ClaudeProvider implements LLMProvider {
         output: `${claudeDisplayName()} native output schema is unsupported for interactive ${claudeDisplayName()} invocation. Recovery action: dispatch the schema request in non-interactive print mode.`,
         exitCode: 1,
         nativeSchemaUnsupported: true,
+        executionDisposition: 'not-started',
       };
     }
     const hasMachineEnvelope = !options.interactive;
