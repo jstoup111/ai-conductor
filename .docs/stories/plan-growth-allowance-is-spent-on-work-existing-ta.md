@@ -17,7 +17,7 @@ As the conductor, I want a finding whose remedy existing plan tasks already own 
 - Given a prd_audit FIXABLE finding dispositioned `existing-task` bound to its owning plan task id, when remediation routes, then it takes the same non-appending route under gate key `prd_audit`
 
 #### Negative Paths
-- Given an `existing-task` gap whose bound id is absent from the active plan, or is not the finding's owning task, when the engine validator checks the plan, then the whole plan is rejected naming the unresolvable or non-owning id (and the owner) rather than silently appending or dropping the gap
+- Given an `existing-task` gap whose bound id is absent from the active plan, or is neither the finding's owning task nor a repair task of the prior as-built case named by the gap's `same` or `recurrence` reconciliation, when the engine validator checks the plan, then the whole plan is rejected naming the unresolvable or non-owning id (and the owner) rather than silently appending or dropping the gap
 - Given an `existing-task` gap with an empty task-binding list, when the engine validator checks the plan, then the whole plan is rejected naming the empty binding field rather than admitting the gap as a free lap
 - Given a plan whose growth allowance is fully unspent, when every finding in the round is `existing-task`, then no `kickback-cap` halt citing the plan-growth allowance is produced
 
