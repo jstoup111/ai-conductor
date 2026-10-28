@@ -1,4 +1,4 @@
-// Covers: task:13, task:rem-prd-audit-13-r1
+// Covers: task:8, task:13, task:rem-prd-audit-13-r1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { runDaemonStatus } from '../../src/engine/daemon-observe-cli.js';
+import { cascadesRefFor } from '../../src/engine/restack/cascade-cap.js';
 import {
   writeSliceTopologyFixture,
   type SliceTopologyFixtureFilesystem,
@@ -25,6 +26,27 @@ let featureRoot: string;
 
 async function git(args: string[], cwd = repository): Promise<string> {
   return (await execFile('git', args, { cwd })).stdout;
+}
+
+async function writeCascades(slug: string, value: string): Promise<void> {
+  const path = join(repository, `.cascades-${slug}.json`);
+  await writeFile(path, value);
+  const blob = (await git(['hash-object', '-w', path])).trim();
+  await git(['update-ref', cascadesRefFor(slug), blob]);
+}
+
+async function statusOutput(): Promise<string> {
+  const registryPath = join(repository, 'registry.json');
+  await writeFile(registryPath, JSON.stringify([{
+    schemaVersion: 1,
+    name: 'demo-repo',
+    path: repository,
+    status: 'registered',
+    registeredAt: '2026-10-09T00:00:00.000Z',
+  }]));
+  const out: string[] = [];
+  await runDaemonStatus({ registryPath, out: (line) => out.push(line), hasSessionProbe: () => false });
+  return out.join('\n');
 }
 
 beforeEach(async () => {
@@ -148,5 +170,66 @@ describe('stacked daemon status', () => {
     expect(rendered).toContain('Kickback budget (build_review): 2/5 consumed; 3 remaining');
     expect(rendered).toContain('Latest reason: child two finding');
     expect(rendered).not.toContain('flat ledger');
+  });
+
+  it('renders the shared tier-L cascade summary for charged children', async () => {
+    await writeFile(
+      join(featureRoot, '.pipeline', 'conduct-state.json'),
+      JSON.stringify({ coverage_binding: 'done', build_review: 'done', complexity_tier: 'L' }),
+    );
+    await writeCascades('demo', JSON.stringify({ version: 1, counts: { 1: 4, 2: 3 } }));
+
+    expect(await statusOutput()).toContain(
+      'RESTACK CASCADES [demo]: tier L allowance 8 (default); child 1 4/8, child 2 3/8',
+    );
+  });
+
+  it('renders a raised child limit and an empty cascade ref through daemon status', async () => {
+    await writeFile(
+      join(featureRoot, '.pipeline', 'conduct-state.json'),
+      JSON.stringify({ coverage_binding: 'done', build_review: 'done', complexity_tier: 'L' }),
+    );
+    await writeCascades('demo', JSON.stringify({ version: 1, counts: { 2: 3 }, limits: { 2: 10 } }));
+
+    expect(await statusOutput()).toContain('RESTACK CASCADES [demo]: tier L allowance 8 (default); child 2 3/10 (raised)');
+
+    await git(['update-ref', '-d', cascadesRefFor('demo')]);
+    expect(await statusOutput()).toContain('RESTACK CASCADES [demo]: tier L allowance 8 (default); none charged');
+  });
+
+  it('reports an unreadable cascade ref and continues rendering later features', async () => {
+    await writeCascades('demo', '{ malformed');
+    await git(['branch', 'feat/daemon-later']);
+    const laterRoot = join(repository, '.worktrees', 'later');
+    await git(['worktree', 'add', '-q', laterRoot, 'feat/daemon-later']);
+    const tip = (await git(['rev-parse', 'feat/daemon-later'])).trim();
+    await git(['branch', 'feat/c1/later', tip]);
+    await git(['update-ref', 'refs/conductor/later/closed/c1', tip]);
+    await writeSliceTopologyFixture(laterRoot, {
+      version: 1,
+      slug: 'later',
+      runId: 'status-2',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
+      storyOwnership: { S1: 1, S2: 2 },
+    }, envelopeFilesystem);
+    await mkdir(join(laterRoot, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(laterRoot, '.pipeline', 'conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeFile(join(laterRoot, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({ build: 'in_progress' }));
+
+    const rendered = await statusOutput();
+    expect(rendered).toContain('RESTACK CASCADES [demo]: unavailable (');
+    expect(rendered).toContain('PLAN GROWTH [later child 2/2; tasks 2]');
+  });
+
+  it('does not render a cascade line for a feature without child state', async () => {
+    await rm(join(featureRoot, '.pipeline', 'children'), { recursive: true, force: true });
+    await rm(join(featureRoot, '.docs'), { recursive: true, force: true });
+    await git(['update-ref', '-d', 'refs/conductor/demo/closed/c1']);
+    await git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+    await git(['branch', '-D', 'feat/c1/demo']);
+
+    expect(await statusOutput()).not.toContain('RESTACK CASCADES');
   });
 });
