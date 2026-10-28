@@ -132,7 +132,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
-  stacked_prs: ['enabled', 'max_slices', 'route_whole_feature_fixes'],
+  stacked_prs: ['enabled', 'max_slices', 'route_whole_feature_fixes', 'max_restack_cascades'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
@@ -3044,6 +3044,11 @@ function validateStackedPrsBlock(raw: unknown): ConfigError | null {
       message: 'stacked_prs.max_slices must be an integer from 1 through 9',
     };
   }
+  const restackCascadeError = validateRemediationLapCap(
+    obj.max_restack_cascades,
+    'stacked_prs.max_restack_cascades',
+  );
+  if (restackCascadeError) return restackCascadeError;
   return null;
 }
 
