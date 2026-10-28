@@ -2,6 +2,7 @@
 // Covers: task:rem-prd-audit-rem-prd-audit-R26
 // Covers: task:31.2
 // Covers: task:rem-prd-audit-rem-prd-audit-R25
+// Covers: task:6
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -49,7 +50,7 @@ async function fixture() {
   return repo;
 }
 
-async function realCascadeCapCliFixture() {
+async function realCascadeCapCliFixture(options: { tier?: 'M' | 'L'; charged?: number; originatingChild?: 1 | 2 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'kickback-budget-restack-cli-'));
   repos.push(root);
   const repo = join(root, '.worktrees', 'demo');
@@ -67,6 +68,10 @@ async function realCascadeCapCliFixture() {
   await writeFile(join(root, 'base.txt'), 'base\n');
   await git(['add', 'base.txt']);
   await git(['commit', '-qm', 'base']);
+  await mkdir(join(root, '.ai-conductor'), { recursive: true });
+  await writeFile(join(root, '.ai-conductor', 'config.yml'), [
+    'stacked_prs:', '  enabled: true', '  route_whole_feature_fixes: true', '',
+  ].join('\n'));
   await writeSliceTopologyFixture(root, {
     version: 1,
     slug: 'demo',
@@ -88,9 +93,13 @@ async function realCascadeCapCliFixture() {
     slug: 'demo',
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
   });
+  if (options.tier !== undefined) {
+    await writeFile(join(repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: options.tier }));
+  }
+  const originatingChild = options.originatingChild ?? 1;
   const blob = (await makeGitRunner(repo)(
     ['hash-object', '-w', '--stdin'],
-    { input: JSON.stringify({ version: 1, counts: { 1: 3 } }) },
+    { input: JSON.stringify({ version: 1, counts: { [originatingChild]: options.charged ?? 3 } }) },
   )).stdout.trim();
   await git(['update-ref', cascadesRefFor('demo'), blob]);
   return { root, repo };
@@ -194,13 +203,61 @@ describe('restack kickback budget storage', () => {
     });
   });
 
+  it('uses the tier-L allowance for a raise from a real cascade-cap halt', async () => {
+    const subject = await realCascadeCapCliFixture({ tier: 'L', charged: 8 });
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    const events: unknown[] = [];
+    expect(await dispatchKickbackBudgetCommand({
+      kind: 'kickback-budget', action: 'raise', feature: 'demo', gate: 'restack', child: '1', by: 2,
+      rationale: 'raise the tier L stopped cascade', format: 'human',
+    }, {
+      cwd: subject.root, resolveMainRoot: async () => subject.root, isInteractive: () => true,
+      resolveOperator: () => 'operator', print: () => {}, appendEvent: (_worktree, event) => { events.push(event); },
+    })).toBe(0);
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'kickback_budget_adjustment_authorized', beforeLimit: 8, afterLimit: 10,
+    }));
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts', counts: { counts: { 1: 8 }, limits: { 1: 10 } },
+    });
+  });
+
+  it('refuses a restack raise when the tier allowance changed after the cap halt', async () => {
+    const subject = await realCascadeCapCliFixture({ tier: 'M', charged: 3 });
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    const before = await readCascadeCounts(subject.repo, 'demo');
+    if (before.kind !== 'counts') throw new Error('unreadable cascades');
+    await writeFile(join(subject.root, '.ai-conductor', 'config.yml'), [
+      'stacked_prs:', '  enabled: true', '  route_whole_feature_fixes: true', '  max_restack_cascades:', '    M: 4', '',
+    ].join('\n'));
+
+    const printed: string[] = [];
+    expect(await dispatchKickbackBudgetCommand({
+      kind: 'kickback-budget', action: 'raise', feature: 'demo', gate: 'restack', child: '1', by: 1,
+      rationale: 'recover only with current cap evidence', format: 'human',
+    }, {
+      cwd: subject.root, resolveMainRoot: async () => subject.root, isInteractive: () => true,
+      resolveOperator: () => 'operator', print: (message) => { printed.push(message); },
+    })).toBe(1);
+    expect(printed.join('\n')).toContain('current cap evidence is missing or no longer matches the live halt');
+    const after = await readCascadeCounts(subject.repo, 'demo');
+    expect(after).toMatchObject({ kind: 'counts', blob: before.blob });
+  });
+
   it('resets the originating child cascade budget from a real cascade-cap halt', async () => {
-    const subject = await realCascadeCapCliFixture();
+    const subject = await realCascadeCapCliFixture({ tier: 'M', originatingChild: 2 });
 
     await expect(runRestack({
       worktree: subject.repo,
       slug: 'demo',
       cause: 'feature-repair',
+      originatingChildren: [child(2)],
       git: makeGitRunner(subject.repo),
     })).resolves.toEqual({ kind: 'halted' });
 
@@ -210,7 +267,7 @@ describe('restack kickback budget storage', () => {
         action: 'reset',
         feature: 'demo',
         gate: 'restack',
-        child: '1',
+        child: '2',
         rationale: 'reset the stopped cascade',
         format: 'human',
       },
@@ -225,7 +282,7 @@ describe('restack kickback budget storage', () => {
 
     await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
       kind: 'counts',
-      counts: { counts: { 1: 0 } },
+      counts: { counts: { 2: 0 } },
     });
     await expect(readKickbackLedger(subject.repo, child(2))).resolves.toMatchObject({
       gates: {
