@@ -10,7 +10,7 @@ import {
   type PersistOutboxEvent,
   type RouteRecordStoreDependencies,
 } from './route-record-store.js';
-import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
+import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type HostState, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { advanceRound, selectNextHost } from './routed-exit.js';
@@ -141,7 +141,39 @@ export type ReconcileRoundsResult =
   /** Route records remain only as closed history; no marker or queue work remains. */
   | { readonly kind: 'quiescent' }
   | { readonly kind: 'deferred' }
+  /** A named routing round could not advance without risking durable state. */
+  | { readonly kind: 'stalled'; readonly detail: string; readonly rounds: readonly RoundStallEntry[] }
   | { readonly kind: 'unavailable'; readonly detail: string };
+
+/** Durable round context supplied to the bounded routing-stall recorder. */
+export interface RoundStallEntry {
+  readonly roundId: RoundId;
+  readonly unsettledHosts: Readonly<Record<ChildId, HostState>>;
+}
+
+function unsettledHosts(record: RouteRecord): Readonly<Record<ChildId, HostState>> {
+  return Object.fromEntries(Object.entries(record.hosts)
+    .filter(([, state]) => state !== 'restacked' && state !== 'done' && state !== 'rerouted' && state !== 'abandoned')
+    .map(([host, state]) => [Number(host) as ChildId, state])) as Readonly<Record<ChildId, HostState>>;
+}
+
+async function stalledRounds(
+  worktree: string,
+  slug: string,
+  roundIds: readonly RoundId[],
+  git: RouteRecordStoreDependencies['git'],
+): Promise<readonly RoundStallEntry[]> {
+  const rounds: RoundStallEntry[] = [];
+  for (const roundId of roundIds) {
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') {
+      rounds.push({ roundId, unsettledHosts: {} });
+    } else if (stored.record.phase !== 'closed') {
+      rounds.push({ roundId, unsettledHosts: unsettledHosts(stored.record) });
+    }
+  }
+  return rounds;
+}
 
 /** Recover the durable record/marker handshake without inferring a round from a branch. */
 export async function reconcileRounds(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<ReconcileRoundsResult> {
@@ -155,11 +187,23 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
   if (refs.length === 0) return { kind: 'none' };
   const marker = await readRepairMarker(worktree, slug, { git });
   if (marker.kind === 'unreadable') return { kind: 'unavailable', detail: 'routing marker is unreadable' };
+  const ids: RoundId[] = [];
   for (const ref of refs) {
     const id = parseRoundId(ref.split('/').at(-1) ?? '');
     if (!id) return { kind: 'unavailable', detail: 'routing ref has an invalid round id' };
+    ids.push(id);
+  }
+  const orderedIds = marker.kind === 'marker'
+    ? [marker.marker.roundId, ...ids.filter((id) => id !== marker.marker.roundId)]
+    : ids;
+  const stalled = async (roundId: RoundId, detail: string): Promise<ReconcileRoundsResult> => ({
+    kind: 'stalled',
+    detail: `routing round ${roundId} stalled: ${detail}`,
+    rounds: await stalledRounds(worktree, slug, orderedIds, git),
+  });
+  for (const id of orderedIds) {
     const stored = await readRouteRecord(worktree, slug, id, { git });
-    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `routing record ${id} is unreadable` };
+    if (stored.kind !== 'record') return stalled(id, 'routing record is unreadable');
     const abandonHost = Object.entries(stored.record.hosts)
       .find(([, state]) => state === 'abandoning' || state === 'abandoned');
     if (abandonHost !== undefined) {
@@ -201,7 +245,7 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     }
     if (stored.record.phase === 'prepared' && (marker.kind !== 'marker' || marker.marker.roundId !== id)) {
       const deleted = await writeRoutingTransaction(worktree, slug, [{ kind: 'delete-record', previous: stored }], { git });
-      return deleted.kind === 'updated' ? { kind: 'aborted', roundId: id } : { kind: 'unavailable', detail: `cannot abort prepared routing round: ${deleted.kind}` };
+      return deleted.kind === 'updated' ? { kind: 'aborted', roundId: id } : stalled(id, `cannot abort prepared routing round: ${deleted.kind}`);
     }
     const builtHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'built');
     if (builtHost) return { kind: 'resume-exit', roundId: id, host: Number(builtHost[0]) as ChildId };
@@ -220,8 +264,9 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
         case 'leaf-returned':
           return { kind: 'leaf-returned', roundId: id };
         case 'unavailable':
-          return { kind: 'unavailable', detail: advanced.detail };
+          return stalled(id, advanced.detail);
         case 'closed':
+          continue;
         case 'queue':
           return { kind: 'deferred' };
       }
