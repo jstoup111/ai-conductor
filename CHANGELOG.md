@@ -208,6 +208,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review semantic case repeat and regression halts now name their recovery command (resolve-case for a repeat; accept, or a fix on a stacked child, for a regression), and the stalled-or-stuck-feature runbook documents them. ([implementation PR #3491](https://github.com/jstoup111/ai-conductor/pull/3491)).
 - As-built remediation halts now name findings the planner escalated against a sealed artifact such as an approved ADR, with the target step and the planner's rationale, instead of reporting them as missing. ([implementation PR #3503](https://github.com/jstoup111/ai-conductor/pull/3503)).
 - Raising the restack cascade cap for one originating child no longer blocks raising it later for a different originating child, and the cascade-cap halt now reports the budget that actually refused. ([implementation PR #3504](https://github.com/jstoup111/ai-conductor/pull/3504)).
+- Build reviews now halt for human action when a judge rejects a case binding. ([implementation PR #3520](https://github.com/jstoup111/ai-conductor/pull/3520)).
 
 ## Migration
 
