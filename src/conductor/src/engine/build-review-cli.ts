@@ -1,6 +1,6 @@
 import { access, readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
@@ -464,12 +464,12 @@ type CliAggregateFailureDescription = {
   readonly stackedChildHint: string;
 };
 
-function aggregateRelativePath(child: ChildId | undefined): string {
-  return child === undefined ? '.pipeline/build-review.json' : `.pipeline/children/${child}/build-review.json`;
-}
-
-function ledgerRelativePath(child: ChildId | undefined): string {
-  return child === undefined ? '.pipeline/kickback-ledger.json' : `.pipeline/children/${child}/kickback-ledger.json`;
+/**
+ * Keep diagnostic paths tied to the path constructor used for artifact access.
+ * Diagnostics are always slash-delimited, including on a Windows worktree.
+ */
+function pipelineRelativePath(worktree: string, artifact: string, child: ChildId | undefined): string {
+  return relative(worktree, pipelinePathFor(worktree, artifact, child)).replaceAll('\\', '/');
 }
 
 function readErrorDetail(error: unknown): string {
@@ -484,7 +484,7 @@ async function readCliBuildReviewAggregate(
   readFile: (path: string) => Promise<string>,
 ): Promise<CliAggregateReadResult> {
   const path = pipelinePathFor(worktree, 'build-review.json', child);
-  const relativePath = aggregateRelativePath(child);
+  const relativePath = pipelineRelativePath(worktree, 'build-review.json', child);
   let source: string;
   try {
     source = await readFile(path);
@@ -628,7 +628,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
         : await (async () => {
           const ledger = await readKickbackLedger(worktree, child);
           if (isUnreadableKickbackGate(ledger, 'build_review')) {
-            throw new FindingsLedgerGateError(ledgerRelativePath(child));
+            throw new FindingsLedgerGateError(pipelineRelativePath(worktree, 'kickback-ledger.json', child));
           }
           return ledger.gates.build_review;
         })();
