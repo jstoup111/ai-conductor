@@ -77,6 +77,7 @@ async function subject(options: {
     },
   ]);
   const projectDir = await mkdtemp(join(tmpdir(), 'remediation-closure-judgement-'));
+  const sessionStore = new ProviderSessionStore();
   dirs.push(projectDir);
   return {
     claudeInvoke, codexInvoke, readHead, lifecycle, projectDir,
@@ -95,11 +96,18 @@ async function subject(options: {
           },
         },
       },
-      configuredProviders: ['claude'], providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'], providerRuntimes: runtimes, sessionStore,
       providerAttempt: lifecycle, remediationClosureHeadReader: readHead,
       ...(options.prepareCandidateSelfHost === undefined
         ? {}
-        : { providerExecution: { prepareCandidateSelfHost: options.prepareCandidateSelfHost } }),
+        : {
+            providerExecution: {
+              configuredProviders: ['claude'],
+              runtimes,
+              sessions: sessionStore,
+              prepareCandidateSelfHost: options.prepareCandidateSelfHost,
+            },
+          }),
     }),
   };
 }
