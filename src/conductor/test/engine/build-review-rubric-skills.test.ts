@@ -1,9 +1,11 @@
 // Covers: task:4, task:12, task:rem-prd-audit-10-2
 import { createHash } from 'node:crypto';
+import { execFile as execFileCallback } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -27,6 +29,7 @@ const implementationQualitySkill = fileURLToPath(new URL('../../../../skills/bui
 const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const retired = ['build-review-scope', 'build-review-root-cause', 'build-review-completeness'];
 const hash = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
+const execFile = promisify(execFileCallback);
 
 function judgementSection(skillText: string): string {
   return skillText.split('## Judgement\n')[1]?.split('\n## ')[0] ?? '';
@@ -77,6 +80,18 @@ describe('build-review rubric skill catalog', () => {
       expect(content).not.toMatch(/`(?:critical|major|minor|nit)`/);
     },
   );
+
+  it('keeps the vocabulary guard green alongside the catalog assertions', async () => {
+    const { stdout } = await execFile(
+      'bash',
+      [join(repositoryRoot, 'test/check_build_review_rubric_skill_vocabularies.sh')],
+      { cwd: repositoryRoot },
+    );
+
+    expect(stdout).toContain('build-review testQuality descriptor enum and SKILL.md judgement kinds are equal');
+    expect(stdout).toContain('build-review security descriptor enum and SKILL.md judgement kinds are equal');
+    expect(stdout).toContain('build-review implementationQuality descriptor enum and SKILL.md judgement kinds are equal');
+  });
 
   it('pins implementation-quality defect and non-finding payload fixtures at changed hunks', () => {
     const kinds = ['duplication', 'excess-complexity', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match'] as const;
