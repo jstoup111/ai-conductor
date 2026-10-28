@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
@@ -88,5 +89,56 @@ describe('stack preflight routing', () => {
     expect(refusals).toHaveLength(1);
     expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'deferred-base-refresh' })]);
     expect(consumed).toEqual([]);
+  });
+
+  it('escalates repeated routing stalls across their loop halts and resets after routed progress', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    const stalled = {
+      kind: 'stalled' as const,
+      detail: 'test reconciliation stall',
+      rounds: [{ roundId, unsettledHosts: { [child]: 'pending' as const } }],
+    };
+    const options = {
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => stalled,
+      hasMatchingResumeAuthorization: async () => true,
+    };
+
+    persister.start();
+    try {
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted' });
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+
+      const escalated = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number });
+      expect(escalated.map((event) => event.type)).toEqual([
+        'routing_rounds_stalled', 'loop_halt',
+        'routing_rounds_stalled', 'loop_halt',
+        'routing_rounds_stalled', 'loop_halt',
+      ]);
+      expect(escalated.filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt)).toEqual([1, 2, 3]);
+
+      await events.emit({
+        type: 'routed_repair_phase', eventId: 'progress', occurredAt: '2026-10-28T00:00:00.000Z',
+        roundId, host: child, phase: 'repairing', credit: true, child,
+      });
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+
+      const attempts = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number })
+        .filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt);
+      expect(attempts).toEqual([1, 2, 3, 1]);
+    } finally {
+      persister.stop();
+    }
   });
 });
