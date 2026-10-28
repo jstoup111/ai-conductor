@@ -1,23 +1,34 @@
 // Covers: task:6
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { hostNoOpEvidence } from '../../../src/engine/routing/routed-exit.js';
-import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import type { StoredRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { sealStack } from '../restack/restack-sweepG2-fixture.js';
 
 const host = parseChildId(1)!;
 const anotherHost = parseChildId(2)!;
 const roundId = parseRoundId('r1')!;
 const roots: string[] = [];
 
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.clearAllMocks();
+  vi.doUnmock('../../../src/engine/restack/restack-executor.js');
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function writeBlob(git: ReturnType<typeof makeGitRunner>, value: unknown): Promise<string> {
+  const result = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) });
+  if (result.exitCode !== 0) throw new Error('cannot write fixture blob');
+  return result.stdout.trim();
+}
 
 async function fixture(): Promise<{ readonly root: string; readonly git: ReturnType<typeof makeGitRunner>; readonly stored: StoredRouteRecord }> {
   const root = await mkdtemp(join(tmpdir(), 'routed-exit-'));
@@ -99,5 +110,53 @@ describe('host no-op evidence (real local Git)', () => {
       kind: 'unavailable', detail: 'host 1 closure is unavailable',
     });
     await expect(subject.git(['rev-parse', '-q', '--verify', closure])).resolves.toMatchObject({ exitCode: 1 });
+  });
+});
+
+// Covers: task:13
+describe('routed exit resolver forwarding', () => {
+  it('forwards the supplied resolver and cap to the exit restack', async () => {
+    const runRestack = vi.fn().mockResolvedValue({ kind: 'applied', opId: 'test-op' });
+    vi.resetModules();
+    vi.doMock('../../../src/engine/restack/restack-executor.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-executor.js')>();
+      return { ...actual, runRestack };
+    });
+    const { requestRoutedExit } = await import('../../../src/engine/routing/routed-exit.js');
+    const subject = await fixture();
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'not used' }));
+    await mkdir(join(subject.root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(subject.root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await subject.git(['add', '.ai-conductor/config.yml']);
+    await subject.git(['commit', '-qm', 'enable routing']);
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    await subject.git(['commit', '--allow-empty', '-qm', 'closed child']);
+    const closure = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await subject.git(['update-ref', closureRefFor('demo', host), closure]);
+    await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+    await subject.git(['commit', '--allow-empty', '-qm', 'leaf']);
+    await sealStack(subject.root, [1, 2]);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.git(['commit', '--allow-empty', '-qm', 'routed work']);
+    const tree = parseCommitSha((await subject.git(['rev-parse', `${closure}^{tree}`])).stdout.trim())!;
+    const record: RouteRecord = { ...subject.stored.record, entry: { host, pinnedBase: closure, tree } };
+    const recordBlob = await writeBlob(subject.git, record);
+    await subject.git(['update-ref', routeRecordRefFor('demo', roundId), recordBlob]);
+    await subject.git(['update-ref', repairMarkerRefFor('demo'), await writeBlob(subject.git, { host, roundId })]);
+    await expect(requestRoutedExit({
+      worktree: subject.root,
+      slug: 'demo',
+      roundId,
+      host,
+      git: subject.git,
+      resolver,
+      resolverCap: 7,
+    })).resolves.toEqual({ kind: 'restacked' });
+
+    expect(runRestack).toHaveBeenCalledWith(expect.objectContaining({
+      cause: 'feature-repair',
+      resolver,
+      resolverCap: 7,
+    }));
   });
 });

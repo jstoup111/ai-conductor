@@ -807,7 +807,7 @@ describe('Conductor routed acceptance verify-green path', () => {
       featureSlug: 'demo',
       fromStep: 'build_review',
       mode: 'auto', daemon: true, verifyArtifacts: false,
-      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      config: { rebase_resolution_attempts: 7, stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
       events: new ConductorEventEmitter(),
       stepRunner: runner,
       acceptanceRedExec: vi.fn(),
@@ -822,7 +822,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     await conductor.run();
 
     const [exitInput] = vi.mocked(requestRoutedExit).mock.calls[0] as unknown as [{ resolver?: (ctx: never) => unknown; resolverCap?: number }];
-    expect(exitInput.resolverCap).toEqual(expect.any(Number));
+    expect(exitInput.resolverCap).toBe(7);
     await exitInput.resolver?.({} as never);
     expect(resolveRebaseConflict).toHaveBeenCalledOnce();
   });

@@ -1,8 +1,10 @@
 // Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { execFile as execFileCallback } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
@@ -34,6 +36,7 @@ const cleanup: string[] = [];
 const host = parseChildId(1)!;
 const childTwo = parseChildId(2)!;
 const roundId = parseRoundId('r1')!;
+const execFile = promisify(execFileCallback);
 
 afterEach(async () => {
   vi.mocked(requestRoutedExit).mockClear();
@@ -410,6 +413,29 @@ describe('routed exit (real local Git)', () => {
 
     expect(resolver).toHaveBeenCalled();
     expect(result).toMatchObject({ kind: 'halted', detail: expect.stringContaining('test resolver declined') });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/restack conflict child 2[\s\S]*test resolver declined/);
+  });
+
+  it('applies a routed restack when the supplied resolver reconciles child 2', async () => {
+    const subject = await fixture(true);
+    await subject.commit('routed fix touching child 2', 'two.txt', 'routed\n');
+
+    await expect(requestRoutedExit({
+      worktree: subject.repo,
+      slug: 'demo',
+      roundId,
+      host,
+      git: subject.gitRunner,
+      resolver: async ({ projectRoot, environment }) => {
+        await writeFile(join(projectRoot, 'two.txt'), 'two\nrouted\n');
+        await execFile('git', ['add', 'two.txt'], { cwd: projectRoot, env: { ...process.env, ...environment } });
+        await execFile('git', ['rebase', '--continue'], { cwd: projectRoot, env: { ...process.env, ...environment } });
+        return { resolved: true };
+      },
+      resolverCap: 1,
+    })).resolves.toEqual({ kind: 'restacked' });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('reports a provider setup exhaustion from the routed resolver', async () => {
