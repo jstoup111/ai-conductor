@@ -8,7 +8,7 @@
  */
 import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import type { ConductorEvent, ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './step-runner-types.js';
@@ -35,14 +35,12 @@ import { activePublicationRecord, readPublicationRecord, writePublicationRecord,
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  projectChildOwnership,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { splitStoryBlocks } from './story-criteria.js';
+import { loadSliceTopology } from './slice-topology.js';
+import { resolveFeaturePlanPath } from './artifacts.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
 import { gateSatisfied } from './selector.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import {
   dispatchFinishRecord,
   makeProductionFinishRecordRunners,
@@ -55,6 +53,7 @@ import {
   resolveUnattendedPublicationIntent,
   StackPublicationHaltError,
   StackPublicationRetryError,
+  PublicationOperationFailedError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -69,14 +68,14 @@ import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
-import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { type BuildReviewAdvisoryFinding, upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
-import { RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { currentBuildReviewSourceLinks, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { listExistingChildren, type ChildId } from './child-context.js';
-import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import {
   appendRecordedShipmentFindings,
@@ -91,14 +90,7 @@ import {
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
 import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
-
-/** FINISH only reads the sealed coverage evidence; writes remain step-runner owned. */
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-  writeFile: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-  rename: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-};
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
@@ -151,7 +143,9 @@ export interface ProductionFinishPublicationDeps {
   /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
   remoteGit?: typeof executeRemoteGit;
   /** Canonical event spine; required for D9 warned operator-credential fallback. */
-  events?: { emit(event: ConductorEvent): Promise<void> };
+  events?: ConductorEventEmitter;
+  /** Delivers completed external-process records without stopping the feature tail. */
+  flushSessionEvents?: () => Promise<void>;
   /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
@@ -177,9 +171,10 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   originalBody?: string;
   records: readonly BuildReviewDispositionRecord[];
   caseRead?: RemediationCaseStoreReadResult;
+  advisoryFindings?: readonly BuildReviewAdvisoryFinding[];
   operations?: GithubOperationRunner;
 }): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
-  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records, input.caseRead);
+  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records, input.caseRead, input.advisoryFindings);
   if (!upserted.ok) return upserted;
   if (upserted.changed || (input.originalBody !== undefined && upserted.body !== input.originalBody)) {
     const mutation = await mutateRetainedPullRequest({
@@ -191,6 +186,45 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
     if (!mutation.ok) return mutation;
   }
   return { ok: true, changed: upserted.changed };
+}
+
+/**
+ * Projects the two durable advisory authorities into the PR-safe renderer.
+ * Severity suppressions are written only by the effective-verdict path, while
+ * settled advisory cases carry the adjudicator's lowered severity. Neither
+ * authority exposes the adjudicator rationale to publication.
+ */
+function projectBuildReviewAdvisoryFindings(
+  aggregate: ReturnType<typeof parseBuildReviewAggregate> | undefined,
+  caseReads: readonly Extract<RemediationCaseStoreReadResult, { ok: true }>[],
+): readonly BuildReviewAdvisoryFinding[] {
+  if (!aggregate) return [];
+  const sources = projectBuildReviewAggregateSources(aggregate);
+  if (!sources) return [];
+  const threshold = new Map<string, BuildReviewAdvisoryFinding>();
+  const adjudicated = new Map<string, BuildReviewAdvisoryFinding>();
+  for (const read of caseReads) {
+    for (const entry of read.state.suppressions ?? []) {
+      if (entry.kind !== 'severity' || entry.lastSeenLap !== aggregate.lapId) continue;
+      const source = sources.find((candidate) => candidate.rubric === entry.rubric && candidate.findingId === entry.findingId);
+      if (!source || source.severity === undefined) continue;
+      threshold.set(`${source.rubric}:${source.findingId}`, {
+        id: source.findingId, rubric: source.rubric, severity: source.severity,
+        origin: 'threshold', reviewerSummary: source.summary,
+      });
+    }
+    for (const [sourceId, { record, link }] of currentBuildReviewSourceLinks(read.state.cases)) {
+      if (record.disposition !== 'advisory' || record.operatorResolution !== undefined || record.adjudicatedSeverity === undefined ||
+        (link.outcome !== 'advisory' && link.outcome !== 'merged')) continue;
+      const source = sources.find((candidate) => `${candidate.rubric}:${candidate.findingId}` === sourceId);
+      if (!source) continue;
+      adjudicated.set(sourceId, {
+        id: source.findingId, rubric: source.rubric, severity: record.adjudicatedSeverity,
+        origin: 'adjudicated', reviewerSummary: source.summary,
+      });
+    }
+  }
+  return [...threshold.values(), ...adjudicated.values()];
 }
 
 type RetainedPullRequestMutation =
@@ -254,24 +288,53 @@ async function sealedChildPresentation(input: {
   base: string;
   git: GitRunner;
 }): Promise<{ slice: { position: number; name: string; taskIds: readonly string[]; storyIds: readonly string[] }; stories: readonly { id: string; title: string }[]; diffstat: string }> {
-  const envelope = await readCoverageBindingEnvelope(input.root, coverageBindingFilesystem).catch(() => null);
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack coverage evidence is unreadable');
+  // FINISH's historical Git seam requires a cwd while the topology reader's
+  // shared seam owns cwd at construction. Adapt only the compatible read
+  // options here so stack publication stays on its injected process boundary.
+  const topology = await loadSliceTopology(input.root, input.slug, {
+    git: async (args, options) => {
+      const result = await input.git(args, {
+        cwd: input.root,
+        ...(options?.credential === undefined ? {} : { credential: options.credential }),
+        ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      });
+      return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+    },
+  });
+  if (topology.kind !== 'sliced') {
+    const detail = topology.kind === 'unavailable' ? topology.cause : 'unsliced';
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack topology is unavailable: ${detail}`);
   }
-  const positions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))].sort((left, right) => left - right);
-  const title = envelope.sliceMembership.titles[positions.indexOf(input.position)];
+  const title = topology.sliceMembership.titles[topology.positions.indexOf(input.position)];
   if (!title) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} is missing`);
-  const ownership = projectChildOwnership(envelope, input.position);
-  if (ownership.taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
-  const storiesPath = join(input.root, '.docs', 'stories', `${input.slug}.md`);
-  const storiesText = await readFile(storiesPath, 'utf8').catch(() => '');
+  const taskIds = Object.entries(topology.sliceMembership.taskSlices)
+    .filter(([, position]) => position === input.position)
+    .map(([taskId]) => taskId);
+  const storyIds = Object.entries(topology.storyOwnership)
+    .filter(([, position]) => position === input.position)
+    .map(([storyId]) => storyId);
+  if (taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
+  const planPath = await resolveFeaturePlanPath(input.root, input.slug);
+  const planText = planPath === undefined ? undefined : await readFile(planPath, 'utf8').catch(() => undefined);
+  const storiesPath = planPath === undefined || planText === undefined
+    ? null
+    : await resolveFeatureStoriesRef(
+      worktreeManifestSource(input.root),
+      relative(input.root, planPath).replaceAll('\\', '/'),
+      planText,
+    );
+  if (storiesPath === null) {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack stories path is unavailable');
+  }
+  const storiesText = await readFile(join(input.root, storiesPath), 'utf8').catch(() => '');
   const stories = splitStoryBlocks(storiesText).flatMap((story) => story.id === undefined ? [] : [{
     id: story.id,
     title: story.text.split('\n').find((line) => /^##\s+Story\s+/i.test(line))?.replace(/^##\s+Story\s+[^:]+:?\s*/i, '') || story.id,
   }]);
   const diff = await input.git(['diff', '--stat', `${input.base}...${input.branch}`], { cwd: input.root });
   return {
-    slice: { position: input.position, name: title, taskIds: ownership.taskIds, storyIds: ownership.storyIds },
+    slice: { position: input.position, name: title, taskIds, storyIds },
     stories,
     diffstat: diff.stdout.trim(),
   };
@@ -1291,6 +1354,12 @@ export function createProductionFinishPublicationCoordinator(
   const acceptedProseRevisionByPr = new Map<string, string>();
   const authoredPlaceholderProsePendingByPr = new Set<string>();
   const authoringOriginByPr = new Map<string, 'placeholder' | 'revision_required'>();
+  // Once a retained PR exists, its finish pass observes one immutable sealed
+  // topology. Reuse that cursor across its coordinator lifetime to avoid
+  // repeating durable-child-state probes while retaining the loader's
+  // all-cardinality position check for the observation.
+  const retainedPrObservationChildByFeature = new Map<string, Promise<Awaited<ReturnType<typeof resolveActiveChild>>>>();
+  let retainedPrFinish = false;
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -1326,6 +1395,7 @@ export function createProductionFinishPublicationCoordinator(
     const aggregate = await readFile(join(deps.projectRoot, '.pipeline', 'build-review.json'), 'utf8')
       .then((text) => parseBuildReviewAggregate(JSON.parse(text)))
       .catch(() => undefined);
+    const advisoryFindings = projectBuildReviewAdvisoryFindings(aggregate, readableCaseReads);
     if (reducedCoverage.records.length > 0 && !aggregate) {
       throw new Error('accepted-risk projection: reduced build-review coverage has no renderable current-lap evidence');
     }
@@ -1358,6 +1428,7 @@ export function createProductionFinishPublicationCoordinator(
       originalBody: typeof body === 'string' ? body : '',
       records: listed.records,
       caseRead,
+      advisoryFindings,
       operations,
     });
     if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
@@ -1395,6 +1466,7 @@ export function createProductionFinishPublicationCoordinator(
   return {
     requiresArtifactValidation: true,
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
+      retainedPrFinish ||= state.pr_url !== undefined;
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended
         ? await (attendedRequestedOutcome ??= Promise.resolve().then(
@@ -1480,10 +1552,18 @@ export function createProductionFinishPublicationCoordinator(
 
       let activeChildForObservation: Awaited<ReturnType<typeof resolveActiveChild>> | undefined;
       const resolveObservationChild = async () => {
-        if (activeChildForObservation !== undefined) return activeChildForObservation;
-        activeChildForObservation = state.feature_desc === undefined
-          ? { kind: 'no-child' as const }
-          : await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        if (state.feature_desc === undefined) return { kind: 'no-child' as const };
+        if (retainedPrFinish) {
+          let cursor = retainedPrObservationChildByFeature.get(state.feature_desc);
+          if (cursor === undefined) {
+            cursor = resolveActiveChild(deps.projectRoot, state.feature_desc, { reuseDurableChildState: true });
+            retainedPrObservationChildByFeature.set(state.feature_desc, cursor);
+          }
+          return cursor;
+        }
+        if (activeChildForObservation === undefined) {
+          activeChildForObservation = await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        }
         return activeChildForObservation;
       };
       const observeStackReadiness = async (prUrl: string, leafReady: boolean): Promise<boolean> => {
@@ -1693,8 +1773,9 @@ export function createProductionFinishPublicationCoordinator(
         observe: async () => {
           // The snapshot ports are evaluated in a fixed order. Reuse the
           // cursor within one observation so adding the stack dimension does
-          // not add duplicate N=1 Git discovery; discard it before every
-          // re-observation after an effect.
+          // not add duplicate N=1 Git discovery. A retained PR keeps its
+          // sealed cursor for the whole coordinator pass; a new PR rechecks
+          // after each effect because branch publication can change state.
           activeChildForObservation = undefined;
           return observePublicationSnapshot(
             observationInput as Parameters<typeof observePublicationSnapshot>[0],
@@ -1709,7 +1790,38 @@ export function createProductionFinishPublicationCoordinator(
           ...(dispatchAuthoring
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
-                  const dispatched = await dispatchAuthoring(request);
+                  const pullRequest = repositoryAndNumber(request.pullRequestUrl);
+                  let lastFailure: { operation: string; error: string } | undefined;
+                  const observeFailure = (event: ConductorEvent) => {
+                    if (
+                      event.type === 'github_operation_failed'
+                      && event.operation === 'pull-request.edit'
+                      && event.target.kind === 'pull-request'
+                      && event.target.repository === pullRequest?.repository
+                      && event.target.number === pullRequest.number
+                    ) {
+                      lastFailure = { operation: event.operation, error: event.error };
+                    }
+                  };
+                  // Establish the pass boundary before observing failures. The
+                  // pre-subscribe drain advances any earlier sibling-ledger
+                  // records, while the post-dispatch fresh flush projects only
+                  // records produced by this authoring pass.
+                  const canObserveFailures = pullRequest !== undefined
+                    && deps.events !== undefined
+                    && deps.flushSessionEvents !== undefined;
+                  let observingFailures = false;
+                  if (canObserveFailures) {
+                    // A failed drain leaves the sibling-ledger cursor at an
+                    // unknown boundary. Do not subscribe in that case: a
+                    // later successful flush could replay a failure from an
+                    // earlier authoring pass and misattribute it here.
+                    observingFailures = await deps.flushSessionEvents!()
+                      .then(() => true, () => false);
+                    if (observingFailures) deps.events!.on('github_operation_failed', observeFailure);
+                  }
+                  try {
+                    const dispatched = await dispatchAuthoring(request);
                   // A failed provider run returns, it does not throw. Passing
                   // it through as a completed pass made the coordinator's
                   // fixed-point guard read an aborted attempt as "authoring
@@ -1718,8 +1830,15 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
+                    if (observingFailures) {
+                      await deps.flushSessionEvents!().catch(() => undefined);
+                      if (lastFailure) throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
+                    }
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
+                  }
+                  } finally {
+                    if (observingFailures) deps.events!.off('github_operation_failed', observeFailure);
                   }
                 },
               }

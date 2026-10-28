@@ -7,7 +7,7 @@
 // without eagerly loading the daemon runtime (execa, the provider layer, …).
 // The actual `runDaemonMode` is imported lazily by index.ts only on a match.
 
-import { DEFAULT_IDLE_POLL_SECONDS } from '../cli-defaults.js';
+import { DEFAULT_IDLE_POLL_SECONDS } from './daemon-command-defaults.js';
 
 /**
  * Options carried from `conduct daemon …` into `runDaemonMode`. A subset of

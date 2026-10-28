@@ -8,7 +8,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
-import { repairMarkerRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
@@ -38,6 +38,24 @@ async function fixture() {
 }
 
 describe('routed-round admission (real local Git)', () => {
+  // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
+  it('reports quiescent when closed route history has neither a marker nor queued work', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', input);
+      if (created.kind !== 'created') throw new Error(created.kind);
+      const closed: RouteRecord = {
+        ...created.record,
+        phase: 'closed',
+        hosts: { [c1]: 'done' },
+      };
+      const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(closed) })).stdout.trim();
+      await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({ kind: 'quiescent' });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   it('writes a prepared record then atomically opens its first marker and phase events', async () => {
     const subject = await fixture();
     try {
@@ -129,6 +147,28 @@ describe('routed-round admission (real local Git)', () => {
       if (opened.kind !== 'created') throw new Error(opened.kind);
       await admitRound(subject.repo, 'demo', opened.record, c1);
       expect(await reconcileRounds(subject.repo, 'demo')).toEqual({ kind: 'navigate-leaf-to-build', roundId: 'r1', host: c1 });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:20
+  it('carries an operator host entry step through reconciliation', async () => {
+    const subject = await fixture();
+    try {
+      const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+      const created = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        kind: 'operator',
+        operator: {
+          origin: 'rewind', reason: 'recheck the suite', operator: 'operator@example.test', entryStep: 'test_suite',
+          carried: [], otherTips: { 'feat/daemon-demo': tip as never },
+          priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+        },
+      });
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await expect(admitRound(subject.repo, 'demo', created.record, c1)).resolves.toMatchObject({ kind: 'admitted' });
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
+        kind: 'navigate-leaf-to-build', roundId: 'r1', host: c1, entryStep: 'test_suite',
+      });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 

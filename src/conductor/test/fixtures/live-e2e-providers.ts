@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from './dispatch-git-guard.js';
+
 // Covers: task:20
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -28,7 +30,7 @@ export interface LiveE2EProviderDescriptor extends LiveE2EProviderManifestEntry 
 
 const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
   claude: {
-    createProvider: () => new ClaudeProvider(),
+    createProvider: () => new ClaudeProvider(dispatchGitGuard),
     expectedAuthenticationSource: 'oauth-token',
     resolveAuthenticationSource: async (provider) => {
       if (!(provider instanceof ClaudeProvider)) {
@@ -39,7 +41,7 @@ const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
     assertCredentialAvailable: () => {},
   },
   codex: {
-    createProvider: () => new CodexProvider(),
+    createProvider: () => new CodexProvider(dispatchGitGuard),
     expectedAuthenticationSource: 'api-key',
     resolveAuthenticationSource: async (provider) => {
       const readiness = await provider.readiness?.();
@@ -60,7 +62,7 @@ const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
     },
   },
   pi: {
-    createProvider: () => new PiProvider(),
+    createProvider: () => new PiProvider(dispatchGitGuard),
     expectedAuthenticationSource: 'missing',
     resolveAuthenticationSource: async () => 'missing',
     assertCredentialAvailable: (credential) => {

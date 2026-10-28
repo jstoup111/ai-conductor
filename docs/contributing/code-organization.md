@@ -50,7 +50,7 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 | `engine/` | 238 | The state machine, step catalogue, gate loop, daemon, composer-loop implementation, config resolution, self-host guardrails — essentially all domain logic. |
 | `execution/` | 6 | The third-party process boundary: LLM provider adapters and subprocess/session management. |
 | `types/` | 6 | The shared type surface: `StepName`, `ConductState`, `ConductorEvent`, `HarnessConfig`, plugin kinds. |
-| `ui/` | 10 | Event emitter, subscriber fan-out, terminal renderer, dashboard snapshot/text, notifications, prompt host. |
+| `ui/` | 10 | Subscriber fan-out, terminal renderer, dashboard snapshot/text, notifications, prompt host. |
 | `tools/` | 3 | Build-time code generators invoked by `bin/` wrappers. Nothing in the runtime imports them. |
 
 ### engine/
@@ -137,18 +137,39 @@ The only layer permitted to reach a third party in ordinary code paths.
 | `pi-self-host-auth.ts` | Pi credential resolution into the isolated self-host home. |
 | `session.ts` | `SessionManager`. |
 | `subprocess.ts` | `runCommand`. |
+| `feature-slug.ts`, `real-exec-guard.ts`, `scratch-schema.ts`, `provider-model-policy-defaults.ts`, `build-review-read-only-capability.ts`, `transcript-format.ts` | Leaf helpers moved down from `engine/` so adapters need no engine import. Their former engine modules re-export them. |
+| `provider-setup-failure.ts` | Provider setup failure classification, moved whole from `engine/`. |
 
 Tests must fake this seam rather than cross it. See [testing](testing.md).
 
+Adapters reach engine behavior only through injected ports. `llm-provider.ts` declares
+`DispatchGitGuard`; `ClaudeProvider`, `CodexProvider`, `PiProvider`, and the catalog's
+`createAdapter` require it, and engine code passes `ensureGitGuardForDispatch` from
+`engine/git-guard.ts`.
+
 ### types/
 
-`types/index.ts` is a barrel over five modules: `steps.ts` (the `StepName` union at `:1`, `Phase` at
-`:37`, `EnforcementLevel` at `:44`, `StepDefinition` at `:50`), `state.ts`, `events.ts`, `config.ts`
-(`HarnessConfig`, the config schema of record), and `plugin.ts` (`PluginKind` at `:8`).
+`types/index.ts` is a barrel over `steps.ts` (`StepName`, `Phase`, `EnforcementLevel`,
+`StepDefinition`), `state.ts`, `events.ts`, `config.ts` (`HarnessConfig`, the config schema of
+record), `plugin.ts` (`PluginKind`), and the contract modules `provider.ts`, `github.ts`,
+`restack.ts`, `build-review.ts`, `routing.ts`, and `scheduling-unit.ts`.
+
+`types/` imports nothing outside `types/`, including through `import type` and inline
+`import('…')` types:
+
+- A type a module here used to borrow from `execution/` or `engine/` is declared here, and its old
+  module imports it back.
+- A union derived from an implementation registry is written as a literal union here. The
+  registry `satisfies` a record keyed by that union, so drift either way fails `tsc`.
+- Built-in provider ids are the exception: the provider catalog stays their only literal source,
+  so `provider.ts` declares the opaque `ProviderId` brand and the catalog converts into it.
+- `plugin.ts` types plugin emitters against `ConductorEventBus`, which `ConductorEventEmitter`
+  implements.
 
 ### ui/
 
-`events.ts` (`ConductorEventEmitter`), `types.ts` (`UIRenderer`, `UISubscriber`, `StepSnapshot`,
+`events.ts` (a re-export of `ConductorEventEmitter` and `EventHandler`, which live in
+`engine/conductor-event-emitter.ts`; no `src/` file below `ui/` imports through it), `types.ts` (`UIRenderer`, `UISubscriber`, `StepSnapshot`,
 `DashboardSnapshot`, `ViewMode`, `UIPromptHost`), `terminal-renderer.ts`,
 `subscriber.ts`, `dispatch.ts`, `dashboard-snapshot.ts`, `dashboard-text.ts`, `live-region.ts`,
 `notifications.ts`, and `terminal/prompt-host.ts` — the only file under `ui/terminal/`.
@@ -170,7 +191,7 @@ contract: `0` clean, `1` drift, `2` environment error.
 
 ## Entry points
 
-Seven files sit at the top level of `src/conductor/src/`.
+Eleven files sit at the top level of `src/conductor/src/`.
 
 | File | Role |
 | --- | --- |
@@ -181,6 +202,12 @@ Seven files sit at the top level of `src/conductor/src/`.
 | `intake-file-cli.ts` | Standalone `main()`; invoked by `skills/intake/scripts/intake-file`. |
 | `intake-backfill-cli.ts` | Standalone `main()`; invoked by `bin/intake-backfill`. |
 | `quarantine-engineer-signals-cli.ts` | Standalone `main()`; wraps `engine/engineer/quarantine.ts`. |
+| `cli-defaults.ts`, `cli-pre-dispatch.ts` | Shared CLI defaults, and the command detectors reached before the foreground pipeline starts. |
+| `terminal-builtins.ts` | `registerTerminalBuiltins`: constructs and registers `TerminalRenderer` and `TerminalSubscriber`. Called by `daemon-cli.ts`. |
+| `cli-builtins.ts` | `registerCliBuiltins`: registers built-in providers through `registerBuiltins` in `engine/plugin-loader.ts`, then the terminal UI. Called by `index.ts`. |
+
+The engine never constructs UI. `registerBuiltins` registers only built-in providers; terminal
+rendering is composed at these entry points, through the same plugin registry.
 
 `main()` in `index.ts:1933` dispatches in strict priority order, each branch calling `process.exit`.
 Subcommand detection runs first; the `detectInline` check at `:670` is the last fallthrough, and a bare
@@ -191,36 +218,30 @@ appropriate CLI or integration test instead of adding a `wiring.entry_points` co
 
 ## Dependency direction
 
-Intended layering is `types ← execution ← engine ← ui ← entry points`. Measured by import grep over
-`src/conductor/src/`:
+Layering is `types ← execution ← engine ← ui ← entry points`, and it is enforced: a file may
+import its own layer or any layer to its left. `tools/` may import only `tools/`, `engine/`, and
+`types/`, and nothing outside `tools/` may import `tools/`. Only an entry point may import another
+entry point.
 
-| Edge | Imports | Notes |
+Every module reference is an edge for this rule: value imports, `import type`, `export … from`
+re-exports, inline `import('…')` types, and dynamic `import()`. To use something from a higher
+layer, move it down or have the higher layer inject it through a port; see
+[execution/](#execution) for the `DispatchGitGuard` example.
+
+`test/structural/layer-ratchet.test.ts` enforces this in the default tier (see
+[layer ratchet](testing.md#layer-ratchet)). It fails on any upward edge, any value-import cycle
+inside a layer, and any such edge missing from the allowlist. Cycle detection counts value imports
+and value re-exports only.
+
+`test/structural/layer-allowlist.txt` holds no upward edge, and the same test fails if one is
+added. Its remaining entries are grandfathered same-layer value cycles, one sorted
+`<from> -> <to>` line per (importing file, imported file) pair. The allowlist can only shrink: an
+entry whose edge disappears or stops violating fails the test as stale.
+
+| Allowlisted edge | Entries | Example |
 | --- | --- | --- |
-| engine → types | 74 | The dominant edge. |
-| engine → execution | 17 | Includes concrete `ClaudeProvider` / `CodexProvider` in `engine/plugin-loader.ts`. |
-| ui → types | 11 | |
-| engine → ui | 14 | 11 are `import type`. |
-| ui → engine | 10 | 5 are `import type`. |
-| types → execution | 1 | `types/events.ts:3-9`. |
-| execution → anything internal | 0 | A clean leaf — `execution/` imports nothing from `engine/`, `types/`, or `ui/`. |
-| anything → entry points | 0 | No layer file imports `index.js`, `cli.js`, or `daemon-cli.js`. |
-| tools → engine, types | — | Generators read engine metadata; the reverse never happens. |
-
-> **Known limitation.** `engine/` and `ui/` import each other, so the layering above is not enforceable
-> as a one-way rule. Engine-side value imports: `engine/conductor.ts:132` and `engine/event-persister.ts:13`
-> (`ConductorEventEmitter`), `engine/plugin-loader.ts:8-9` (`TerminalSubscriber`, `TerminalRenderer`).
-> UI-side value imports: `ui/terminal-renderer.ts:11,12,15`
-> (`getArtifactStatus`, `STEP_ARTIFACT_GLOBS`, `formatProgressDelta`), `ui/terminal/prompt-host.ts:15`
-> (`getRecoveryOptions`). Moving a symbol between the two layers can therefore create a runtime
-> initialization cycle that the type checker will not flag. Tracked in
-> [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
-
-> **Known limitation.** `types/events.ts:3-9` imports `AuthenticationReadinessState`,
-> `AuthenticationSource`, `CodexProbeFailureKind`, `CodexProbeParserRejection`, and `TokenUsage` from
-> `../execution/llm-provider.js` — the only outbound edge from `types/`, and it inverts
-> `types ← execution`. It is a type-only import, so it has no runtime
-> effect, but `types/` is not the dependency-free leaf the layering implies. Tracked in
-> [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
+| engine → engine (cycle) | 225 | `engine/slice-topology.ts` → `engine/plan-slices.ts` |
+| execution → execution (cycle) | 9 | `execution/provider-catalog.ts` ↔ provider adapters |
 
 ## Build output
 

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { ConductorEvent } from '../../types/events.js';
 import type { ChildId } from '../child-context.js';
 import type { HostState, RouteRecord, RoundId } from './route-types.js';
+import type { CommitSha } from '../restack/restack-types.js';
 
 function occurrence(): { readonly eventId: string; readonly occurredAt: string } {
   return { eventId: randomUUID(), occurredAt: new Date().toISOString() };
@@ -25,6 +26,29 @@ export function routedRepairPhaseEvent(
   credit: boolean,
 ): Extract<ConductorEvent, { type: 'routed_repair_phase' }> {
   return { type: 'routed_repair_phase', ...occurrence(), roundId, host, phase, credit, child: host };
+}
+
+/** Creates the durable operator-landing occurrence paired with its route mutation. */
+export function operatorRoundEvent(
+  roundId: RoundId,
+  operator: NonNullable<RouteRecord['operator']>,
+  host: ChildId,
+  phase: 'opened' | 'declared' | 'abandoned',
+): Extract<ConductorEvent, { type: 'operator_round' }> {
+  return {
+    type: 'operator_round', ...occurrence(), roundId, child: host,
+    origin: operator.origin, reason: operator.reason, action: phase,
+  };
+}
+
+/** Creates the one durable occurrence for a completed queued revalidation. */
+export function childRevalidatedEvent(
+  child: ChildId,
+  generation: number,
+  closureSha: CommitSha,
+  outcome: 'passed' | 'fixed',
+): Extract<ConductorEvent, { type: 'child_revalidated' }> {
+  return { type: 'child_revalidated', ...occurrence(), child, generation, closureSha, outcome };
 }
 
 /** Creates the durable occurrence paired with an upward host movement. */

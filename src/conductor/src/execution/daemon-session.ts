@@ -6,7 +6,7 @@ import {
 } from './session-event-producer.js';
 import type { SessionCommandRefusedEvent } from '../types/events.js';
 import { isSessionEventIdentity } from './session-event-identity.js';
-import { isFeatureSlug } from '../engine/worktree.js';
+import { isFeatureSlug } from './feature-slug.js';
 
 /**
  * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.
@@ -89,6 +89,9 @@ export const SESSION_SANCTIONED_SUBCOMMANDS = [
   // `Round:` trailer to the session's own commit message; it writes nothing
   // but that message file.
   'round-stamp',
+  // git-hook-assets.ts — this pre-commit guard is the session-owned commit
+  // boundary for an active operator round.
+  'stack-commit-guard',
   // engine/conductor.ts FINISH publication prompts + skills/pr/SKILL.md — the
   // author_pr_prose / repair passes submit PR edits as a guarded
   // `pull-request.edit` request. github-operations.ts enforces feature

@@ -73,6 +73,8 @@ As an operator reading daemon output, I want an incomplete build to say exactly 
 
 **Requirement:** TI-3 — a build whose tasks are all genuinely complete completes as today, with no false reopen or stall.
 
+**Scenario scope:** assumes no completed engine-appended `rem-*` task is reopened in the pass by the BUILD-boundary remediation-closure judgement (`adr-2026-10-21-remediation-closure-judgement`); a `persists` or `partial` verdict withholds completion through its own `remediation-closure` obligation (`adr-2026-09-06-reopened-task-resolution` decision 14).
+
 As an operator, I want builds that have legitimately finished to keep completing without extra work, so that this fix does not create false stalls or redo finished tasks.
 
 ### Acceptance Criteria

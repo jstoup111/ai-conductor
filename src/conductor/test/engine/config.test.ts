@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:8, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -11,7 +11,6 @@ import {
   loadConfig,
   loadMergedConfig,
   validateConfig,
-  CONFIG_CONSUMER_KEY_SETS,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
   customStepEntries,
@@ -39,6 +38,7 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
 } from '../../src/engine/pr-labels.js';
 import { collectProviderModelSelections } from '../../src/engine/provider-model-config.js';
+import { buildStepRegistry } from '../../src/engine/steps.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -3093,13 +3093,54 @@ steps:
     });
   });
 
+  describe('plan_review config field', () => {
+    it('accepts and preserves max_prompt_chars', () => {
+      expect(validateConfig({ plan_review: { max_prompt_chars: 600000 } })).toMatchObject({
+        ok: true,
+        config: { plan_review: { max_prompt_chars: 600000 } },
+      });
+    });
+
+    it.each([0, -1, 1.5, 'large'])(
+      'rejects non-positive-integer max_prompt_chars %#',
+      (max_prompt_chars) => {
+        expect(validateConfig({ plan_review: { max_prompt_chars } })).toEqual({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: 'plan_review.max_prompt_chars must be a positive integer',
+          },
+        });
+      },
+    );
+
+    it('rejects unknown plan_review keys', () => {
+      expect(validateConfig({ plan_review: { max_chars: 1 } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown key in plan_review: "max_chars"',
+        },
+      });
+    });
+
+    it('rejects max_prompt_chars as a per-step setting', () => {
+      expect(validateConfig({ steps: { plan_review: { max_prompt_chars: 600000 } } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown key in steps.plan_review: "max_prompt_chars"',
+        },
+      });
+    });
+  });
+
   describe('prd_audit and architecture_review_as_built config fields', () => {
-    it('resolves the remediation caps and plan-gap policy defaults', () => {
+    it('materializes the other prd-audit defaults without a remediation lap default', () => {
       expect(validateConfig({})).toMatchObject({
         ok: true,
         config: {
           prd_audit: {
-            max_remediation_laps: 1,
             max_appended_tasks: 5,
             max_appended_ratio: 0.25,
             halt_on_any_plan_gap: false,
@@ -3109,17 +3150,43 @@ steps:
     });
 
     it.each([
-      ['max_remediation_laps', 0],
-      ['max_appended_tasks', 0],
-    ])('rejects prd_audit.%s when it is zero', (key, value) => {
-      expect(validateConfig({ prd_audit: { [key]: value } })).toEqual({
+      ['prd_audit', 0],
+      ['prd_audit', '3'],
+      ['architecture_review_as_built', 0],
+      ['architecture_review_as_built', '3'],
+    ] as const)('rejects an invalid %s remediation lap integer without coercion', (gate, value) => {
+      const result = validateConfig({ [gate]: { max_remediation_laps: value } });
+
+      expect(result).toEqual({
         ok: false,
         error: {
           type: 'validation_error',
-          message: `prd_audit.${key} must be a positive integer`,
+          message: `${gate}.max_remediation_laps must be a positive integer or a map of S, M, L to positive integers`,
         },
       });
     });
+
+    it('keeps max_appended_tasks positive-integer validation', () => {
+      expect(validateConfig({ prd_audit: { max_appended_tasks: 0 } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'prd_audit.max_appended_tasks must be a positive integer',
+        },
+      });
+    });
+
+    it.each(['prd_audit', 'architecture_review_as_built'] as const)(
+      'accepts a remediation lap integer or S/M/L map for %s',
+      (gate) => {
+        for (const max_remediation_laps of [5, {}, { L: 6 }]) {
+          expect(validateConfig({ [gate]: { max_remediation_laps } })).toMatchObject({
+            ok: true,
+            config: { [gate]: { max_remediation_laps } },
+          });
+        }
+      },
+    );
 
     it.each([0, -0.1, 1.1])('rejects an out-of-range remediation ratio', (value) => {
       expect(validateConfig({ prd_audit: { max_appended_ratio: value } })).toEqual({
@@ -3148,13 +3215,12 @@ steps:
       });
     });
 
-    it('resolves as-built remediation defaults and preserves configured overrides', () => {
+    it('materializes as-built remediation defaults without a remediation lap default and preserves configured overrides', () => {
       expect(validateConfig({})).toMatchObject({
         ok: true,
         config: {
           architecture_review_as_built: {
             remediation: { enabled: true },
-            max_remediation_laps: 1,
           },
         },
       });
@@ -3178,19 +3244,43 @@ steps:
     });
 
     it.each([
-      [
-        { remediation: { enabled: 'yes' } },
-        'architecture_review_as_built.remediation.enabled must be a boolean',
-      ],
-      [
-        { max_remediation_laps: 1.5 },
-        'architecture_review_as_built.max_remediation_laps must be a positive integer',
-      ],
-    ])('rejects invalid as-built remediation config %#', (architecture_review_as_built, message) => {
-      expect(validateConfig({ architecture_review_as_built })).toEqual({
+      ['prd_audit', { XL: 3 }, 'prd_audit.max_remediation_laps.XL is an unknown tier'],
+      ['prd_audit', { M: 2.5 }, 'prd_audit.max_remediation_laps.M must be a positive integer'],
+      ['architecture_review_as_built', { XL: 3 }, 'architecture_review_as_built.max_remediation_laps.XL is an unknown tier'],
+      ['architecture_review_as_built', { M: 2.5 }, 'architecture_review_as_built.max_remediation_laps.M must be a positive integer'],
+    ] as const)('rejects an invalid remediation lap map for %s', (gate, max_remediation_laps, message) => {
+      expect(validateConfig({ [gate]: { max_remediation_laps } })).toEqual({
         ok: false,
         error: { type: 'validation_error', message },
       });
+    });
+
+    it('rejects an invalid as-built remediation switch', () => {
+      expect(validateConfig({ architecture_review_as_built: { remediation: { enabled: 'yes' } } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'architecture_review_as_built.remediation.enabled must be a boolean',
+        },
+      });
+    });
+
+    it('leaves remediation lap caps absent while materializing sibling defaults', () => {
+      const result = validateConfig({
+        prd_audit: { max_appended_tasks: 5 },
+        architecture_review_as_built: { remediation: { enabled: true } },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          prd_audit: { max_appended_tasks: 5, max_appended_ratio: 0.25 },
+          architecture_review_as_built: { remediation: { enabled: true } },
+        },
+      });
+      if (!result.ok) return;
+      expect(result.config.prd_audit).not.toHaveProperty('max_remediation_laps');
+      expect(result.config.architecture_review_as_built).not.toHaveProperty('max_remediation_laps');
     });
 
     it('rejects an unknown as-built check name', () => {
@@ -3209,6 +3299,49 @@ steps:
   });
 
   describe('build_review config field', () => {
+    it('resolves per-rubric min_severity for built-in and custom rubrics without defaulting it', () => {
+      const resolved = resolveBuildReviewConfig({
+        build_review: {
+          rubrics: {
+            implementationQuality: { min_severity: 'major' },
+          },
+          custom_rubrics: {
+            eventSpine: {
+              skill: 'event-spine',
+              question: 'Does this preserve the event spine?',
+              enabled: true,
+              min_severity: 'minor',
+            },
+          },
+        },
+      });
+
+      expect(resolved.rubrics.implementationQuality.min_severity).toBe('major');
+      expect(resolved.rubrics.security).not.toHaveProperty('min_severity');
+      expect(resolved.catalog.find((entry) => entry.id === 'eventSpine')?.policy.min_severity)
+        .toBe('minor');
+    });
+
+    it.each([
+      [
+        { build_review: { rubrics: { implementationQuality: { min_severity: 'blocker' } } } },
+        'build_review.rubrics.implementationQuality.min_severity must be critical|major|minor|nit',
+      ],
+      [
+        { build_review: { custom_rubrics: { eventSpine: { skill: 'event-spine', question: 'Check event spine.', min_severity: 2 } } } },
+        'build_review.custom_rubrics.eventSpine.min_severity must be critical|major|minor|nit',
+      ],
+      [
+        { build_review: { rubrics: { security: { min_severity: 'Major' } } } },
+        'build_review.rubrics.security.min_severity must be critical|major|minor|nit',
+      ],
+    ])('rejects invalid per-rubric min_severity %#', (config, message) => {
+      expect(validateConfig(config)).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
+      });
+    });
+
     it('accepts retired rubric keys as no-ops and warns once per configured key', () => {
       const retiredScope = validateConfig({
         build_review: {
@@ -3957,85 +4090,42 @@ steps:
     });
   });
 
-  describe('coverage_binding config field (Task 8)', () => {
-    it('resolves an omitted judge batch size to 8', () => {
-      const result = validateConfig({ coverage_binding: { judge: {} } });
+  describe('coverage_binding config retirement', () => {
+    it('loads legacy top-level and step settings with warnings and no registry entry', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), [
+        'coverage_binding:',
+        '  judge:',
+        '    enabled: true',
+        'steps:',
+        '  coverage_binding:',
+        '    llm_provider: codex',
+        '',
+      ].join('\n'));
 
+      const result = await loadConfig(tmpDir);
       expect(result).toMatchObject({
         ok: true,
-        config: { coverage_binding: { judge: { batch_size: 8 } } },
+        warnings: [
+          'coverage_binding is retired and ignored (adr-2026-10-23-slice-topology-from-sealed-plan).',
+          'steps.coverage_binding is retired and ignored (adr-2026-10-23-slice-topology-from-sealed-plan).',
+        ],
       });
-    });
-
-    it('preserves a positive judge batch size', () => {
-      const result = validateConfig({ coverage_binding: { judge: { batch_size: 1 } } });
-
-      expect(result).toMatchObject({
-        ok: true,
-        config: { coverage_binding: { judge: { batch_size: 1 } } },
-      });
-    });
-
-    it.each([
-      ['zero', 0],
-      ['a negative number', -3],
-      ['a non-integer', 2.5],
-      ['a string', '8'],
-    ])('rejects batch size %s', (_name, batch_size) => {
-      const result = validateConfig({ coverage_binding: { judge: { batch_size } } });
-
-      expect(result).toEqual({
-        ok: false,
-        error: {
-          type: 'validation_error',
-          message: 'coverage_binding.judge.batch_size must be a positive integer',
-        },
-      });
-    });
-
-    it('rejects an unknown plural batch-size key', () => {
-      const result = validateConfig({ coverage_binding: { judge: { batch_sizes: 8 } } });
-
-      expect(result).toEqual({
-        ok: false,
-        error: {
-          type: 'validation_error',
-          message: 'Unknown key in coverage_binding.judge: "batch_sizes"',
-        },
-      });
-    });
-
-    it('registers the complete judge key set', () => {
-      expect(CONFIG_CONSUMER_KEY_SETS['coverage_binding.judge']).toEqual(['enabled', 'batch_size']);
-    });
-
-    it('resolves the omitted judge to disabled', () => {
-      const result = validateConfig({});
-      expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.coverage_binding?.judge?.enabled).toBe(false);
+      expect(buildStepRegistry(result.config).map((step) => step.name)).not.toContain('coverage_binding');
     });
 
-    it('preserves an enabled judge', () => {
-      const result = validateConfig({ coverage_binding: { judge: { enabled: true } } });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.coverage_binding?.judge?.enabled).toBe(true);
+    it('still rejects a genuinely unknown top-level key', () => {
+      expect(validateConfig({ coverage_binding: {}, not_a_real_key: true })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message: 'Unknown top-level key: "not_a_real_key"' },
+      });
     });
 
-    it('rejects a non-boolean judge enablement', () => {
-      const result = validateConfig({ coverage_binding: { judge: { enabled: 'yes' } } });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toContain('coverage_binding.judge.enabled');
-      expect(result.error.message).toContain('boolean');
-    });
-
-    it('rejects an unknown key under coverage_binding.judge', () => {
-      const result = validateConfig({ coverage_binding: { judge: { enabled: true, bogus: true } } });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toContain('Unknown key in coverage_binding.judge');
+    it('does not reinterpret custom steps missing after as retired built-ins', () => {
+      expect(validateConfig({ steps: { my_step: { skill: 'skills/my-step/SKILL.md' } } })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message: "Custom step \"my_step\" requires 'after: <existing-step>'" },
+      });
     });
   });
 

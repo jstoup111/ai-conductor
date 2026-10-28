@@ -1,11 +1,11 @@
-// Covers: task:8
+// Covers: task:2
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
-import { access, chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { installDaemonBotCoAuthor, type BotCoAuthorResolver } from '../../src/engine/bot-co-author.js';
+import { installDaemonBotCoAuthor, type BotCoAuthorResolver, withDaemonCoAuthorTrailer } from '../../src/engine/bot-co-author.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
@@ -117,5 +117,80 @@ describe('engine/worktree-prepare co-author input', () => {
     await expect(access(join(dir, '.pipeline', 'co-author'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ emit: expect.any(Function) }));
     expect(events).toContainEqual({ type: 'bot_co_author_skipped', reason: 'identity-read-failed' });
+  });
+
+  it('reports an absent resolver only when daemon dispatch removes stale co-author input', async () => {
+    const events: ConductorEvent[] = [];
+    const coAuthorPath = join(dir, '.pipeline', 'co-author');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(coAuthorPath, 'stale trailer\n', 'utf8');
+    installDaemonBotCoAuthor(undefined);
+
+    await prepareWorktree(dir, undefined, {
+      dispatchStart: true,
+      dispatchStartTimeoutSeconds: 1,
+      events: { emit: async (event: ConductorEvent) => { events.push(event); } } as never,
+    });
+
+    await expect(access(coAuthorPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events.filter((event) => event.type === 'bot_co_author_skipped')).toEqual([
+      { type: 'bot_co_author_skipped', reason: 'resolver-absent' },
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'project_setup' }));
+  });
+
+  it('keeps absent resolver preparation silent outside daemon dispatch', async () => {
+    const events: ConductorEvent[] = [];
+    const coAuthorPath = join(dir, '.pipeline', 'co-author');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(coAuthorPath, 'stale trailer\n', 'utf8');
+    installDaemonBotCoAuthor(undefined);
+
+    await prepareWorktree(dir, undefined, {
+      events: { emit: async (event: ConductorEvent) => { events.push(event); } } as never,
+    });
+
+    await expect(access(coAuthorPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events.filter((event) => event.type === 'bot_co_author_skipped')).toEqual([]);
+  });
+
+  it('continues daemon dispatch when the absent-resolver event handler throws', async () => {
+    const coAuthorPath = join(dir, '.pipeline', 'co-author');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(coAuthorPath, 'stale trailer\n', 'utf8');
+    installDaemonBotCoAuthor(undefined);
+
+    await expect(prepareWorktree(dir, undefined, {
+      dispatchStart: true,
+      dispatchStartTimeoutSeconds: 1,
+      events: {
+        emit: async (event: ConductorEvent) => {
+          if (event.type === 'bot_co_author_skipped') throw new Error('event sink unavailable');
+        },
+      } as never,
+    })).resolves.toBeUndefined();
+
+    await expect(access(coAuthorPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not stamp an engine commit after dispatch removes stale co-author input', async () => {
+    const events: ConductorEvent[] = [];
+    const coAuthorPath = join(dir, '.pipeline', 'co-author');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(coAuthorPath, 'stale trailer\n', 'utf8');
+    installDaemonBotCoAuthor(undefined);
+
+    await prepareWorktree(dir, undefined, {
+      dispatchStart: true,
+      dispatchStartTimeoutSeconds: 1,
+      events: { emit: async (event: ConductorEvent) => { events.push(event); } } as never,
+    });
+    const skippedBeforeCommit = events.filter((event) => event.type === 'bot_co_author_skipped');
+    const message = withDaemonCoAuthorTrailer('engine commit');
+
+    expect(message).toBe('engine commit');
+    await git('commit', '--allow-empty', '-m', message);
+    expect(await git('log', '-1', '--format=%B')).not.toContain('Co-authored-by');
+    expect(events.filter((event) => event.type === 'bot_co_author_skipped')).toEqual(skippedBeforeCommit);
   });
 });

@@ -316,10 +316,16 @@ only when I accept, so that stacking is a deliberate DECIDE choice.
 - Given the skill's documented example manifest and Story lines, when parsed by
   `validatePlanSlices` and the ownership predicate, then the result is `sliced` with no ownership
   violation.
+- Given `skills/plan/SKILL.md` and `skills/composer/SKILL.md`, when they are read, then each
+  instructs asking the operator to choose stacked or single-PR delivery before a `## Slices`
+  section is written. The plan skill's precondition gate and verification checklist both require
+  the recorded `Stacked-Delivery: approved` line for a sliced plan.
 
 #### Negative Paths
 - Given the skill text, when it describes an operator decline, then it instructs authoring no
   manifest and writing no sign-off line.
+- Given the operator has not been asked about stacked delivery, when the plan skill reaches the
+  slice manifest, then its text forbids writing a `## Slices` section unasked.
 - Given the skill's example sign-off line, when it is parsed by the sign-off parser, then it is
   recognized as approved. A drift test fails if the documented line and the parser disagree.
 

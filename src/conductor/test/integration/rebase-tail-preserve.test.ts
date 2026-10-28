@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'node:child_process';
@@ -11,8 +11,6 @@ import { writeState, readState } from '../../src/engine/state.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
@@ -62,7 +60,6 @@ const FRONT_DONE_M: ConductState = {
   plan: 'done',
   coherence_check: 'done',
   plan_review: 'done',
-  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'done',
   acceptance_specs: 'skipped',
@@ -159,7 +156,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     runner: StepRunner,
     config: Record<string, unknown> = {},
     suiteVerifier?: NonNullable<ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier']>,
-    fromStep: 'build' | 'coverage_binding' = 'build',
+    fromStep: 'build' = 'build',
   ): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
@@ -198,9 +195,6 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
       );
-    } else if (step === 'coverage_binding') {
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
     } else if (step === 'build_review') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -257,38 +251,6 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         return satisfy(step, options);
       },
     };
-  }
-
-  function coverageRefreshRunner(
-    counts: Record<string, number>,
-    provider: LLMProvider,
-    config: Record<string, unknown>,
-  ): StepRunner {
-    const coverage = new DefaultStepRunner(provider, 'rebase-coverage-refresh', dir, {
-      featureDesc: 'add-foo',
-      planPath: join(dir, '.docs/plans/add-foo.md'),
-      config: config as never,
-    });
-    return {
-      run: async (step, state, options) => {
-        counts[step] = (counts[step] ?? 0) + 1;
-        return step === 'coverage_binding'
-          ? coverage.run(step, state, options)
-          : satisfy(step, options);
-      },
-    };
-  }
-
-  async function prepareChangedCoveragePair(): Promise<void> {
-    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
-    await writeFile(
-      join(dir, '.docs/plans/add-foo.md'),
-      '### Task 1: Implement foo\n\n**Criterion:** S1.1\n\n**Done when:**\n- Foo is implemented with an audit record.\n',
-    );
-    await git('add', '.docs/plans/add-foo.md');
-    await git('commit', '-m', 'change coverage pair');
-    await advanceBaseForeignRuntimeOnly();
-    await writeState(statePath, { ...FRONT_DONE_M });
   }
 
   it('takes the explicit conservative path when replay proof is unavailable without replaying completed authoring or BUILD by position', async () => {
@@ -377,11 +339,8 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     // Everything from the first CURRENT (post-replay HEAD) proof onward.
     const proofAtInOrder = order.indexOf(`suite-proof@${replayedHead}`);
     expect(proofAtInOrder).toBeGreaterThanOrEqual(0);
-    // Reviews dispatched before the replay belong to the pre-replay pass;
-    // the replay boundary is the coverage refresh that follows the rebase.
-    const replayAt = order.indexOf('coverage_binding');
-    expect(replayAt).toBeGreaterThanOrEqual(0);
-    const afterReplay = order.slice(replayAt);
+    // Reviews dispatched before the replay belong to the pre-replay pass.
+    const afterReplay = order.slice(proofAtInOrder);
     const proofAt = afterReplay.indexOf(`suite-proof@${replayedHead}`);
     expect(proofAt).toBeGreaterThanOrEqual(0);
 
@@ -396,22 +355,4 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     expect(afterReplay.indexOf('manual_test')).toBeGreaterThan(proofAt);
   });
 
-  it('refreshes the no-op coverage step after a rebase without a provider call or reopening acceptance authoring', async () => {
-    await prepareChangedCoveragePair();
-    let providerCalls = 0;
-    const provider: LLMProvider = {
-      lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => {
-        providerCalls++;
-        return { success: true, output: '{}', exitCode: 0 };
-      },
-    };
-    const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, {}), {}, undefined, 'coverage_binding').run();
-
-    expect(counts.coverage_binding).toBe(1);
-    expect(counts.acceptance_specs ?? 0).toBe(0);
-    expect(providerCalls).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'disabled', entries: [] });
-  });
 });

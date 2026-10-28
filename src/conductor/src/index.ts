@@ -88,6 +88,8 @@ import {
   dispatchDecideGrantCommand,
   detectHaltClearCommand,
   detectKickbackBudgetCommand,
+  detectStackLandCommand,
+  detectStackOwnersCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -101,6 +103,8 @@ import {
 } from './cli.js';
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
+import { dispatchStackLandCommand } from './engine/stack-land-cli.js';
+import { dispatchStackOwnersCommand } from './engine/stack-owners-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
 import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
@@ -109,6 +113,10 @@ import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
+import {
+  prepareInteractiveConductorRunWithLease,
+  type InteractiveConductorRunLeaseAcquisition,
+} from './engine/interactive-run-lease.js';
 import { detectAutoResume } from './engine/auto-resume.js';
 import {
   verifyCompleteState,
@@ -120,7 +128,7 @@ import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
-import { registerCliBuiltins } from './engine/cli-builtins.js';
+import { registerCliBuiltins } from './cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import {
   EventPersister,
@@ -140,7 +148,7 @@ import {
 } from './engine/version-report.js';
 import { detectUpdateCommand, dispatchUpdateCommand } from './engine/update-cli.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
-import type { UIRenderer } from "./ui/types.js";
+import type { UIRenderer } from './ui/types.js';
 import type {
   VisualizerFactory,
   VisualizerFactoryContext,
@@ -150,6 +158,7 @@ import type {
 import type { HarnessConfig } from './types/config.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { defaultPaneLabelRunner } from './engine/engineer/pane-label.js';
 import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
 import { detectBrainCommand, dispatchBrain } from './engine/brain-supervisor-cli.js';
 import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
@@ -217,6 +226,10 @@ import {
   detectRoundStampCommand,
   runRoundStamp,
 } from './engine/round-stamp-cli.js';
+import {
+  detectStackCommitGuardCommand,
+  runStackCommitGuard,
+} from './engine/stack-commit-guard-cli.js';
 import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
@@ -332,18 +345,18 @@ export function buildInteractiveVisualizers(
 ): VisualizerPlugin[] {
   const started = buildVisualizers(
     selectVisualizers(registry, config, context),
-    context.emitter,
+    context.emitter as ConductorEventEmitter,
     context.startContext,
   );
   const otel = wireOtelVisualizer(
     config,
     { ...context.startContext, pipelineDir: context.pipelineDir, metrics: false },
-    context.emitter,
+    context.emitter as ConductorEventEmitter,
   );
   const metrics = wireInteractiveOtelMetrics(
     config,
     { ...context.startContext, pipelineDir: context.pipelineDir },
-    context.emitter,
+    context.emitter as ConductorEventEmitter,
   );
   return [...started, ...(otel ? [otel] : []), ...(metrics ? [metrics] : [])];
 }
@@ -550,6 +563,7 @@ export async function bootDispatchingCliProviders(options: {
     options.config,
     options.rendererOpts,
     new Set(discovery.installed),
+    false,
   );
   options.registry.markInitialized();
   validateProviderInstallation({ config: options.config ?? {}, discovery });
@@ -848,21 +862,20 @@ async function dispatchCliCommand(): Promise<void> {
   if (process.argv[2] === 'executor-child') {
     const [
       { runExecutorChild, withExecutorBrokerProxies },
-      { runExecutorChildFeature },
+      { makeExecutorChildDispatchAdmission, makeExecutorChildRun },
       { createWorkOrderGitRunner },
       { makeFeatureRunnerDeps },
-      { leafBranchFor },
       { defaultSelfHostDetector },
     ] = await Promise.all([
       import('./engine/executor-child.js'),
       import('./engine/executor-child-runtime.js'),
       import('./daemon-cli.js'),
       import('./engine/daemon-deps.js'),
-      import('./engine/feature-branch-identity.js'),
       import('./engine/self-host/detector.js'),
     ]);
     const projectRoot = process.cwd();
     await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
       // Reuse the daemon seam, which verifies the WorkOrder before its first
       // worktree side effect and performs the pinned-base create under the
       // brokered lifecycle lock.
@@ -877,15 +890,7 @@ async function dispatchCliCommand(): Promise<void> {
         });
         return runnerDeps.createWorktree(order.slug, order);
       },
-      run: async (input) => {
-        const branch = leafBranchFor(input.order.slug);
-        return runExecutorChildFeature({
-          ...input,
-          worktree: { path: join(projectRoot, '.worktrees', input.order.slug), branch },
-          projectRoot,
-          supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
-        });
-      },
+      run: makeExecutorChildRun({ projectRoot }),
       // The WorkOrder is the supervisor's authority for self-host mode.  The
       // detector is only a compatibility fallback for pre-field orders.
       liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
@@ -973,6 +978,18 @@ async function dispatchCliCommand(): Promise<void> {
   const kickbackBudgetCmd = detectKickbackBudgetCommand(process.argv);
   if (kickbackBudgetCmd) {
     process.exitCode = await dispatchKickbackBudgetCommand(kickbackBudgetCmd);
+    return;
+  }
+
+  const stackLandCmd = detectStackLandCommand(process.argv);
+  if (stackLandCmd) {
+    process.exitCode = await dispatchStackLandCommand(stackLandCmd);
+    return;
+  }
+
+  const stackOwnersCmd = detectStackOwnersCommand(process.argv);
+  if (stackOwnersCmd) {
+    process.exitCode = await dispatchStackOwnersCommand(stackOwnersCmd);
     return;
   }
 
@@ -1068,6 +1085,7 @@ async function dispatchCliCommand(): Promise<void> {
     try {
       code = await dispatchEngineer(engineerCmd, {
         events: spine.events,
+        paneLabelRunner: defaultPaneLabelRunner,
       });
     } finally {
       spine.stop();
@@ -1243,6 +1261,11 @@ async function dispatchCliCommand(): Promise<void> {
     }));
   }
 
+  if (detectStackCommitGuardCommand(process.argv)) {
+    const projectRoot = process.env.CONDUCT_STACK_GUARD_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runStackCommitGuard({ projectRoot }));
+  }
+
   // Evidence subcommand (`evidence judge <slug>`, Task 19) runs NON-INTERACTIVELY and exits —
   // routes to semantic attribution evidence gate operations. Dispatched before the daemon
   // commands, mirroring the task-cli dispatch pattern.
@@ -1358,7 +1381,8 @@ async function dispatchCliCommand(): Promise<void> {
     const resolved = await resolveMainRepoRoot(process.cwd());
     if ('error' in resolved) {
       console.error(resolved.error);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
@@ -1464,17 +1488,17 @@ async function dispatchCliCommand(): Promise<void> {
   // state or initializing provider-facing runtime.
   const mode = deriveMode(opts);
 
+  let interactiveLease: InteractiveConductorRunLeaseAcquisition = { kind: 'unleased' };
+  let persister: EventPersister | undefined;
+  let sessionTail: ReturnType<typeof startSessionEventTail> | undefined;
+  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
+  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
+  try {
+
   let projectRoot = process.cwd();
   let pipelineDir = join(projectRoot, '.pipeline');
   let stateFilePath = join(pipelineDir, 'conduct-state.json');
-
-  // Ensure .pipeline/ exists
-  await mkdir(pipelineDir, { recursive: true });
-
-  // Preflight: ensure .claude/settings.json exists with project-scoped
-  // permissions. Solves the chicken-and-egg where bootstrap can't write its
-  // own permission file without permission. Idempotent — no-op if present.
-  await ensureClaudeSettings(projectRoot);
+  const resumeNeedsFeatureSelection = opts.resume && !opts.featureDesc;
 
   // Shared UI state: one live region, one prompt host. The host suspends the
   // region around each readline prompt so dashboard and prompts don't fight
@@ -1547,6 +1571,7 @@ async function dispatchCliCommand(): Promise<void> {
   // Handle --reset: clear state and exit
   if (opts.reset) {
     // Deliberate full clear — the one place a recorded pr_url is meant to go.
+    await mkdir(pipelineDir, { recursive: true });
     await replaceCommandState(stateFilePath, 'reset conductor state');
     console.log('State cleared.');
     return;
@@ -1599,6 +1624,25 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(1);
   }
 
+  // A stacked interactive run must own its feature before any foreground
+  // setup can create session state, managed context, or a worktree marker.
+  // Flat features deliberately keep the historical no-lease path. A bare
+  // --resume receives its feature identity from the selection below.
+  interactiveLease = await prepareInteractiveConductorRunWithLease({
+    projectRoot,
+    featureDesc: opts.featureDesc,
+    prepare: async () => {
+      if (!resumeNeedsFeatureSelection) {
+        await mkdir(pipelineDir, { recursive: true });
+        await ensureClaudeSettings(projectRoot);
+      }
+    },
+  });
+  if (interactiveLease.kind === 'refused') {
+    console.error(interactiveLease.message);
+    process.exitCode = 1;
+    return;
+  }
   // Auto-resume: if a feature description was provided and a worktree for its
   // slug already exists with in-progress state, silently redirect to that
   // worktree and enable resume. --fresh bypasses this.
@@ -1688,7 +1732,8 @@ async function dispatchCliCommand(): Promise<void> {
           `       feature branch — if it exists — is untouched).\n` +
           `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
       );
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -1698,7 +1743,8 @@ async function dispatchCliCommand(): Promise<void> {
     const features = await scanResumableFeatures(projectRoot);
     if (features.length === 0) {
       console.error('No active features found in .worktrees/');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
 
     let selected = selectFeature(features, undefined);
@@ -1718,7 +1764,10 @@ async function dispatchCliCommand(): Promise<void> {
     projectRoot = selected.path;
     pipelineDir = join(projectRoot, '.pipeline');
     stateFilePath = join(pipelineDir, 'conduct-state.json');
-    await mkdir(pipelineDir, { recursive: true });
+
+    if (!opts.featureDesc && selected.featureDesc) {
+      opts.featureDesc = selected.featureDesc;
+    }
 
     // Also check for state in worktree root (legacy location)
     const legacyStatePath = join(selected.path, 'conduct-state.json');
@@ -1734,9 +1783,24 @@ async function dispatchCliCommand(): Promise<void> {
     } catch {
       // No legacy state — use .pipeline
     }
+  }
 
-    if (!opts.featureDesc && selected.featureDesc) {
-      opts.featureDesc = selected.featureDesc;
+  // A bare --resume learns its stacked feature only after the non-mutating
+  // selection prompt. Acquire before materializing that selected worktree's
+  // pipeline or provider session state.
+  if (resumeNeedsFeatureSelection) {
+    interactiveLease = await prepareInteractiveConductorRunWithLease({
+      projectRoot,
+      featureDesc: opts.featureDesc,
+      prepare: async () => {
+        await mkdir(pipelineDir, { recursive: true });
+        await ensureClaudeSettings(projectRoot);
+      },
+    });
+    if (interactiveLease.kind === 'refused') {
+      console.error(interactiveLease.message);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -1770,15 +1834,12 @@ async function dispatchCliCommand(): Promise<void> {
   // Start persistence before boot discovery so the boot event is retained in
   // the same ledger as the dispatch it authorizes.
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
-  const persister = new EventPersister(eventsLogPath, events);
+  persister = new EventPersister(eventsLogPath, events);
   persister.start();
   // Foreground/project-prelude provider sessions have no daemon feature
   // scope. Own their same-schema producer tail alongside this persister so
   // every exit drains records before subscribers detach.
-  const sessionTail = startSessionEventTail(projectRoot, events);
-  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
-  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
-  try {
+  sessionTail = startSessionEventTail(projectRoot, events);
     subscriber = await bootDispatchingCliProviders({
     command: 'inline',
     registry,
@@ -1836,7 +1897,7 @@ async function dispatchCliCommand(): Promise<void> {
         })),
   };
 
-  // Select UI subscriber based on config (default: 'terminal')
+  // Select UI subscriber based on config (default: 'terminal').
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
   subscriber.start([renderer]);
 
@@ -1972,6 +2033,7 @@ async function dispatchCliCommand(): Promise<void> {
       git: finishPublicationGit,
       gh: finishPublicationGh,
       events,
+      flushSessionEvents: sessionTail.flush,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot,
         git: finishPublicationGit,
@@ -2006,10 +2068,14 @@ async function dispatchCliCommand(): Promise<void> {
 
     await conductor.run();
   } finally {
-    await sessionTail.drain();
-    persister.stop();
+    await sessionTail?.drain();
+    persister?.stop();
     await stopVisualizers(visualizerList);
     await subscriber?.stop();
+    if (interactiveLease.kind === 'acquired') {
+      const released = await interactiveLease.lease.release();
+      if (!released.ok) throw new Error(released.message);
+    }
   }
 }
 

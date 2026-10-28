@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:4
 import { afterEach, describe, expect, it } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
@@ -14,7 +16,7 @@ describe('ClaudeProvider executable resolution', () => {
   it('spawns the descriptor override when CLAUDE_EXECUTABLE is set', async () => {
     process.env.CLAUDE_EXECUTABLE = '/opt/claude/bin/claude';
     const launches: string[] = [];
-    const provider = new ClaudeProvider(
+    const provider = new ClaudeProvider(dispatchGitGuard,
       undefined,
       (executable) => {
         launches.push(executable);

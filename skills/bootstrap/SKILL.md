@@ -400,6 +400,25 @@ both point to the same shared harness contract and lifecycle gates. If either fi
 contradicts that contract, report the host and the conflicting instruction before completing
 initialization.
 
+### 6b. Suggest Host Parallelism Settings
+
+The pipeline runs up to X independent tasks at once, where X = min(3, free sub-agent slots on the
+host). Check each installed host's slot setting and suggest a change only where it would cap the
+pipeline below 3 parallel tasks. These settings are operator-level, outside the project: show the
+exact change and ask, and never edit them without the operator's approval.
+
+- **Codex:** `~/.codex/config.toml` sets sub-agents per session with `[agents] max_threads`. The
+  default leaves exactly 3, so any other active sub-agent leaves the pipeline fewer. Suggest:
+
+  ```toml
+  [agents]
+  max_threads = 6
+  ```
+
+- **Claude Code:** `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (default 20, Claude Code v2.1.217 or
+  later) caps concurrent Agent-tool sub-agents. Suggest a change only if it is set below 4, for
+  example under `env` in `~/.claude/settings.json`.
+
 For Codex, `~/.agents/skills/` is the active current catalog; treat the former
 `~/.codex/skills/` location as legacy migration material only. Never describe it as the active
 discovery location or ask an operator to recreate it.

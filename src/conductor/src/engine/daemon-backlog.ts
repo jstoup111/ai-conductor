@@ -28,6 +28,11 @@ import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
 import { parseCoherenceArtifact } from './coherence-parse.js';
 import {
+  backlogTreeManifestSource,
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+} from './feature-manifest-source.js';
+import {
   healPlan,
   enumerateCandidates,
   reVerifyHealPlan,
@@ -46,6 +51,8 @@ const execFile = promisify(execFileCb);
  * filesystem) is exactly what makes "merged" the build-ready signal (FR-24).
  *
  * `listPlanFiles()` → the `.md` basenames under `.docs/plans` on the base branch.
+ * `listFeatureManifests()` → the repo-relative `.docs/<slug>/manifest.json`
+ * paths found in the prefetched `.docs` tree.
  * `listShippedFiles()` → the `.md` basenames under `.docs/shipped` on the base
  *   branch, using the identical base-branch-only semantics as `listPlanFiles`
  *   (see `listShippedRecords` in `shipped-record.ts`, Story 3/4).
@@ -111,6 +118,12 @@ export function gitTreeSource(
       } catch {
         return []; // no such tree (no `.docs/plans` on base branch) → nothing to do
       }
+    },
+    async listFeatureManifests() {
+      const prefetched = await prefetchDocs();
+      return prefetched.docs
+        ? [...prefetched.docs.keys()].filter((path) => /^\.docs\/[^/]+\/manifest\.json$/.test(path))
+        : [];
     },
     async listShippedFiles() {
       try {
@@ -662,7 +675,8 @@ export interface BlockedSpecItem {
     | 'stories-not-approved'
     | 'adr-not-approved'
     | 'no-dependency-tree'
-    | 'missing-coherence';
+    | 'missing-coherence'
+    | 'malformed-manifest';
   remedy: string;
 }
 
@@ -795,6 +809,20 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
+  const manifestSlugs = new Set(
+    (await tree.listFeatureManifests?.() ?? [])
+      .map((path) => path.match(/^\.docs\/([^/]+)\/manifest\.json$/)?.[1])
+      .filter((slug): slug is string => slug !== undefined),
+  );
+  const candidates = new Map<string, { planFile?: string; manifestBacked: boolean }>();
+  for (const file of planFiles) {
+    const slug = planStem(file);
+    candidates.set(slug, { planFile: file, manifestBacked: manifestSlugs.has(slug) });
+  }
+  for (const slug of manifestSlugs) {
+    const existing = candidates.get(slug);
+    candidates.set(slug, { ...existing, manifestBacked: true });
+  }
   const persistBlockedSnapshot = async (blocked: BlockedSpecItem[]): Promise<void> => {
     try {
       await (opts.writeBlockedSnapshot ?? ((items) => writeBlockedSnapshot(projectRoot, items)))(blocked);
@@ -802,7 +830,7 @@ export async function discoverBacklog(
       log(`blocked snapshot: failed to persist latest state: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-  if (planFiles.length === 0) {
+  if (candidates.size === 0) {
     await persistBlockedSnapshot([]);
     return { items: [], waiting: [], blocked: [], gated: [] };
   }
@@ -885,13 +913,18 @@ export async function discoverBacklog(
   // Owner-gate skips surfaced to the operator (FR-7/FR-11/S1 HP-1). Populated
   // alongside the existing warnOnce log line below — never in place of it.
   const gatedItems: GatedItem[] = [];
-  for (const file of [...planFiles].sort()) {
-    const slug = planStem(file);
-    const planRel = `.docs/plans/${file}`;
-
-    // Read the plan FROM THE BASE-BRANCH TREE. Absent → not merged → skip.
-    const planContent = await tree.readFile(planRel);
-    if (planContent === null) continue;
+  const manifestSource = backlogTreeManifestSource(tree);
+  for (const [slug, candidate] of [...candidates].sort(([leftSlug], [rightSlug]) => {
+    const leftPlanFile = `${leftSlug}.md`;
+    const rightPlanFile = `${rightSlug}.md`;
+    return leftPlanFile < rightPlanFile ? -1 : leftPlanFile > rightPlanFile ? 1 : 0;
+  })) {
+    let planRel = `.docs/plans/${candidate.planFile ?? `${slug}.md`}`;
+    // Preserve the legacy candidate's historical read timing and fallback
+    // behavior. Manifest candidates defer parsing until after identity-only
+    // dedup checks, as the manifest is not relevant to completed or parked work.
+    let planContent = candidate.manifestBacked ? null : await tree.readFile(planRel);
+    if (!candidate.manifestBacked && planContent === null) continue;
 
     if (await isProcessed(slug)) continue;
 
@@ -921,30 +954,68 @@ export async function discoverBacklog(
 
     if (await isOperatorParked(slug)) continue;
 
-    const storiesRef = await resolveStoriesRef(tree, slug, planContent);
-    if (storiesRef.kind === 'unresolvable') {
-      const remedy =
-        `Fix ${planRel}: use a repo-relative path, an inline-code path, or a Markdown link, ` +
-        'each optionally followed by a trailing annotation.';
-      await block(
-        { slug, reason: 'unresolvable-stories-ref', remedy },
-        `skip ${slug}: merged spec cannot build — Stories reference cannot resolve. ${remedy} ` +
-          'logged once.',
-      );
-      continue;
+    const manifestPathFor = async (kind: 'plan' | 'stories' | 'complexity' | 'coherence' | 'track' | 'applicability' | 'intake'): Promise<string | undefined> => {
+      const artifact = await resolveFeatureArtifact(manifestSource, slug, kind, async () => []);
+      return artifact.paths.find((path) => artifact.origin === 'legacy' || !artifact.missing.includes(path));
+    };
+    if (candidate.manifestBacked) {
+      try {
+        const resolvedPlan = await manifestPathFor('plan');
+        if (!resolvedPlan) continue;
+        planRel = resolvedPlan;
+        planContent = await tree.readFile(planRel);
+        if (planContent === null) continue;
+      } catch (error) {
+        if (!(error instanceof MalformedFeatureManifestError)) throw error;
+        const manifestPath = `.docs/${slug}/manifest.json`;
+        await block(
+          { slug, reason: 'malformed-manifest', remedy: `Fix malformed feature manifest ${manifestPath}: ${error.message}` },
+          `skip ${slug}: merged spec cannot build — malformed feature manifest ${manifestPath}. ${error.message} logged once.`,
+        );
+        continue;
+      }
     }
-    if (storiesRef.kind === 'missing') {
-      const remedy =
-        `Create the Stories file at ${storiesRef.path} on the default branch, or fix its ` +
-        `reference in ${planRel}.`;
-      await block(
-        { slug, reason: 'stories-missing', remedy },
-        `skip ${slug}: merged spec cannot build — Stories file missing at ${storiesRef.path}. ` +
-          `${remedy} logged once.`,
-      );
-      continue;
+
+    if (planContent === null) continue;
+
+    let storiesRel: string;
+    if (candidate.manifestBacked) {
+      const resolvedStories = await manifestPathFor('stories');
+      if (!resolvedStories) {
+        const remedy = `Add a committed stories entry to .docs/${slug}/manifest.json.`;
+        await block(
+          { slug, reason: 'stories-missing', remedy },
+          `skip ${slug}: merged spec cannot build — Stories file missing from the feature manifest. ${remedy} logged once.`,
+        );
+        continue;
+      }
+      storiesRel = resolvedStories;
+    } else {
+      const storiesRef = await resolveStoriesRef(tree, slug, planContent);
+      if (storiesRef.kind === 'unresolvable') {
+        const remedy =
+          `Fix ${planRel}: use a repo-relative path, an inline-code path, or a Markdown link, ` +
+          'each optionally followed by a trailing annotation.';
+        await block(
+          { slug, reason: 'unresolvable-stories-ref', remedy },
+          `skip ${slug}: merged spec cannot build — Stories reference cannot resolve. ${remedy} ` +
+            'logged once.',
+        );
+        continue;
+      }
+      if (storiesRef.kind === 'missing') {
+        const remedy =
+          `Create the Stories file at ${storiesRef.path} on the default branch, or fix its ` +
+          `reference in ${planRel}.`;
+        await block(
+          { slug, reason: 'stories-missing', remedy },
+          `skip ${slug}: merged spec cannot build — Stories file missing at ${storiesRef.path}. ` +
+            `${remedy} logged once.`,
+        );
+        continue;
+      }
+      storiesRel = storiesRef.path;
     }
-    const storiesRel = storiesRef.path;
 
     // Carry the engineer-assessed complexity tier so the daemon build honors it
     // (Small skips acceptance_specs). Resolve it before vetting so those
@@ -953,7 +1024,13 @@ export async function discoverBacklog(
     // `slug` plus the base-branch tree source are unchanged through the vetting
     // block below. Absent/garbled → undefined, and the daemon falls back to 'M'
     // (legacy behavior, no breakage).
-    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
+    const tierMarker = candidate.manifestBacked
+      ? await manifestPathFor('complexity').then(async (path) => ({
+        content: path ? await tree.readFile(path) : null,
+        tried: path ? [path] : [],
+        ambiguous: false,
+      }))
+      : await readFeatureMarker('.docs/complexity', slug);
     const tier = parseComplexityTier(tierMarker.content);
 
     // Content-hash dedup needs the plan + stories bytes, but it must still
@@ -1035,7 +1112,10 @@ export async function discoverBacklog(
     // The coherence artifact is mandatory for every non-S tier. Discovery
     // shares the structural parser with land; semantic validation still needs
     // a change set and runs at land.
-    const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
+    const coherencePath = candidate.manifestBacked
+      ? await manifestPathFor('coherence')
+      : `.docs/coherence/${slug}.md`;
+    const coherenceContent = coherencePath ? await tree.readFile(coherencePath) : null;
     const coherence = parseCoherenceArtifact(coherenceContent);
     if (tier !== 'S' && !coherence.ok) {
       const detail = coherence.detail
@@ -1044,12 +1124,12 @@ export async function discoverBacklog(
       blockedItems.push({
         slug,
         reason: 'missing-coherence',
-        remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.${detail}`,
+        remedy: `Author a valid coherence table in ${coherencePath ?? `.docs/${slug}/manifest.json`} on the default branch.${detail}`,
       });
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
-          `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
+          `(${coherencePath ?? `.docs/${slug}/manifest.json`}) required for tier ${tier ?? 'unresolved'}. ` +
           `Author it on the default branch; logged once.${detail}`,
       );
       continue;
@@ -1130,7 +1210,10 @@ export async function discoverBacklog(
     // absence (FR-7): it must fail closed to `waiting` as `indeterminate`
     // rather than silently dispatching like a spec with no marker at all, so
     // it is tracked separately in `malformedSourceRefs` below.
-    const intakeMarker = await tree.readFile(`.docs/intake/${slug}.md`);
+    const intakePath = candidate.manifestBacked
+      ? await manifestPathFor('intake')
+      : `.docs/intake/${slug}.md`;
+    const intakeMarker = intakePath ? await tree.readFile(intakePath) : null;
     const sourceRef = parseIntakeSourceRef(intakeMarker);
     const rawSourceRefLine = intakeMarker?.match(/^\s*Source-Ref:\s*(\S+)/im)?.[1];
     if (rawSourceRefLine && !sourceRef) {
@@ -1184,7 +1267,13 @@ export async function discoverBacklog(
     // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
     // daemon treats the feature as `product` (back-compat: pre-track specs are
     // PRDs), so `prd`/`prd-audit` still run. Carried only when explicitly set.
-    const trackMarker = await readFeatureMarker('.docs/track', slug);
+    const trackMarker = candidate.manifestBacked
+      ? await manifestPathFor('track').then(async (path) => ({
+        content: path ? await tree.readFile(path) : null,
+        tried: path ? [path] : [],
+        ambiguous: false,
+      }))
+      : await readFeatureMarker('.docs/track', slug);
     const track = parseTrack(trackMarker.content);
 
     // Like tier and track, the applicability marker is resolved only from the
@@ -1193,7 +1282,13 @@ export async function discoverBacklog(
     // the backlog scan.
     let applicabilityMarker: { content: string | null; tried: string[]; ambiguous: boolean };
     try {
-      applicabilityMarker = await readFeatureMarker('.docs/applicability', slug);
+      applicabilityMarker = candidate.manifestBacked
+        ? await manifestPathFor('applicability').then(async (path) => ({
+          content: path ? await tree.readFile(path) : null,
+          tried: path ? [path] : [],
+          ambiguous: false,
+        }))
+        : await readFeatureMarker('.docs/applicability', slug);
     } catch (err) {
       const path = `.docs/applicability/${slug}.md`;
       log(`${slug}: unable to read applicability marker (${path}): ${err instanceof Error ? err.message : String(err)}`);

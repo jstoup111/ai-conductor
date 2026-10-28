@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor, checkCascadeCap } from '../../../src/engine/restack/cascade-cap.js';
@@ -49,7 +49,7 @@ vi.mock('../../../src/engine/restack/cascade-cap.js', async (importOriginal) => 
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -91,8 +91,8 @@ async function fixture() {
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -274,7 +274,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await subject.isAncestor(subject.closedOne, 'feat/c1/demo')).toBe(false);
       const c2Before = await subject.rev('feat/c2/demo');
       const { result, records } = await preflight(subject);
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.stringContaining('closed-child-rewritten') });
       expect(runRestack).not.toHaveBeenCalled();
       expect(ofType(records, 'restack_planned')).toEqual([]);
       expect(ofType(records, 'restack_refused')).toEqual([expect.objectContaining({ reason: 'closed-child-rewritten', child: 1 })]);
@@ -292,7 +292,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', rebuiltTwo]);
       const closedBefore = await subject.rev('refs/conductor/demo/closed/c1');
       const { result, records } = await preflight(subject);
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(runRestack).not.toHaveBeenCalled();
       expect(ofType(records, 'restack_planned')).toEqual([]);
       expect(ofType(records, 'restack_refused')).toEqual([expect.objectContaining({ reason: 'range-not-ancestor', child: 2 })]);
@@ -442,7 +442,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
       const consumed: string[] = [];
       const { result, records } = await preflight(subject, { baseRefreshDue: true, consumeRekick: async () => { consumed.push('x'); } });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['cascade-cap', 'deferred-base-refresh']);
       expect(consumed).toEqual([]);
       await expectNoBaseRefresh(subject, records, advanced);
@@ -456,7 +456,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'base.txt', 'X\n'));
       await writeFile(join(subject.repo, 'base.txt'), 'operator wip\n');
       const { result, records } = await preflight(subject, { baseRefreshDue: true });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['dirty-overlap', 'deferred-base-refresh']);
       await expectNoBaseRefresh(subject, records, advanced);
       vi.mocked(runRestack).mockClear();
@@ -469,7 +469,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       const { result, records } = await preflight(subject, {
         baseRefreshDue: true, resolver: async () => ({ resolved: false, reason: 'cannot resolve' }), resolverCap: 1,
       });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(ofType(records, 'restack_conflict').length).toBeGreaterThan(0);
       expect(ofType(records, 'restack_refused').map((record) => record.reason)).toContain('deferred-base-refresh');
       expect(ofType(records, 'restack_applied')).toEqual([]);
@@ -486,7 +486,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await rm(elsewhere, { recursive: true, force: true });
       await subject.git(['worktree', 'add', '-q', elsewhere, 'feat/c1/demo']);
       const { result, records } = await preflight(subject, { baseRefreshDue: true });
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
       expect(await subject.rev('refs/conductor/demo/closed/c1')).toBe(x);
       expect(ofType(records, 'restack_applied').map((record) => record.cause)).toContain('feature-repair');
       expect(ofType(records, 'restack_applied').map((record) => record.cause)).not.toContain('base-refresh');
@@ -534,7 +534,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
       vi.clearAllMocks();
     }
-    // (b) No durable child state: only the guarded journal probe runs.
+    // (b) No durable child state: the durable-state probe preserves the flat path.
     {
       const repo = await mkdtemp(join(tmpdir(), 'stack-preflight-sweep-flat-'));
       repositories.push(repo);
@@ -554,7 +554,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await expect(runStackPreflight({ worktree: repo, slug: 'demo', baseRefreshDue: true, git: makeGitRunner(repo) }))
         .resolves.toEqual({ kind: 'no-stack' });
 
-      expect(recoverRestackJournal).toHaveBeenCalled();
+      expect(recoverRestackJournal).not.toHaveBeenCalled();
       expect(resolveActiveChild).not.toHaveBeenCalled();
       expect(checkCascadeCap).not.toHaveBeenCalled();
       expect(runRestack).not.toHaveBeenCalled();

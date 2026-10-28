@@ -391,6 +391,13 @@ Operator decisions (2026-10-10):
 > blocks in the plan by id. The same id with a different body halts
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
+> **Amended 2026-10-25 by #3421:** An unresolved `feature-repair` conflict also writes a durable
+> conflict record outside `restack/staging/` and halts with a resolution recipe. An operator can
+> then record a resolution with `ai-conductor stack restack-resolve`. The command applies this
+> decision's FR-8, FR-9 and path-ownership guards. A later run consumes that resolution as the
+> resolver's output for the child when the range and the parent tree match, and halts
+> `restack-resolution-stale` otherwise (`adr-2026-10-25-operator-recorded-restack-conflict-resolution`).
+
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
      1. journal recovery;
@@ -442,6 +449,14 @@ Operator decisions (2026-10-10):
      A preflight that halts ends the dispatch, so no re-kick base refresh follows it.
    - **The re-kick sentinel.** The one-shot `REKICK` sentinel is consumed before a restack runs, so
      crash recovery depends only on the journal.
+
+> **Amended 2026-10-23 by #3212:** With routing on, a follow-on base refresh is deferred while the
+> re-validation queue holds an entry or any route record is not `closed`. This applies both in the
+> preflight and in the `applied` with a follow-on recovery row: the follow-on is suppressed,
+> `restack_refused` with reason `deferred-base-refresh` is emitted, and the repair journal becomes
+> terminal. The request survives in `REKICK` until the queue drains: the preflight defers before
+> consuming it, and recovery, which runs after it was consumed, re-arms it before deleting the
+> journal (`adr-2026-10-12-routed-whole-feature-repair` decisions 7 and 14).
 
 > **Amended 2026-10-12 by #2944:** After both journal recoveries and before the cursor, the
 > preflight reconciles any open routing round. It skips the automatic repair while a host is
@@ -549,6 +564,8 @@ Operator decisions (2026-10-10):
 > no closed child. While any route record is not `closed` or the re-validation queue is non-empty, a
 > due base refresh is deferred with `restack_refused` reason `deferred-base-refresh`
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+
+> **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that carries the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
@@ -672,12 +689,25 @@ Operator decisions (2026-10-10):
         `verification-failed`, `replay-mismatch`, `range-not-ancestor`,
         `closed-child-rewritten`, `flatten_refused`, `restack-outstanding`,
         `published-stack` or `deferred-base-refresh`.
+
+        > **Amended 2026-10-27 by #3446:** The reason set also includes `journal-live-owner`. It
+        > is emitted when the stack preflight stops because journal recovery returns `live-owner`
+        > on either recovery pass, with `detail` naming the owner as
+        > `restack journal owned by live process <pid> on <host>`, or `journal owner unreadable`
+        > when no owner was read. The preflight then writes a `mechanical` HALT. It stays distinct
+        > from `restack-outstanding`, which a competing planner receives, because only this reason
+        > ends the run on a live owner (operator decision 2026-10-26).
       - `restack_recovered` {opId, fromState}, emitted only when recovery drives a journal out of
         `planned`, `ready`, `moved`, `rolling-back` or `synced`. Deleting a leftover `applied` or
         `aborted` journal emits nothing;
       - `push_lease_refused` {ref, expected, actual}.
     - **Re-kick.** `rebase_skipped_for_stack` is no longer emitted for the re-kick, because it no
       longer skips.
+
+> **Amended 2026-10-25 by #3421:** `restack_refused`'s reason list also includes
+> `restack-resolution-stale`. A new variant, `restack_resolution {opId, child, action, tip, operator?}`,
+> reports an operator-recorded conflict resolution being `recorded` or `consumed`
+> (`adr-2026-10-25-operator-recorded-restack-conflict-resolution` decision 8).
     - **Base-advance attribution.** A `base-refresh` restack also persists `rebase_changed` with the
       unfiltered whole-stack delta, as `adr-2026-08-13-durable-base-advance-attribution` requires,
       so test failures caused by the base advance stay attributed to it.

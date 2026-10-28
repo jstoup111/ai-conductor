@@ -1,6 +1,6 @@
 // Covers: task:8, task:9, task:13, task:14, S5.1, S5.2
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,7 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 
 const roots: string[] = [];
 const predicate = CUSTOM_COMPLETION_PREDICATES.build!;
@@ -97,13 +98,21 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
     expect(result.reason).not.toContain('unverified Done-when');
   });
 
-  it('exempts citation-refusal retries at attempt one and later while retaining ordinary no-progress stalls', () => {
+  it('exempts remediation-closure reopens with falling resolved work while retaining ordinary no-progress stalls', () => {
     expect(isNoTaskProgressBuildStall({
       attempt: 1,
       resolvedTasksBefore: 1,
       resolvedTasksAfter: 1,
       headMovedThisAttempt: false,
       completionReason: 'Done-when citation refused: Task 7 must repair its refused test citation(s): check 1',
+    })).toBe(false);
+
+    expect(isNoTaskProgressBuildStall({
+      attempt: 2,
+      resolvedTasksBefore: 1,
+      resolvedTasksAfter: 0,
+      headMovedThisAttempt: false,
+      completionReason: 'Remediation closure reopened: Task rem-as-built-R5 must repair the named change',
     })).toBe(false);
 
     expect(isNoTaskProgressBuildStall({
@@ -129,6 +138,79 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
       headMovedThisAttempt: false,
       completionReason: 'tasks not completed: 8',
     })).toBe(true);
+  });
+
+  it('does not emit a no-task-progress stall when attempt two reopens a remediation closure with falling resolved work and unchanged HEAD', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-remediation-closure-retry-'));
+    roots.push(root);
+    const pipeline = join(root, '.pipeline');
+    const statePath = join(pipeline, 'conduct-state.json');
+    const statusPath = join(pipeline, 'task-status.json');
+    await mkdir(pipeline, { recursive: true });
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+    });
+    await writeFile(statusPath, JSON.stringify({ tasks: [{
+      id: '13',
+      status: 'completed',
+    }] }));
+
+    let buildAttempts = 0;
+    const stallEvents: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') stallEvents.push(event.reason);
+    });
+    const predicates = CUSTOM_COMPLETION_PREDICATES as {
+      build: NonNullable<typeof CUSTOM_COMPLETION_PREDICATES.build>;
+    };
+    const originalPredicate = predicates.build;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step !== 'build') return { success: true };
+        buildAttempts++;
+        if (buildAttempts === 2) {
+          await writeFile(statusPath, JSON.stringify({ tasks: [{
+            id: '13', status: 'pending',
+          }] }));
+        }
+        if (buildAttempts === 3) {
+          await writeFile(statusPath, JSON.stringify({ tasks: [{
+            id: '13', status: 'completed',
+          }] }));
+        }
+        return { success: true };
+      },
+    };
+
+    predicates.build = async () => {
+      if (buildAttempts === 2) {
+        return { done: false, reason: 'Remediation closure reopened: Task rem-as-built-R5: Named repair remains absent.' };
+      }
+      return buildAttempts >= 3 ? { done: true } : { done: false, reason: 'retry once before closure judgement' };
+    };
+    try {
+      await new Conductor({
+        projectRoot: root,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        resume: true,
+        fromStep: 'build',
+        verifyArtifacts: true,
+        maxRetries: 3,
+      } as never).run();
+    } finally {
+      predicates.build = originalPredicate;
+    }
+
+    expect(buildAttempts).toBe(3);
+    expect(stallEvents).toEqual([]);
+    await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps a recorded nudge spent after a fresh conductor stamps a new session', async () => {

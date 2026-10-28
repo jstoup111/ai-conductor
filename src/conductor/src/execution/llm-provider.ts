@@ -1,53 +1,30 @@
 import type { ObservedInterval } from './observed-interval.js';
-import type { ProviderSetupExhaustion } from '../engine/provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import type { ProviderWith } from './provider-catalog.js';
 import type { ManagedSessionContext } from './managed-session-context.js';
-
-export interface TokenUsage {
-  /**
-   * Fresh (non-cached) input tokens. Every adapter normalizes to this
-   * semantic: cached prompt volume is carried separately in `cacheRead` /
-   * `cacheCreation`, never folded into `input` (Codex's raw `input_tokens`
-   * includes its cached share and is normalized at the adapter).
-   */
-  input: number;
-  output: number;
-  reasoningOutput?: number;
-  cacheRead?: number;
-  cacheCreation?: number;
-  costUsd?: number;
-  /**
-   * Where `costUsd` came from. `'provider'` is a figure the provider itself
-   * reported (Claude Code's `total_cost_usd`); `'rate-card'` is a harness
-   * estimate computed at dispatch time from the committed per-model rate card
-   * (`.ai-conductor/rate-card.json`) for a provider that reports tokens but no
-   * money. Absent when `costUsd` is absent. Additive and optional: a consumer
-   * that does not read it behaves exactly as before.
-   */
-  costSource?: 'provider' | 'rate-card';
-  /**
-   * Catalog D21: canonical `provider/model` identifier reported by the model
-   * that produced this usage. Optional because only providers that expose the
-   * executed model can attribute it without inference.
-   */
-  attributedModel?: string;
-  numTurns?: number;
-  durationMs?: number;
-}
-
-/** A provider-neutral, best-effort observation from an autonomous output stream. */
-export interface ProviderStreamObservation {
-  /** Present only when the provider can observe child lifecycle activity. */
-  activeChildren?: number;
-  /** Whether this provider can observe child lifecycle activity. */
-  childObservability: 'observed' | 'unsupported';
-  /** Fresh (non-cached) input tokens observed so far. */
-  uncachedInputTokens: number;
-  /** Cached input tokens observed so far, when the provider reports them. */
-  cachedInputTokens?: number;
-  /** Output tokens observed so far. */
-  outputTokens: number;
-}
+import type {
+  AuthenticationSource,
+  AuthenticationReadinessState,
+  CodexProbeFailure,
+  CodexProbeFailureFacts,
+  CodexProbeFailureKind,
+  CodexProbeParserRejection,
+  ProviderExitFacts,
+  ProviderStreamObservation,
+  TokenUsage,
+} from '../types/provider.js';
+export type {
+  AuthenticationSource,
+  AuthenticationReadinessState,
+  CodexProbeFailure,
+  CodexProbeFailureFacts,
+  CodexProbeFailureKind,
+  CodexProbeParserRejection,
+  ProviderExitFacts,
+  ProviderStreamObservation,
+  TokenUsage,
+};
+export type DispatchGitGuard = (cwd: string | undefined) => Promise<string | null>;
 
 /** Candidate-owned provider-stream observer with a close-boundary flush. */
 export interface ProviderStreamCandidateObserver {
@@ -56,59 +33,6 @@ export interface ProviderStreamCandidateObserver {
 }
 
 export type ProviderUnavailableScope = 'run';
-
-/** The credential mechanism selected by the Codex provider for a run. */
-export type AuthenticationSource = 'api-key' | 'cached-login';
-
-/** A closed classification for a Codex doctor probe that yielded no credential verdict. */
-export type CodexProbeFailureKind = 'exec-error' | 'timeout' | 'unparseable-output';
-
-/** A closed parser/evidence reason retained without raw doctor output. */
-export type CodexProbeParserRejection =
-  | 'invalid-json'
-  | 'unsupported-schema'
-  | 'unrecognized-envelope'
-  | 'conflicting-source-evidence'
-  | 'ambiguous-credential-evidence';
-
-/**
- * Bounded, allowlisted facts retained from a provider subprocess that did not
- * produce a classifiable result. These fields deliberately exclude raw output,
- * paths, credential material, hashes, and arbitrary error messages.
- */
-export interface ProviderExitFacts {
-  processErrorCode?: 'E2BIG' | 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
-  exitCode?: number;
-  signal?: 'SIGABRT' | 'SIGALRM' | 'SIGHUP' | 'SIGINT' | 'SIGKILL' | 'SIGPIPE' | 'SIGQUIT' | 'SIGTERM' | 'UNKNOWN';
-  stdoutBytes?: number;
-  stderrBytes?: number;
-}
-
-/**
- * Bounded, allowlisted facts about a failed Codex doctor probe. These fields
- * deliberately exclude raw output, paths, credential material, hashes, and
- * arbitrary error messages.
- */
-export interface CodexProbeFailureFacts extends ProviderExitFacts {
-  timeoutMs?: number;
-  schemaVersion?: number;
-  envelopeStatus?: 'ok' | 'warning' | 'fail' | 'unknown';
-  credentialCheck?: 'absent' | 'ok' | 'fail' | 'unknown';
-  parserRejection?: CodexProbeParserRejection;
-}
-
-/** Closed metadata retained when the Codex doctor probe cannot determine readiness. */
-export interface CodexProbeFailure {
-  kind: CodexProbeFailureKind;
-  facts: CodexProbeFailureFacts;
-}
-
-/** Every state the provider may report for the selected authentication source. */
-export type AuthenticationReadinessState =
-  | 'ready'
-  | 'missing'
-  | 'unusable'
-  | 'probe-failed';
 
 /** A closed indication that non-authentication doctor checks are degraded. */
 export type UnrelatedHealth = 'degraded';
@@ -217,6 +141,11 @@ export interface ProviderNativeSchemaCapability {
   nativeOutputSchema: true;
 }
 
+/** Declares that an adapter delivers the engine-owned system prompt to the model. */
+export interface ProviderSystemPromptCapability {
+  deliversSystemPrompt: true;
+}
+
 /** The synchronous authority decision made immediately before process creation. */
 export type SpawnPermitDecision =
   | { permitted: true }
@@ -248,6 +177,8 @@ export interface InvokeResult {
   structuredResultFailure?: 'missing' | 'malformed';
   /** A requested native schema could not be enforced by the selected adapter. */
   nativeSchemaUnsupported?: true;
+  /** A provider cannot deliver the engine-owned system prompt to the model. */
+  systemPromptUndeliverable?: true;
   /** Candidate setup established that its provider cannot enforce read-only review. */
   readOnlyReviewUnavailable?: true;
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
@@ -436,6 +367,8 @@ export interface LLMProvider {
   lifecycleCapability?: ProviderLifecycleCapability;
   /** Declares native output-schema support; absence is an explicit unsupported capability. */
   nativeSchemaCapability?: ProviderNativeSchemaCapability;
+  /** Declares engine-owned system-prompt delivery; absence is an explicit unsupported capability. */
+  systemPromptCapability?: ProviderSystemPromptCapability;
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;

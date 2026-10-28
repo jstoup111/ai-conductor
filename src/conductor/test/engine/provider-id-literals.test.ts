@@ -12,7 +12,10 @@ import { CONDUCTOR_DECOMPOSED_MODULES } from '../structural/conductor-shape-guar
 const testRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(testRoot, '../..');
 const sourceRoot = join(conductorRoot, 'src');
-const catalogModule = 'execution/provider-catalog.ts';
+const catalogModules = new Set([
+  'execution/provider-catalog.ts',
+  'execution/provider-catalog-identities.ts',
+]);
 const ADAPTER_MODULES_BY_PROVIDER_ID = {
   claude: ['execution/claude-provider.ts'],
   codex: ['execution/codex-provider.ts'],
@@ -85,7 +88,7 @@ function findProviderLiterals(
   source: ts.SourceFile,
   adapterModules = declaredAdapterModules(),
 ): readonly ProviderLiteralFinding[] {
-  if (module === catalogModule) return [];
+  if (catalogModules.has(module)) return [];
 
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
@@ -202,7 +205,7 @@ function findProviderShapeBranches(
 }
 
 async function productionProviderShapeBranchFindings(): Promise<readonly ProviderShapeBranchFinding[]> {
-  const excluded = new Set([catalogModule, ...declaredAdapterModules()]);
+  const excluded = new Set([...catalogModules, ...declaredAdapterModules()]);
   const files = (await sourceFiles(sourceRoot)).filter((path) => !excluded.has(relative(sourceRoot, path)));
   const findings = await Promise.all(files.map(async (path) => {
     const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
@@ -372,7 +375,7 @@ describe('structural: built-in provider literals', () => {
     ]);
   });
 
-  it('has no built-in provider ids or display names outside the catalog and declared adapters', async () => {
+  it('has no built-in provider ids or display names outside declared provider-owned modules', async () => {
     expect(await productionProviderLiteralFindings()).toEqual([]);
   });
 

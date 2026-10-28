@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:2, task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -33,10 +33,12 @@ vi.mock('execa', () => ({ execa: mockExeca }));
 
 let discoverPlugins: typeof import('../../src/engine/plugin-loader.js').discoverPlugins;
 let registerBuiltins: typeof import('../../src/engine/plugin-loader.js').registerBuiltins;
+let registerTerminalBuiltins: typeof import('../../src/terminal-builtins.js').registerTerminalBuiltins;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ discoverPlugins, registerBuiltins } = await import('../../src/engine/plugin-loader.js'));
+  ({ registerTerminalBuiltins } = await import('../../src/terminal-builtins.js'));
 });
 
 describe('discoverPlugins', () => {
@@ -619,7 +621,7 @@ describe('registerBuiltins — terminal halt-marker sink', () => {
     const registry = new PluginRegistry();
     const events = new ConductorEventEmitter();
     const stream = new CaptureStream();
-    const subscriber = registerBuiltins(registry, events, () => {}, {
+    const subscriber = registerTerminalBuiltins(registry, events, {
       stateFilePath: '/tmp/conduct-state.json',
       steps: ALL_STEPS,
       readStateFn: async () => ({ ok: true, value: {} }),
@@ -641,7 +643,7 @@ describe('registerBuiltins — terminal halt-marker sink', () => {
 
   it('registers terminal as a renderer and never registers the subscriber as ui_renderer', () => {
     const registry = new PluginRegistry();
-    const subscriber = registerBuiltins(registry, new ConductorEventEmitter(), {
+    const subscriber = registerTerminalBuiltins(registry, new ConductorEventEmitter(), {
       stateFilePath: '/tmp/conduct-state.json', steps: ALL_STEPS,
       readStateFn: async () => ({ ok: true, value: {} }),
     });

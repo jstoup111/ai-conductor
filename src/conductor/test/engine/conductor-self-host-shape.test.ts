@@ -1,4 +1,4 @@
-// Covers: task:7, task:8
+// Covers: task:3, task:7, task:8
 import { describe, expect, it, vi } from 'vitest';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import { Conductor, type StepRunResult, type StepRunner } from '../../src/engine
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
-import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState } from '../../src/types/index.js';
 import * as liveBoundary from '../../src/engine/self-host/live-boundary.js';

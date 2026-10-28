@@ -1,6 +1,6 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { journalRefFor, readRestackJournal } from '../restack/restack-journal.js';
-import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
+import { journalRefFor, readRestackJournal, type ReadRestackJournalResult, type RestackJournal } from '../restack/restack-journal.js';
+import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
   MAX_ROUTE_ROUNDS,
@@ -27,6 +27,18 @@ export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { r
 
 const ZERO_SHA = '0'.repeat(40);
 
+/**
+ * A routing writer can pass an in-progress sync only when it owns that
+ * journal. Other non-terminal journal states fence routing mutations.
+ */
+export function routingFenceOpen(journal: ReadRestackJournalResult, ownerOpId?: RestackOpId): boolean {
+  if (journal.kind === 'missing') return true;
+  if (journal.kind !== 'journal') return false;
+  return journal.journal.state === 'aborted'
+    || (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)
+    || (journal.journal.state === 'synced' && ownerOpId === journal.journal.opId);
+}
+
 function isFeatureBranchRef(ref: string): boolean {
   return /^refs\/heads\/feat\/(?:c[1-9]\/|daemon-)[a-z0-9][a-z0-9-]*$/.test(ref);
 }
@@ -47,18 +59,30 @@ export type RoutingTransactionOp =
   | { readonly kind: 'delete-record'; readonly previous: StoredRouteRecord }
   | { readonly kind: 'create-marker'; readonly marker: RepairMarker }
   | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
+  | { readonly kind: 'update-queue'; readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' }; readonly queue: RevalidationQueueRecord }
+  | { readonly kind: 'delete-queue'; readonly previous: ReadRevalidationQueueResult & { readonly kind: 'queue' } }
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
-  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
+  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
+  | { readonly kind: 'delete-marker'; readonly old: CommitSha }
+  /** A value-only fence for authority refs not otherwise written by this transaction. */
+  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
-/** Every newly admitted route seals its authored-task denominator. */
+/**
+ * Every newly admitted audit or operator route seals its authored-task
+ * denominator. A revalidate route authors no remediation tasks, so it seals none.
+ */
 export type CreateRouteRecordInput = Pick<
   RouteRecord,
-  'roundId' | 'kind' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
-> & { readonly sealedAuthored: number; readonly receipt?: RouteRecord['receipt'] };
+  'roundId' | 'items' | 'allocation' | 'pendingAsBuiltFindings' | 'operator'
+> & { readonly receipt?: RouteRecord['receipt'] } & (
+  | { readonly kind: 'audit'; readonly sealedAuthored: number }
+  | { readonly kind: 'revalidate'; readonly sealedAuthored?: never }
+  | { readonly kind: 'operator'; readonly sealedAuthored: number }
+);
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
-export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'unavailable' };
+export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
 
 async function readBlob(ref: string, git: GitRunner): Promise<{ readonly kind: 'absent' } | { readonly kind: 'unreadable' } | { readonly blob: CommitSha; readonly content: string }> {
   try {
@@ -129,9 +153,7 @@ export async function writeRoutingTransaction(
   const git = dependencies.git ?? makeGitRunner(worktree);
   const journal = await readRestackJournal(worktree, slug, { git });
   if (journal.kind === 'unreadable') return { kind: 'unavailable' };
-  if (journal.kind === 'journal' &&
-    (journal.journal.state !== 'applied' && journal.journal.state !== 'aborted' ||
-      (journal.journal.state === 'applied' && journal.journal.followOnCause !== undefined))) {
+  if (!routingFenceOpen(journal)) {
     return { kind: 'restack-journal-open' };
   }
   try {
@@ -179,6 +201,20 @@ export async function writeRoutingTransaction(
           lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${op.previous.blob}`);
           break;
         }
+        case 'update-queue': {
+          if (op.previous.slug !== slug) return { kind: 'unavailable' };
+          const serialized = JSON.stringify(op.queue);
+          if (parseRevalidationQueueRecord(serialized) === undefined) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
+          const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
+          if (!blob) return { kind: 'unavailable' };
+          lines.push(`update ${revalidationQueueRefFor(slug)} ${blob} ${op.previous.blob}`);
+          break;
+        }
+        case 'delete-queue':
+          if (op.previous.slug !== slug) return { kind: 'unavailable' };
+          lines.push(`delete ${revalidationQueueRefFor(slug)} ${op.previous.blob}`);
+          break;
         case 'update-branch':
           if (!isFeatureBranchRef(op.ref)) return { kind: 'unavailable' };
           lines.push(`update ${op.ref} ${op.new} ${op.old}`);
@@ -189,6 +225,12 @@ export async function writeRoutingTransaction(
           break;
         case 'update-marker':
           lines.push(`update ${repairMarkerRefFor(slug)} ${op.new} ${op.old}`);
+          break;
+        case 'delete-marker':
+          lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
+          break;
+        case 'verify-ref':
+          lines.push(`verify ${op.ref} ${op.value}`);
           break;
       }
     }
@@ -227,6 +269,41 @@ export function transitionHost(
   return { kind: 'updated', record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit)) };
 }
 
+/** Applies the host state recorded when a routed repair leaves the restack. */
+export function routedRecordAfterExit(
+  stored: StoredRouteRecord,
+  host: import('../child-context.js').ChildId,
+  outcome: 'restacked' | 'done',
+): ReturnType<typeof transitionHost> {
+  return transitionHost(stored, host, outcome, { credit: false });
+}
+
+/**
+ * Builds the route and repair-marker portion of a routed restack transaction.
+ * The caller owns the write; this helper deliberately performs no I/O.
+ */
+export function routedAppliedLines(
+  slug: string,
+  journal: RestackJournal | ReadRestackJournalResult,
+  ownerOpId: RestackOpId,
+): readonly string[] | 'refused' {
+  let stored: ReadRestackJournalResult;
+  if ('kind' in journal) {
+    stored = journal;
+  } else {
+    const routed = journal.routed;
+    if (routed === undefined) return 'refused';
+    stored = { kind: 'journal', slug, blob: routed.routeOld, journal };
+  }
+  if (!routingFenceOpen(stored, ownerOpId) || stored.kind !== 'journal') return 'refused';
+  const routed = stored.journal.routed;
+  if (routed === undefined || routed.routeNew === undefined) return 'refused';
+  return [
+    `update ${routeRecordRefFor(slug, routed.roundId)} ${routed.routeNew} ${routed.routeOld}`,
+    `delete ${repairMarkerRefFor(slug)} ${routed.markerOld}`,
+  ];
+}
+
 
 /**
  * At-least-once delivery for a route record. A persistence acknowledgement is
@@ -257,10 +334,42 @@ export async function drainOutbox(worktree: string, stored: StoredRouteRecord, p
   return { kind: 'drained' };
 }
 
+/** Delivers queue outcomes using the same at-least-once envelope as routes. */
+export async function drainQueueOutbox(
+  worktree: string,
+  stored: Extract<ReadRevalidationQueueResult, { readonly kind: 'queue' }>,
+  persist: PersistOutboxEvent,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<DrainOutboxResult> {
+  let current = stored;
+  while (current.queue.outbox.length > 0) {
+    const entry = current.queue.outbox[0]!;
+    const event = { ...entry.event, eventId: entry.eventId, occurredAt: entry.occurredAt } as ConductorEvent;
+    try { await persist(event); } catch { return { kind: 'persist-failed' }; }
+    const queue = { ...current.queue, outbox: current.queue.outbox.slice(1) };
+    const wrote = queue.entries.length === 0 && queue.outbox.length === 0
+      ? await writeRoutingTransaction(worktree, current.slug, [{ kind: 'delete-queue', previous: current }], dependencies)
+      : await writeRoutingTransaction(worktree, current.slug, [{ kind: 'update-queue', previous: current, queue }], dependencies);
+    if (wrote.kind === 'restack-journal-open') return { kind: 'restack-journal-open' };
+    if (wrote.kind !== 'updated') return wrote.kind === 'cas-failed' ? { kind: 'retry' } : { kind: 'unavailable' };
+    if (queue.entries.length === 0 && queue.outbox.length === 0) return { kind: 'drained' };
+    const reread = await readRevalidationQueue(worktree, current.slug, dependencies);
+    if (reread.kind !== 'queue' || reread.queue.outbox.length >= current.queue.outbox.length) return { kind: 'retry' };
+    current = reread;
+  }
+  return { kind: 'drained' };
+}
+
 /** Enumerates durable route records, never inferring them from a transient marker. */
 export async function drainRoutingOutboxes(worktree: string, slug: string, persist: PersistOutboxEvent, dependencies: RouteRecordStoreDependencies = {}): Promise<DrainOutboxResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   try {
+    const queue = await readRevalidationQueue(worktree, slug, { git });
+    if (queue.kind === 'unreadable') return { kind: 'unavailable' };
+    if (queue.kind === 'queue') {
+      const drained = await drainQueueOutbox(worktree, queue, persist, { git });
+      if (drained.kind !== 'drained') return drained;
+    }
     const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
     if (listed.exitCode !== 0) return { kind: 'unavailable' };
     for (const ref of listed.stdout.split('\n').filter(Boolean)) {

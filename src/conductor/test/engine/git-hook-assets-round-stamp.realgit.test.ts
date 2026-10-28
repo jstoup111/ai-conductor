@@ -7,14 +7,16 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
+import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 const sourceIndex = fileURLToPath(new URL('../../src/index.ts', import.meta.url));
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -57,6 +59,16 @@ function withoutGuardValve(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 async function writeRepairMarker(root: string, host: number, roundId: string): Promise<void> {
+  const parsedRoundId = parseRoundId(roundId);
+  if (parsedRoundId === undefined) throw new Error(`invalid round id: ${roundId}`);
+  const route = await createRouteRecord(root, 'demo', {
+    roundId: parsedRoundId,
+    sealedAuthored: 0,
+    kind: 'audit',
+    items: [],
+    allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+  });
+  if (route.kind !== 'created') throw new Error(`could not create route: ${route.kind}`);
   const markerPath = join(root, '.pipeline', 'repair-marker.json');
   await writeFile(markerPath, JSON.stringify({ host, roundId }));
   const blob = await git(root, ['hash-object', '-w', markerPath]);
@@ -81,14 +93,7 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
   await git(root, ['add', '.gitignore', '.ai-conductor/config.yml']);
   await git(root, ['commit', '-qm', 'base']);
-  await git(root, ['checkout', '-qb', 'feat/c1/demo']);
-  await writeFile(join(root, 'child.txt'), 'child\n');
-  await git(root, ['add', 'child.txt']);
-  await git(root, ['commit', '-qm', 'child']);
-  await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
-  await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
-  await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1,
     slug: 'demo',
     runId: 'round-stamp',
@@ -97,6 +102,13 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
+  await git(root, ['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'child.txt'), 'child\n');
+  await git(root, ['add', 'child.txt']);
+  await git(root, ['commit', '-qm', 'child']);
+  await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
+  await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
+  await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
   await git(root, ['checkout', '-q', 'feat/c1/demo']);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'current-task'), 'T1\n');
@@ -112,13 +124,13 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await expect(commit(root, 'member.txt', 'feat: permitted child task')).resolves.toContain('Task: T1');
   });
 
-  it('adds one Task and Round trailer only for the marker host branch', async () => {
+  it('adds one Task and Round trailer for the marker host and refuses a non-host commit', async () => {
     const root = await routedFixture();
     await writeRepairMarker(root, 1, 'r1');
 
     await expect(commit(root, 'host.txt', 'feat: host repair')).resolves.toContain('Task: T1\nRound: r1');
     await git(root, ['checkout', '-q', 'feat/daemon-demo']);
-    await expect(commit(root, 'leaf.txt', 'feat: leaf change')).resolves.not.toMatch(/^Round:/m);
+    await expect(commit(root, 'leaf.txt', 'feat: leaf change')).rejects.toThrow(/stack-commit-guard/);
     await git(root, ['checkout', '-q', 'feat/c1/demo']);
     const duplicate = await commit(root, 'duplicate.txt', 'feat: same round\n\nRound: r1');
     expect(duplicate.match(/^Round:/gm)).toHaveLength(1);

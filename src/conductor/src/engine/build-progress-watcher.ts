@@ -7,7 +7,7 @@ import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
 import { heartbeatBelongsToDispatch, readStepHeartbeat } from './step-heartbeat.js';
 import type { ResolvedBuildProgressConfig } from './config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { BuildActivity } from '../types/events.js';
@@ -48,7 +48,8 @@ export function isNoTaskProgressBuildStall(input: {
     // deliberately admitted after task resolution.  Treating either as a
     // no-progress stall would prevent its one permitted follow-up lap.
     !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:') &&
-    !input.completionReason?.startsWith('Done-when citation refused:');
+    !input.completionReason?.startsWith('Done-when citation refused:') &&
+    !input.completionReason?.startsWith('Remediation closure reopened:');
 }
 
 /**

@@ -1,5 +1,5 @@
-import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
 import type { ChildId } from '../child-context.js';
+import type { SliceTopologyMembership } from '../slice-topology.js';
 import type { AsBuiltGoverningReference } from '../as-built-contract.js';
 import type { CriterionBoundRemediationGap, FrozenHostPlan } from '../remediation-append.js';
 import { allocateFrozenBlocks } from '../remediation-append.js';
@@ -43,7 +43,7 @@ export interface AdmittedRoutingItem {
 
 export interface RouteAdmittedRoundInput {
   readonly admitted: readonly AdmittedRoutingItem[];
-  readonly envelope: Pick<CoverageBindingEnvelope, 'sliceMembership'>;
+  readonly sliceMembership: SliceTopologyMembership;
   readonly planText: string;
   readonly appendedChildren: Readonly<Record<string, number>>;
   readonly declaredPositions: readonly ChildId[];
@@ -153,7 +153,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
       };
     }
     const ownership = deriveTaskBoundOwner({
-      taskIds: source.ownerTaskIds, envelope: input.envelope,
+      taskIds: source.ownerTaskIds, sliceMembership: input.sliceMembership,
       planText: input.planText, appendedChildren: input.appendedChildren, declaredPositions: input.declaredPositions,
     });
     if (ownership.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: ownership.detail };

@@ -1,4 +1,4 @@
-// Covers: task:1, task:200
+// Covers: task:1, task:6, task:200
 import { describe, expect, it } from 'vitest';
 
 import { MAX_CHILD_ID } from '../../../src/engine/child-context.js';
@@ -10,6 +10,7 @@ import {
   parseRouteRecord,
   parseRoundId,
   emptyUnsettledReceipt,
+  isLegalHostTransition,
   type RoutedItem,
   type UnsettledRoundReceipt,
 } from '../../../src/engine/routing/route-types.js';
@@ -99,7 +100,59 @@ const admittedRecord = { ...preparedRecord, phase: 'open', hosts: { 1: 'admitted
 /** A round that finished: its rerouted source and its done destination are both terminal. */
 const closedRecord = { ...enteredRecord, phase: 'closed', hosts: { 1: 'rerouted', 2: 'done', 3: 'done' } };
 
+/** An operator round retains its complete, durable command and recovery context. */
+const operatorRecord = {
+  roundId: 'r2',
+  kind: 'operator',
+  phase: 'closed',
+  items: [],
+  allocation: { 1: { remTaskIds: [], blockBodies: [] } },
+  hosts: { 1: 'abandoned' },
+  currentHostIndex: 0,
+  receipt: emptyUnsettledReceipt(),
+  operator: {
+    origin: 'land',
+    reason: 'Apply the reviewer correction to its owning child.',
+    operator: 'james',
+    entryStep: 'acceptance_specs',
+    park: { token: 'park-token' },
+    carried: [{ child: 2, tip: '1'.repeat(40) }],
+    otherTips: {
+      'feat/c2/demo': '2'.repeat(40),
+      'feat/daemon-demo': '3'.repeat(40),
+    },
+    priorRegion: {
+      statuses: {
+        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      },
+      verdicts: { 'build-review.json': '{"verdict":"PASS"}' },
+    },
+    declaration: { tip: '4'.repeat(40), at: '2026-10-24T00:00:00.000Z' },
+    abandon: { rejectedTip: '5'.repeat(40), resetTip: '6'.repeat(40), stage: 'synced' },
+  },
+  outbox: [],
+};
+
 describe('routed repair durable record parsers', () => {
+  // Covers: task:6
+  it('parses the complete operator section only on an operator route', () => {
+    expect(parseRouteRecord(JSON.stringify(operatorRecord))).toEqual(operatorRecord);
+    expect(JSON.stringify(parseRouteRecord(JSON.stringify(operatorRecord)))).toBe(JSON.stringify(operatorRecord));
+
+    const { operator: _operator, ...withoutOperator } = operatorRecord;
+    expect(parseRouteRecord(JSON.stringify(withoutOperator))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, operator: operatorRecord.operator }))).toBeUndefined();
+  });
+
+  // Covers: task:6
+  it('allows only the operator abandon transitions and a closed abandoned host', () => {
+    expect(isLegalHostTransition('admitted', 'abandoning')).toBe(true);
+    expect(isLegalHostTransition('repairing', 'abandoning')).toBe(true);
+    expect(isLegalHostTransition('abandoning', 'abandoned')).toBe(true);
+    expect(isLegalHostTransition('built', 'abandoning')).toBe(false);
+    expect(parseRouteRecord(JSON.stringify(operatorRecord))).toBeDefined();
+  });
+
   it('parses only bounded, branded route round ids', () => {
     expect(parseRoundId('r1')).toBe('r1');
     expect(parseRoundId(`r${MAX_ROUTE_ROUNDS}`)).toBe(`r${MAX_ROUTE_ROUNDS}`);
@@ -307,18 +360,53 @@ describe('routed repair durable record parsers', () => {
     }))).toBeUndefined();
   });
 
+  // Covers: task:28
   it('parses valid repair markers and revalidation queues', () => {
     expect(parseRepairMarker(JSON.stringify({ host: 2, roundId: 'r1' }))).toEqual({ host: 2, roundId: 'r1' });
     expect(parseRevalidationQueueRecord(JSON.stringify({
       generation: 3,
-      entries: [{ child: 2, closureSha: 'a'.repeat(40), state: 'pending' }],
+      entries: [
+        {
+          child: 2,
+          position: 2,
+          closureSha: 'a'.repeat(40),
+          gates: ['test_suite'],
+          replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+          state: 'queued',
+        },
+        {
+          child: 4,
+          position: 4,
+          closureSha: 'd'.repeat(40),
+          gates: ['acceptance_specs', 'build_review'],
+          replay: { oldParent: 'e'.repeat(40), newParent: 'f'.repeat(40) },
+          state: 'queued',
+        },
+      ],
       outbox: [{
         eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z',
         event: { type: 'child_revalidated', eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z' },
       }],
     }))).toEqual({
       generation: 3,
-      entries: [{ child: 2, closureSha: 'a'.repeat(40), state: 'pending' }],
+      entries: [
+        {
+          child: 2,
+          position: 2,
+          closureSha: 'a'.repeat(40),
+          gates: ['test_suite'],
+          replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+          state: 'queued',
+        },
+        {
+          child: 4,
+          position: 4,
+          closureSha: 'd'.repeat(40),
+          gates: ['acceptance_specs', 'build_review'],
+          replay: { oldParent: 'e'.repeat(40), newParent: 'f'.repeat(40) },
+          state: 'queued',
+        },
+      ],
       outbox: [{
         eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z',
         event: { type: 'child_revalidated', eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z' },
@@ -326,8 +414,56 @@ describe('routed repair durable record parsers', () => {
     });
   });
 
+  // Covers: task:28
+  it('rejects queues with duplicate children, non-ascending positions, or abbreviated closure SHAs', () => {
+    const entry = {
+      child: 2,
+      position: 2,
+      closureSha: 'a'.repeat(40),
+      gates: ['test_suite'],
+      replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+      state: 'queued',
+    };
+    const laterEntry = {
+      child: 4,
+      position: 4,
+      closureSha: 'd'.repeat(40),
+      gates: ['build_review'],
+      replay: { oldParent: 'e'.repeat(40), newParent: 'f'.repeat(40) },
+      state: 'queued',
+    };
+
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [entry, { ...laterEntry, child: 2 }], outbox: [],
+    }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [laterEntry, entry], outbox: [],
+    }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [{ ...entry, closureSha: 'a'.repeat(12) }], outbox: [],
+    }))).toBeUndefined();
+  });
+
+  it('rejects queues with an unknown gate or a state other than queued', () => {
+    const entry = {
+      child: 2,
+      position: 2,
+      closureSha: 'a'.repeat(40),
+      gates: ['test_suite'],
+      replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+      state: 'queued',
+    };
+
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [{ ...entry, gates: ['lint-docs'] }], outbox: [],
+    }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 3, entries: [{ ...entry, state: 'pending' }], outbox: [],
+    }))).toBeUndefined();
+  });
+
   it('rejects out-of-bounds repair marker hosts and queue entries without a closure SHA', () => {
     expect(parseRepairMarker(JSON.stringify({ host: MAX_CHILD_ID + 1, roundId: 'r1' }))).toBeUndefined();
-    expect(parseRevalidationQueueRecord(JSON.stringify({ generation: 1, entries: [{ child: 1, state: 'pending' }], outbox: [] }))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({ generation: 1, entries: [{ child: 1, position: 1, state: 'queued' }], outbox: [] }))).toBeUndefined();
   });
 });

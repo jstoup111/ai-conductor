@@ -17,4 +17,5 @@ Operational recovery procedures for daemon, worktree, and shipped-record inciden
 | [Shipped record reconciliation](shipped-record-reconciliation.md) | A feature shipped by hand and the daemon keeps re-dispatching it because `.docs/shipped/<slug>.md` is missing. |
 | [Corrupt intake ledger](corrupt-intake-ledger.md) | Intake has stopped: the ledger is corrupt or its lease is stuck, and every mutating verb exits non-zero. |
 | [Protected-artifact plan deadlock](protected-artifact-plan-deadlock.md) | `build_review` demands an outcome that would amend another feature's sealed DECIDE artifact, so no legal BUILD remediation exists. |
+| [Stacked feature manual recovery](stacked-feature-manual-recovery.md) | A stacked or routed feature halts or stops with no actionable reason: cascade caps, two open routed rounds, silent preflight stops, restack conflicts, child-scoped build_review halts. |
 | [Abandoning a spec](abandoning-a-spec.md) | The operator has decided a spec will not be delivered and its DECIDE artifacts must leave the active backlog. |

@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { detectKickbackBudgetCommand } from '../../src/cli.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -67,14 +67,7 @@ async function realCascadeCapCliFixture() {
   await writeFile(join(root, 'base.txt'), 'base\n');
   await git(['add', 'base.txt']);
   await git(['commit', '-qm', 'base']);
-  await git(['worktree', 'add', '-qb', 'feat/c1/demo', childWorktree, 'main']);
-  const closed = await commit('closed child', 'child.txt');
-  await git(['update-ref', 'refs/conductor/demo/closed/c1', closed]);
-  await commit('repair child', 'repair.txt');
-  await git(['branch', 'feat/daemon-demo', closed]);
-  await git(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
-  await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(root, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
@@ -82,7 +75,19 @@ async function realCascadeCapCliFixture() {
     entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
+    materializeTopologyCommit: true,
   }, envelopeFilesystem);
+  await git(['worktree', 'add', '-qb', 'feat/c1/demo', childWorktree, 'main']);
+  const closed = await commit('closed child', 'child.txt');
+  await git(['update-ref', 'refs/conductor/demo/closed/c1', closed]);
+  await commit('repair child', 'repair.txt');
+  await git(['branch', 'feat/daemon-demo', closed]);
+  await git(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
+  await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
+  await sealSliceTopologyPositions(repo, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
+  });
   const blob = (await makeGitRunner(repo)(
     ['hash-object', '-w', '--stdin'],
     { input: JSON.stringify({ version: 1, counts: { 1: 3 } }) },
@@ -248,15 +253,10 @@ describe('restack kickback budget storage', () => {
     await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.root });
     await execFile('git', ['worktree', 'add', '-q', subject.repo, 'feat/daemon-demo'], { cwd: subject.root });
 
-    await writeCoverageBindingEnvelope(subject.repo, {
-      version: 1,
+    await sealSliceTopologyPositions(subject.repo, {
       slug: 'demo',
-      runId: 'run-2',
-      status: 'done',
-      entries: [],
       sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
-      storyOwnership: { S1: 1, S2: 2 },
-    }, envelopeFilesystem);
+    });
     await mkdir(join(subject.repo, '.pipeline', 'children', '2'), { recursive: true });
     await writeFile(join(subject.repo, '.pipeline', 'children', '2', 'kickback-ledger.json'), activeLedger);
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), halt);

@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
@@ -14,7 +16,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    provider = new ClaudeProvider(undefined, mockExeca as never);
+    provider = new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never);
   });
 
   const baseOptions: InvokeOptions = {

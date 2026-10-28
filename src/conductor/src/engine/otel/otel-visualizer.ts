@@ -31,7 +31,7 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { basename } from 'node:path';
-import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
+import type { ConductorEventEmitter, EventHandler } from '../conductor-event-emitter.js';
 import type { ConductorEvent } from '../../types/events.js';
 import { otelTracedEventTypes } from '../event-sinks.js';
 import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';

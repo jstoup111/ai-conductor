@@ -15,6 +15,7 @@ import { isOperatorParked } from './park-marker.js';
 import { DefaultStepRunner } from './step-runners.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
 import { readWorktreeOutcome } from './daemon-deps.js';
+import { installDaemonProcessServices, type DaemonProcessServicesOptions } from './daemon-process-bootstrap.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { runSetupFailureTriage } from './setup-triage.js';
 import { PluginRegistry } from './plugin-registry.js';
@@ -27,13 +28,18 @@ import { validateConfiguredProviderModels } from './provider-model-probe.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
+import { leafBranchFor } from './feature-branch-identity.js';
+import { hasDurableChildState } from './child-cursor.js';
+import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
 import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { ConductState } from '../types/index.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
-import type { ExecutorChildRunInput } from './executor-child.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import type { ExecutorChildDispatchAdmission, ExecutorChildRunInput } from './executor-child.js';
+import type { WorkOrder } from './work-order.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
+import { startSessionEventTail } from './event-persister.js';
 
 export interface ExecutorChildFeatureRunnerInput {
   order: ExecutorChildRunInput['order'];
@@ -44,6 +50,70 @@ export interface ExecutorChildFeatureRunnerInput {
   log?: (message: string) => void;
   /** Store for the daemon base-state seed; defaults to the filesystem store. */
   stateStore?: ConductStateStore<ConductState>;
+}
+
+export interface MakeExecutorChildRunOptions {
+  readonly projectRoot: string;
+  readonly runFeature?: typeof runExecutorChildFeature;
+  readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
+}
+
+/**
+ * Claim the root-owned stacked-feature lease before an isolated child creates
+ * or reuses its worktree. The child process runs with the supervisor's root as
+ * its cwd, so this remains the canonical lease and park-marker location.
+ */
+export async function makeExecutorChildDispatchAdmission(
+  { projectRoot }: Pick<MakeExecutorChildRunOptions, 'projectRoot'>,
+  order: WorkOrder,
+): Promise<ExecutorChildDispatchAdmission> {
+  if (await hasDurableChildState(projectRoot, order.slug) !== true) return { kind: 'admitted' };
+
+  const leaseResult = await acquireFeatureDispatchLease(projectRoot, order.slug, 'daemon dispatch');
+  if (leaseResult.kind !== 'acquired') {
+    return {
+      kind: 'skipped',
+      outcome: { slug: order.slug, status: 'parked', reason: 'feature-lease-held' },
+    };
+  }
+
+  try {
+    if (await isOperatorParked(projectRoot, order.slug)) {
+      await leaseResult.lease.release();
+      return {
+        kind: 'skipped',
+        outcome: { slug: order.slug, status: 'parked', reason: 'parked-after-lease' },
+      };
+    }
+  } catch (error) {
+    await leaseResult.lease.release();
+    throw error;
+  }
+
+  return { kind: 'admitted', release: () => leaseResult.lease.release() };
+}
+
+/**
+ * Compose the child-only daemon services before running its sole feature.
+ * Each child handles one order, so the order's feature bus is the process bus.
+ */
+export function makeExecutorChildRun({
+  projectRoot,
+  runFeature = runExecutorChildFeature,
+  githubBoundary,
+}: MakeExecutorChildRunOptions): (input: ExecutorChildRunInput) => Promise<FeatureExecutionOutcome> {
+  return async (input) => {
+    installDaemonProcessServices({ projectRoot, events: input.events, ...githubBoundary });
+    return runFeature({
+      ...input,
+      worktree: {
+        path: join(projectRoot, '.worktrees', input.order.slug),
+        branch: leafBranchFor(input.order.slug),
+      },
+      projectRoot,
+      supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
+    });
+  };
 }
 
 /**
@@ -133,7 +203,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     registry,
   );
   const discovery = await discoverInstalledProviders({ events });
-  registerBuiltins(registry, events, undefined, config?.codex_doctor_timeout_seconds, undefined, new Set(discovery.installed));
+  registerBuiltins(registry, config?.codex_doctor_timeout_seconds, new Set(discovery.installed));
   registry.markInitialized();
   validateProviderInstallation({ config: config ?? {}, discovery });
   await validateConfiguredProviderModels({ config: config ?? {}, discovery });
@@ -154,6 +224,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
 
   const pipelineDir = join(worktree.path, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
+  const sessionTail = startSessionEventTail(worktree.path, events, order.slug);
   const sessionId = uuidv4();
   const stepRunner = new DefaultStepRunner(runtime.provider, sessionId, worktree.path, {
     featureDesc: order.slug,
@@ -199,6 +270,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
       git,
       gh: (await import('./pr-labels.js')).makeProductionGh(),
       events,
+      flushSessionEvents: sessionTail.flush,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({ projectRoot: worktree.path, git, gh: (await import('./pr-labels.js')).makeProductionGh(), baseBranch, events }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({ projectRoot: worktree.path, config }),
     }),
@@ -314,10 +386,14 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     project: basename(projectRoot),
     log: input.log,
   });
-  const result = await runner();
-  if (signal.aborted && result.status !== 'parked') {
-    await beginShutdown();
-    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+  try {
+    const result = await runner();
+    if (signal.aborted && result.status !== 'parked') {
+      await beginShutdown();
+      return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+    }
+    return result;
+  } finally {
+    await sessionTail.drain();
   }
-  return result;
 }

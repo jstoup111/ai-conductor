@@ -1,10 +1,11 @@
-// Covers: task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
+// Covers: task:1, task:3, task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildOutcomeRung, Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { readKickbackLedger, type KickbackLedger, type PendingRepair } from '../../src/engine/kickback-ledger.js';
 import type { BuildOutcomeStore } from '../../src/engine/build-outcome.js';
 import { sameNoOpCycle } from '../../src/engine/build-outcome.js';
@@ -72,6 +73,12 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       growthCap?: number;
       authoredTasks?: number;
       buildResult?: { success: true; model?: string; effort?: 'low' | 'medium' | 'high' };
+      activeRegionChild?: number;
+      complexityTier?: 'S' | 'M' | 'L';
+      remediationCaps?: {
+        prdAudit?: number | Partial<Record<'S' | 'M' | 'L', number>>;
+        asBuilt?: number | Partial<Record<'S' | 'M' | 'L', number>>;
+      };
     } = {},
   ): Promise<{
     build: ReturnType<typeof vi.fn>;
@@ -82,6 +89,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       session_started_at: Date.now() - 1_000,
       run_started_at: Date.now() - 1_000,
       feature_desc: 'transition',
+      ...(options.complexityTier === undefined ? {} : { complexity_tier: options.complexityTier }),
     });
     await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
       tasks: [{ id: 'rem-1', status: 'pending' }],
@@ -109,7 +117,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     if (options.treeHash !== undefined) {
       vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(options.treeHash);
     }
-    await new Conductor({
+    const conductor = new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       stepRunner: runner,
@@ -117,10 +125,30 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
       config: {
         defaults: { model: 'test-model', effort: options.effort ?? 'medium', max_retries: 1, escalate: false },
-        prd_audit: { max_remediation_laps: 1, max_appended_tasks: options.growthCap ?? 5, max_appended_ratio: 1 },
-        architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
+        prd_audit: {
+          ...(options.remediationCaps === undefined
+            ? { max_remediation_laps: 1 }
+            : options.remediationCaps.prdAudit === undefined
+              ? {}
+              : { max_remediation_laps: options.remediationCaps.prdAudit }),
+          max_appended_tasks: options.growthCap ?? 5,
+          max_appended_ratio: 1,
+        },
+        architecture_review_as_built: {
+          ...(options.remediationCaps === undefined
+            ? { max_remediation_laps: 1 }
+            : options.remediationCaps.asBuilt === undefined
+              ? {}
+              : { max_remediation_laps: options.remediationCaps.asBuilt }),
+          max_appended_tasks: 5,
+          max_appended_ratio: 1,
+        },
       },
-    } as never).run();
+    } as never);
+    if (options.activeRegionChild !== undefined) {
+      (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(options.activeRegionChild);
+    }
+    await conductor.run();
     return { build };
   }
 
@@ -138,6 +166,102 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { prd_audit: { laps: 1 }, architecture_review_as_built: { laps: 1 } },
       growth: { added: 2, byGate: { prd_audit: 1, architecture_review_as_built: 1 } },
+    });
+  });
+
+  // Covers: task:7
+  it('charges an unconfigured tier-L as-built fourth lap and halts the fifth at BUILD dispatch', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'tier-l-as-built', taskIds: ['rem-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    };
+    const { build: fourth } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: entry(3) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'L', remediationCaps: {} });
+
+    expect(fourth).toHaveBeenCalledOnce();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { architecture_review_as_built: { laps: 4 } },
+    });
+
+    const { build: fifth } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: entry(4) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'L', remediationCaps: {} });
+
+    expect(fifth).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'BUILD dispatch halted: architecture_review_as_built laps allowance exhausted',
+    );
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Kickback budget (architecture_review_as_built): 4/4 consumed; 0 remaining — tier L allowance 4 (default)',
+    );
+  });
+
+  it('halts an unconfigured tier-S prd-audit third lap without charging it at BUILD dispatch', async () => {
+    const { build } = await runBuild({
+      receiptId: 'tier-s-prd', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(2) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'S', remediationCaps: {} });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({ gates: { prd_audit: { laps: 2 } } });
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('kickback-cap');
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Kickback budget (prd_audit): 2/2 consumed; 0 remaining — tier S allowance 2 (default)',
+    );
+  });
+
+  it('halts an unconfigured feature with no recorded tier at the default M prd-audit allowance', async () => {
+    const { build } = await runBuild({
+      receiptId: 'unrecorded-tier-prd', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(3) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { remediationCaps: {} });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(
+      'BUILD dispatch halted: prd_audit laps allowance exhausted',
+    );
+    expect(halt).toContain('Kickback budget (prd_audit): 3/3 consumed; 0 remaining — tier unrecorded, treated as M; allowance 3 (default)');
+    expect(halt).not.toContain('tier L');
+    expect(halt).not.toContain('allowance 4');
+  });
+
+  it('honors raised effective lap caps over tier defaults and configured caps at BUILD dispatch', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'raised-tier-cap', taskIds: ['rem-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    };
+    const { build: raisedDefault } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 5 } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { complexityTier: 'M', remediationCaps: {} });
+    expect(raisedDefault).toHaveBeenCalledOnce();
+
+    const { build: raisedConfigured } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { architecture_review_as_built: { ...entry(4), effectiveLapCap: 5 } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, {
+      complexityTier: 'L',
+      remediationCaps: { asBuilt: { L: 2 } },
+    });
+    expect(raisedConfigured).toHaveBeenCalledOnce();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { architecture_review_as_built: { laps: 5, effectiveLapCap: 5 } },
     });
   });
 
@@ -453,6 +577,47 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(ledger.gates.architecture_review_as_built?.capEvidence).toMatchObject({
       allowance: 'laps', consumed: 3, limit: 3,
     });
+  });
+
+  it('renders a child inspect whole-feature cap line identically to its real child-qualified halt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-kickback-inspect-root-'));
+    const originalDir = dir;
+    dir = join(root, '.worktrees', 'transition');
+    statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    try {
+      await runBuild({
+        receiptId: 'child-as-built-exhausted', taskIds: ['rem-1'],
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+      }, {
+        version: 1,
+        gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      }, { activeRegionChild: 2 });
+
+      const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+      expect(halt).toContain('for child 2');
+      const childPipeline = join(dir, '.pipeline', 'children', '2');
+      await mkdir(childPipeline, { recursive: true });
+      await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+      await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
+      await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: { architecture_review_as_built: entry(0) },
+      }));
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'transition', format: 'human', child: '2' },
+        { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
+      )).toBe(0);
+      const haltLine = halt.split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      const inspectLine = output.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      expect(inspectLine).toBe(haltLine);
+    } finally {
+      dir = originalDir;
+      statePath = join(dir, '.pipeline', 'conduct-state.json');
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('fails closed before BUILD for a malformed pending repair', async () => {

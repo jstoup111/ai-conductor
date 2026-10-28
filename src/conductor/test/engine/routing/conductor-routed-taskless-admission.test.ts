@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 
 const seams = vi.hoisted(() => ({
   reread: 'record' as 'record' | 'absent' | 'throw',
@@ -109,10 +110,10 @@ async function subject(judgedChild = 1) {
   ].join('\n'));
   await git(['add', 'base.txt']);
   await git(['commit', '-qm', 'base']);
-  await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-    version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: [] },
-  }));
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['First', 'Second'] },
+  });
   const events = new ConductorEventEmitter();
   const runner: StepRunner = {
     run: vi.fn(async () => ({ success: true })),

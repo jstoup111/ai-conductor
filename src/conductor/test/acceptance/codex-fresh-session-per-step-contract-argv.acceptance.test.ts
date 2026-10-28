@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * RED acceptance spec — a Codex resume invocation is structurally
  * unconstructable (#903, story S1 happy path bullets 4–5).
@@ -61,7 +63,7 @@ describe('CodexProvider argv never expresses a session resume', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    provider = new CodexProvider(
+    provider = new CodexProvider(dispatchGitGuard,
       vi.fn(async () => readyDoctorResult()) as never,
       'codex',
       undefined,

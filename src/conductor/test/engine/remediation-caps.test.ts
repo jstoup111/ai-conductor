@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:2, task:3
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,8 +9,12 @@ import {
   pendingRepairSettlementBudgets,
   readPlanGrowthBudget,
   readRemediationGateAppendBudget,
+  remediationLapCapForGate,
+  resolveRemediationLapAllowance,
+  validationJoinRemediationRoundCap,
 } from '../../src/engine/remediation-caps.js';
 import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
+import { loadMergedConfig } from '../../src/engine/config.js';
 
 const STORY_TWO_SLUG = 'growth-feature';
 const STORY_TWO_CONFIG = {
@@ -40,7 +44,7 @@ describe('remediation cap consumers', () => {
   // Covers: task:1
   it('resolves kickback-budget fallback limits through the enforcement caps', () => {
     expect(kickbackBudgetFallbackLimit('build_review', {} as never)).toBe(5);
-    expect(kickbackBudgetFallbackLimit('architecture_review_as_built', {} as never)).toBe(1);
+    expect(kickbackBudgetFallbackLimit('architecture_review_as_built', {} as never)).toBe(3);
     expect(kickbackBudgetFallbackLimit(
       'architecture_review_as_built',
       { architecture_review_as_built: { max_remediation_laps: 3 } } as never,
@@ -49,6 +53,112 @@ describe('remediation cap consumers', () => {
       'prd_audit',
       { prd_audit: { max_remediation_laps: 2 } } as never,
     )).toBe(2);
+  });
+});
+
+describe('resolveRemediationLapAllowance', () => {
+  const remediationGates = ['prd_audit', 'architecture_review_as_built'] as const;
+
+  it.each(remediationGates)('returns S/M/L defaults and treats an unrecorded tier as M for %s', (gate) => {
+    expect(resolveRemediationLapAllowance(gate, {} as never, 'S')).toEqual({ limit: 2, tier: 'S', source: 'default' });
+    expect(resolveRemediationLapAllowance(gate, {} as never, 'M')).toEqual({ limit: 3, tier: 'M', source: 'default' });
+    expect(resolveRemediationLapAllowance(gate, {} as never, 'L')).toEqual({ limit: 4, tier: 'L', source: 'default' });
+    expect(resolveRemediationLapAllowance(gate, {} as never, undefined)).toEqual({ limit: 3, tier: undefined, source: 'default' });
+  });
+
+  it('uses integer and per-tier maps without crossing remediation-gate boundaries', () => {
+    const integer = { prd_audit: { max_remediation_laps: 7 } } as never;
+    for (const tier of ['S', 'M', 'L', undefined] as const) {
+      expect(resolveRemediationLapAllowance('prd_audit', integer, tier)).toMatchObject({ limit: 7, tier, source: 'configured' });
+    }
+
+    const mapped = { prd_audit: { max_remediation_laps: { L: 6 } } } as never;
+    expect(resolveRemediationLapAllowance('prd_audit', mapped, 'L')).toMatchObject({ limit: 6, tier: 'L', source: 'configured' });
+    expect(resolveRemediationLapAllowance('prd_audit', mapped, 'S')).toEqual({ limit: 2, tier: 'S', source: 'default' });
+    expect(resolveRemediationLapAllowance('prd_audit', mapped, 'M')).toEqual({ limit: 3, tier: 'M', source: 'default' });
+    expect(resolveRemediationLapAllowance('prd_audit', mapped, undefined)).toEqual({ limit: 3, tier: undefined, source: 'default' });
+    expect(resolveRemediationLapAllowance('architecture_review_as_built', mapped, 'L')).toEqual({ limit: 4, tier: 'L', source: 'default' });
+    expect(resolveRemediationLapAllowance('prd_audit', { prd_audit: { max_remediation_laps: {} } } as never, 'L')).toEqual({ limit: 4, tier: 'L', source: 'default' });
+  });
+
+  it('threads the tier-aware resolver through every remediation cap consumer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-tier-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      const config = {
+        prd_audit: { max_remediation_laps: { L: 6 } },
+        architecture_review_as_built: { max_remediation_laps: { S: 5 } },
+      } as never;
+      expect(remediationLapCapForGate('prd_audit', config, 0, 'L')).toBe(6);
+      expect(kickbackBudgetFallbackLimit('architecture_review_as_built', config, 'S')).toBe(5);
+      expect(await validationJoinRemediationRoundCap(root, config, 'L')).toBe(6);
+      await writePlanFixture(root, STORY_TWO_SLUG, taskHeadings('', 1), {});
+      await expect(pendingRepairSettlementBudgets(root, config, await readKickbackLedger(root), 'L')).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ gate: 'prd_audit', lapCap: 6 }),
+        expect.objectContaining({ gate: 'architecture_review_as_built', lapCap: 4 }),
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds an unconfigured tier-L validation join by its four-lap allowance', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-validation-join-tier-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      expect(await validationJoinRemediationRoundCap(root, {} as never, 'L')).toBeGreaterThanOrEqual(4);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves tier maps after user/project config merging without inventing a lap cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-config-'));
+    const userConfigDir = join(root, 'user');
+    const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+    try {
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await mkdir(userConfigDir, { recursive: true });
+      process.env.AI_CONDUCTOR_USER_CONFIG_DIR = userConfigDir;
+
+      const load = async (user: string, project: string) => {
+        await writeFile(join(userConfigDir, 'config.yml'), user);
+        await writeFile(join(root, '.ai-conductor', 'config.yml'), project);
+        const loaded = await loadMergedConfig(root);
+        if (!loaded.ok) throw new Error(loaded.error.message);
+        return loaded.config;
+      };
+
+      const noCaps = await load(
+        '{}\n',
+        'prd_audit:\n  max_appended_tasks: 5\narchitecture_review_as_built:\n  remediation:\n    enabled: true\n',
+      );
+      for (const gate of remediationGates) expect(resolveRemediationLapAllowance(gate, noCaps, 'L').limit).toBe(4);
+
+      const mergedMaps = await load(
+        'prd_audit:\n  max_remediation_laps:\n    S: 1\narchitecture_review_as_built:\n  max_remediation_laps:\n    S: 1\n',
+        'prd_audit:\n  max_remediation_laps:\n    L: 5\narchitecture_review_as_built:\n  max_remediation_laps:\n    L: 5\n',
+      );
+      for (const gate of remediationGates) {
+        expect(resolveRemediationLapAllowance(gate, mergedMaps, 'S').limit).toBe(1);
+        expect(resolveRemediationLapAllowance(gate, mergedMaps, 'M').limit).toBe(3);
+        expect(resolveRemediationLapAllowance(gate, mergedMaps, 'L').limit).toBe(5);
+      }
+
+      const projectInteger = await load(
+        'prd_audit:\n  max_remediation_laps:\n    L: 5\narchitecture_review_as_built:\n  max_remediation_laps:\n    L: 5\n',
+        'prd_audit:\n  max_remediation_laps: 2\narchitecture_review_as_built:\n  max_remediation_laps: 2\n',
+      );
+      for (const gate of remediationGates) {
+        for (const tier of ['S', 'M', 'L', undefined] as const) {
+          expect(resolveRemediationLapAllowance(gate, projectInteger, tier)).toMatchObject({ limit: 2, source: 'configured' });
+        }
+      }
+    } finally {
+      if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+      else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -68,7 +68,7 @@ describe('child-routed conduct state', () => {
     roots.push(root);
     const child = parseChildId(2)!;
     const flatPath = join(root, '.pipeline', 'conduct-state.json');
-    await writeState(flatPath, { coverage_binding: 'done', last_step: 'coverage_binding' });
+    await writeState(flatPath, { plan_review: 'done', last_step: 'plan_review' });
     const state = createRoutedConductStateStore(root, child);
     await state.applyBatch({
       name: 'complete child review',
@@ -122,7 +122,7 @@ describe('child-routed conduct state', () => {
     roots.push(root);
     const child = parseChildId(2)!;
     const flatPath = join(root, '.pipeline', 'conduct-state.json');
-    await writeState(flatPath, { last_step: 'coverage_binding' });
+    await writeState(flatPath, { last_step: 'plan_review' });
     const state = createRoutedConductStateStore(root, child);
     await state.applyBatch({
       name: 'complete child review',
@@ -141,7 +141,7 @@ describe('child-routed conduct state', () => {
     });
 
     expect(result.kind).not.toBe('applied');
-    await expect(readFile(flatPath, 'utf8')).resolves.toContain('"last_step": "coverage_binding"');
+    await expect(readFile(flatPath, 'utf8')).resolves.toContain('"last_step": "plan_review"');
   });
 
   it('does not let a flat completed build skip the active child build in Conductor selection', async () => {
@@ -149,7 +149,7 @@ describe('child-routed conduct state', () => {
     roots.push(root);
     const child = parseChildId(2)!;
     await writeState(join(root, '.pipeline', 'conduct-state.json'), {
-      coverage_binding: 'done',
+      plan_review: 'done',
       build: 'done',
     });
     await createRoutedConductStateStore(root, child).apply({
@@ -161,7 +161,7 @@ describe('child-routed conduct state', () => {
       daemon: false,
       events: new ConductorEventEmitter(),
     } as never);
-    const state: ConductState = { coverage_binding: 'done', build: 'done' };
+    const state: ConductState = { plan_review: 'done', build: 'done' };
 
     await (conductor as unknown as {
       activateChildRegionState: (value: ConductState, id: typeof child) => Promise<void>;

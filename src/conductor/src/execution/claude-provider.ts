@@ -9,6 +9,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
@@ -38,12 +39,11 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { CLAUDE_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 function claudeDisplayName(): string {
-  return providerDescriptor('claude').displayName;
+  return CLAUDE_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -569,9 +569,11 @@ export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
   private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
     private readonly executable = 'claude',
@@ -695,10 +697,17 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
-    if (options.abortSignal?.aborted) return abortedInvocationResult();
+    if (options.abortSignal?.aborted) {
+      return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
+    }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     // Claude's native JSON-schema mode is a non-interactive print-mode
     // capability. A REPL cannot return its terminal result envelope, so never
@@ -709,6 +718,7 @@ export class ClaudeProvider implements LLMProvider {
         output: `${claudeDisplayName()} native output schema is unsupported for interactive ${claudeDisplayName()} invocation. Recovery action: dispatch the schema request in non-interactive print mode.`,
         exitCode: 1,
         nativeSchemaUnsupported: true,
+        executionDisposition: 'not-started',
       };
     }
     const hasMachineEnvelope = !options.interactive;
@@ -1023,11 +1033,16 @@ export class ClaudeProvider implements LLMProvider {
 /** Stands in for the per-invocation file when argv is only inspected, never launched. */
 const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
 
+// A test can temporarily override TMPDIR while exercising a subprocess path.
+// Preserve the startup marker so a concurrent or nested helper cannot redirect
+// a prompt file into the operator's real temp directory after clearing it.
+const testTmpRootAtModuleLoad = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+
 /** Write one invocation's system prompt to a private temp file Claude reads at startup. */
 async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
   // Resolve this at invocation time: Vitest installs its run root after some
   // modules have already loaded, and fixtures can temporarily change TMPDIR.
-  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? testTmpRootAtModuleLoad ?? tmpdir();
   const dir = await mkdtemp(join(tempRoot, 'ai-conductor-claude-system-prompt-'));
   const path = join(dir, 'system-prompt.md');
   await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });

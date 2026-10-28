@@ -27,7 +27,7 @@ export function isUnroutedRepairPending(
 export function resolveExecutionChild(cursor: ActiveChildResolution, slug: string): ExecutionChildResolution {
   switch (cursor.kind) {
     case 'no-child': return { source: 'none' };
-    case 'envelope-missing':
+    case 'topology-unavailable':
     case 'detached-head':
     case 'git-error':
     case 'divergent': return { source: 'refused', cursor };

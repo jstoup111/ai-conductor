@@ -1,4 +1,4 @@
-// Covers: task:5, task:7, task:10, task:rem-prd-audit-R8
+// Covers: task:4, task:5, task:7, task:10, task:rem-prd-audit-R8
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,6 +22,7 @@ describe('FINISH human-required guidance', () => {
     'judgment_halt_prose',
     'ambiguous_pr_identity',
     'invalid_shipped_record',
+    'publication_operation_failed',
     'interactive_intent_deferred',
     'interactive_intent_declined',
     'interactive_intent_destructive_choice',
@@ -41,6 +42,7 @@ describe('FINISH human-required guidance', () => {
       'judgment_halt_prose',
       'ambiguous_pr_identity',
       'invalid_shipped_record',
+      'publication_operation_failed',
       'interactive_intent_deferred',
       'interactive_intent_declined',
       'interactive_intent_destructive_choice',
@@ -55,10 +57,35 @@ describe('FINISH human-required guidance', () => {
       return guidance.message;
     });
 
-    expect(messages).toHaveLength(10);
+    expect(messages).toHaveLength(11);
     expect(new Set(messages)).toHaveLength(messages.length);
   });
 });
+
+async function publicationOperationFailedError(operation: string, error: string): Promise<Error> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const PublicationOperationFailedError = mod.PublicationOperationFailedError;
+  if (typeof PublicationOperationFailedError !== 'function') {
+    throw new Error(
+      'expected export "PublicationOperationFailedError" to classify guarded publication failures (not yet implemented)',
+    );
+  }
+  return new (PublicationOperationFailedError as new (operation: string, error: string) => Error)(
+    operation,
+    error,
+  );
+}
+
+async function isPublicationOperationFailedError(error: unknown): Promise<boolean> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const isPublicationOperationFailedError = mod.isPublicationOperationFailedError;
+  if (typeof isPublicationOperationFailedError !== 'function') {
+    throw new Error(
+      'expected export "isPublicationOperationFailedError" to discriminate guarded publication failures (not yet implemented)',
+    );
+  }
+  return (isPublicationOperationFailedError as (value: unknown) => boolean)(error);
+}
 
 async function routeFinishPublicationDisposition(disposition: unknown) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
@@ -336,6 +363,164 @@ function readyPublicationSnapshot(
     pr: overrides.pr ?? base.pr,
   } as PublicationSnapshot;
 }
+
+describe('author_pr_prose publish failure', () => {
+  const operation = 'pull-request.edit';
+  const error = 'GraphQL: Your token has not been granted the required scopes: read:org';
+
+  function placeholderSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'placeholder',
+        ready: false,
+      },
+    });
+  }
+
+  function authoredSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+    });
+  }
+
+  function indeterminateSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'indeterminate',
+        ready: false,
+      },
+    });
+  }
+
+  it('halts with the guarded publish failure after placeholder prose is re-observed', async () => {
+    const snapshot = placeholderSnapshot();
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: {
+        authorProse: async () => { throw failure; },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_operation_failed',
+      detail: `${operation} failed: ${error}`,
+    });
+  });
+
+  it.each([
+    ['placeholder prose', placeholderSnapshot],
+    ['indeterminate prose', indeterminateSnapshot],
+  ])('halts with the operation failure when re-observation has %s', async (_scenario, observeAfter) => {
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(placeholderSnapshot())
+        .mockResolvedValueOnce(observeAfter()),
+      effects: {
+        authorProse: async () => { throw failure; },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toMatchObject({
+      kind: 'human_required',
+      reason: 'publication_operation_failed',
+      detail: `${operation} failed: ${error}`,
+    });
+  });
+
+  it('keeps ambiguous PR identity authoritative after a typed publish failure', async () => {
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(placeholderSnapshot())
+        .mockResolvedValueOnce(readyPublicationSnapshot({
+          pr: {
+            identity: 'ambiguous',
+            urls: [
+              'https://github.com/acme/widget/pull/1172',
+              'https://github.com/acme/widget/pull/1173',
+            ],
+          },
+        })),
+      effects: {
+        authorProse: async () => { throw failure; },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({ kind: 'human_required', reason: 'ambiguous_pr_identity' });
+  });
+
+  it('exports a discriminator for guarded publication failures', async () => {
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(isPublicationOperationFailedError(failure)).resolves.toBe(true);
+    await expect(isPublicationOperationFailedError(new Error(error))).resolves.toBe(false);
+  });
+
+  it('renders publish-failure guidance and the operation error without the unmoved explanation', async () => {
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'publication_operation_failed',
+      detail: `${operation} failed: ${error}`,
+    });
+    if (route.kind !== 'halt') throw new Error('expected a human-required halt');
+
+    expect(route.reason).toContain(
+      'A FINISH pull-request publish failed, so the authored prose never reached the pull request.',
+    );
+    expect(route.reason).toContain('Resolve the failure named below, then retry FINISH.');
+    expect(route.reason).toContain(error);
+    expect(route.reason).not.toContain('left pr.prose unchanged at placeholder');
+  });
+
+  it.each([
+    ['a typed publish failure', async () => { throw await publicationOperationFailedError(operation, error); }],
+    ['a normally completing authoring effect', async () => undefined],
+  ])('advances when %s is followed by authored prose', async (_scenario, authorProse) => {
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(placeholderSnapshot())
+        .mockResolvedValueOnce(authoredSnapshot()),
+      effects: { authorProse, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+  });
+
+  it('keeps the unmoved disposition when normally completing authoring leaves placeholder prose', async () => {
+    await expect(advanceFinishPublication({
+      observe: async () => placeholderSnapshot(),
+      effects: { authorProse: async () => undefined, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The author_pr_prose transition left pr.prose unchanged at placeholder.',
+    });
+  });
+
+  it('keeps authoring dispatch failures retryable when placeholder prose is re-observed', async () => {
+    await expect(advanceFinishPublication({
+      observe: async () => placeholderSnapshot(),
+      effects: {
+        authorProse: async () => { throw new Error('provider transport failed'); },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'authoring_dispatch_failed',
+    });
+  });
+});
 
 async function publicationProgressAllowance(snapshot: PublicationSnapshot): Promise<number> {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;

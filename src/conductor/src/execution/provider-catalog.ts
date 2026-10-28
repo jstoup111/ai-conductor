@@ -6,20 +6,30 @@ import {
   PiProvider,
   type PiModelIdParseResult,
 } from './pi-provider.js';
-import type { LLMProvider } from './llm-provider.js';
+import type { DispatchGitGuard, LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
 import type { EffortLevel } from '../types/config.js';
+import type { ProviderId } from '../types/provider.js';
 import {
   extractClaudeFinalAssistantMessage,
   extractCodexFinalAssistantMessage,
   extractPiFinalAssistantMessage,
   type FinalAssistantMessageExtractor,
-} from '../engine/self-host/transcript-format.js';
+} from './transcript-format.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
-} from '../engine/provider-model-policy-defaults.js';
+} from './provider-model-policy-defaults.js';
+import {
+  BUILT_IN_PROVIDER_IDENTITIES,
+  CLAUDE_DISPLAY_NAME,
+  CLAUDE_PROVIDER,
+  CODEX_DISPLAY_NAME,
+  CODEX_PROVIDER,
+  PI_DISPLAY_NAME,
+  PI_PROVIDER,
+} from './provider-catalog-identities.js';
 
 /** Provider-specific behavior that must be declared rather than inferred. */
 export type ProviderCapability =
@@ -47,6 +57,7 @@ export const PROVIDER_CAPABILITY_OWNERS = {
 } as const satisfies Partial<Record<ProviderCapability, string>>;
 
 export interface ProviderFactoryOptions {
+  readonly dispatchGitGuard: DispatchGitGuard;
   readonly codexDoctorTimeoutMs?: number;
 }
 
@@ -97,7 +108,7 @@ interface BuiltInProviderDescriptorBase {
   readonly id: string;
   /** Human-readable name for diagnostics and operator-facing status. */
   readonly displayName: string;
-  readonly createAdapter: (options?: ProviderFactoryOptions) => LLMProvider;
+  readonly createAdapter: (options: ProviderFactoryOptions) => LLMProvider;
   readonly defaultExecutable: string;
   readonly executableOverrideEnv: string;
   readonly versionArgv: readonly string[];
@@ -157,15 +168,16 @@ const PI_MODEL_POLICY: ProviderModelPolicy = {
  */
 export const BUILT_IN_PROVIDERS = [
   {
-    id: 'claude',
-    displayName: 'Claude',
-    createAdapter: (): LLMProvider => new ClaudeProvider(
+    id: CLAUDE_PROVIDER,
+    displayName: CLAUDE_DISPLAY_NAME,
+    createAdapter: (options): LLMProvider => new ClaudeProvider(
+      options.dispatchGitGuard,
       undefined,
       undefined,
-      resolveProviderExecutable('claude'),
+      resolveProviderExecutable(CLAUDE_PROVIDER),
     ),
-    defaultExecutable: 'claude',
-    executableOverrideEnv: 'CLAUDE_EXECUTABLE',
+    defaultExecutable: BUILT_IN_PROVIDER_IDENTITIES[0].defaultExecutable,
+    executableOverrideEnv: BUILT_IN_PROVIDER_IDENTITIES[0].executableOverrideEnv,
     versionArgv: ['--version'],
     invocationPrefix: '/',
     environmentPrefix: 'CLAUDE_',
@@ -215,17 +227,18 @@ export const BUILT_IN_PROVIDERS = [
     reviewPolicyCatalog: 'claude-metadata',
   },
   {
-    id: 'codex',
-    displayName: 'Codex',
-    createAdapter: (options = {}): LLMProvider => new CodexProvider(
+    id: CODEX_PROVIDER,
+    displayName: CODEX_DISPLAY_NAME,
+    createAdapter: (options): LLMProvider => new CodexProvider(
+      options.dispatchGitGuard,
       undefined,
-      resolveProviderExecutable('codex'),
+      resolveProviderExecutable(CODEX_PROVIDER),
       undefined,
       undefined,
       options.codexDoctorTimeoutMs,
     ),
-    defaultExecutable: 'codex',
-    executableOverrideEnv: 'CODEX_EXECUTABLE',
+    defaultExecutable: BUILT_IN_PROVIDER_IDENTITIES[1].defaultExecutable,
+    executableOverrideEnv: BUILT_IN_PROVIDER_IDENTITIES[1].executableOverrideEnv,
     versionArgv: ['--version'],
     invocationPrefix: '$',
     environmentPrefix: 'CODEX_',
@@ -271,11 +284,11 @@ export const BUILT_IN_PROVIDERS = [
     reviewPolicyCatalog: 'codex-app-server',
   },
   {
-    id: 'pi',
-    displayName: 'Pi',
-    createAdapter: (): LLMProvider => new PiProvider(resolveProviderExecutable('pi')),
-    defaultExecutable: 'pi',
-    executableOverrideEnv: 'PI_EXECUTABLE',
+    id: PI_PROVIDER,
+    displayName: BUILT_IN_PROVIDER_IDENTITIES[2].displayName,
+    createAdapter: (options): LLMProvider => new PiProvider(options.dispatchGitGuard, resolveProviderExecutable(PI_PROVIDER)),
+    defaultExecutable: BUILT_IN_PROVIDER_IDENTITIES[2].defaultExecutable,
+    executableOverrideEnv: BUILT_IN_PROVIDER_IDENTITIES[2].executableOverrideEnv,
     versionArgv: ['--version'],
     invocationPrefix: '/skill:',
     environmentPrefix: 'PI_',
@@ -329,11 +342,14 @@ export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
 
 /** The first catalog descriptor remains the default provider selection. */
 export const DEFAULT_PROVIDER: BuiltInProviderId = BUILT_IN_PROVIDERS[0].id;
-export const CLAUDE_PROVIDER = BUILT_IN_PROVIDERS[0].id;
-export const CODEX_PROVIDER = BUILT_IN_PROVIDERS[1].id;
-export const PI_PROVIDER = BUILT_IN_PROVIDERS[2].id;
-export const CLAUDE_DISPLAY_NAME = BUILT_IN_PROVIDERS[0].displayName;
-export const CODEX_DISPLAY_NAME = BUILT_IN_PROVIDERS[1].displayName;
+export {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
+  CLAUDE_DISPLAY_NAME,
+  CODEX_DISPLAY_NAME,
+  PI_DISPLAY_NAME,
+};
 
 /** Catalog lookup that keeps plugin callers on their existing generic path. */
 export function findBuiltInProviderDescriptor(
@@ -412,4 +428,9 @@ export function requireProviderCapability<Capability extends ProviderCapability>
 export function resolveProviderExecutable(id: BuiltInProviderId): string {
   const descriptor = providerDescriptor(id);
   return process.env[descriptor.executableOverrideEnv] ?? descriptor.defaultExecutable;
+}
+
+/** The catalog is the sole conversion boundary from known built-ins to event ids. */
+export function toProviderId(id: BuiltInProviderId): ProviderId {
+  return id as ProviderId;
 }

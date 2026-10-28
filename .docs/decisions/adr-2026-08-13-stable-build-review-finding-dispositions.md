@@ -88,6 +88,16 @@ result and block as infrastructure failure. A contract version changes only when
 change; that change intentionally prevents an old disposition from silently matching the new
 meaning. Pure wording changes retain the version and identity.
 
+> **Amended 2026-10-19 by #3298:** The built-in rubric contract moves from `v3` to `v4` for a
+> required, reviewer-assigned `severity` that is excluded from identity, so identity semantics do
+> not change. Contract version is still an identity input, so every built-in finding id re-keys once
+> at upgrade and stored `v3` dispositions stop matching by exact identity; the operator accepted
+> that cost over a dual-version parse path. Custom finding ids do not re-key: the custom identity
+> grammar pins its own version. Where adjudication is enabled, a re-keyed finding that `remediate`
+> binds to the case holding the accepted `v3` source is carried acceptance
+> (`adr-2026-10-20-operator-acceptance-is-durable-case-state` D3, D4); any other must be
+> re-accepted (adr-2026-10-19-build-review-finding-severity-advisory-threshold D1, D2).
+
 The LLM judges what concern and anchors apply as part of rubric evaluation. Everything after that
 judgement — schema validation, canonicalization, ID creation, collision handling, and matching — is
 deterministic.
@@ -105,6 +115,8 @@ matching finding's blocking effect. New, unmatched, malformed, legacy, and infra
 remain blocking.
 
 > **Amended 2026-10-20 by #3271:** Exact dispositions in this store remain the only source of accepted risk. Their effect now also extends to later re-raises that the judge binds to a case holding an acceptance origin derived from them, recorded in the remediation case store as `carried` (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3, D9). Invalidating a disposition stops new carry admission from it.
+
+> **Amended 2026-10-24 by #3294:** The store is still never included in grader input. Exact dispositions now also inform the engine's pre-projection scope decision: a hunk whose findings all match exact dispositions, or are otherwise non-blocking, can be settled and leave a later lap's delta. The raw aggregate remains an independent judgement of the delta the engine scoped. A finding outside that delta without a verified cause hunk is classified `outOfDelta`, which is not accepted risk (adr-2026-10-24-lap-monotonic-build-review-scope D2, D5, D6).
 
 ### 3. Serialize the coordinator and CLI through one state transaction
 

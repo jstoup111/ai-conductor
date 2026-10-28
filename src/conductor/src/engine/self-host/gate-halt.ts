@@ -12,7 +12,7 @@
 
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import type { HaltMarkerWriteResult } from '../halt-marker.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 
 /** Re-exported from the canonical marker module for existing importers. */

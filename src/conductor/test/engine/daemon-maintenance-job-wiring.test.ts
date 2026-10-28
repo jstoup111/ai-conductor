@@ -307,6 +307,7 @@ describe('daemon maintenance job wiring', () => {
     const poll = deferred<void>();
     let refreshes = 0;
     let polls = 0;
+    let clock = 0;
     const daemon = runDaemon(depsFor(calls, [{ slug: 'one', baseSha: 'pinned-base' }], {
       discoverBacklog: async ({ refresh }) => {
         if (refresh) refreshes += 1;
@@ -317,13 +318,23 @@ describe('daemon maintenance job wiring', () => {
         return feature.promise;
       },
       sleep: async () => ++polls === 1 ? poll.promise : new Promise<void>(() => {}),
+      now: () => clock,
     }), { concurrency: 1, once: true, maxItems: 1, idlePollMs: 1 });
 
-    await vi.waitFor(() => expect(calls).toContain('dispatch:one:pinned-base'));
-    poll.resolve();
-    await vi.waitFor(() => expect(refreshes).toBe(2));
-    expect(calls).toContain('dispatch:one:pinned-base');
-    feature.resolve(done('one'));
-    await daemon;
+    try {
+      await vi.waitFor(() => expect(calls).toContain('dispatch:one:pinned-base'));
+      // The mocked poll has no wall-clock duration. Advance the injected clock
+      // through its configured interval so the scheduler may start the refresh.
+      clock = 1;
+      poll.resolve();
+      await vi.waitFor(() => expect(refreshes).toBe(2));
+      expect(calls).toContain('dispatch:one:pinned-base');
+    } finally {
+      // An assertion failure must not leave the daemon's live worker holding
+      // the Vitest process open and obscure this failure with teardown fallout.
+      poll.resolve();
+      feature.resolve(done('one'));
+      await daemon;
+    }
   });
 });

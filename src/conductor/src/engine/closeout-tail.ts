@@ -6,7 +6,7 @@ import {
   ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES,
   type ExternalPipelineEvent,
 } from './closeout-events.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { SessionEventReader } from './session-event-reader.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
@@ -203,5 +203,15 @@ export class CloseoutEventTail {
   async drain(): Promise<void> {
     await this.poll();
     await this.projectSessionRecords(true);
+  }
+
+  /**
+   * Join any poll already reading, then always make one fresh ledger read.
+   * A caller at a dispatch boundary must not mistake the joined poll's
+   * snapshot for a read that includes a producer append that raced it.
+   */
+  async flush(): Promise<void> {
+    await this.poll();
+    await this.poll();
   }
 }

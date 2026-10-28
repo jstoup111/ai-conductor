@@ -61,6 +61,10 @@ unchanged. No new step, skill, provider member, or second adjudicator is introdu
 
 > **Amended 2026-09-10 by #1986:** custom-policy laps extend this same case flow with versioned consistency, plan-admission, and decision-escalation outcomes. The shared operation serves attended and daemon execution exactly once per lap. A blocked consistency decision, any decision escalation, or invalid admission evidence prevents action effects before a worker receives repairs. The inherited source-complete, mixed-lap infrastructure, suppression, settled-recurrence, durable-effect, and cumulative-bound contracts remain effective (adr-2026-09-10-portable-build-review-policy D8–D11).
 
+> **Amended 2026-10-23 by #3291:** "Exactly once per lap" now means one authoritative judgement per lap. Inside the one shared operation, the coordinator may re-dispatch the same `remediate` judgement at most once, as an expansion round, under three conditions: the lap is case-v2, the round-1 judgement fails validation only because it admits plan tasks the context listed in its index without their bodies, and those tasks exist in the active plan. The expansion uses the same skill, provider member, mode and context contract, and adds only the requested task bodies under the same serialized ceiling. Round 1's judgement is discarded, never merged or reconciled. The expansion charges no kickback, and a second invalid judgement stops as today, naming any unsupplied task ids. No new step, skill, provider member or second adjudicator is introduced (adr-2026-09-10-portable-build-review-policy D8 amendment of the same date).
+
+> **Amended 2026-10-24 by #3294:** Each prior case source in the remediate context may carry a bounded `finding` digest (rubric, concernKind, a summary of at most 1000 bytes, up to 8 evidence locations, lapId) read from the lap artifact that raised it. Only the latest 4 sources per case carry one, and all digests share one budget: the smaller of 64 KiB and the headroom left under `maxSerializedBytes` after every case, current source and the plan context. It is recomputed for an expansion round. The oldest digests are dropped first and counted as `priorDigestsOmitted`, never failing the context (adr-2026-10-24-lap-monotonic-build-review-scope D8).
+
 ### D3 — Content action and infrastructure blocking compose without erasure
 
 After complete adjudication and required-effect settlement, transition precedence is:
@@ -144,6 +148,18 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 > This is the predecessor's decision 5 store used as designed: the occurrence is emitted on the
 > spine (D4.5), and the store carries it as durable control input for later judgement.
 
+> **Amended 2026-10-19 by #3298:** D4.2 kept the result contract at `v3` because `confidence` is
+> optional. A required, reviewer-assigned `severity` (critical, major, minor, nit) now moves fresh
+> built-in results to `v4`. Because contract version is part of built-in finding identity, every
+> built-in finding id re-keys once at upgrade (custom ids are unchanged), and stored `v3` dispositions invalidate through the existing
+> `build_review_disposition_version_invalidated` path; where remediate binds the re-keyed finding to
+> the accepted case, #3271 still carries it. D4.3's buckets gain `advisory`, classified
+> after `suppressed`: a finding whose severity is strictly below its rubric's declared `min_severity`
+> never reaches remediate, is never charged, and is recorded on the same event, seam and store
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D2, D4, D5).
+
+> **Amended 2026-10-24 by #3294:** Confidence suppression now has a second effect, before judgement. A finding below the floor is non-blocking, so it can let its hunk settle and leave a later lap's delta. D4.3's rule still holds, because the floor is applied after judgement to the findings a lap raises. The floor's value is not in the cache fingerprint, but a floor change can change a later lap's delta and thus its projection digest (adr-2026-10-24-lap-monotonic-build-review-scope D2).
+
 ### D5 — Exact-id recurrence of a settled finding does not re-dispatch the judge
 
 > **Amended 2026-09-06 by #2383:** The predecessor's decision 7 says a previously deferred or
@@ -180,6 +196,13 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   exact id, so a refuted claim is neither re-dispatched to the judge nor halted as a regression.
 >   A `refute` case whose deferral effect is `reserved` or `failed` does not satisfy the predicate,
 >   exactly as D5.2 prescribes for every other unfinished effect.
+
+> **Amended 2026-10-19 by #3298:** D5.1's finalized cases also include a remediate case with
+> disposition `advisory` and effect `none`, read through the D5.5 authoritative link. That case
+> settles only while every source rubric's current `min_severity` stays strictly above the case's
+> adjudicated severity. Lowering or removing
+> the threshold makes its sources live again. The predicate remains read-only
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D6, D7).
 
 > **Amended 2026-10-19 by #3292:** Source ownership is scoped to open cases, and an unbound
 > re-raise of resolved history is admitted. The predecessor's D5 store kept one case per source id
@@ -220,7 +243,49 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   escalation's durable stopping point under portable-build-review-policy D9. Superseding an open
 >   owner with a stop is #3005's decision and is not made here.
 
+> **Amended 2026-10-23 by #3124:** An undeclared unbound re-raise is a recorded recurrence that
+> shares its prior case's attempt limit. D5.6 read every unbound proposal as "the judge's statement
+> that the case is not that one". That let a returning defect open fresh repair cycles until the
+> feature-wide kickback cap stopped it, with nothing linking the new case to the attempts that
+> already failed. The operator's goal is fewer halts, so the safe default is a bounded autonomous
+> repair, not a halt. This amendment narrows D5.6 for `act` and adds the decisions below.
+>
+> - **D5.8 — Distinctness is declared, never inferred.** A remediate case row with disposition `act`
+>   and no `existingCaseId` may carry `distinctFrom`: one or more `{ caseId, reason }` entries, each
+>   with a non-empty bounded reason. An entry counts only when its `caseId` is the D5.5
+>   authoritative owner of one of the row's sources, and that owner is a resolved `act` case. The
+>   engine drops every other entry and halts on none. A row with a malformed `distinctFrom` shape is
+>   rejected like any other malformed artifact. Nothing infers distinctness or sameness from prose,
+>   summaries, or tree movement.
+> - **D5.9 — An undeclared re-raise is a recurrence.** When reconciliation mints a new `act` case
+>   whose sources' authoritative owners include resolved `act` cases that no counted entry names,
+>   the new case is stamped `recurrenceOf` with those owners' ids. A case named by a counted entry
+>   is recorded on the new case as `distinctFrom` with its reason, and the new case starts no
+>   lineage with it. Both fields are optional, engine-stamped, and written only on the new case at
+>   creation. Every resolved row stays byte-identical, and the store version is unchanged. The
+>   frozen prior-case projection the judge reads exposes both fields, and `build-review findings`
+>   shows them next to the case they reference.
+> - **D5.10 — A lineage shares one attempt limit of three.** A case's lineage is that case plus
+>   every case reachable through `recurrenceOf`. Its attempt count is the number of distinct
+>   lineage `act` cases whose action effect is `applied`, read from the store, not from lap-local
+>   work-order evidence. Before reconciliation reserves any effect, the coordinator checks every
+>   undeclared recurrence proposal. A proposal whose lineage already counts three attempts does not
+>   reconcile. Instead its live sources are linked to the authoritative resolved owner through the
+>   existing halting-binding writer, and the lap halts through the existing operator-acceptance-aware
+>   halt as `semantic remediation case recurrence limit <case id>`, naming every lineage case id and
+>   the attempt count. Under the limit, the recurrence is admitted and charged exactly as D5.6
+>   prescribes. The cumulative kickback cap still applies on top. The limit is a fixed engine
+>   constant, not configuration.
+> - **D5.11 — Recurrence is reported on the existing spine.** `remediation_case_reconciled` for a
+>   newly opened case carries optional `recurrenceOf` and `distinctFrom` (case ids, with reasons
+>   for distinct). `remediation_semantic_repeat_halt` gains the reason `recurrence-limit` and an
+>   optional `lineageCaseIds`. No new event type, sink entry, or sidecar is added. Non-`act`
+>   dispositions, decision and consistency stops (D5.7, #3005), explicit `existingCaseId` rebinds
+>   (the predecessor D7 regression halt and carry), and resolved rows are unchanged.
+
 > **Amended 2026-10-20 by #3271:** The settled predicate of D5.1 also admits a source by exact id when its D5.5 authoritative link is `carried`. A binding to a carry-eligible case is classified `carry` before D5.6's explicit-rebind regression halt and before D5.7's decision-stop persistence, so neither applies to it. D5.4's unchanged-resolved-row rule gains three engine writers that may change a resolved row: `finalize` acceptance origins, the carry lane, and reuse-halt source linking (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3). D5.2's exclusion of `failed` and `reserved` action cases from settlement no longer applies to retirement: such a case retires under the shared retirement predicate when every source is covered by operator acceptance or carry, or is no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D4, D5).
+
+> **Amended 2026-10-24 by #3294:** D5.1's exact-id rule remains the only admitted equivalence. Out-of-delta classification is a scope rule, not an equivalence: in a delta lap, a finding whose mapped hunks are all settled is `outOfDelta` unless its `causeHunk` names a delta hunk (adr-2026-10-24-lap-monotonic-build-review-scope D5, D6). D5.8's recurrence owner gains a provenance source. An unbound `act` case with no exact-source owner, and with a source mapped to a delta hunk, is stamped `recurrenceOf` the applied act case that owns a source raised in the predecessor lap on the same path. Among several candidates, the one with the most applied lineage attempts wins, ties going to the lowest case id. D5.8's counting rule admits a `distinctFrom` entry that names a provenance candidate of the row, as well as a resolved `act` owner of a row source, and still drops every other entry. A provenance candidate may be an open or a resolved case with an applied action effect. D5.10's lineage limit of 3 applies unchanged (adr-2026-10-24-lap-monotonic-build-review-scope D7).
 
 ## Consequences
 

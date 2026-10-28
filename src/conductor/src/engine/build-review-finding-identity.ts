@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import {
+  CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION,
   normalizeBuildReviewFindingVocabularyMember,
   parseBuildReviewCanonicalPathReference,
   parseBuildReviewFindingAnchor,
@@ -264,7 +265,7 @@ export function stampBuildReviewCustomJudgedResult(
   // at least one frozen source region through `bindSourceRegions` below.
   if (!validStamp(stamp) || !Array.isArray(references.sourceRegions)) return undefined;
   const payload = parseBuildReviewCustomReviewerPayload(value);
-  if (!payload || payload.kind !== 'custom-findings') return undefined;
+  if (!payload || payload.kind !== 'custom-findings' || payload.version !== CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION) return undefined;
   const findings = payload.findings.map((finding): BuildReviewStampedCustomFinding | undefined => {
     if (!CUSTOM_CONCERN.test(finding.concernId) || !locationsAreAdmitted(finding.evidenceLocations, references)) return undefined;
     const sourceRegions = bindSourceRegions(finding, references);

@@ -20,6 +20,7 @@ const fixtures = [
 const DRAFT_ADR_CHANNEL = {
   concernId: 'unapproved-channel-adr',
   summary: 'The review IPC endpoint has a DRAFT ADR; missing approval, consumers, and reconciliation story.',
+  severity: 'major',
   evidenceLocations: ['src/conductor/src/engine/review-ipc.ts:21'],
   sourceRegions: [{
     path: 'src/conductor/src/engine/review-ipc.ts', startLine: 21, endLine: 23, contentHash: HASH, display: 'added changed hunk',
@@ -57,14 +58,14 @@ describe('event-spine build-review skill', () => {
   ) => {
     const sourceRegion = { path, startLine: line, endLine: line + 2, contentHash: HASH, display: 'added changed hunk' };
     const payload = parseBuildReviewCustomReviewerPayload({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId, summary, evidenceLocations: [`${path}:${line}`], sourceRegions: [sourceRegion],
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId, summary, severity: 'major', evidenceLocations: [`${path}:${line}`], sourceRegions: [sourceRegion],
       }],
     });
 
     expect(payload).toEqual({
-      kind: 'custom-findings', version: 'v1', findings: [expect.objectContaining({
-        concernId, summary, evidenceLocations: [`${path}:${line}`], sourceRegions: [sourceRegion],
+      kind: 'custom-findings', version: 'v2', findings: [expect.objectContaining({
+        concernId, summary, severity: 'major', evidenceLocations: [`${path}:${line}`], sourceRegions: [sourceRegion],
       })],
     });
     expect(payload?.kind === 'custom-findings' && payload.findings).toHaveLength(1);
@@ -72,15 +73,15 @@ describe('event-spine build-review skill', () => {
 
   it('accepts a valid empty custom-reviewer result', () => {
     expect(parseBuildReviewCustomReviewerPayload({
-      kind: 'custom-findings', version: 'v1', findings: [],
-    })).toEqual({ kind: 'custom-findings', version: 'v1', findings: [] });
+      kind: 'custom-findings', version: 'v2', findings: [],
+    })).toEqual({ kind: 'custom-findings', version: 'v2', findings: [] });
   });
 
   it('parses a DRAFT ADR channel as an unapproved-channel-adr finding', () => {
     expect(parseBuildReviewCustomReviewerPayload({
-      kind: 'custom-findings', version: 'v1', findings: [DRAFT_ADR_CHANNEL],
+      kind: 'custom-findings', version: 'v2', findings: [DRAFT_ADR_CHANNEL],
     })).toEqual({
-      kind: 'custom-findings', version: 'v1', findings: [DRAFT_ADR_CHANNEL],
+      kind: 'custom-findings', version: 'v2', findings: [DRAFT_ADR_CHANNEL],
     });
   });
 });

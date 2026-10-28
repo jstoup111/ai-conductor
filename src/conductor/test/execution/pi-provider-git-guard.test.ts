@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:1, task:3, task:4
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,6 +57,7 @@ function fakeEnvironment(): PiEnvironment {
       error.code = 'ENOENT';
       throw error;
     },
+    access: async () => {},
     env: { PATH: inheritedPath },
     homeDir: () => '/home/agent',
     cwd: () => '/prepared',
@@ -70,7 +73,7 @@ describe('PiProvider git guard dispatch environment', () => {
     vi.clearAllMocks();
     mockEnsureGitGuardForDispatch.mockResolvedValue('/prepared/.pipeline/bin');
     spawn.mockResolvedValue(completePi());
-    provider = new PiProvider('pi', spawn, fakeEnvironment());
+    provider = new PiProvider(dispatchGitGuard, 'pi', spawn, fakeEnvironment());
   });
 
   afterEach(async () => {
@@ -119,14 +122,15 @@ describe('PiProvider git guard dispatch environment', () => {
     ]);
   });
 
-  it('fails before launch when the git guard cannot be verified', async () => {
+  // Covers: task:8
+  it('marks a git-guard failure as not started before launch', async () => {
     const error = 'git guard repair failed: /prepared/.pipeline/bin/git: guard is not a regular executable file';
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(error));
 
     const result = await provider.invoke(baseOptions);
 
     expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
-    expect(result).toEqual({ success: false, output: error, exitCode: 1 });
+    expect(result).toEqual({ success: false, output: error, exitCode: 1, executionDisposition: 'not-started' });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -141,7 +145,7 @@ describe('PiProvider git guard dispatch environment', () => {
 
   it('launches a read-only review when a skipped guard would reject', async () => {
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error('git guard repair failed'));
-    const reviewProvider = new PiProvider('pi', spawn, fakeEnvironment(), async () => '/engine/pi-review-extension.ts');
+    const reviewProvider = new PiProvider(dispatchGitGuard, 'pi', spawn, fakeEnvironment(), async () => '/engine/pi-review-extension.ts');
 
     await reviewProvider.invoke({ ...baseOptions, reviewDispatch: true, readOnlyReview: true });
 

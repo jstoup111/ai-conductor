@@ -7,7 +7,7 @@ import { isStepName } from '../execution-identity.js';
 import { ownerFromCaptureSource, transcriptOwnerStep } from './transcript-retention.js';
 import type { ConductorEvent, TranscriptOwner } from '../../types/events.js';
 import type { StepName } from '../../types/steps.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 
 export interface HarvestTranscriptsOptions {
   readonly home: string;

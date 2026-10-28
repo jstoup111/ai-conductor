@@ -339,7 +339,7 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
       recorder.onFeatureHalt('mechanical', 'build', 'L');
       recorder.onRunClose('halted', 'L');
       recorder.onFeatureShipped('S');
-      recorder.onFeatureDuration(12, 9, 'S');
+      recorder.onFeatureDuration(12, { state: 'exact', activeMs: 9 }, 'S');
       await provider.forceFlush();
 
       const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
@@ -356,7 +356,7 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
         outcomes: { outcome: 'halted', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
         shipped: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
         wall: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
-        active: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        active: { tier: 'S', state: 'exact', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
       });
     } finally {
       await provider.shutdown();
@@ -377,7 +377,7 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
       recorder.onFeatureHalt('mechanical', 'build');
       recorder.onRunClose('halted');
       recorder.onFeatureShipped();
-      recorder.onFeatureDuration(12, 9);
+      recorder.onFeatureDuration(12, { state: 'exact', activeMs: 9 });
       await provider.forceFlush();
 
       const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
@@ -400,13 +400,16 @@ describe('Task 5: feature activity and outcome tier attributes', () => {
     });
 
     try {
-      recorder.onFeatureDuration(12, undefined, 'S');
+      recorder.onFeatureDuration(12, { state: 'partial' }, 'S');
       await provider.forceFlush();
 
       expect(findMetric(exporter, 'conductor.feature.duration.wall')?.dataPoints[0]?.attributes).toEqual({
         tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature',
       });
       expect(findMetric(exporter, 'conductor.feature.duration.active')).toBeUndefined();
+      expect(findMetric(exporter, 'conductor.feature.duration.active.missing')?.dataPoints[0]).toMatchObject({
+        attributes: { tier: 'S', state: 'partial', project: 'test-project', worker: 'test-worker', feature: 'test-feature' }, value: 1,
+      });
     } finally {
       await provider.shutdown();
     }
@@ -1456,4 +1459,29 @@ describe('run outcome counter', () => {
     ]);
   });
 
+});
+
+// Covers: task:2
+describe('Task 2: active duration instruments', () => {
+  it('creates the missing counter and restricts active-duration labels to the approved vocabulary', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const recorder = new MetricsRecorder(
+      provider.getMeter('task-2-instruments'),
+      { project: 'project', worker: 'worker', feature: 'feature' },
+      { 'deployment.environment': 'staging' },
+    );
+    try {
+      recorder.onFeatureDuration(10, { state: 'partial', activeMs: 9, reason: 'provider-evidence-incomplete' }, 'M');
+      recorder.onFeatureDuration(10, { state: 'unavailable' }, 'M');
+      await provider.forceFlush();
+      const allowed = new Set(['project', 'worker', 'feature', 'tier', 'state', 'reason', 'deployment.environment']);
+      const points = (name: string) => findMetric(exporter, name)?.dataPoints ?? [];
+      expect(findMetric(exporter, 'conductor.feature.duration.active.missing')).toBeDefined();
+      expect([...points('conductor.feature.duration.active'), ...points('conductor.feature.duration.active.missing')]
+        .every((point) => Object.keys(point.attributes).every((key) => allowed.has(key)))).toBe(true);
+    } finally {
+      await provider.shutdown();
+    }
+  });
 });

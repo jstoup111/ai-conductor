@@ -45,7 +45,7 @@ unfinished one.
 - Given a two-child baseline in which `feat/c1/demo` has just been created at `B` with no commits and
   no closure ref, when the daemon restarts, then child 1 is still the active child, even though the
   leaf branch contains child 1's tip.
-- Given a three-child baseline with child 1 closed, when an operator commits directly onto
+- Given a three-child baseline with child 1 closed and `stacked_prs.route_whole_feature_fixes: false`, when an operator commits directly onto
   `feat/c1/demo` past its closure tip, then the next dispatch with no routing round open runs a `feature-repair` restack that
   moves `refs/conductor/demo/closed/c1` to the new tip and replays the children above it, and no
   needs-human halt is written.
@@ -450,8 +450,8 @@ feature.
   `--child`, then membership is validated against child 2.
 
 #### Negative Paths
-- Given a two-child baseline with child 1 closed, when `ai-conductor rewind --to build --child 1` runs,
-  then it is refused, naming child 1 as closed and #3203, and no state changes.
+- Given a two-child baseline with child 1 closed and no live HALT, when `ai-conductor rewind --to build --child 1 --reason "x"` runs,
+  then it is refused naming the missing HALT, and no state changes.
 - Given a two-child baseline with child 2 active, when `ai-conductor task start T1` runs without `--child`
   with no open routing round granting the execution projection, then it is refused, naming `T1` as owned by child 1.
 - Given a feature with no children, when each of the three commands runs without `--child`, then its

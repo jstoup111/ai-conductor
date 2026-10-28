@@ -1,7 +1,7 @@
 import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
-
-export type ChildId = number & { readonly __brand: 'ChildId' };
+import type { ChildId } from '../types/restack.js';
+export type { ChildId };
 
 export const MAX_CHILD_ID = 9;
 

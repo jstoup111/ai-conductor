@@ -9,7 +9,7 @@ import type {
 } from '../types/index.js';
 import { auditedEventTypes } from './event-sinks.js';
 import { phaseForStep } from './resolved-config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 /** Directory owning the per-worktree audit ledger. */
 export const AUDIT_TRAIL_DIRECTORY = '.pipeline/audit-trail';

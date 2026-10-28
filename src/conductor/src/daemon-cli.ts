@@ -5,7 +5,7 @@ import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync, realpathSync } from 'node:fs';
-import { access, mkdir, readFile, readlink, unlink as unlinkFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readlink, unlink as unlinkFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
@@ -50,6 +50,7 @@ import { buildAuthRemediationMessage } from './engine/self-host/build-auth-messa
 import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
+import { registerTerminalBuiltins } from './terminal-builtins.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { formatProviderStartLine } from './ui/provider-start-line.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
@@ -109,8 +110,9 @@ import {
   renderedSessionOccurrenceTypes,
 } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
-import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
-import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from './engine/github-operations.js';
+import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
+import { installDaemonProcessServices } from './engine/daemon-process-bootstrap.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -163,12 +165,15 @@ import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
+import { gitRefManifestSource, resolveFeatureArtifact } from './engine/feature-manifest-source.js';
 import {
   formatDaemonStartupLog,
   formatDaemonConcurrencyWarning,
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
+import { hasDurableChildState } from './engine/child-cursor.js';
+import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
@@ -205,7 +210,11 @@ import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js'
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
-import { runStackPreflight } from './engine/restack/stack-preflight.js';
+import {
+  runStackPreflight,
+  type RunStackPreflightOptions,
+  type StackPreflightResult,
+} from './engine/restack/stack-preflight.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -222,6 +231,7 @@ import {
 import {
   scanInheritedState,
   renderDashboard,
+  resolveRowBudget,
   type InheritedState,
   type ParkedEntry,
   type ScanInheritedStateDeps,
@@ -327,6 +337,43 @@ export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunne
       };
     }
   };
+}
+
+/** Resolve the two documents carried into a daemon work order at its pinned base. */
+export async function resolveDaemonWorkOrderDocumentRefs(
+  projectRoot: string,
+  baseSha: string,
+  slug: string,
+  legacy: { storiesPath?: string; planPath?: string } = {},
+): Promise<readonly string[]> {
+  const source = gitRefManifestSource(projectRoot, baseSha);
+  const [stories, plan] = await Promise.all([
+    resolveFeatureArtifact(source, slug, 'stories', async () => [
+      legacy.storiesPath ?? `.docs/stories/${slug}.md`,
+    ]),
+    resolveFeatureArtifact(source, slug, 'plan', async () => [
+      legacy.planPath ?? `.docs/plans/${slug}.md`,
+    ]),
+  ]);
+  return [...stories.paths, ...plan.paths];
+}
+
+/** Read the owner-gate merge time from the manifest-authoritative plan path. */
+export async function readDaemonMergeTime(
+  git: GitRunner,
+  projectRoot: string,
+  slug: string,
+  baseRef: string,
+): Promise<string | null> {
+  const plan = await resolveFeatureArtifact(
+    gitRefManifestSource(projectRoot, baseRef),
+    slug,
+    'plan',
+    async () => [`.docs/plans/${slug}.md`],
+  );
+  const path = plan.paths[0];
+  if (path === undefined || (plan.origin === 'manifest' && plan.missing.includes(path))) return null;
+  return firstAppearanceTime(git, baseRef, path);
 }
 
 /** The only transformation from the serializable executor contract to runner input. */
@@ -1040,6 +1087,8 @@ export interface StartupDashboardBindingOptions {
   worktreeBase: string;
   processedDir: string;
   showCompleted?: boolean;
+  discoveryPartitions?: () => { waiting: import('./engine/daemon-dashboard.js').WaitingEntry[]; blocked: import('./engine/daemon-backlog.js').BlockedSpecItem[]; gated: import('./engine/daemon-backlog.js').GatedItem[] } | undefined;
+  consoleStream?: { isTTY?: boolean; columns?: number };
   log: (message: string) => void;
   discoverTick: (options: { refresh: boolean }) => Promise<BacklogItem[]>;
   scanInheritedState?: (deps: ScanInheritedStateDeps) => Promise<InheritedState>;
@@ -1099,9 +1148,13 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
   renderStartupDashboard: (pausedAtStartup: boolean) => Promise<void>;
 } {
   let cachedStartupDiscovery: BacklogItem[] | undefined;
+  let cachedPartitions: ReturnType<NonNullable<StartupDashboardBindingOptions['discoveryPartitions']>>;
   const discoverAndCacheStartup = async (discoverOptions: { refresh: boolean }): Promise<BacklogItem[]> => {
     const result = await options.discoverTick(discoverOptions);
-    cachedStartupDiscovery ??= result;
+    if (cachedStartupDiscovery === undefined) {
+      cachedStartupDiscovery = result;
+      cachedPartitions = options.discoveryPartitions?.();
+    }
     return result;
   };
 
@@ -1112,7 +1165,12 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
       const state = await (options.scanInheritedState ?? scanInheritedState)({
         worktreeBase: options.worktreeBase,
         processedDir: options.processedDir,
-        discover: () => Promise.resolve(cachedStartupDiscovery ?? []),
+        discover: () => {
+          if (cachedStartupDiscovery === undefined) return Promise.reject(new Error('startup discovery did not complete'));
+          return Promise.resolve(cachedPartitions === undefined
+            ? cachedStartupDiscovery
+            : { items: cachedStartupDiscovery, waiting: cachedPartitions.waiting, blocked: cachedPartitions.blocked, gated: cachedPartitions.gated });
+        },
         log: options.log,
         prStateProbe: options.prStateProbe,
       });
@@ -1122,6 +1180,8 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         ...state.eligible.map((entry) => entry.slug),
         ...state.processed.map((entry) => entry.slug),
         ...(state.waiting ?? []).map((entry) => entry.slug),
+        ...(state.blocked ?? []).map((entry) => entry.slug),
+        ...(state.gated ?? []).flatMap((entry) => entry.kind === 'spec' ? [entry.slug] : []),
         ...await options.listOperatorParkedSlugs(options.projectRoot),
       ]);
       const reconciliation = await options.reconcileParkedFeatures({
@@ -1147,8 +1207,10 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
       }
       const dashboardState = { ...state, parked };
       options.writeDashboard(
-        renderDashboard(dashboardState),
-        renderDashboard(dashboardState, { includeCompleted: options.showCompleted }),
+        renderDashboard(dashboardState, { mode: 'full' }),
+        options.showCompleted
+          ? renderDashboard(dashboardState, { mode: 'full', includeCompleted: true })
+          : renderDashboard(dashboardState, { mode: 'compact', rowBudget: resolveRowBudget(options.consoleStream ?? process.stdout) }),
       );
     },
   };
@@ -1257,6 +1319,40 @@ export function createClaimTimeRepairRunner(options: {
     }
     await applyOutcome({ request, outcome: await request.run(claimedEntry) }, previousEntry);
   };
+}
+
+/**
+ * Attaches the daemon renderer to a feature event bus. Persistence is owned
+ * separately by the feature's EventPersister.
+ */
+export function attachFeatureEventRenderer(
+  featureEvents: ConductorEventEmitter,
+  featureLog: (message: string) => void,
+): () => void {
+  const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+  const renderableEvents = renderedEventTypes();
+  for (const type of renderableEvents) featureEvents.on(type, renderEvent);
+  return () => {
+    for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+  };
+}
+
+/**
+ * Run the stack repair boundary that precedes every daemon re-kick.
+ *
+ * Keeping this small boundary exported lets the dispatch-level test exercise
+ * the same call that protects `runConductorInWorktree`, rather than proving
+ * only `runStackPreflight` in isolation.
+ */
+export async function runDaemonRekickStackPreflight(
+  options: RunStackPreflightOptions,
+  log: (message: string) => void,
+): Promise<StackPreflightResult> {
+  const result = await runStackPreflight(options);
+  if (result.kind === 'halted' || result.kind === 'unavailable') {
+    log(`stack preflight ${options.slug}: ${result.kind} — ${result.detail}`);
+  }
+  return result;
 }
 
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
@@ -1552,7 +1648,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
   // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
-  installDaemonBotCoAuthor(createBotCoAuthorResolver({ runner: makeProductionGh(), cwd: projectRoot, events }));
+  installDaemonProcessServices({ projectRoot, events });
   // Both daemon-only occurrences and forwarded feature events share one bus;
   // the sibling ledger deliberately persists only daemon-origin copies.
   const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
@@ -1612,15 +1708,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     readStateFn: readState,
     projectRoot,
   };
-  const globalSubscriberLog = createOwnershipAwareDaemonLogger(log);
-  const subscriber = registerBuiltins(
+  registerBuiltins(
     registry,
-    events,
-    rendererOpts,
     config?.codex_doctor_timeout_seconds,
-    undefined,
     new Set(providerDiscovery.installed),
   );
+  // Register terminal for the renderer registry, but preserve the daemon's
+  // daemon-log-only global subscription.
+  const subscriber = registerTerminalBuiltins(registry, events, rendererOpts, [], false);
   registry.markInitialized();
   validateProviderInstallation({
     config: config ?? {},
@@ -1635,6 +1730,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     config: config ?? {},
     registeredProviders: registry.list('llm_provider'),
   });
+  const globalSubscriberLog = createOwnershipAwareDaemonLogger(log);
   const daemonLogRenderer: UIRenderer = {
     name: 'daemon-log',
     async handle(event) {
@@ -1742,6 +1838,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
   // records and the worktree-owned records share one immutable attribution.
   const featureLogs = new Map<string, (message: string) => void>();
+  const featureEventFlushers = new WeakMap<ConductorEventEmitter, () => Promise<void>>();
   const featureLogFor = (slug: string): ((message: string) => void) => {
     let featureLog = featureLogs.get(slug);
     if (!featureLog) {
@@ -1754,24 +1851,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     }
     return featureLog;
   };
-  /**
-   * The same slug-aware renderer serves in-process feature buses and the
-   * supervisor's child-executor proxy buses. Persistence is intentionally not
-   * included: an executor child is the only writer of its feature ledger.
-   */
-  const attachFeatureEventRenderer = (slug: string, featureEvents: ConductorEventEmitter): (() => void) => {
-    const featureLog = featureLogFor(slug);
-    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
-    const renderableEvents = renderedEventTypes();
-    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
-    return () => {
-      for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-    };
-  };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
     const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
+    featureEventFlushers.set(featureEvents, persistence.flush);
     const featureLog = featureLogFor(item.slug);
     const providerExecution = createProviderExecution(featureEvents, featureLog);
     const provider = providerExecution.configuredProviders[0];
@@ -1811,7 +1895,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
       : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    const detachFeatureEventRenderer = attachFeatureEventRenderer(item.slug, featureEvents);
+    const detachFeatureEventRenderer = attachFeatureEventRenderer(featureEvents, featureLog);
     let stopPromise: Promise<void> | undefined;
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
@@ -1828,6 +1912,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           } finally {
             if (visualizer) activeDispatchVisualizers.delete(visualizer);
             detachFeatureEventRenderer();
+            featureEventFlushers.delete(featureEvents);
             persistence.stop();
           }
         }
@@ -1963,6 +2048,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         git: finishPublicationGit,
         gh: finishPublicationGh,
         events: featureEvents,
+        flushSessionEvents: featureEventFlushers.get(featureEvents),
         repairPresentation: createProvenanceGuardedFinishPresentationRepair({
           projectRoot: wt.path,
           git: finishPublicationGit,
@@ -2037,7 +2123,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // chained base refresh owns consumption of REKICK through its journal;
     // otherwise resumeRebaseFirst retains its historical one-shot behavior.
     const rekickPath = join(pipelineDir, 'REKICK');
-    const stackPreflight = await runStackPreflight({
+    const stackPreflight = await runDaemonRekickStackPreflight({
       worktree: wt.path,
       slug: item.slug,
       baseRefreshDue: existsSync(rekickPath),
@@ -2046,6 +2132,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT') throw error;
         });
+      },
+      rearmRekick: async () => {
+        await writeFile(rekickPath, '');
       },
       events: featureEvents,
       resolver: stepRunner.resolveRebaseConflict
@@ -2063,9 +2152,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`);
         }
       },
-    });
+    }, featureLog);
     if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') {
-      featureLog(`stack preflight ${item.slug}: ${stackPreflight.kind}`);
       return;
     }
     const resume = await resumeRebaseFirst({
@@ -2273,10 +2361,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         enginePin,
         effectiveConcurrency: daemonConcurrency.concurrency,
         selfHost: isSelfHost,
-        documentRefs: [
-          item.storiesPath ?? `.docs/stories/${item.slug}.md`,
-          item.planPath ?? `.docs/plans/${item.slug}.md`,
-        ],
+        documentRefs: await resolveDaemonWorkOrderDocumentRefs(projectRoot, baseSha, item.slug, item),
         tier: item.tier,
         sourceRef: item.sourceRef,
         track: item.track,
@@ -2327,7 +2412,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktreeLifecycle,
     rootEvents: events,
     featureLogFor,
-    attachFeatureEventRenderer,
+    attachFeatureEventRenderer: (slug, featureEvents) => attachFeatureEventRenderer(featureEvents, featureLogFor(slug)),
     attachFeatureOtelVisualizer: attachChildFeatureOtelVisualizer,
     log,
   });
@@ -2547,8 +2632,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug, baseRef) => readSpecOwnerStamp(ownerGit, baseRef, slug),
-      readMergeTime: (slug, baseRef) =>
-        firstAppearanceTime(ownerGit, baseRef, `.docs/plans/${slug}.md`),
+      readMergeTime: (slug, baseRef) => readDaemonMergeTime(ownerGit, projectRoot, slug, baseRef),
       cutover: config?.owner_gate_cutover ?? null,
       // The shared reader factory creates a fresh blocker resolver per pass,
       // so its per-pass memo never leaks stale verdicts across polls.
@@ -2580,6 +2664,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     showCompleted,
     log,
     discoverTick,
+    discoveryPartitions: () => workSource.partitions?.(),
     prStateProbe: async (prUrl) => {
       const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
       return state === 'OPEN' ? { prUrl, state: 'open' } : state === 'CLOSED' ? { prUrl, state: 'closed' } : undefined;
@@ -2639,6 +2724,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       isOperatorParked(projectRoot, slug, (err) =>
         log(`anomaly checking if ${slug} is parked: ${err.message}`),
       ),
+    hasDurableChildState: (slug) => hasDurableChildState(join(worktreeBase, slug), slug),
+    acquireFeatureDispatchLease: (slug) => acquireFeatureDispatchLease(projectRoot, slug, 'daemon re-kick'),
   };
 
   // Task 4: Create the real restart requester with injected lock + process
@@ -3565,6 +3652,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       for (const finding of event.suppressedFindings ?? []) {
         log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
       }
+      for (const finding of event.advisoryFindings ?? []) {
+        log(`${dot} build_review advisory ${finding.rubric}:${finding.findingId} (severity ${finding.severity} < threshold ${finding.threshold})`);
+      }
       const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
       const reason = event.reason ? ` — ${event.reason}` : '';
       const unresolvedMarkers = event.unresolvedMarkers
@@ -3661,6 +3751,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'github_operation_failed':
+      log(`${dot} ${chalk.red('✗')} ${chalk.red(`GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`)}`);
       break;
     case 'session_command_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);

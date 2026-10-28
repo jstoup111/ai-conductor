@@ -46,18 +46,18 @@ describe('task-progress', () => {
     async function writeMembershipFixture(childLine?: number, cachedChild?: unknown): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-        version: 1,
-        slug: 'demo',
-        runId: 'run',
-        status: 'done',
-        entries: [],
-        sliceMembership: { taskSlices: { T1: 1 }, titles: ['one'] },
-      }));
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
       await writeFile(
         join(dir, '.docs', 'plans', 'demo.md'),
-        `### Task rem-prd-audit-T1: repair\n${childLine === undefined ? '' : `\n**Child:** ${childLine}\n`}`,
+        [
+          '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+          '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | T1 |', '| 2 | Two | T2 |', '',
+          '### Task T1: One', '**Story:** Story 1', '**Dependencies:** none', '',
+          '### Task T2: Two', '**Story:** Story 2', '**Dependencies:** T1', '',
+          `### Task rem-prd-audit-T1: repair\n${childLine === undefined ? '' : `\n**Child:** ${childLine}\n`}`,
+        ].join('\n'),
       );
+      await writeFile(join(dir, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n');
       if (cachedChild !== undefined) {
         await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
           appendedRemediationTaskIds: ['rem-prd-audit-T1'],
@@ -86,7 +86,7 @@ describe('task-progress', () => {
       await writeMembershipFixture(undefined, cachedChild);
 
       await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
-        kind: 'available', taskIds: ['rem-prd-audit-T1'],
+        kind: 'available', taskIds: ['T2', 'rem-prd-audit-T1'],
       });
     });
 
@@ -108,6 +108,33 @@ describe('task-progress', () => {
       await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toMatchObject({
         kind: 'refused',
         reason: expect.stringContaining('remediation task rem-prd-audit-T1 has no recorded child'),
+      });
+    });
+
+    it('derives child two task scope from the plan with no envelope', async () => {
+      await writeMembershipFixture();
+      await writeFile(join(dir, '.docs', 'plans', 'demo.md'), [
+        '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 1, 2, 3 |', '| 2 | Delivery | 4, 5, 6 |', '',
+        '### Task 1: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+        '### Task 2: Foundation', '**Story:** Story 1', '**Dependencies:** 1', '',
+        '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** 2', '',
+        '### Task 4: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
+        '### Task 5: Delivery', '**Story:** Story 2', '**Dependencies:** 4', '',
+        '### Task 6: Delivery', '**Story:** Story 2', '**Dependencies:** 5', '',
+      ].join('\n'));
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['4', '5', '6'],
+      });
+    });
+
+    it('refuses malformed plan slices instead of returning an unscoped child', async () => {
+      await writeMembershipFixture();
+      await writeFile(join(dir, '.docs', 'plans', 'demo.md'), '# Plan\n\n## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | broken |\n');
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toMatchObject({
+        kind: 'refused', reason: expect.stringContaining('plan-invalid'),
       });
     });
   });

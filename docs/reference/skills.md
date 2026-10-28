@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 38 skills: 33 under `skills/` and 5 repository-local ones under `.agents/skills/`.
+The catalog of all 42 skills: 37 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -60,7 +60,7 @@ operator invocation remains available regardless of these implicit-selection bou
 
 The 19 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
 `daemon-triage`, `finish`, `manual-test`, `memory`, `pipeline`, `plan-review`, `prd-audit`, `rebase`,
-`remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
+`remediate`, `pr`, `stack-land`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
 `write-tests`.
 
@@ -101,6 +101,7 @@ policy across both catalogs and both host metadata formats.
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
 | `code-removal` | advisory | all | — | none | Advisory |
 | `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
+| `stack-land` | advisory | all | — | none (operator-only) | None — owner-evidenced landing only after per-action operator confirmation |
 | `architecture-diagram` | advisory | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
@@ -191,6 +192,22 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Runbooks** — reached via `skills/daemon-triage/runbooks`, a symlink to `docs/runbooks/`. The
   symlink is what makes the reference resolve correctly in a consumer repo, where the harness's
   `docs/` tree is not present but the skill directory itself is symlinked in by `bin/install`.
+
+### stack-land
+
+> Use when an operator needs to land reviewed manual changes on the correct closed child of a stacked feature. Operator-invoked only: inspect ownership, propose the safe child with evidence, and require confirmation before opening the landing.
+
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `operator_only: true`,
+  `requires: [verify-claims]`, no model pin.
+- **Engine step** — none. It is never dispatched. `operator_only: true` suppresses it from step
+  sessions while preserving direct operator access in each provider's installed skill catalog.
+- **Inputs** — the feature slug, reviewer-changed paths, `ai-conductor stack owners` output, and the
+  operator's stated landing reason.
+- **Outputs** — no file artifact. It presents an ownership-evidenced child proposal, waits for an
+  explicit confirmation, then opens one operator landing or relays a refusal unchanged.
+- **Gate role** — neither. The CLI owns admissibility; this skill must not bypass a refusal, retry it,
+  or choose an unconfirmed child. After reviewer work, it guides the operator through `--done` or
+  `--abandon`.
 
 ### architecture-diagram
 
@@ -521,7 +538,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### pipeline
 
-> Use when executing an implementation plan with multiple tasks. Factory orchestration with three autonomy levels, quality gates, rework budgets, and audit trails.
+> Use when executing an implementation plan with multiple tasks. Factory orchestration with ready-frontier parallelism, quality gates, rework budgets, and audit trails.
 
 - **Frontmatter** — `enforcement: structural`, `phase: build`, `standalone: false`,
   `requires: [".docs/plans/ with implementation plan"]`, no model pin.

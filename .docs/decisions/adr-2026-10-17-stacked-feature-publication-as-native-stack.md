@@ -426,6 +426,8 @@ Option B, with engine-rendered child bodies and the leaf draft opened at SHIP en
       merge the remaining stack in GitHub and clear the halt, or close the stack and park the
       feature. Pushed-tip refs are never re-recorded by hand. `conduct stack adopt` is #3268's.
 
+    > **Amended 2026-10-24 by #3203:** With routing eligible, the preflight checks publication before `unlanded-closed-child-commits`, so a published stack with post-closure commits keeps this `published-stack` halt and is never told to run `stack land`. `stack land` and the closed-child `rewind` refuse on a published stack, naming #3268 (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 4 and 8).
+
 12. **Teardown removes a stacked feature's child branches only after the leaf merges, by explicit
     name, in a fixed order.**
     - When the existing reap gate passes, the sweep:

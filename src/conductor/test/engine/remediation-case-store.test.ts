@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:9, task:20
+// Covers: task:1, task:2, task:9, task:20, task:rem-prd-audit-r21-1, task:rem-prd-audit-r21-2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT,
+  buildReviewRecurrenceLineage,
+  classifyBuildReviewRecurrence,
   currentBuildReviewSourceLinks,
   finalizedBuildReviewSourceIds,
   parseRemediationCaseDomainRecord,
@@ -236,6 +239,112 @@ describe('remediation case store', () => {
     });
   });
 
+  it('classifies a resolved action owner as a recurrence unless the judge declares it distinct', () => {
+    const owner: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'R',
+      resolution: 'resolved',
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+      sources: [{ sourceId: 'testQuality:S', outcome: 'merged', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+    const declaration = { caseId: 'R', reason: 'The current finding concerns daemon liveness, not in-flight age.' };
+
+    expect([
+      classifyBuildReviewRecurrence([owner], ['testQuality:S'], []),
+      classifyBuildReviewRecurrence([owner], ['testQuality:S'], [declaration]),
+    ]).toEqual([
+      { recurrenceOf: ['R'], distinctFrom: [] },
+      { recurrenceOf: [], distinctFrom: [declaration] },
+    ]);
+  });
+
+  it('drops declarations that do not name a resolved action owner of a source', () => {
+    const owner: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'R', resolution: 'resolved',
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+      sources: [{ sourceId: 'testQuality:S', outcome: 'merged', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+    const unrelated = (id: string, resolution: 'open' | 'resolved', disposition: 'act' | 'defer'): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0], id, resolution, disposition,
+      effect: disposition === 'act'
+        ? { id: `effect-${id}`, kind: 'action', status: 'reserved' }
+        : { id: `effect-${id}`, kind: 'deferral', status: 'reserved' },
+      sources: [{ sourceId: `testQuality:${id}`, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    });
+    const declared = (caseId: string) => [{ caseId, reason: 'This case addresses a distinct concern.' }];
+
+    expect([
+      classifyBuildReviewRecurrence([owner], ['testQuality:S'], declared('unknown')),
+      classifyBuildReviewRecurrence([owner, unrelated('O', 'open', 'act')], ['testQuality:S'], declared('O')),
+      classifyBuildReviewRecurrence([owner, unrelated('D', 'resolved', 'defer')], ['testQuality:S'], declared('D')),
+    ]).toEqual([
+      { recurrenceOf: ['R'], distinctFrom: [] },
+      { recurrenceOf: ['R'], distinctFrom: [] },
+      { recurrenceOf: ['R'], distinctFrom: [] },
+    ]);
+  });
+
+  it('does not classify an open owner or an unowned source as a recurrence', () => {
+    const openOwner: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0], id: 'O',
+      sources: [{ sourceId: 'testQuality:S', outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+
+    expect([
+      classifyBuildReviewRecurrence([openOwner], ['testQuality:S'], []),
+      classifyBuildReviewRecurrence([], ['testQuality:unowned'], []),
+    ]).toEqual([
+      { recurrenceOf: [], distinctFrom: [] },
+      { recurrenceOf: [], distinctFrom: [] },
+    ]);
+  });
+
+  it('counts applied action cases once across recurrence paths and excludes failed actions', () => {
+    const failed: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0], id: 'failed', resolution: 'resolved',
+      effect: { id: 'effect-failed', kind: 'action', status: 'failed', diagnostic: 'attempt failed' },
+    };
+    const root: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0], id: 'R', resolution: 'resolved',
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+    };
+    const left: RemediationCaseRecord = {
+      ...root, id: 'N1', effect: { id: 'effect-N1', kind: 'action', status: 'applied', workOrderId: 'work-order-N1' }, recurrenceOf: ['R'],
+    };
+    const right: RemediationCaseRecord = {
+      ...root, id: 'N2', effect: { id: 'effect-N2', kind: 'action', status: 'applied', workOrderId: 'work-order-N2' }, recurrenceOf: ['R'],
+    };
+    const leaf: RemediationCaseRecord = {
+      ...root, id: 'N3', effect: { id: 'effect-N3', kind: 'action', status: 'applied', workOrderId: 'work-order-N3' }, recurrenceOf: ['N1', 'N2'],
+    };
+
+    expect([
+      buildReviewRecurrenceLineage([failed], ['failed']),
+      buildReviewRecurrenceLineage([root, left, right, leaf], ['N3']),
+    ]).toEqual([
+      { caseIds: ['failed'], appliedAttempts: 0 },
+      { caseIds: ['R', 'N1', 'N2', 'N3'], appliedAttempts: 4 },
+    ]);
+  });
+
+  it('sets the recurrence attempt limit at three and returns a root-first applied lineage', () => {
+    const record = (id: string, recurrenceOf: readonly string[]): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0], id, resolution: 'resolved', recurrenceOf,
+      effect: { id: `effect-${id}`, kind: 'action', status: 'applied', workOrderId: `work-order-${id}` },
+    });
+
+    expect({
+      limit: BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT,
+      lineage: buildReviewRecurrenceLineage([
+        record('R', []), record('N', ['R']), record('N2', ['N']),
+      ], ['N2']),
+    }).toEqual({
+      limit: 3,
+      lineage: { caseIds: ['R', 'N', 'N2'], appliedAttempts: 3 },
+    });
+  });
+
   it('returns no settled source for resolved R and open N on S when N is authoritative', () => {
     const sourceId = 'testQuality:shared';
     const settled: RemediationCaseRecord = {
@@ -261,9 +370,9 @@ describe('remediation case store', () => {
       sources: [{ ...settled.sources[0]!, recordedAt: '2026-10-21T12:00:00.000Z' }],
     };
 
-    expect(finalizedBuildReviewSourceIds([unsettled, laterSettled])).toEqual(new Set([sourceId]));
-    expect(finalizedBuildReviewSourceIds([settled, unsettled])).toEqual(new Set());
-    expect(finalizedBuildReviewSourceIds([settled, open])).toEqual(new Set());
+    expect(finalizedBuildReviewSourceIds([unsettled, laterSettled], {})).toEqual(new Set([sourceId]));
+    expect(finalizedBuildReviewSourceIds([settled, unsettled], {})).toEqual(new Set());
+    expect(finalizedBuildReviewSourceIds([settled, open], {})).toEqual(new Set());
   });
 
   it('settles carried authoritative links for built-in and custom rubric sources', () => {
@@ -278,7 +387,7 @@ describe('remediation case store', () => {
     expect(finalizedBuildReviewSourceIds([
       carried('built-in-case', 'testQuality:built-in-finding'),
       carried('custom-case', 'portablePolicy:custom-finding'),
-    ])).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
+    ], {})).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
   });
 
   it('settles the current acted link of an operator-resolved action despite its failed effect', () => {
@@ -293,7 +402,32 @@ describe('remediation case store', () => {
       },
     };
 
-    expect(finalizedBuildReviewSourceIds([operatorResolved])).toEqual(new Set(['testQuality:finding-1']));
+    expect(finalizedBuildReviewSourceIds([operatorResolved], {})).toEqual(new Set(['testQuality:finding-1']));
+  });
+
+  it('settles an advisory source only while its resolved per-rubric threshold strictly admits its adjudicated severity', () => {
+    const sourceId = 'testQuality:advisory-finding';
+    const advisory: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      disposition: 'advisory',
+      rationale: 'The adjudicated impact is below the operator threshold.',
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+      effect: { kind: 'none' },
+      adjudicatedSeverity: 'minor',
+    };
+
+    expect([
+      finalizedBuildReviewSourceIds([advisory], { testQuality: { min_severity: 'critical' } }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: { min_severity: 'major' } }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: { min_severity: 'minor' } }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: {} }),
+    ].map((sourceIds) => [...sourceIds])).toEqual([
+      [sourceId],
+      [sourceId],
+      [],
+      [],
+    ]);
   });
 
   it('preserves the former any-link settlement result when no source is shared', () => {
@@ -314,7 +448,7 @@ describe('remediation case store', () => {
           : [],
     ));
 
-    expect(finalizedBuildReviewSourceIds(records)).toEqual(formerAnyLinkRule);
+    expect(finalizedBuildReviewSourceIds(records, {})).toEqual(formerAnyLinkRule);
   });
 
   it('parses separate domain records and selects only their domain without sharing display ordinals', () => {
@@ -366,6 +500,26 @@ describe('remediation case store', () => {
     });
   });
 
+  it('round-trips recurrence and distinction links on a case', async () => {
+    const projectRoot = await createProjectRoot();
+    const writer = new RemediationCaseStore(projectRoot, FEATURE);
+    const recurrentCase = {
+      ...CASE_STATE.cases[0],
+      recurrenceOf: ['case-r'],
+      distinctFrom: [{ caseId: 'case-r2', reason: 'The finding concerns a different invariant.' }],
+    };
+
+    await expect(writer.mutate(async () => ({
+      value: 'seeded' as const,
+      nextState: { ...CASE_STATE, cases: [recurrentCase] },
+    }))).resolves.toEqual({ ok: true, value: 'seeded' });
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...CURRENT_CASE_STATE, cases: [recurrentCase] },
+    });
+  });
+
   it.each([
     ['a no-effect refutation', REFUTED_CASE_STATE],
     ['a refutation with a durable deferral', {
@@ -407,6 +561,51 @@ describe('remediation case store', () => {
     expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
   });
 
+  it('preserves omitted v3 lineage fields when adding an unrelated case', async () => {
+    const persistedState = CURRENT_CASE_STATE;
+    const preservedRow = JSON.stringify(persistedState.cases[0]);
+    const unrelatedCase: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'case-2',
+      sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'testQuality:finding-2' }],
+      effect: { id: 'effect-2', kind: 'action', status: 'reserved' },
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(persistedState)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+
+    await expect(store.mutate(async () => ({
+      value: 'added' as const,
+      nextState: { ...persistedState, cases: [...persistedState.cases, unrelatedCase] },
+    }))).resolves.toEqual({ ok: true, value: 'added' });
+
+    const written = JSON.parse(tracked.contents) as RemediationCaseStoreState;
+    expect(JSON.stringify(written.cases[0])).toBe(preservedRow);
+    expect(written.cases[0]).not.toHaveProperty('recurrenceOf');
+    expect(written.cases[0]).not.toHaveProperty('distinctFrom');
+  });
+
+  it.each([
+    ['an empty recurrence list', { recurrenceOf: [] }],
+    ['a recurrence list containing its own id', { recurrenceOf: ['case-1'] }],
+    ['an empty distinction list', { distinctFrom: [] }],
+    ['a distinction with an empty reason', { distinctFrom: [{ caseId: 'case-r', reason: '' }] }],
+    ['a distinction with a reason longer than 8,000 characters', { distinctFrom: [{ caseId: 'case-r', reason: 'x'.repeat(8_001) }] }],
+  ] as const)('rejects a persisted v3 case with %s', async (_description, lineage) => {
+    const malformedState = {
+      ...CURRENT_CASE_STATE,
+      cases: [{ ...CURRENT_CASE_STATE.cases[0], ...lineage }],
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(malformedState)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    }).read()).resolves.toEqual({ ok: false, reason: 'malformed-state' });
+  });
+
   it('preserves v3 outbox entries when a PRD-widening writer replaces its cases', async () => {
     const tracked = createTrackedFilesystem(`${JSON.stringify(V3_STATE)}\n`);
     const store = new RemediationCaseStore('/project', FEATURE, {
@@ -433,7 +632,7 @@ describe('remediation case store', () => {
       suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
     }, {
       ...CASE_STATE,
-      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, kind: 'confidence', lastSeenLap: 'lap-first' }],
     }],
     ['v2', CASE_STATE, CASE_STATE],
   ] as const)('upgrades a valid %s envelope on its first mutation without inventing optional state', async (_version, legacyState, preservedState) => {
@@ -738,7 +937,8 @@ describe('remediation case store', () => {
     await expect(readFile(dispositionPath, 'utf8')).resolves.toBe('{"operator":"only"}\n');
   });
 
-  it('admits a proposed case that links a source owned only by a resolved case', async () => {
+  it('preserves a resolved row byte-for-byte when a drifted source id gains a proposed owner', async () => {
+    const driftedSourceId = 'testQuality:drifted-finding';
     const resolvedState: RemediationCaseStoreState = {
       ...CASE_STATE,
       cases: [{
@@ -746,7 +946,7 @@ describe('remediation case store', () => {
         id: 'case-R',
         resolution: 'resolved',
         effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
-        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: driftedSourceId }],
       }],
     };
     const proposedState: RemediationCaseStoreState = {
@@ -755,11 +955,13 @@ describe('remediation case store', () => {
         ...CASE_STATE.cases[0],
         id: 'case-N',
         effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
-        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: driftedSourceId }],
       }],
     };
+    // Capture the canonical persisted row bytes before the new owner is
+    // admitted; source-id drift must not rewrite that resolved history.
     const resolvedRow = JSON.stringify(resolvedState.cases[0]);
-    const tracked = createTrackedFilesystem(`${JSON.stringify(resolvedState)}\n`);
+    const tracked = createTrackedFilesystem(`{"version":"v2","feature":${JSON.stringify(FEATURE)},"cases":[${resolvedRow}],"prdWideningCases":[],"suppressions":[]}\n`);
     const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
 
     await expect(store

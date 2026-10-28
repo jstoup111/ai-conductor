@@ -9,32 +9,20 @@ import type {
   ProviderExitFacts,
   ProviderStreamObservation,
   TokenUsage,
-} from '../execution/llm-provider.js';
-import type { BuiltInProviderId, ProviderWith } from '../execution/provider-catalog.js';
-import type { ObservedInterval } from '../execution/observed-interval.js';
+} from './provider.js';
+import type { ObservedInterval } from './provider.js';
+import type { ProviderId } from './provider.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
-import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
-import type { RefusalReason } from '../engine/park-reconciliation.js';
-import type {
-  GithubOperationName,
-  GithubOperationRefusalReason,
-  GithubOperationTarget,
-} from '../engine/github-operations.js';
-import type { GithubBotAuthRefusalReason } from '../engine/github-bot-auth-refusal.js';
-import type {
-  BuildReviewInfrastructureFailureReason,
-  BuildReviewJudgedResultRejection,
-} from '../engine/build-review-domain.js';
-import type { ChildId } from '../engine/child-context.js';
-import type {
-  CommitSha,
-  JournalState,
-  RefName,
-  RestackCause,
-  RestackOpId,
-  RestackRefusalReason,
-} from '../engine/restack/restack-types.js';
-import type { HostState, RoundId, RouteKind } from '../engine/routing/route-types.js';
+import type { GithubOperationName, GithubOperationRefusalReason, GithubOperationTarget, GithubBotAuthRefusalReason } from './github.js';
+import type { BuildReviewInfrastructureFailureReason, BuildReviewJudgedResultRejection } from './build-review.js';
+import type { ChildId, CommitSha, JournalState, RefName, RestackCause, RestackOpId, RestackRefusalReason } from './restack.js';
+type LandGateRejectionIdentifier = import('./land.js').LandGateRejectionIdentifier;
+type RefusalReason = import('./park.js').RefusalReason;
+type HaltDisposition = import('./halt.js').HaltDisposition;
+type InboundNeutralization = import('./intake.js').InboundNeutralization;
+type ManagedGhObservationCoverage = import('./managed-session.js').ManagedGhObservationCoverage;
+import type { HostState, RoundId, RouteKind } from './routing.js';
+import type { ArtifactKind } from './feature-manifest.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -92,6 +80,13 @@ export interface GithubOperationRefusedEvent {
   reason: GithubOperationRefusalReason;
   remedy: GithubOperationRefusalRemedy;
 }
+/** A guarded GitHub operation executed but GitHub rejected or failed it. */
+export interface GithubOperationFailedEvent {
+  type: 'github_operation_failed';
+  target: GithubOperationTarget;
+  operation: GithubOperationName;
+  error: string;
+}
 /** A bot credential was unavailable for an authorized write; the operation retried once as the operator. */
 export interface GithubWriteCredentialFallbackEvent {
   type: 'github_write_credential_fallback';
@@ -101,7 +96,7 @@ export interface GithubWriteCredentialFallbackEvent {
 }
 export interface BotCoAuthorSkippedEvent {
   type: 'bot_co_author_skipped';
-  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed';
+  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed' | 'resolver-absent';
 }
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
@@ -109,6 +104,15 @@ export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parke
 export type DispatchKind = 'initial' | 'resume' | 'rekick';
 export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
 export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
+
+/** Bounded partial-timing causes safe to attach to feature-level telemetry. */
+export type TimingReasonClass =
+  | 'empty-active-union'
+  | 'active-evidence-incomplete'
+  | 'open-executions'
+  | 'provider-outside-active-union'
+  | 'provider-evidence-incomplete'
+  | 'ledger-unreadable';
 
 /** Closed daemon-maintenance phases so the persisted timing vocabulary remains bounded. */
 export type MaintenancePhase =
@@ -228,6 +232,10 @@ export type FinishPublicationEvent =
   | {
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
+      /** Present for a typed human-required FINISH publication halt. */
+      reason?: string;
+      /** Detail retained from the typed human-required publication disposition. */
+      detail?: string;
     };
 
 /** Stack-publication occurrences remain on the canonical conductor event spine. */
@@ -253,7 +261,7 @@ export type CredentialParkProgressDegradation =
 
 type CredentialParkProgressEventBase = {
   type: 'credentials_park_progress';
-  provider: ProviderWith<'readiness'>['id'];
+  provider: ProviderId;
   source: AuthenticationSource;
   elapsedSeconds: number;
 };
@@ -368,9 +376,9 @@ export type ProviderDiscoveryFailureReason =
 /** The installed and unavailable built-in providers observed during one boot. */
 export interface ProviderDiscoveryEvent {
   type: 'provider_discovery';
-  installed: BuiltInProviderId[];
+  installed: ProviderId[];
   missing: Array<{
-    id: BuiltInProviderId;
+    id: ProviderId;
     reason: ProviderDiscoveryFailureReason;
   }>;
 }
@@ -506,6 +514,7 @@ type ConductorEventBody =
       pullRequestUrl?: string;
     }
   | BotCoAuthorSkippedEvent
+  | GithubOperationFailedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
   | GithubBypassResultEvent
@@ -601,7 +610,7 @@ type ConductorEventBody =
       slug: string;
       outcome: FeatureDispatchOutcome;
       tier?: ComplexityTier;
-      haltClass?: import('../engine/halt-marker.js').HaltDisposition;
+      haltClass?: HaltDisposition;
       step?: string;
     }
   | {
@@ -609,7 +618,11 @@ type ConductorEventBody =
       slug: string;
       tier?: ComplexityTier;
       runStartedAt?: number;
-      active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
+      active: {
+        state: 'exact' | 'partial' | 'unavailable';
+        activeMs?: number;
+        reason?: TimingReasonClass;
+      };
     }
   /** A foreground monitor presented one halted feature to the operator. */
   | { type: 'monitor_item_offered'; project: string; feature: string }
@@ -619,7 +632,7 @@ type ConductorEventBody =
   | { type: 'monitor_item_deferred'; project: string; feature: string }
   /** A foreground monitor's guided recovery session returned control. */
   | { type: 'monitor_session_ended'; project: string; feature: string }
-  | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
+  | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: InboundNeutralization[]; digest: string }
   | {
       type: 'intake_overlap_checked';
       repository: string;
@@ -648,6 +661,11 @@ type ConductorEventBody =
       declined: string[];
       skipped: { reason: string } | null;
       writes: Array<{ target: string; status: string; reason?: string }>;
+    }
+  | {
+      type: 'feature_artifacts_registered';
+      slug: string;
+      added: Array<{ kind: ArtifactKind; path: string }>;
     }
   | {
       type: 'dependency_drift_swept';
@@ -707,59 +725,6 @@ type ConductorEventBody =
       completedHead: string;
       rationale?: string;
       reason?: string;
-    }
-  | {
-      /** One terminal judgement of a criterion-to-Done-when binding claim. */
-      type: 'coverage_binding_judged';
-      step: 'coverage_binding';
-      verdict: 'asserts' | 'does-not-assert' | 'not-applicable';
-      digest: string;
-      taskIds: string[];
-    }
-  | {
-      /** One terminal judgement of a DECIDE amendment's plan obligation. */
-      type: 'coverage_binding_amendment_judged';
-      step: 'coverage_binding';
-      verdict: 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
-      digest: string;
-      artifactPath: string;
-      taskIds: string[];
-    }
-  | {
-      /** One terminal judgement that a plan task can coexist with a sealed claim. */
-      type: 'coverage_binding_conflict_judged';
-      step: 'coverage_binding';
-      claimKind: 'criterion' | 'adr-decision';
-      claimId: string;
-      verdict: 'consistent' | 'conflicts' | 'not-applicable' | 'unjudged';
-      taskIds: string[];
-    }
-  | {
-      /** The default-off coverage-binding judge completed without dispatching. */
-      type: 'coverage_binding_disabled';
-      step: 'coverage_binding';
-    }
-  | {
-      /** A changed resolved DECIDE input voided completed coverage evidence. */
-      type: 'coverage_binding_invalidated';
-      paths: string[];
-      origin: 'decide-change';
-    }
-  | {
-      /** A void exposed a completed task contradicted by current DECIDE coverage. */
-      type: 'coverage_binding_task_reopened';
-      step: 'coverage_binding';
-      taskId: string;
-      digest: string;
-    }
-  | {
-      /** Recorded slice membership changed after a coverage-binding re-validation. */
-      type: 'plan_slices_changed';
-      step: 'coverage_binding';
-      moved: Array<{ taskId: string; from: number; to: number }>;
-      added: string[];
-      removed: string[];
-      manifest: 'unchanged' | 'dropped';
     }
   | {
       /** A source-grounded reviewer session was dispatched for one plan-review round. */
@@ -890,6 +855,16 @@ type ConductorEventBody =
       unresolvedReasons: readonly string[];
       excludedMarkerFiles?: readonly { readonly selector: string; readonly reason: string }[];
     }
+  /** Durable announcement of the engine-decided scope for one rubric lap. */
+  | {
+      type: 'build_review_review_scope';
+      rubric: string;
+      lapId: string;
+      mode: 'full' | 'delta';
+      reason: 'first-lap' | 'merge-base-changed' | 'version-changed' | 'record-unreadable' | 'open-source-unmapped' | 'delta';
+      deltaHunkCount: number;
+      settledHunkCount: number;
+    }
   /** adr-2026-08-21 D5: a cached judgement discarded because the judging engine or rubric skill text changed. */
   | { type: 'build_review_cache_discarded'; rubric: string; lapId: string; reason: 'engine-version-mismatch' | 'skill-digest-mismatch'; cachedEngineStamp?: string; currentEngineStamp: string }
   | {
@@ -959,12 +934,18 @@ type ConductorEventBody =
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
       /** Findings below the configured per-rubric confidence floor. */
       suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
+      /** Below-threshold findings are durable advisory history, never a route. */
+      advisoryFindings?: readonly { findingId: string; rubric: string; severity: 'critical' | 'major' | 'minor' | 'nit'; threshold: 'critical' | 'major' | 'minor' | 'nit' }[];
+      /** Scope bookkeeping: visible, never accepted risk or remediation work. */
+      outOfDeltaCount?: number;
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */
       type: 'remediation_adjudication_started';
       domain: 'build_review';
       lapId: string;
+      /** The index-only task bodies added for the bounded second adjudication round. */
+      expansionTaskIds?: readonly string[];
     }
   | {
       /** A valid remediation judgement was fully reconciled for one build-review lap. */
@@ -1017,6 +998,8 @@ type ConductorEventBody =
       lapId: string;
       caseId: string;
       resolution: 'open' | 'resolved';
+      recurrenceOf?: readonly string[];
+      distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
     }
   | {
       /** One attempted remediation case was refuted against the current lap. */
@@ -1070,7 +1053,8 @@ type ConductorEventBody =
       lapId: string;
       caseId: string;
       effectId?: string;
-      reason: 'already-attempted' | 'regressed';
+      reason: 'already-attempted' | 'regressed' | 'recurrence-limit';
+      lineageCaseIds?: readonly string[];
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | {
@@ -1111,7 +1095,7 @@ type ConductorEventBody =
       actualProvider?: string;
       observedIntervals?: readonly ObservedInterval[];
       /** Bounded completeness of managed gh observation for this step outcome. */
-      managedGhObservationCoverage?: import('../execution/managed-session-preparation.js').ManagedGhObservationCoverage;
+      managedGhObservationCoverage?: ManagedGhObservationCoverage;
       /** Build-only tree witnesses; absent on legacy and non-build events. */
       treeBefore?: string | null;
       treeAfter?: string | null;
@@ -1558,6 +1542,18 @@ type ConductorEventBody =
         readonly check: number;
         readonly verdict?: 'asserts' | 'does-not-assert';
         readonly unavailable?: string;
+      }[];
+    }
+  | {
+      /** One remediation-close judgement pass, including its unavailable fallback. */
+      type: 'remediation_closure_judged';
+      outcome: 'judged' | 'unjudged';
+      attempts: number;
+      candidates: readonly {
+        readonly taskId: string;
+        readonly verdict: 'resolved' | 'persists' | 'partial' | 'unjudged';
+        readonly rationale: string;
+        readonly disposition: 'reopened' | 'left-closed' | 'bound-exhausted';
       }[];
     }
   | {
@@ -2293,13 +2289,6 @@ type ConductorEventBody =
       expected: CommitSha;
       actual: CommitSha;
     }
-  | {
-      /** A reseal changed a story's owner without moving any task. */
-      type: 'story_reowned';
-      story: string;
-      from: number;
-      to: number;
-    }
   // ── Routed whole-feature repair occurrences ─────────────────────────────
   | {
       type: 'remediation_routed';
@@ -2335,6 +2324,17 @@ type ConductorEventBody =
       credit: boolean;
       child: ChildId;
     }
+  /** Lifecycle of an operator-owned landing, delivered from the route outbox. */
+  | {
+      type: 'operator_round';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      origin: 'land' | 'rewind';
+      reason: string;
+      action: 'opened' | 'declared' | 'abandoned';
+    }
   | {
       type: 'child_revalidated';
       eventId: string;
@@ -2342,7 +2342,7 @@ type ConductorEventBody =
       child: ChildId;
       generation: number;
       closureSha: CommitSha;
-      outcome: string;
+      outcome: 'passed' | 'fixed';
     }
   // ── Worktree reclamation lifecycle ──
   | {

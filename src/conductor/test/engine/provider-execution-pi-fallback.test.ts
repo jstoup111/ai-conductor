@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:10, task:19
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -41,6 +43,7 @@ function fakeProvider(result: InvokeResult): LLMProvider {
   return {
     supportsSessionResume: false,
     lifecycleCapability: { synchronousSpawnPermit: true },
+    systemPromptCapability: { deliversSystemPrompt: true },
     invoke: vi.fn(async () => result),
   };
 }
@@ -114,11 +117,12 @@ describe('Pi lifecycle abort', () => {
       return subprocess;
     });
     // Provision HARNESS.md so Pi's invocation preflight reaches the spawn.
-    const pi = new PiProvider('pi', spawnPi as never, {
+    const pi = new PiProvider(dispatchGitGuard, 'pi', spawnPi as never, {
       stat: async (path) => ({
         isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
         isDirectory: () => false,
       }),
+      access: async () => {},
       env: {},
       homeDir: () => '/home/agent',
       cwd: () => '/workspace',
@@ -445,6 +449,7 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
         success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
       })),
@@ -478,6 +483,7 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
         success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
       })),
@@ -594,7 +600,7 @@ describe('preferred Pi escalation and fallback isolation', () => {
     };
 
     const result = await executeProviderCandidates({
-      step: 'coverage_binding', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
+      step: 'plan_review', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
       runtimes: runtimeSet(config, { claude, pi }), sessions: new ProviderSessionScope(vi.fn()), config,
       modelFallbackLadder: ['opus', 'sonnet'], options: { prompt: 'Judge.', cwd: '/workspace' },
     });

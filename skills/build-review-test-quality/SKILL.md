@@ -39,6 +39,9 @@ form with `git show <mergeBase>:<path>`). Those reads are part of this closed in
 facts from a maker transcript, task-status narrative, prior review, or state outside this projection
 and its referenced content.
 
+Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review
+identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.
+
 For every `testScope.evidence` region you inspect, re-read the file at the pinned ref for its
 `source` side (`mergeBase` for base regions, `headSha` for head regions). The region is the raw bytes
 from `byteRegion.start` (inclusive) to `byteRegion.end` (exclusive) of that output. `byteRegion` is in
@@ -73,3 +76,7 @@ A `stayed-green` result is not automatically a concern: read the test and cite t
 stub-passable assertion before finding it insensitive. An infrastructure failure is not a finding;
 do not invent evidence, downgrade it to a pass, or turn it into content criticism. Tests outside the
 supplied in-scope set are not this rubric's concern.
+
+Every reported finding requires `severity`: use `critical` for security exposure, data loss, or
+wrong results; `major` for a real defect or broken invariant; `minor` for a real low-impact quality
+issue; and `nit` only for cosmetic naming or style.

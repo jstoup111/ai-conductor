@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt
+// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt, task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1561,6 +1561,100 @@ describe('Conductor FINISH publication routing', () => {
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:6
+  it.each([
+    { name: 'the last same-PR publish failure', writeFailures: true },
+    { name: 'no publish failure', writeFailures: false },
+  ])('halts FINISH on %s rather than treating placeholder prose as authored', async ({ writeFailures }) => {
+    const pipeline = join(dir, '.pipeline');
+    const productionStatePath = join(pipeline, 'conduct-state.json');
+    const prUrl = 'https://github.com/acme/repo/pull/17';
+    const missingScope = 'GraphQL: Resource not accessible by integration (missing required scope read:org)';
+    const pullRequest = {
+      url: prUrl,
+      title: 'feat: draft publication',
+      body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.',
+      isDraft: true,
+    };
+    await mkdir(pipeline);
+    await writeGreenShipValidatorEvidence(dir);
+    await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), '---\nslug: finish-publication\n---\n');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'S', track: 'technical', feature_desc: 'finish-publication',
+      worktree_branch: 'feat/finish-publication', pr_url: prUrl,
+    };
+    for (const step of [
+      'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'worktree', 'acceptance_specs', 'build', 'build_review', 'test_suite', 'manual_test',
+      'prd_audit', 'architecture_review_as_built', 'rebase',
+    ] satisfies StepName[]) state[step] = 'done';
+    state.architecture_review = 'skipped';
+    await writeState(productionStatePath, state as ConductState);
+    const queuedPublishFailures: Array<{
+      type: 'github_operation_failed'; operation: 'pull-request.edit';
+      target: { kind: 'pull-request'; repository: string; number: number }; error: string; ts: string;
+    }> = [];
+    const runner: StepRunner = { run: vi.fn(async () => {
+      if (writeFailures) {
+        queuedPublishFailures.push(
+          { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: 'first missing-scope error', ts: '2026-10-25T00:00:00.000Z' },
+          { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: missingScope, ts: '2026-10-25T00:00:01.000Z' },
+        );
+      }
+      return { success: true };
+    }) };
+    const events = new ConductorEventEmitter();
+    const dispositions: Array<{ reason?: string; detail?: string }> = [];
+    const loopHalts: string[] = [];
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: dir, stateFilePath: productionStatePath, baseBranch: 'main',
+      git: async (args) => args[0] === 'rev-parse'
+        ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
+        : args[0] === 'cat-file' ? { stdout: '', exitCode: 1 } : { stdout: '' },
+      gh: async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
+        throw new Error(`unexpected gh command: ${args.join(' ')}`);
+      },
+      operations: { run: async () => ({}) }, observeReleaseReadiness: async () => 'present',
+      events,
+      flushSessionEvents: async () => {
+        for (const event of queuedPublishFailures) await events.emit(event);
+      },
+    });
+    const conductor = new Conductor({
+      stateFilePath: productionStatePath, stepRunner: runner, finishPublication: coordinator, events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    const halt = await readFile(join(pipeline, 'HALT'), 'utf8');
+    expect(runner.run).toHaveBeenCalledOnce();
+    if (writeFailures) {
+      expect(halt).toContain('A FINISH pull-request publish failed');
+      expect(halt).toContain(missingScope);
+      expect(halt).not.toContain('left pr.prose unchanged at placeholder');
+      expect(dispositions).toEqual([expect.objectContaining({
+        reason: 'publication_operation_failed', detail: `pull-request.edit failed: ${missingScope}`,
+      })]);
+      expect(loopHalts).toEqual([
+        expect.stringContaining('A FINISH pull-request publish failed'),
+      ]);
+      expect(loopHalts[0]).toContain(missingScope);
+    } else {
+      expect(halt).toContain('The author_pr_prose transition left pr.prose unchanged at placeholder.');
+    }
   });
 
   // Regression: a small-tier feature resolves manual_test by SKIPPING it. The production

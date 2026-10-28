@@ -352,7 +352,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       complexity_tier: 'S',
       track: 'technical',
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
-      conflict_check: 'skipped', plan: 'done', coherence_check: 'done', coverage_binding: 'done', architecture_diagram: 'skipped',
+      conflict_check: 'skipped', plan: 'done', coherence_check: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
       build: 'done',  test_suite: 'done', build_review: 'pending',
     } satisfies Partial<ConductState>));

@@ -2,13 +2,13 @@ import { readFile as readFileDefault, realpath as realpathDefault } from 'node:f
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
-import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
-import { buildReviewConfidenceFloors, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
-import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, currentBuildReviewSourceLinks, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -31,6 +31,8 @@ export interface BuildReviewFindingsDeps {
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
+  /** Reads the exact diff named by a persisted lap scope for shared verdict resolution. */
+  readonly readCurrentLapChangedFiles?: import('./build-review-effective.js').BuildReviewEffectiveResolverDeps['readCurrentLapChangedFiles'];
   readonly createStore?: (worktree: string) => DispositionStore;
   readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreReader;
   readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
@@ -160,6 +162,70 @@ type CurrentFinding = {
   readonly identity: NonNullable<ReturnType<typeof rehydrateBuildReviewAcceptedRiskFinding>>;
 };
 
+type AdvisoryFindingProjection = {
+  readonly id: string;
+  readonly rubric: string;
+  readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+  readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
+  readonly origin: 'threshold' | 'adjudicated';
+  readonly summary: string;
+  /** The autonomous adjudicator's reasoning is local CLI evidence, never machine output. */
+  readonly adjudicatorRationale?: string;
+};
+
+/**
+ * The effective reducer identifies advisory and settled findings by id; this
+ * projection restores their current source metadata without reopening either
+ * source of truth.  Advisory cases are otherwise absent from
+ * `advisoryFindingIds`, because their finalized ids are deliberately removed
+ * from the actionable set before the CLI reports it.
+ */
+function advisoryFindings(
+  aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+  effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>,
+  cases: readonly RemediationCaseRecord[],
+  thresholds: Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>,
+): readonly AdvisoryFindingProjection[] | undefined {
+  const sources = projectBuildReviewAggregateSources(aggregate);
+  if (!sources) return undefined;
+  const thresholdAdvisories = new Set(effective.advisoryFindingIds ?? []);
+  const settled = new Set(effective.settledFindingIds ?? []);
+  const adjudicated = new Map<string, {
+    readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+    readonly rationale: string;
+  }>();
+  for (const [sourceId, { record, link }] of currentBuildReviewSourceLinks(cases)) {
+    if (record.disposition !== 'advisory' || record.adjudicatedSeverity === undefined ||
+      (link.outcome !== 'advisory' && link.outcome !== 'merged')) continue;
+    adjudicated.set(sourceId, { severity: record.adjudicatedSeverity, rationale: record.rationale });
+  }
+  const projected: AdvisoryFindingProjection[] = [];
+  for (const source of sources) {
+    const threshold = thresholds[source.rubric];
+    if (thresholdAdvisories.has(source.findingId) && source.severity !== undefined && threshold !== undefined) {
+      projected.push({ id: source.findingId, rubric: source.rubric, severity: source.severity, threshold, origin: 'threshold', summary: source.summary });
+      continue;
+    }
+    const adjudicatedFinding = adjudicated.get(`${source.rubric}:${source.findingId}`);
+    if (settled.has(source.findingId) && adjudicatedFinding !== undefined && threshold !== undefined) {
+      projected.push({
+        id: source.findingId, rubric: source.rubric, severity: adjudicatedFinding.severity, threshold, origin: 'adjudicated',
+        summary: source.summary, adjudicatorRationale: adjudicatedFinding.rationale,
+      });
+    }
+  }
+  return Object.freeze(projected);
+}
+
+/** Adjudicator downgrades are local human evidence, never JSON output. */
+function jsonCases(cases: readonly RemediationCaseRecord[]): readonly object[] {
+  return cases.map((caseRecord) => {
+    if (caseRecord.disposition !== 'advisory') return caseRecord;
+    const { rationale: _rationale, ...projected } = caseRecord;
+    return projected;
+  });
+}
+
 /** Rehydrates the stamped custom identity rather than accepting a CLI supplied payload. */
 function currentFindings(aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>): readonly CurrentFinding[] {
   const builtin = Object.values(aggregate.results).flatMap((result) => result.kind === 'judged'
@@ -246,13 +312,26 @@ function acceptedDispositions(
   });
 }
 
-function renderCase(caseRecord: RemediationCaseRecord): string {
+function renderCase(caseRecord: RemediationCaseRecord, cases: readonly RemediationCaseRecord[]): string {
   const effect = caseRecord.effect.kind === 'none'
     ? 'none'
     : `${caseRecord.effect.kind}/${caseRecord.effect.status}`;
   const assertions = caseRecord.refutation?.assertions
     .map((assertion) => `${assertion.assertion} (${assertion.verdict})`).join('; ') ?? 'none';
-  return `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`;
+  const distinctFrom = caseRecord.distinctFrom?.map(({ caseId, reason }) => `distinct from ${caseId}: ${reason}`) ?? [];
+  const recurrence = caseRecord.recurrenceOf === undefined ? [] : (() => {
+    const lineage = buildReviewRecurrenceLineage(cases, [caseRecord.id]);
+    return [`recurs from ${caseRecord.recurrenceOf.join(', ')}; ${lineage.appliedAttempts} of ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT} applied attempts`];
+  })();
+  const declaredDistinct = cases.flatMap((other) => other.distinctFrom
+    ?.filter(({ caseId }) => caseId === caseRecord.id)
+    .map(({ reason }) => `declared distinct by ${other.id}: ${reason}`) ?? []);
+  return [
+    `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`,
+    ...distinctFrom,
+    ...recurrence,
+    ...declaredDistinct,
+  ].join('\n');
 }
 
 type CarriedSourceFinding = {
@@ -321,7 +400,7 @@ function operatorResolvedCaseFindings(cases: readonly RemediationCaseRecord[]): 
     }]);
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], carriedSources: readonly CarriedSourceFinding[], operatorResolvedCases: readonly OperatorResolvedCaseFinding[], pendingOutbox: readonly RemediationCaseOutboxEntry[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
+function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], advisories: readonly AdvisoryFindingProjection[], carriedSources: readonly CarriedSourceFinding[], operatorResolvedCases: readonly OperatorResolvedCaseFinding[], pendingOutbox: readonly RemediationCaseOutboxEntry[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
@@ -334,8 +413,11 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     ...operatorResolvedCases.map((caseRecord) => `Operator-resolved case: ${caseRecord.caseId}; source ids: ${caseRecord.sourceIds.join(', ') || 'none'}; operator: ${caseRecord.operator}; rationale: ${caseRecord.rationale}; resolved at: ${caseRecord.resolvedAt}`),
     ...pendingOutbox.map((entry) => `Pending case-store outbox entry: ${entry.eventId}; occurred at: ${entry.occurredAt}; event: ${entry.event.type}`),
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
-    ...cases.map(renderCase),
+    ...cases.map((caseRecord) => renderCase(caseRecord, cases)),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
+    `Out-of-delta findings: ${effective.outOfDeltaFindingIds?.join(', ') || 'none'}`,
+    `Advisory build-review findings: ${advisories.length === 0 ? 'none' : ''}`,
+    ...advisories.map((advisory) => `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`),
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
     ...(lastMechanicalFault === undefined ? [] : [
@@ -360,6 +442,11 @@ async function resolveCliMinConfidence(
   const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
   if (!loaded.ok) throw new Error(loaded.error.message);
   return buildReviewConfidenceFloors(resolveBuildReviewConfig(loaded.config));
+}
+async function resolveCliMinSeverity(worktree: string, deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>): Promise<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>> {
+  const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
+  if (!loaded.ok) throw new Error(loaded.error.message);
+  return buildReviewSeverityThresholds(resolveBuildReviewConfig(loaded.config));
 }
 
 /** The CLI and live runner must address the same canonical feature state. */
@@ -414,6 +501,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
     if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
+    const minSeverity = await resolveCliMinSeverity(worktree, deps);
     const gateEntry = deps.readKickbackGateEntry
       ? await deps.readKickbackGateEntry(worktree)
       : deps.readMechanicalFaults
@@ -425,10 +513,31 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
           }
           return ledger.gates.build_review;
         })();
-    // The same composed reducer the live gate uses, over the full record list.
-    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases));
-    if (!effective) throw new Error('current findings are invalid');
+    // The shared resolver is the only reader that combines current-lap scope,
+    // dispositions, and case settlement.  Keeping this command on that seam
+    // prevents a findings report from disagreeing with the live gate.
+    const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
+    if (!loaded.ok) throw new Error(loaded.error.message);
+    const resolution = await resolveEffectiveBuildReviewVerdict(worktree, aggregate, {
+      resolveMainRoot: deps.resolveMainRoot,
+      realpath: deps.realpath,
+      createStore: () => ({
+        list: async () => listed,
+        listReducedCoverage: async () => reducedCoverage,
+      }),
+      createCaseStore: deps.createCaseStore,
+      minConfidence,
+      minSeverity,
+      readFile,
+      readCurrentLapChangedFiles: deps.readCurrentLapChangedFiles,
+      child,
+      adjudicationEnabled: resolveBuildReviewConfig(loaded.config).adjudication.enabled,
+    });
+    if (!resolution.ok) throw new Error(resolution.reason);
+    const effective = resolution.effective;
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
+    const advisories = advisoryFindings(aggregate, effective, cases, minSeverity);
+    if (advisories === undefined) throw new Error('current advisory findings are invalid');
     const carriedSources = carriedSourceFindings(cases, records);
     const operatorResolvedCases = operatorResolvedCaseFindings(cases);
     const pendingOutbox = caseRead.state.version === 'v3' ? caseRead.state.outbox : [];
@@ -445,14 +554,15 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     } = effective;
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...reported, acceptedDispositions: accepted,
-      cases,
+      cases: jsonCases(cases),
       ...(carriedSources.length === 0 ? {} : { carriedSources }),
       ...(operatorResolvedCases.length === 0 ? {} : { operatorResolvedCases }),
       ...(pendingOutbox.length === 0 ? {} : { pendingOutbox }),
+      ...(advisories.length === 0 ? {} : { advisoryFindings: advisories.map(({ summary: _summary, adjudicatorRationale: _adjudicatorRationale, ...advisory }) => advisory) }),
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
+    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, advisories, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
     return 0;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('remediation case store is ')) {

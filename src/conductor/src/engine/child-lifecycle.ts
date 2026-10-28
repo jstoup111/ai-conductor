@@ -1,19 +1,16 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { resolveMainRepoRoot } from './park-marker.js';
 import { redRefFor } from './routing/routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, serializeRoutedRedRecord } from './routing/red-record.js';
 import { routingSettingOn } from './routing/route-types.js';
+import { loadSliceTopology } from './slice-topology.js';
 
 export type StartChildGitRunner = GitRunner;
 
@@ -31,6 +28,13 @@ export interface ChildLifecycleTarget {
   readonly branch: string;
 }
 
+/** CLI recovery paths without an active event spine deliberately emit nothing. */
+export type ChildLifecycleEventEmitter = Pick<ConductorEventEmitter, 'emit'>;
+
+export const noOpChildLifecycleEvents: ChildLifecycleEventEmitter = {
+  async emit(): Promise<void> {},
+};
+
 /** The cursor-owned branch target needed to enter or advance a BUILD region. */
 export interface ActiveChildLifecycleTarget extends ChildLifecycleTarget {
   readonly isLeaf: boolean;
@@ -41,25 +45,6 @@ export interface ActiveChildLifecycleTarget extends ChildLifecycleTarget {
 export type ChildLifecycleResult =
   | StartChildResult
   | { readonly kind: 'completed' };
-
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
-
-function sealedPositions(
-  envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>,
-): ChildId[] {
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    return [];
-  }
-  return [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-    .map((position) => parseChildId(position))
-    .filter((position): position is ChildId => position !== undefined)
-    .sort((left, right) => left - right);
-}
 
 function refused(reason: string): StartChildResult {
   return { kind: 'refused', reason };
@@ -88,21 +73,23 @@ export async function startChild(
   worktree: string,
   slug: string,
   child: ChildId,
-  _emitter: ConductorEventEmitter,
+  _emitter: ChildLifecycleEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<StartChildResult> {
-  const envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-  const positions = sealedPositions(envelope);
-  const positionIndex = positions.indexOf(child);
-  if (positionIndex === -1 || positions.length < 2) {
-    return refused(`child ${child} is not a declared stacked position`);
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  // New child creation is controlled by the repository-root configuration,
+  // rather than a feature worktree's potentially uncommitted config edit.
+  const projectRoot = await resolveMainRepoRoot(worktree);
+  const topology = await loadSliceTopology(worktree, slug, { git, projectRoot });
+  if (topology.kind === 'unavailable') {
+    return refused(`child ${child} cannot start: sealed-plan topology is unavailable (${topology.cause})`);
   }
-
-  const loaded = await loadConfig(worktree);
-  if (!loaded.ok) return refused(`cannot load project config: ${loaded.error.message}`);
-  const maxSlices = loaded.config.stacked_prs?.max_slices ?? 1;
-  if (positions.length > maxSlices) {
-    return refused(`sealed position count ${positions.length} exceeds stacked_prs.max_slices ${maxSlices}`);
+  const positions = topology.kind === 'sliced'
+    ? topology.positions.map((position) => parseChildId(position)).filter((position): position is ChildId => position !== undefined)
+    : [];
+  const positionIndex = positions.indexOf(child);
+  if (topology.kind !== 'sliced' || topology.stackEligibility.kind !== 'eligible' || positionIndex === -1 || positions.length < 2) {
+    return refused(`child ${child} is not a declared stacked position`);
   }
 
   const leaf = positions.at(-1)!;
@@ -113,7 +100,6 @@ export async function startChild(
 
   const branch = childBranchFor(slug, child);
   if (!branch.ok) return refused(branch.reason);
-  const git = dependencies.git ?? makeGitRunner(worktree);
   const namespaceRef = `refs/heads/feat/c${child}`;
   const namespace = await runGit(git, ['show-ref', '--verify', '--quiet', namespaceRef]);
   if (namespace === undefined || (namespace.exitCode !== 0 && namespace.exitCode !== 1)) {
@@ -157,7 +143,7 @@ export async function startChild(
 export async function switchToChild(
   worktree: string,
   target: ChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   previous?: ChildLifecycleTarget,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
@@ -188,14 +174,16 @@ export async function enterChildRegion(
   worktree: string,
   slug: string,
   target: ActiveChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   previous?: ChildLifecycleTarget,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   if (target.isLeaf && target.leafMovePending) {
-    const envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-    const positions = sealedPositions(envelope);
+    const topology = await loadSliceTopology(worktree, slug, { git });
+    const positions = topology.kind === 'sliced'
+      ? topology.positions.map((position) => parseChildId(position)).filter((position): position is ChildId => position !== undefined)
+      : [];
     const positionIndex = positions.indexOf(target.position);
     const parent = positionIndex > 0 ? positions[positionIndex - 1] : undefined;
     if (parent === undefined) return refused(`cannot resolve declared parent for pending leaf ${target.branch}`);
@@ -231,7 +219,7 @@ export async function closeChild(
   worktree: string,
   slug: string,
   child: ChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
@@ -334,7 +322,7 @@ export async function advanceChildRegion(
   worktree: string,
   slug: string,
   completed: ActiveChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);

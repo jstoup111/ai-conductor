@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isRetiredBuiltInStep } from './config.js';
 import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { intersectIntervalUnions, unionIntervals } from './interval-algebra.js';
 
@@ -69,13 +70,47 @@ function executionKey(
     legacyStep: step,
     executionContext: event.executionContext,
   });
-  if (identity === undefined) return undefined;
+  if (identity === undefined) return retiredLifecycleStepExecutionKey(event, kind, step);
 
   // Preserve legacy reason vocabulary for context-free ledgers while ensuring
   // correlated records can close only their own execution.
   return event.executionContext === undefined
     ? `${kind}:${step}`
     : `${kind}:${identity.correlationKey}`;
+}
+
+function retiredLifecycleStepExecutionKey(
+  event: Record<string, unknown>,
+  kind: 'step' | 'parallel',
+  step: string,
+): string | undefined {
+  const context = event.executionContext;
+  if (!isRecord(context) || !isNonEmptyString(context.executionId) || !isRecord(context.subject)) {
+    return undefined;
+  }
+  if (
+    context.subject.kind !== 'lifecycle-step'
+    || context.subject.step !== step
+    || !isRetiredBuiltInStep(step)
+  ) {
+    return undefined;
+  }
+
+  return `${kind}:execution\0${JSON.stringify([
+    timingRollupScope.featureId,
+    timingRollupScope.runId,
+    context.executionId,
+    'lifecycle-step',
+    step,
+  ])}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 function collectExecutionEvidence(

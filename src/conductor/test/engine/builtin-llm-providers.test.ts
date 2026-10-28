@@ -58,8 +58,8 @@ describe('registerBuiltInLlmProviders', () => {
   });
 
   it('is delegated to by the plugin-loader composition root', () => {
-    expect(readFileSync(PLUGIN_LOADER, 'utf8')).toContain(
-      'registerBuiltInLlmProviders(registry, { installed, codexDoctorTimeoutMs });',
+    expect(readFileSync(PLUGIN_LOADER, 'utf8')).toMatch(
+      /registerBuiltInLlmProviders\(registry,\s*\{ installed: installedProviders, codexDoctorTimeoutMs \}\s*\)/,
     );
   });
 });

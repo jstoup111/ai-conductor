@@ -8,12 +8,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { runDaemonStatus } from '../../src/engine/daemon-observe-cli.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -48,7 +48,7 @@ beforeEach(async () => {
     join(featureRoot, '.ai-conductor', 'config.yml'),
     'stacked_prs:\n  enabled: true\n  max_slices: 2\n',
   );
-  await writeCoverageBindingEnvelope(featureRoot, {
+  await writeSliceTopologyFixture(featureRoot, {
     version: 1,
     slug: 'demo',
     runId: 'status-1',
@@ -118,10 +118,10 @@ describe('stacked daemon status', () => {
       expect.objectContaining({
         slug: 'demo',
         step: 'build',
-        activeChild: { child: 2, total: 2 },
+        activeChild: { child: 2, total: 2, taskIds: ['2'] },
       }),
     ]);
-    expect(renderDashboard(state)).toContain('demo @build (child 2/2)');
+    expect(renderDashboard(state)).toContain('demo @build (child 2/2; tasks 2)');
   });
 
   it('shows the active child and reads its kickback ledger in daemon status', async () => {
@@ -142,7 +142,7 @@ describe('stacked daemon status', () => {
     });
 
     const rendered = out.join('\n');
-    expect(rendered).toContain('PLAN GROWTH [demo child 2/2]');
+    expect(rendered).toContain('PLAN GROWTH [demo child 2/2; tasks 2]');
     expect(rendered).toContain('remaining 9/9');
     expect(rendered).toContain('KICKBACK BUDGET [demo]: Allowance: laps; Child: 2 |');
     expect(rendered).toContain('Kickback budget (build_review): 2/5 consumed; 3 remaining');

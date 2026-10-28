@@ -28,7 +28,7 @@ describe('build-review scope source', () => {
     ]);
   });
 
-  it.each(['/absolute.ts', '../escape.ts', 'src/../../escape.ts', 'src/has\u0000nul.ts'])(
+  it.each(['/absolute.ts', '../escape.ts', 'src/../../escape.ts', 'src/has\u0000nul.ts', 'test/engine%2Fa.ts'])(
     'rejects unsafe repository path %j',
     (path) => expect(() => safeRepoRelativePath(path)).toThrow(BuildReviewSourceReadError),
   );

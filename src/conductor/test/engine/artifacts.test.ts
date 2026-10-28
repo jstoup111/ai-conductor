@@ -171,52 +171,6 @@ describe('engine/artifacts', () => {
     await writeFile(fullPath, content);
   }
 
-  it.each([
-    ['disabled', true],
-    ['done', true],
-    ['failed', false],
-    ['refused', false],
-  ] as const)('accepts coverage-binding completion evidence only when status is %s', async (status, done) => {
-    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status,
-      entries: [],
-    }));
-
-    expect(await checkStepCompletion(dir, 'coverage_binding')).toMatchObject({ done });
-  });
-
-  it('reports a partial coverage-binding envelope as incomplete rather than completion evidence', async () => {
-    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status: 'partial',
-      entries: [],
-    }));
-
-    await expect(checkStepCompletion(dir, 'coverage_binding')).resolves.toEqual({
-      done: false,
-      reason: '.pipeline/coverage-binding.json has non-completing status: partial',
-    });
-  });
-
-  it('reports an invalidated coverage-binding envelope as incomplete rather than completion evidence', async () => {
-    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status: 'invalidated',
-      entries: [],
-    }));
-
-    await expect(checkStepCompletion(dir, 'coverage_binding')).resolves.toEqual({
-      done: false,
-      reason: '.pipeline/coverage-binding.json has non-completing status: invalidated',
-    });
-  });
   describe('STEP_ARTIFACT_GLOBS', () => {
     it('derives the complete ordered compatibility map while retaining per-pattern scope', async () => {
       const expected: Record<StepName, string[]> = {
@@ -237,7 +191,6 @@ describe('engine/artifacts', () => {
           '.docs/decisions/adr-*.md',
         ],
         worktree: [],
-        coverage_binding: ['.pipeline/coverage-binding.json'],
         acceptance_specs: [
           'spec/acceptance/**/*',
           'spec/requests/**/*',
@@ -286,12 +239,6 @@ describe('engine/artifacts', () => {
         ],
         derivedProjection: true,
       });
-    });
-
-    it('declares coverage_binding as run-scoped completion evidence', () => {
-      expect(STEP_ARTIFACT_CONTRACTS.coverage_binding).toEqual([
-        { pattern: '.pipeline/coverage-binding.json', scope: 'run' },
-      ]);
     });
 
     it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {
@@ -5616,7 +5563,8 @@ Task 1 → Task 2
       expect(result.reason).not.toContain('old finding');
     });
 
-    it('preserves a stamped PASS from a different HEAD when its code delta misses the gate surface', async () => {
+    // Covers: task:9, task:rem-prd-audit-r9-1
+    it('passes shared built-in and custom confidence and severity thresholds to the effective verdict', async () => {
       const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
       await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
         ...makeAggregate('lap-A', false),
@@ -5641,7 +5589,21 @@ Task 1 → Task 2
       }));
       const result = await checkStepCompletion(dir, 'build_review', {
         sessionStartedAt: Date.now(),
-        config: { gate_code_validity: { enabled: true }, build_review: { rubrics: { testQuality: { enabled: true, min_confidence: 70 } } } },
+        config: {
+          gate_code_validity: { enabled: true },
+          build_review: {
+            rubrics: { testQuality: { enabled: true, min_confidence: 70 } },
+            custom_rubrics: {
+              eventSpine: {
+                skill: 'event-spine',
+                question: 'Does this preserve the event spine?',
+                enabled: true,
+                min_confidence: 70,
+                min_severity: 'major',
+              },
+            },
+          },
+        },
         buildReviewEffectiveResolver: effectiveResolver,
         git: async (args) => {
           if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
@@ -5660,9 +5622,22 @@ Task 1 → Task 2
       expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
         child: undefined,
         adjudicationEnabled: true,
-        minConfidence: { testQuality: 70, security: 0, implementationQuality: 0 },
+        minConfidence: { testQuality: 70, security: 0, implementationQuality: 0, eventSpine: 70 },
+        minSeverity: { eventSpine: 'major' },
       });
       expect(result.staleLap).toBeUndefined();
+    });
+
+    // Covers: task:9
+    it('uses the shared threshold helper at both gate-completion resolver calls', async () => {
+      const source = await readFile(join(REPOSITORY_ROOT, 'src/conductor/src/engine/artifacts.ts'), 'utf8');
+      const completionPredicate = source.slice(
+        source.indexOf('  build_review: async'),
+        source.indexOf('  test_suite: async'),
+      );
+
+      expect(completionPredicate.match(/buildReviewEffectiveResolverThresholds\(ctx\.config\)/g)).toHaveLength(2);
+      expect(completionPredicate).not.toContain('resolveBuildReviewConfig(ctx.config ?? {}).rubrics');
     });
 
     it('rejects a matching-lap FAIL whose mtime predates the session without reporting a stale lap', async () => {

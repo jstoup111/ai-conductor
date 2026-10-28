@@ -22,7 +22,7 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { ensureMemoryStore, projectKey } from './memory-store.js';
 import { migrateMemory } from './memory-migrate.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dispatch type (mirrors RegistryDispatch pattern)

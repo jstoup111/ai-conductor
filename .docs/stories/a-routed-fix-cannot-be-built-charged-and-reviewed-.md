@@ -22,8 +22,8 @@ Scope outcomes (from jstoup111/ai-conductor#3211):
 5. N=1 features remediate exactly as today.
 
 Terms used below:
-- **Routing on:** the project sets `stacked_prs.route_whole_feature_fixes: true`. The default is
-  `false`, and with it off every story below behaves exactly as before this spec.
+- **Routing on:** `stacked_prs.route_whole_feature_fixes` resolves to `true`, which is the default.
+  A project that sets it `false` gets exactly the behavior from before this spec in every story below.
 - **Three-child stack:** a stacked feature with slug `demo`, routing on, and positions `1`, `2`
   and `3`.
   - `feat/c1/demo` is closed at `refs/conductor/demo/closed/c1`, owns task `T1` and file `src/a.ts`.
@@ -132,6 +132,7 @@ worktree recreation or an older child never blocks a repair on missing RED evide
 - Given a child with no owned criteria and so no RED marker, when it closes, then no `red/c<k>` ref is written, and its later routed pass runs verify-green without a refusal.
 - Given host 1's routed pass with a present RED marker whose digest differs from `red/c1`, when `acceptance_specs` runs, then the step fails naming the digest mismatch.
 - Given an N=1 feature, when `acceptance_specs` runs, then today's RED lifecycle applies unchanged.
+- Given a routed pass whose host is the leaf, which never closes and so has no `red/c<leaf>` ref, when `acceptance_specs` runs, then verify-green is not invoked, the ordinary `acceptance_specs` step runs for the leaf, and its completion is judged by the ordinary predicate rather than by a verify-green record.
 
 ### Done When
 - [ ] Tests assert `closeChild` writes `red/c<k>` only with routing on and a RED marker, accepts a same-digest blob on resume, and refuses a different one.
@@ -152,6 +153,7 @@ grants extra laps or growth, and a crash never double-charges or refunds.
 - Given that settled round, when a later BUILD dispatch for the round's current host occurs, then only an acknowledgement is recorded, and the ledger's laps and growth are unchanged.
 - Given one round admitting a `prd_audit` FIXABLE and an as-built REMEDIABLE, when host 1 dispatches, then one lap is charged to each gate and their growth once, in one settlement.
 - Given a stacked feature's first ledger record, when growth is read, then `authored` is stored as 12 from the sealed plan, and it stays 12 after rem blocks exist only on child 1's plan.
+- Given a stacked feature with an audit round sealed at 12 authored tasks and a revalidate round, when growth is read, then `authored` is 12: a revalidate round seals no denominator, and one recorded as `0` before this rule is ignored rather than refused.
 - Given rem blocks pending only on child 1's plan, when growth is read before settlement, then the pending-task exclusion takes those ids from the frozen allocation.
 - Given a worktree recreated after settlement, when the feature resumes, then settled laps, growth and taskless counters are rebuilt from the round receipts, and the ledger has no `pendingRepair` field.
 - Given a worktree recreated while an as-built round is open, when as-built runs again, then its prior-findings input includes the pending findings read from the route record.

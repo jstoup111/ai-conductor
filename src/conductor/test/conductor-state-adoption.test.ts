@@ -138,4 +138,64 @@ describe('refused state-change adoption', () => {
     expect(state.manual_test).toBe('skipped');
     expect(snapshot.manual_test).toBe('skipped');
   });
+
+  // Covers: task:rem-prd-audit-rem-vg4-s6-1
+  it('adopts the full leaf state after a routed return before the next root-state CAS', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'conductor-routed-leaf-return-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const childStatePath = join(dir, '.pipeline', 'children', '1', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline', 'children', '1'), { recursive: true });
+    const leafState = {
+      feature_desc: 'demo',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      manual_test: 'pending',
+      policy_scan: 'pending',
+      release_scan: 'pending',
+    } as ConductState;
+    await writeState(statePath, leafState);
+    await writeState(childStatePath, {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    } as ConductState);
+
+    const state = {
+      feature_desc: 'demo',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      prd_audit: 'done', architecture_review_as_built: 'done', manual_test: 'done',
+      policy_scan: 'done', release_scan: 'done',
+    } as ConductState;
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+      config: {
+        steps: {
+          policy_scan: { skill: 'policy-scan', after: 'build_review', gate: true },
+          release_scan: { skill: 'release-scan', after: 'policy_scan', gate: true },
+        },
+      } as never,
+    });
+
+    await (conductor as unknown as {
+      activateChildRegionState(state: ConductState, child: 1): Promise<void>;
+      restoreWholeFeatureState(state: ConductState): Promise<void>;
+    }).activateChildRegionState(state, 1);
+    await (conductor as unknown as {
+      restoreWholeFeatureState(state: ConductState): Promise<void>;
+    }).restoreWholeFeatureState(state);
+
+    expect(state).toMatchObject(leafState);
+    expect((conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot)
+      .toMatchObject(leafState);
+    await expect((conductor as unknown as {
+      commitStateChanges(state: ConductState, name: string, changes: Record<string, unknown>): Promise<void>;
+    }).commitStateChanges(state, 'record post-routed-return gate', { prd_audit: 'running' }))
+      .resolves.toBeUndefined();
+
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('leaf state must remain readable');
+    expect(persisted.value).toMatchObject({ ...leafState, prd_audit: 'running' });
+  });
 });

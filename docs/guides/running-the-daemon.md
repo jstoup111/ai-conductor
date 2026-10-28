@@ -57,8 +57,8 @@ warnings until the spec is fixed.
 Run `ai-conductor daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
 machine-readable reason, remedy, and the latest scan age without invoking Git or the network. An
 empty snapshot reports that no specs are blocked; no valid snapshot means the blocked state is
-unknown until discovery completes. The startup dashboard does not yet render blocked specs;
-dashboard treatment is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
+unknown until discovery completes. The [startup dashboard](#read-the-startup-dashboard) also lists
+blocked specs under `BLOCKED (<n>)`.
 
 DECIDE artifacts are human-authored before merge. The daemon pre-seeds every DECIDE step (recording
 tier-skipped steps as skipped) and starts at BUILD; it never authors or reruns DECIDE work.
@@ -95,8 +95,7 @@ ai-conductor daemon status
 Sweeps the whole project registry and prints one badge line per repo — state, path, pid, since,
 engine version id, pause metadata, last log line and its mtime, and tmux session up/down. It then
 prints `GATED:`, `BLOCKED`, and `SHIPPED PRS:` sections plus an attribution-agreement line. `BLOCKED` reads the
-latest discovery snapshot and lists every blocked spec's reason and remedy; it is not yet part of
-the startup dashboard ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)). The nine
+latest discovery snapshot and lists every blocked spec's reason and remedy. The nine
 state badges and what each one means are in [cli reference](../reference/cli.md#daemon-status);
 `● running` is the one you want.
 
@@ -132,6 +131,32 @@ Filter one feature's narrative with `ai-conductor daemon logs | grep '\[<slug>\]
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
 
+### Read the startup dashboard
+
+At startup the daemon prints an inherited-state dashboard built from its first discovery pass. Its
+first line is the attention summary: `NEEDS YOU: nothing`, or counts joined by ` · ` —
+`<n> halted`, `<n> blocked`, `<n> gated`, `<n> parked need review` (orphan or merged-ready), and
+`<n> retained need action` (any reason except `pr-open-awaiting-main`).
+
+Each slug lands in exactly one group, by precedence: PARKED, HALTED, IN-PROGRESS, RETAINED
+WORKTREES, PROCESSED, BLOCKED, GATED, WAITING, ELIGIBLE. Groups print in action order instead:
+HALTED, BLOCKED, GATED, IN-PROGRESS, WAITING, ELIGIBLE, PARKED, RETAINED WORKTREES, NEVER-STARTED,
+PROCESSED. Empty BLOCKED and WAITING groups are omitted.
+
+If the startup discovery pass did not complete, BLOCKED, GATED, WAITING, and ELIGIBLE each print
+`<GROUP>: unknown — discovery did not complete`, and the attention line ends with
+`· discovery state unknown`. Unknown is not empty.
+
+The dashboard goes to two sinks:
+
+| Sink | Render |
+| --- | --- |
+| `.daemon/daemon.log` | Full: every row of every group except PROCESSED. |
+| Console (default) | Compact: rows clipped to the terminal width (80 outside a TTY, minimum 40) with a trailing `…`. PARKED and RETAINED WORKTREES list only rows that need action; NEVER-STARTED and PROCESSED print counts only. HALTED, BLOCKED, GATED-spec, PARKED, and RETAINED rows put the reason and remedy on an indented second line. |
+| Console with `--completed`/`--all` | Full, including PROCESSED rows. |
+
+When a compact row is clipped, read the full row with `ai-conductor daemon logs`.
+
 ### Build-review rubric progress
 
 Before publication, FINISH rechecks the current validation evidence. If one validator crashes during
@@ -158,7 +183,7 @@ the effective verdict. A `projection-oversized` infrastructure failure includes 
 counts and halts for an operator without consuming the shared mechanical-fault allowance. The optional
 excerpt, deterministic reason, and unresolved-marker count are included only when the event supplies them.
 
-A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Coverage binding is a no-op that only re-records the plan's slice topology, so a rerun never halts or reopens work. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
+A rebase that changes the active feature’s stories or PRD reruns its PRD audit. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
 
 ### Protected-artifact rebaselines
 
@@ -1137,7 +1162,7 @@ resumes, even when it is cleanly mergeable. This play-forward path is intentiona
 normal finish: the pending gate must observe the advanced base in its worktree.
 When that rebase changes code, test paths, or an active review input, the downstream judged gates —
 `test_suite`, `build_review`, and (when they ran) `manual_test`, `prd_audit`,
-`coverage_binding`, `architecture_review_as_built` — are candidates for re-opening. Which ones
+`architecture_review_as_built` — are candidates for re-opening. Which ones
 actually re-open depends on the delta: each judged gate declares the surface its verdict depends on,
 and only a delta that lands inside that surface invalidates it.
 
@@ -1147,7 +1172,6 @@ and only a delta that lands inside that surface invalidates it.
 | `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit` | the feature's own runtime source, active stories, and PRD | the feature's own source, active story, or active PRD |
-| `coverage_binding` (no-op; re-records slice topology) | the feature's own runtime source, active stories, PRD, plan, coherence carrier, and ADRs the feature's documents cite | the feature's own source or one of those active review inputs |
 | `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
 `build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`

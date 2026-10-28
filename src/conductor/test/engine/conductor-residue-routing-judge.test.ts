@@ -180,7 +180,7 @@ vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { childBranchFor, leafBranchFor } from '../../src/engine/feature-branch-identity.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -195,7 +195,7 @@ import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -405,6 +405,31 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   diagramDrift: { enabled: false, reason: 'fixture' },
 };
 
+function slicedRoutingPlan(firstDetails = '', childRepair = ''): string {
+  return [
+    '# Implementation plan',
+    '',
+    '**Stories:** .docs/stories/feature.md',
+    '',
+    '## Slices',
+    '',
+    '| Slice | Title | Tasks |',
+    '| --- | --- | --- |',
+    '| 1 | first | first |',
+    '| 2 | leaf | second |',
+    '',
+    '### Task first: authored work',
+    '**Story:** S1',
+    '**Dependencies:** none',
+    firstDetails,
+    childRepair,
+    '### Task second: leaf work',
+    '**Story:** S2',
+    '**Dependencies:** none',
+    '',
+  ].filter(Boolean).join('\n');
+}
+
 describe('Conductor residue routing judge binding', () => {
   let projectRoot: string;
 
@@ -433,7 +458,7 @@ describe('Conductor residue routing judge binding', () => {
       JSON.stringify({ activePlanPath: planPath }),
       'utf8',
     );
-    await writeCoverageBindingEnvelope(projectRoot, {
+    await writeSliceTopologyFixture(projectRoot, {
       version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
       sliceMembership: { taskSlices: { first: 1, second: 2 }, titles: ['first', 'second'] },
     }, envelopeFilesystem);
@@ -681,7 +706,7 @@ describe('Conductor residue routing judge binding', () => {
   it('routes a proposed repair task to its admitted authored parent host', async () => {
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -733,7 +758,7 @@ describe('Conductor residue routing judge binding', () => {
       '# Implementation plan\n\n### Task T2: second authored work\n\n### Task T3: third authored work\n',
       'utf8',
     );
-    await writeCoverageBindingEnvelope(projectRoot, {
+    await writeSliceTopologyFixture(projectRoot, {
       version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
       sliceMembership: { taskSlices: { T2: 1, T3: 2 }, titles: ['second', 'third'] },
     }, envelopeFilesystem);
@@ -847,7 +872,7 @@ describe('Conductor residue routing judge binding', () => {
 
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n\n**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.\n',
+      slicedRoutingPlan('**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.'),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -907,7 +932,7 @@ describe('Conductor residue routing judge binding', () => {
     await mustSucceed(['checkout', child.branch]);
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n\n### Task rem-as-built-repair-task-for-first: Existing child repair\n',
+      slicedRoutingPlan('', '### Task rem-as-built-repair-task-for-first: Existing child repair'),
       'utf8',
     );
     await mustSucceed(['add', '.docs/plans/feature.md']);
@@ -915,7 +940,7 @@ describe('Conductor residue routing judge binding', () => {
     await mustSucceed(['checkout', leafBranchFor('demo')]);
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -961,7 +986,7 @@ describe('Conductor residue routing judge binding', () => {
   it('passes validation-group FAIL rows verbatim to the router and returns the stored host retry hint', async () => {
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {

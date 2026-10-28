@@ -59,7 +59,7 @@ import {
 } from './session-hook-assets.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ConductorEvent } from '../types/events.js';
 import { refreshWorktreeCoAuthor } from './bot-co-author.js';
 import { resolveSkillName } from './skill-names.js';
@@ -164,7 +164,7 @@ export const DISPATCH_START_SCRIPT = join('bin', 'dispatch-start');
  * the frontmatter agree in both directions, so drift fails the build rather
  * than silently un-suppressing a skill.
  */
-export const OPERATOR_ONLY_SKILLS: readonly string[] = ['daemon-triage'];
+export const OPERATOR_ONLY_SKILLS: readonly string[] = ['daemon-triage', 'stack-land'];
 
 /**
  * Thrown when `bin/setup` fails to run or exits non-zero. Carries the tail of
@@ -251,7 +251,7 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
-  await refreshWorktreeCoAuthor(worktreePath, opts?.events);
+  await refreshWorktreeCoAuthor(worktreePath, opts?.events, { dispatch: opts?.dispatchStart === true });
   await ensureSessionHooks(worktreePath, log, opts?.skillNameRoot);
   await excludeEngineArtifacts(worktreePath, log);
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);
@@ -617,7 +617,7 @@ export async function ensureSessionHooks(
  * Attribution hooks fail open, while the preventive pre-commit control fails
  * closed: a worktree without it must never enter BUILD/SHIP.
  */
-async function writeGitHooksAndWire(
+export async function writeGitHooksAndWire(
   worktreePath: string,
   log?: (msg: string) => void,
 ): Promise<void> {

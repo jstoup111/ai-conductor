@@ -9,7 +9,7 @@ import {
 } from '../rebase.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { resolve } from 'node:path';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   journalStateUpdateLines,
   stagingRefFor,
@@ -183,7 +183,11 @@ export async function checkRestackPreMove(
   }
 
   try {
-    const seal = await verifyProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: checkedOutMove.oldSha });
+    const seal = await verifyProtectedArtifactSeal({
+      projectRoot: worktree,
+      baselineCommit: checkedOutMove.oldSha,
+      toleratesEngineAppendedRemediation: true,
+    });
     return seal.ok ? { kind: 'clear' } : { kind: 'seal-refused', detail: seal.reason };
   } catch (error) {
     return { kind: 'seal-refused', detail: error instanceof Error ? error.message : String(error) };

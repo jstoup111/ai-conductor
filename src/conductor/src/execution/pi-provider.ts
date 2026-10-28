@@ -1,5 +1,6 @@
-import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { access, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
 import type {
@@ -9,11 +10,11 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { piSubagentsArgs, piSubagentsPackageDir, seedPiSubagentsHome } from './pi-subagents.js';
@@ -22,10 +23,10 @@ import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { withholdCost } from './token-usage.js';
-import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { writeScratchSchema } from './scratch-schema.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { PI_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -42,6 +43,7 @@ export type PiSubprocessFactory = (
 /** Filesystem and process environment Pi uses to locate installed skills. */
 export interface PiEnvironment {
   readonly stat: (path: string) => Promise<{ isFile: () => boolean; isDirectory: () => boolean }>;
+  readonly access: (path: string, mode: number) => Promise<void>;
   readonly env: NodeJS.ProcessEnv;
   readonly homeDir: () => string;
   readonly cwd: () => string;
@@ -58,6 +60,7 @@ export type PiSkillResolution = {
 
 const defaultPiEnvironment: PiEnvironment = {
   stat,
+  access,
   env: process.env,
   homeDir: homedir,
   cwd: process.cwd,
@@ -71,12 +74,31 @@ async function isFile(path: string, environment: PiEnvironment): Promise<boolean
   }
 }
 
+async function isReadableRegularFile(path: string, environment: PiEnvironment): Promise<boolean> {
+  if (!await isFile(path, environment)) return false;
+  try {
+    await environment.access(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function isDirectory(path: string, environment: PiEnvironment): Promise<boolean> {
   try {
     return (await environment.stat(path)).isDirectory();
   } catch {
     return false;
   }
+}
+
+/** Write one invocation's system prompt to a private temp file Pi appends at startup. */
+async function writePiSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
+  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const dir = await mkdtemp(join(tempRoot, 'ai-conductor-pi-system-prompt-'));
+  const path = join(dir, 'system-prompt.md');
+  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }
 
 /**
@@ -88,9 +110,8 @@ export async function resolvePiSkill(
   name: string,
   environment: PiEnvironment = defaultPiEnvironment,
 ): Promise<PiSkillResolution> {
-  const descriptor = providerDescriptor('pi');
-  const piAgentDirectory = environment.env[descriptor.homeVariable]
-    ?? join(environment.homeDir(), descriptor.defaultHome);
+  const piAgentDirectory = environment.env.PI_CODING_AGENT_DIR
+    ?? join(environment.homeDir(), '.pi', 'agent');
   const searchedRoots = [
     join(environment.homeDir(), '.agents', 'skills'),
     join(piAgentDirectory, 'skills'),
@@ -192,9 +213,8 @@ type PiJsonEvent = {
   };
 };
 
-/** Resolve lazily because the catalog constructs this adapter. */
 function piDisplayName(): string {
-  return providerDescriptor('pi').displayName;
+  return PI_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -463,8 +483,10 @@ export class PiProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly executable = 'pi',
     private readonly subprocessFactory: PiSubprocessFactory = execa,
     private readonly environment: PiEnvironment = defaultPiEnvironment,
@@ -491,14 +513,19 @@ export class PiProvider implements LLMProvider {
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     options = enforceFreshSessionOptions(options, 'pi');
     const { abortSignal } = options;
-    if (abortSignal?.aborted) return abortedInvocationResult();
+    if (abortSignal?.aborted) return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
     const permit = validateSpawnPermit(options.spawnPermit);
     if (!permit.permitted) {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
 
     const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
@@ -511,6 +538,7 @@ export class PiProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        executionDisposition: 'not-started',
       };
     }
 
@@ -518,7 +546,7 @@ export class PiProvider implements LLMProvider {
     // Trimming here would turn ordinary prompt text on a later or indented line
     // into an executable skill command.
     const promptCommand = options.prompt.split('\n', 1)[0]?.split(/\s+/, 1)[0];
-    const prefix = providerDescriptor('pi').invocationPrefix;
+    const prefix = '/skill:';
     const cwd = options.cwd ?? this.environment.cwd();
     if (promptCommand?.startsWith(prefix)) {
       const name = promptCommand.slice(prefix.length);
@@ -533,6 +561,7 @@ export class PiProvider implements LLMProvider {
           exitCode: 1,
           commandUnresolved: true,
           commandUnresolvedName: name,
+          executionDisposition: 'not-started',
         };
       }
     }
@@ -540,6 +569,28 @@ export class PiProvider implements LLMProvider {
     // ADR D18: -na keeps project-local Pi files untrusted unless the operator
     // opts in; a read-only review (D17) always keeps -na.
     const args = ['-p', ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    let systemPromptFile: Awaited<ReturnType<typeof writePiSystemPromptFile>> | undefined;
+    if (typeof options.systemPrompt === 'string' && options.systemPrompt.length > 0) {
+      try {
+        systemPromptFile = await writePiSystemPromptFile(options.systemPrompt);
+      } catch (error) {
+        return {
+          success: false,
+          output: `${piDisplayName()} could not prepare the system prompt for delivery: ${error instanceof Error ? error.message : String(error)}`,
+          exitCode: 1,
+        };
+      }
+      if (!await isReadableRegularFile(systemPromptFile.path, this.environment)) {
+        await systemPromptFile.dispose();
+        return {
+          success: false,
+          output: `${piDisplayName()} system-prompt file ${systemPromptFile.path} is not a readable regular file.`,
+          exitCode: 1,
+        };
+      }
+      args.push('--append-system-prompt', systemPromptFile.path);
+    }
+    try {
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);
@@ -553,7 +604,12 @@ export class PiProvider implements LLMProvider {
         args.push('-e', extensionPath);
       }
     } catch (error) {
-      return { success: false, output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
+      return {
+        success: false,
+        output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     if (options.readOnlyReview) {
       // Read-only review: no discovered extensions, no project resources (whatever
@@ -565,9 +621,8 @@ export class PiProvider implements LLMProvider {
     // schema-constrained answer never needs a child session.
     let subagentsTempRoot: string | undefined;
     if (options.subagents === true && !options.readOnlyReview && options.nativeSchema === undefined) {
-      const descriptor = providerDescriptor('pi');
-      const operatorAgentDir = this.environment.env[descriptor.homeVariable]
-        ?? join(this.environment.homeDir(), descriptor.defaultHome);
+      const operatorAgentDir = this.environment.env.PI_CODING_AGENT_DIR
+        ?? join(this.environment.homeDir(), '.pi', 'agent');
       const packageDir = piSubagentsPackageDir(operatorAgentDir);
       if (!await isFile(join(packageDir, 'package.json'), this.environment)) {
         const reason = `${piDisplayName()} subagents are enabled (llm_providers.pi.subagents) but ${packageDir} is not installed. Run \`pi install npm:pi-subagents\`.`;
@@ -578,10 +633,11 @@ export class PiProvider implements LLMProvider {
           providerUnavailable: true,
           providerUnavailableScope: 'run',
           providerUnavailableReason: reason,
+          executionDisposition: 'not-started',
         };
       }
       args.push(...piSubagentsArgs(packageDir));
-      const isolatedAgentDir = options.selfHost?.env[descriptor.homeVariable];
+      const isolatedAgentDir = options.selfHost?.env.PI_CODING_AGENT_DIR;
       if (isolatedAgentDir !== undefined) {
         subagentsTempRoot = (await seedPiSubagentsHome(isolatedAgentDir, options.effort)).tempRoot;
       }
@@ -595,7 +651,7 @@ export class PiProvider implements LLMProvider {
     if (options.effort) args.push('--thinking', options.effort);
     // Filesystem preflight is asynchronous. An abort that arrives during it
     // must not create an unobservable subprocess after the signal fired.
-    if (abortSignal?.aborted) return abortedInvocationResult();
+    if (abortSignal?.aborted) return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
 
     // Apply the marker after the self-host overlay, then explicitly mask
     // tmux's implicit target variables so execa cannot inherit the daemon
@@ -708,6 +764,9 @@ export class PiProvider implements LLMProvider {
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
       gitGuardInstalled: guardDir !== null,
     };
+    } finally {
+      await systemPromptFile?.dispose();
+    }
   }
 
 }

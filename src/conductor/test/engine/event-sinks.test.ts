@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:14, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,7 @@ import type {
   MaintenancePhaseOutcome,
 } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 const ACTIVE_STALL_EVENT: ConductorEvent = {
   type: 'build_stall',
@@ -55,6 +56,16 @@ it('declares one persistent sink row for each stack event', () => {
       otel: false,
     });
   }
+});
+
+it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.remediation_closure_judged).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('remediation_closure_judged');
 });
 
 type Equal<Left, Right> =
@@ -146,6 +157,7 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'closed-child-rewritten'
   | 'flatten_refused'
   | 'restack-outstanding'
+  | 'journal-live-owner'
   | 'published-stack'
   | 'deferred-base-refresh'
 >>;
@@ -173,6 +185,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_refused',
   'step_status_write_refused',
   'github_operation_refused',
+  'github_operation_failed',
   'provider_discovery',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
@@ -198,6 +211,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'mode_skip',
   'build_done_when_unverified',
   'done_when_citation_judged',
+  'remediation_closure_judged',
   'done_when_citation_accepted',
   'build_progress',
   'unattributed_progress',
@@ -240,6 +254,7 @@ const REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES = [
 const ROUTING_EVENT_TYPES = [
   'remediation_routed',
   'remediation_rerouted',
+  'operator_round',
   'routed_repair_phase',
   'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
@@ -320,6 +335,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'group_member_step',
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'land_gate_rejected',
+  'feature_artifacts_registered',
   'test_suite_verification',
   'gate_verdict',
   'github_write_credential_fallback',
@@ -347,14 +363,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'memory_setup',
   'plan_growth',
   'kickback_budget_adjustment_authorized',
-  'coverage_binding_amendment_judged',
-  'coverage_binding_conflict_judged',
-  'coverage_binding_judged',
   'rebase_regrade_judged',
-  'coverage_binding_disabled',
-  'coverage_binding_invalidated',
-  'coverage_binding_task_reopened',
-  'plan_slices_changed',
   'plan_review_dispatched',
   'plan_review_completed',
   'plan_review_finding_accepted',
@@ -376,6 +385,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'remediation_case_refuted',
   'prd_widening_reconciled',
   'build_review_scope_summary',
+  'build_review_review_scope',
   'build_review_scope_incomplete',
   'ci_failed',
   'shipped_pr_readiness',
@@ -404,7 +414,6 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_refused',
   'restack_recovered',
   'push_lease_refused',
-  'story_reowned',
   ...ROUTING_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -467,6 +476,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'step_refused',
   'step_status_write_refused',
   'github_operation_refused',
+  'github_operation_failed',
   'session_command_refused',
   'github_bypass_attempt',
   'github_bypass_result',
@@ -523,24 +533,6 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
 // @ts-expect-error -- every ConductorEvent type must declare all three sink decisions.
 missingVerdictFreshness satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-const { coverage_binding_judged: _coverageBindingJudgedOmitted, ...missingCoverageBindingJudged } = EVENT_SINKS;
-// @ts-expect-error -- coverage_binding_judged must declare every sink decision.
-missingCoverageBindingJudged satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-const { coverage_binding_disabled: _coverageBindingDisabledOmitted, ...missingCoverageBindingDisabled } = EVENT_SINKS;
-// @ts-expect-error -- coverage_binding_disabled must declare every sink decision.
-missingCoverageBindingDisabled satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-const { coverage_binding_conflict_judged: _coverageBindingConflictJudgedOmitted, ...missingCoverageBindingConflictJudged } = EVENT_SINKS;
-// @ts-expect-error -- coverage_binding_conflict_judged must declare every sink decision.
-missingCoverageBindingConflictJudged satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-// @ts-expect-error -- coverage_binding is intentionally terminal-only telemetry.
-const coverageBindingStarted: Extract<ConductorEvent, { type: 'coverage_binding_started' }> = { type: 'coverage_binding_started' };
-// @ts-expect-error -- coverage_binding halts are represented by the ordinary step outcome.
-const coverageBindingHalted: Extract<ConductorEvent, { type: 'coverage_binding_halted' }> = { type: 'coverage_binding_halted' };
-void [coverageBindingStarted, coverageBindingHalted];
 
 const deliberatelyNotPersisted = {
   render: false,
@@ -660,9 +652,19 @@ const routingEvents = [
     child: routingChild,
   },
   {
-    type: 'child_revalidated',
+    type: 'operator_round',
     eventId: 'routing-4',
     occurredAt: '2026-10-12T00:00:03.000Z',
+    roundId: routingRoundId,
+    child: routingChild,
+    origin: 'land',
+    reason: 'reviewer change',
+    action: 'opened',
+  },
+  {
+    type: 'child_revalidated',
+    eventId: 'routing-5',
+    occurredAt: '2026-10-12T00:00:04.000Z',
     child: routingChild,
     generation: 1,
     closureSha: routingClosureSha,
@@ -724,6 +726,7 @@ describe('event sink subscriptions', () => {
       expect(Object.fromEntries(ROUTING_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]))).toEqual({
         remediation_routed: { render: false, persist: true, audit: false, otel: false },
         remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
+        operator_round: { render: false, persist: true, audit: false, otel: false },
         routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
         child_revalidated: { render: false, persist: true, audit: false, otel: false },
       });
@@ -865,7 +868,6 @@ describe('event sink subscriptions', () => {
       { type: 'child_closed', child: childOne, position: 1, branch: 'feat/c1/demo', tip: 'child-one-tip' },
       { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/daemon-demo' },
       { type: 'rebase_skipped_for_stack', child: childOne, reason: 'active child is not the leaf' },
-      { type: 'story_reowned', story: '2', from: 1, to: 2 },
     ] satisfies ConductorEvent[];
 
     try {
@@ -931,7 +933,7 @@ describe('event sink subscriptions', () => {
   it('renders and persists read-only review capability results through the event spine', () => {
     const capability = {
       type: 'build_review_read_only_capability',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       platform: 'linux',
       status: 'unavailable',
       reason: 'probe write was not refused',
@@ -1025,55 +1027,6 @@ describe('event sink subscriptions', () => {
       rendered: expect.arrayContaining(['memory_setup']),
       audited: expect.not.arrayContaining(['memory_setup']),
       otel: expect.arrayContaining(['memory_setup']),
-    });
-  });
-
-  it('persists coverage-binding terminal observations without rendering, audit, or OpenTelemetry', () => {
-    expect({
-      judged: EVENT_SINKS.coverage_binding_judged,
-      amendmentJudged: EVENT_SINKS.coverage_binding_amendment_judged,
-      conflictJudged: EVENT_SINKS.coverage_binding_conflict_judged,
-      disabled: EVENT_SINKS.coverage_binding_disabled,
-      persisted: persistedEventTypes(),
-      rendered: renderedEventTypes(),
-      audited: auditedEventTypes(),
-      otel: otelEventTypes(),
-    }).toMatchObject({
-      judged: { render: false, persist: true, audit: false, otel: false },
-      amendmentJudged: { render: false, persist: true, audit: false, otel: false },
-      conflictJudged: { render: false, persist: true, audit: false, otel: false },
-      disabled: { render: false, persist: true, audit: false, otel: false },
-      persisted: expect.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-      rendered: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-      audited: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-      otel: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-    });
-  });
-
-  it('persists plan slice membership changes without rendering, audit, or OpenTelemetry', () => {
-    const changed = {
-      type: 'plan_slices_changed',
-      step: 'coverage_binding',
-      moved: [{ taskId: '4', from: 1, to: 2 }],
-      added: ['9'],
-      removed: ['3'],
-      manifest: 'unchanged',
-    } satisfies ConductorEvent;
-
-    expect({
-      changed,
-      sink: EVENT_SINKS.plan_slices_changed,
-      persisted: persistedEventTypes(),
-      rendered: renderedEventTypes(),
-      audited: auditedEventTypes(),
-      otel: otelEventTypes(),
-    }).toMatchObject({
-      changed,
-      sink: { render: false, persist: true, audit: false, otel: false },
-      persisted: expect.arrayContaining(['plan_slices_changed']),
-      rendered: expect.not.arrayContaining(['plan_slices_changed']),
-      audited: expect.not.arrayContaining(['plan_slices_changed']),
-      otel: expect.not.arrayContaining(['plan_slices_changed']),
     });
   });
 
@@ -1598,7 +1551,7 @@ describe('event sink subscriptions', () => {
   it('keeps probe-failure progress persisted and rendered without widening audit persistence', () => {
     const progress = {
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,

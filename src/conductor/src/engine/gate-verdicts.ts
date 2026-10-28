@@ -253,6 +253,10 @@ export async function writeVerdict(
  */
 export const SKIP_VERDICT_PREFIX = 'skipped: ';
 
+/** Verdict files from the retired pre-BUILD coverage judge can remain in
+ * worktrees recreated from an older branch. They are not lifecycle evidence. */
+const RETIRED_VERDICT_FILES = new Set(['coverage_binding.json']);
+
 /**
  * Record a verdict-bearing gate that was resolved by a SKIP rather than by a
  * run (tier skip, track skip, config disable, `when:` false, upstream skip, or
@@ -319,7 +323,7 @@ export async function readAllVerdicts(
     return out;
   }
   for (const entry of entries) {
-    if (!entry.endsWith('.json')) continue;
+    if (!entry.endsWith('.json') || RETIRED_VERDICT_FILES.has(entry)) continue;
     const step = entry.slice(0, -'.json'.length) as StepName;
     const v = await readVerdict(dir, step);
     if (v) out[step] = v;

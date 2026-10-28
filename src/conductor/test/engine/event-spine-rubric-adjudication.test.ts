@@ -55,9 +55,9 @@ function aggregate() {
   const producer = { provider: 'claude', model: 'opus', effort: 'low' } as const;
   const reviewedInput = { version: 'v1' as const, contentDigest: HASH };
   const result = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1', findings: [{
+    kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'parallel-event-channel', summary: 'The diff adds a separate reviewer ledger.',
-      evidenceLocations: ['src/conductor/src/engine/reviewer.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+      evidenceLocations: ['src/conductor/src/engine/reviewer.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
     }],
   }, { rubric: 'eventSpine', lapId, declaration, policy, candidate: producer, reviewedInput }, { sourceRegions: [sourceRegion] });
   if (!result) throw new Error('expected stamped event-spine finding');

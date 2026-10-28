@@ -20,7 +20,9 @@ import {
 import { resolveActiveChild } from './child-cursor.js';
 import { readRestackJournal, isJournalOwnerAlive } from './restack/restack-journal.js';
 import { recoverRestackJournal } from './restack/restack-recovery.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
+import type { HaltDisposition } from '../types/halt.js';
+export type { HaltDisposition };
 
 /** The park-for-human marker the daemon loop treats as a stop. */
 export const HALT_MARKER = '.pipeline/HALT';
@@ -49,8 +51,6 @@ export type HaltClass =
   | typeof STACK_TIP_DIVERGED_HALT_CLASS;
 
 /** Classification observed while reading a HALT sidecar. */
-export type HaltDisposition = HaltClass | 'kickback-cap' | 'over-scope' | 'legacy' | 'unclassified';
-
 /** True for a classified halt which the daemon must retain for an operator. */
 export function isOperatorActionHalt(
   haltClass: HaltDisposition,

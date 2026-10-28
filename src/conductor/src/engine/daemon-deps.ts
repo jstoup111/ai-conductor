@@ -15,7 +15,7 @@ import type {
   FeatureWorktree,
   WorktreeOutcome,
 } from './daemon-runner.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { defaultSelfHostDetector } from './self-host/detector.js';

@@ -15,7 +15,10 @@ import { loadMergedConfigForRead, projectConfigPath, validateConfig } from './en
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 import { grantStorePath } from './engine/decide-entry-policy.js';
 import { resolveMainRepoRootStrict } from './engine/park-marker.js';
-import { DEFAULT_IDLE_POLL_SECONDS } from './cli-defaults.js';
+import { DEFAULT_IDLE_POLL_SECONDS } from './engine/daemon-command-defaults.js';
+import { KICKBACK_BUDGET_GATES } from './engine/kickback-budget-command.js';
+
+export { KICKBACK_BUDGET_GATES, detectKickbackBudgetCommand, type KickbackBudgetDispatch } from './engine/kickback-budget-command.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -430,25 +433,58 @@ export interface DecideGrantDispatch {
   reason: string;
 }
 
-/** Gates accepted by `kickback-budget raise|reset --gate`. */
-export const KICKBACK_BUDGET_GATES = ['build_review', 'prd_audit', 'architecture_review_as_built', 'restack'] as const;
+export type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch, StackOwnersDispatch } from './types/cli.js';
+import type { StackLandDispatch, StackOwnersDispatch } from './types/cli.js';
 
-export interface KickbackBudgetDispatch {
-  kind: 'kickback-budget';
-  action: 'inspect' | 'raise' | 'reset';
-  feature: string;
-  child?: string;
-  gate?: string;
-  by?: number;
-  rationale?: string;
-  format: 'human' | 'json';
+/** Parse the read-only ownership evidence grammar. */
+export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'owners') return null;
+  const paths: string[] = [];
+  let slug: string | undefined;
+  let diff: string | undefined;
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (value === undefined || !['--slug', '--path', '--diff'].includes(flag ?? '')) return null;
+    if (flag === '--path') { paths.push(value); continue; }
+    if (flag === '--slug' && slug === undefined) { slug = value; continue; }
+    if (flag === '--diff' && diff === undefined) { diff = value; continue; }
+    return null;
+  }
+  if (!slug || slug.includes('/') || slug === '.' || slug === '..' || (paths.length === 0) === (diff === undefined)) return null;
+  return { kind: 'stack-owners', slug, paths, ...(diff === undefined ? {} : { diff }) };
 }
 
-export interface HaltClearDispatch {
-  kind: 'halt-clear';
-  feature: string;
-  rationale?: string;
+/** Parse the open, declaration, and abandon grammars. */
+export function detectStackLandCommand(argv: readonly string[]): StackLandDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'land') return null;
+  if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--done') {
+    const slug = argv[5];
+    return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-done', slug };
+  }
+  if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--abandon') {
+    const slug = argv[5];
+    return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-abandon', slug };
+  }
+  const values = new Map<string, string>();
+  const carry: string[] = [];
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || value === undefined || !['--slug', '--child', '--carry', '--reason'].includes(flag)) return null;
+    if (flag === '--carry') { carry.push(value); continue; }
+    if (values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug');
+  const child = values.get('--child');
+  const reason = values.get('--reason');
+  if (!slug || !child || reason === undefined || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
+  return { kind: 'stack-land', slug, child, carry, reason };
 }
+
+export type { HaltClearDispatch } from './types/cli.js';
+import type { HaltClearDispatch } from './types/cli.js';
 
 /** Parse the operator halt-clear command without starting the pipeline. */
 export function detectHaltClearCommand(argv: string[]): HaltClearDispatch | null {
@@ -463,39 +499,6 @@ export function detectHaltClearCommand(argv: string[]): HaltClearDispatch | null
   const feature = values.get('--feature');
   if (!feature || feature.includes('/') || feature === '.' || feature === '..') return null;
   return { kind: 'halt-clear', feature, rationale: values.get('--rationale') };
-}
-
-/** Parse the explicit operator budget-recovery command without booting the pipeline. */
-export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispatch | null {
-  if (argv[2] !== 'kickback-budget' || !['inspect', 'raise', 'reset'].includes(argv[3] ?? '')) return null;
-  const action = argv[3] as KickbackBudgetDispatch['action'];
-  const values = new Map<string, string>();
-  for (let i = 4; i < argv.length; i += 2) {
-    const flag = argv[i]; const value = argv[i + 1];
-    if (!flag || value === undefined || !['--feature', '--child', '--gate', '--by', '--rationale', '--format'].includes(flag) || values.has(flag)) return null;
-    values.set(flag, value);
-  }
-  const feature = values.get('--feature');
-  const format = values.get('--format') ?? 'human';
-  if (!feature || feature.includes('/') || feature === '.' || feature === '..' || (format !== 'human' && format !== 'json')) return null;
-  if (action === 'inspect') {
-    if (values.size > (values.has('--child') ? 3 : 2) || values.has('--gate')) return null;
-    const child = values.get('--child');
-    return { kind: 'kickback-budget', action, feature, format, ...(child === undefined ? {} : { child }) };
-  }
-  const gate = values.get('--gate'); const rationale = values.get('--rationale');
-  if (!gate || !rationale?.trim()) return null;
-  if (action === 'raise') {
-    const by = Number(values.get('--by'));
-    if (!Number.isSafeInteger(by) || by <= 0) return null;
-    const child = values.get('--child');
-    return { kind: 'kickback-budget', action, feature, gate, by, rationale, format, ...(child === undefined ? {} : { child }) };
-  }
-  const child = values.get('--child');
-  return !values.has('--by') ? {
-    kind: 'kickback-budget', action, feature, gate, rationale, format,
-    ...(child === undefined ? {} : { child }),
-  } : null;
 }
 
 export interface DecideGrantCommandDeps {
@@ -799,6 +802,7 @@ export function createProgram(): Command {
     'scope-check',
     'task-membership-check',
     'round-stamp',
+    'stack-commit-guard',
   ]) {
     program.command(command, { hidden: true });
   }
@@ -872,6 +876,23 @@ export function createProgram(): Command {
     .option('--by <n>', 'Positive amount to raise the limit by (raise only)')
     .option('--rationale <text>', 'Operator rationale (raise and reset)')
     .option('--format <format>', 'Output format: human | json');
+
+  const stack = program
+    .command('stack')
+    .description('Operate on a stacked feature');
+  stack
+    .command('land')
+    .description('Open an operator-owned landing on a closed stack child')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--child <n>', 'Closed child to host the landing')
+    .option('--carry <n>', 'Closed child with post-closure commits to carry')
+    .requiredOption('--reason <text>', 'Reason for the landing');
+  stack
+    .command('owners')
+    .description('Report which stack children introduced paths')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .option('--path <path>', 'Path to inspect (repeatable)')
+    .option('--diff <range>', 'Git range whose changed paths to inspect');
 
   const buildReview = program
     .command('build-review')
@@ -960,7 +981,9 @@ export function createProgram(): Command {
   program
     .command('rewind')
     .description('Return a halted feature to an earlier step')
-    .requiredOption('--to <step>', 'Earlier step to resume from');
+    .requiredOption('--to <step>', 'Earlier step to resume from')
+    .option('--child <n>', 'Closed child to rewind')
+    .option('--reason <text>', 'Reason for rewinding a closed child');
 
   registerCommands(program);
 

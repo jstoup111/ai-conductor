@@ -8,6 +8,7 @@ import {
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
   appendRemediationCaseOutbox,
+  classifyBuildReviewRecurrence,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -40,6 +41,14 @@ export interface ReconcileRemediationCasesInput {
     readonly caseRefs: readonly string[];
     readonly lapId: string;
   };
+  /**
+   * Coordinator-selected repair provenance. Exact source ownership still wins;
+   * this data is used only for an unbound act with no exact owner.
+   */
+  readonly provenanceByCaseRef?: ReadonlyMap<string, {
+    readonly selectedCaseId: string;
+    readonly candidateCaseIds: readonly string[];
+  }>;
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -183,7 +192,7 @@ function isDurableId(value: string): boolean {
 }
 
 function effectFor(caseRow: RemediationCaseRow, id: string | undefined): RemediationCaseEffect {
-  if (caseRow.disposition === 'reject' || caseRow.disposition === 'escalate') return { kind: 'none' };
+  if (caseRow.disposition === 'reject' || caseRow.disposition === 'advisory' || caseRow.disposition === 'escalate') return { kind: 'none' };
   return caseRow.disposition === 'act'
     ? { id: id!, kind: 'action', status: 'reserved' }
     : { id: id!, kind: 'deferral', status: 'reserved' };
@@ -269,10 +278,31 @@ function reconcileState(
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
       }
-      const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'escalate'
+      const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'advisory' || caseRow.disposition === 'escalate'
         ? undefined
         : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
+      const exactRecurrence = caseRow.disposition === 'act'
+        ? classifyBuildReviewRecurrence(state.cases, sources.map((source) => source.sourceId), caseRow.distinctFrom ?? [])
+        : undefined;
+      const provenance = exactRecurrence !== undefined && exactRecurrence.recurrenceOf.length === 0 && exactRecurrence.distinctFrom.length === 0
+        ? input.provenanceByCaseRef?.get(caseRow.caseRef)
+        : undefined;
+      const provenanceDistinctFrom = provenance === undefined
+        ? []
+        : (caseRow.distinctFrom ?? []).filter((entry) => provenance.candidateCaseIds.includes(entry.caseId));
+      const selectedProvenanceIsDistinct = provenance !== undefined &&
+        provenanceDistinctFrom.some((entry) => entry.caseId === provenance.selectedCaseId);
+      const recurrenceOf = exactRecurrence === undefined
+        ? []
+        : exactRecurrence.recurrenceOf.length > 0
+          ? exactRecurrence.recurrenceOf
+          : provenance !== undefined && !selectedProvenanceIsDistinct
+            ? [provenance.selectedCaseId]
+            : [];
+      const distinctFrom = exactRecurrence === undefined
+        ? []
+        : [...exactRecurrence.distinctFrom, ...provenanceDistinctFrom];
       claimed.add(caseId);
       caseIdsByRef.set(caseRow.caseRef, caseId);
       additions.push({
@@ -282,6 +312,7 @@ function reconcileState(
         priority: caseRow.priority,
         rationale: caseRow.rationale,
         confidence: caseRow.confidence,
+        ...(caseRow.adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity: caseRow.adjudicatedSeverity }),
         resolution: 'open',
         sources: sources.map((source) => ({
           sourceId: source.sourceId,
@@ -290,6 +321,8 @@ function reconcileState(
         })),
         effect: effectFor(caseRow, effectId),
         ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
+        ...(recurrenceOf.length === 0 ? {} : { recurrenceOf }),
+        ...(distinctFrom.length === 0 ? {} : { distinctFrom }),
       });
       continue;
     }

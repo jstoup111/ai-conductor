@@ -51,8 +51,8 @@ type Region = { path: string; startLine: number; endLine: number; contentHash: s
 async function review(cited: Region | readonly Region[], declaredDependencies: string[] = [], evidenceLocations?: string[]) {
   const regions = Array.isArray(cited) ? cited : [cited as Region];
   const root = await fixture();
-  const payload = { kind: 'custom-findings', version: 'v1', findings: [{
-    concernId: 'concern.one', summary: 'A concern.',
+  const payload = { kind: 'custom-findings', version: 'v2', findings: [{
+    concernId: 'concern.one', summary: 'A concern.', severity: 'minor',
     evidenceLocations: evidenceLocations ?? regions.map((region) => `${region.path}:${region.startLine}`),
     sourceRegions: regions.map((region) => ({ ...region, display: 'cited region' })),
   }] };

@@ -26,7 +26,8 @@ import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock }
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance } from './remediation-caps.js';
+import { readState } from './state.js';
 import { loadConfig } from './config.js';
 import {
   isUnreadableKickbackGate,
@@ -37,12 +38,8 @@ import { renderKickbackBudgetView, withPendingGrowth } from './kickback-budget-v
 import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
-import { parseChildId, type ChildId } from './child-context.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
+import { type ChildId } from './child-context.js';
+import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
 import {
   readDaemonTimeline,
   type DaemonExitRecord,
@@ -63,15 +60,6 @@ function installedConductorRoot(): string {
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
-
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  // `daemon status` is an observation boundary. The envelope reader only uses
-  // readFile, and these fail loudly if that promise is ever broken.
-  mkdir: async () => { throw new Error('daemon status is read-only'); },
-  writeFile: async () => { throw new Error('daemon status is read-only'); },
-  rename: async () => { throw new Error('daemon status is read-only'); },
-};
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -701,28 +689,39 @@ async function renderAgreementLine(repoPath: string, out: (line: string) => void
   out(`  attribution agreement: ${pct}% (n=${summary.sampleCount})`);
 }
 
-type ActiveChildStatusLabel = { child: ChildId; total: number };
+type ActiveChildStatusLabel = {
+  child: ChildId;
+  total: number;
+  taskIds: readonly string[];
+};
+
+type StackTopologyStatus = { cause: SliceTopologyUnavailableCause };
 
 /**
  * Resolve the one child whose ledger/status is visible. The cursor remains the
- * authority: envelope data supplies only the human-facing denominator.
+ * authority; sealed plan topology supplies the presentation scope.
  */
 async function activeChildStatusLabel(
   featureRoot: string,
   slug: string,
-): Promise<ActiveChildStatusLabel | undefined> {
+): Promise<ActiveChildStatusLabel | StackTopologyStatus | undefined> {
+  const topology = await loadSliceTopology(featureRoot, slug);
+  if (topology.kind === 'unavailable') {
+    return await hasDurableChildState(featureRoot, slug) === true ? { cause: topology.cause } : undefined;
+  }
+  if (topology.kind !== 'sliced' || topology.positions.length < 2) return undefined;
   const cursor = await resolveActiveChild(featureRoot, slug);
   if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return undefined;
-  const envelope = await readCoverageBindingEnvelope(featureRoot, coverageBindingFilesystem);
-  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
-    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-      .map((position) => parseChildId(position))
-      .filter((position): position is ChildId => position !== undefined)
-    : [];
   const execution = resolveExecutionChild(cursor, slug);
   if (!('target' in execution)) return undefined;
   const executionChild = execution.target.child;
-  return positions.length >= 2 ? { child: executionChild, total: positions.length } : undefined;
+  return {
+    child: executionChild,
+    total: topology.positions.length,
+    taskIds: Object.entries(topology.sliceMembership.taskSlices)
+      .filter(([, position]) => position === executionChild)
+      .map(([taskId]) => taskId),
+  };
 }
 
 /**
@@ -743,9 +742,12 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
   for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
-    const activeChild = await activeChildStatusLabel(featureRoot, feature.slug);
+    const stackStatus = await activeChildStatusLabel(featureRoot, feature.slug);
+    const activeChild = stackStatus && 'child' in stackStatus ? stackStatus : undefined;
     const child = activeChild?.child;
-    const childStatus = activeChild ? ` child ${activeChild.child}/${activeChild.total}` : '';
+    const childStatus = activeChild
+      ? ` child ${activeChild.child}/${activeChild.total}${activeChild.taskIds.length ? `; tasks ${activeChild.taskIds.join(', ')}` : ''}`
+      : stackStatus && 'cause' in stackStatus ? ` stack unavailable: ${stackStatus.cause}` : '';
     const config = await loadConfig(featureRoot);
     const ledger = await readKickbackLedger(featureRoot, child);
     try {
@@ -782,17 +784,20 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       );
     }
     const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
+    const state = await readState(join(featureRoot, '.pipeline', 'conduct-state.json'));
+    const tier = state.ok ? state.value.complexity_tier : undefined;
     const renderBudget = (gate: 'build_review' | 'prd_audit' | 'architecture_review_as_built') => {
       const entry = ledger.gates[gate];
       const pendingLaps = gate === 'build_review' ? 0 : ledger.pendingRepair?.charges[gate]?.laps ?? 0;
       const view = renderKickbackBudgetView(
         entry,
         gate,
-        kickbackBudgetFallbackLimit(gate, budgetConfig),
+        kickbackBudgetFallbackLimit(gate, budgetConfig, tier),
         undefined,
         undefined,
         child,
         pendingLaps,
+        gate === 'build_review' ? undefined : resolveRemediationLapAllowance(gate, budgetConfig, tier),
       ).replace(/\n/g, ' | ');
       const allowance = entry?.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);

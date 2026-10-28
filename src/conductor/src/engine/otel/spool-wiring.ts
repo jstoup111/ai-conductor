@@ -1,7 +1,7 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { readdir, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { resolveMainRepoRootStrict } from '../park-marker.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
 import { SpoolDrainer } from './spool-drainer.js';

@@ -6,9 +6,10 @@ import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_operation_failed', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
   'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
   'provider_attempt_started',
   'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
@@ -262,7 +263,7 @@ describe('TerminalRenderer', () => {
   it('renders typed credential-park progress without a lifecycle restart', async () => {
     await renderer.handle({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'unusable',
       elapsedSeconds: 3,
@@ -280,7 +281,7 @@ describe('TerminalRenderer', () => {
     async (parserRejection) => {
       const rawDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
       await renderer.handle({
-        type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+        type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login',
         readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure',
         probeFailureKind: 'unparseable-output', parserRejection, nextDisposition: 'trial-required',
       });
@@ -293,7 +294,7 @@ describe('TerminalRenderer', () => {
   it('renders only closed credential-park progress fields', async () => {
     const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
     await renderer.handle({
-      type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+      type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login',
       readiness: 'unusable', elapsedSeconds: 60, nextProbeDelaySeconds: 30,
       degradation: 'credential-failure',
     });
@@ -406,9 +407,9 @@ describe('TerminalRenderer', () => {
   });
 
   it('does not summarize non-renderable branchless events', async () => {
-    await renderer.handle({ type: 'coverage_binding_judged' } as ConductorEvent);
+    await renderer.handle({ type: 'otel_spool_drop' } as ConductorEvent);
 
-    expect(stream.output()).not.toContain('coverage_binding_judged');
+    expect(stream.output()).not.toContain('otel_spool_drop');
   });
 
   it('renders active build stalls with their elapsed time and selected action', async () => {

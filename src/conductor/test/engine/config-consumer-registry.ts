@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, pi-per-step-model-selection-via-wrapped-providers:task:5
+// Covers: task:1, task:2, task:4, task:8, pi-per-step-model-selection-via-wrapped-providers:task:5
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -94,12 +94,15 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
   ]),
   build_review: consumer(RESOLVED_CONFIG),
-  coverage_binding: none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
   feature_applicability: consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
   ]),
   prd_audit: consumer([REMEDIATION_CAPS, PRD_AUDIT_ROUTING]),
+  plan_review: consumer([
+    'src/conductor/src/engine/engineer-cli.ts',
+    STEP_RUNNERS,
+  ]),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
   ci_watch: consumer(DAEMON_CLI),
   build_progress_halt: consumer(DAEMON_CLI),
@@ -225,7 +228,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'stacked_prs.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     STEP_RUNNERS,
-    'src/conductor/src/engine/child-cursor.ts',
+    'src/conductor/src/engine/slice-topology.ts',
   ]),
   'stacked_prs.max_slices': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
@@ -270,6 +273,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.min_severity': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.timeout_seconds': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.skill': consumer(RESOLVED_CONFIG),
@@ -284,12 +288,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.min_severity': consumer(RESOLVED_CONFIG),
 
-  // ── coverage_binding ────────────────────────────────────────────────────
-  // Retired judge keys: validated for compatibility, read by nothing.
-  'coverage_binding.judge': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
-  'coverage_binding.judge.enabled': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
-  'coverage_binding.judge.batch_size': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
   'feature_applicability.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
@@ -308,6 +308,12 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'prd_audit.max_appended_tasks': consumer(REMEDIATION_CAPS),
   'prd_audit.max_appended_ratio': consumer(REMEDIATION_CAPS),
   'prd_audit.halt_on_any_plan_gap': consumer(PRD_AUDIT_ROUTING),
+
+  // ── plan_review ──────────────────────────────────────────────────────────
+  'plan_review.max_prompt_chars': consumer([
+    'src/conductor/src/engine/engineer-cli.ts',
+    STEP_RUNNERS,
+  ]),
 
   // ── architecture_review_as_built ──────────────────────────────────────────
   // `checks.<check>.tiers` is the as-built policy's own input; the remediation

@@ -24,6 +24,9 @@ content with `git show <mergeBase>:<path>`). Those worktree reads are part of th
 Do not infer facts from a maker transcript, task-status narrative, a prior review, or state outside
 this projection and its referenced content.
 
+Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review
+identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.
+
 ## Judgement
 
 Judge whether the changed diff introduces a concrete, exploitable defect in the closed vocabulary
@@ -71,3 +74,7 @@ introduces the exposure, never to an unchanged sink; cite unchanged sinks only i
 Do not report style concerns, broad architectural preferences, dependency-version changes, or
 vulnerable-component claims: they are outside this vocabulary. Do not report a hypothetical risk
 without concrete changed-hunk evidence that makes it exploitable.
+
+Every reported finding requires `severity`: use `critical` for security exposure, data loss, or
+wrong results; `major` for a real defect or broken invariant; `minor` for a real low-impact quality
+issue; and `nit` only for cosmetic naming or style.

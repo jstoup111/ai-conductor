@@ -9,12 +9,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 
 const execFile = promisify(execFileCallback);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -61,7 +61,7 @@ export async function createSweepRepository(prefix: string, cleanup: string[]): 
 
 /** Seal a stacked feature whose positions are 1..n, the last being the leaf. */
 export async function sealStack(repo: string, positions: readonly number[] = [1, 2, 3]): Promise<void> {
-  await writeCoverageBindingEnvelope(repo, {
+  const fixture = {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
@@ -72,7 +72,29 @@ export async function sealStack(repo: string, positions: readonly number[] = [1,
       titles: positions.map((position) => position === positions.at(-1) ? 'Leaf' : `Child ${position}`),
     },
     storyOwnership: Object.fromEntries(positions.map((position) => [`S${position}`, position])),
-  }, envelopeFilesystem);
+  };
+  const original = (await execFile('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repo })).stdout.trim();
+  const branches = (await execFile('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat'], { cwd: repo })).stdout
+    .split('\n')
+    .filter((branch) => branch === 'feat/daemon-demo' || /^feat\/c\d+\/demo$/.test(branch));
+  const closedRefs = (await execFile('git', ['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/closed/'], { cwd: repo })).stdout
+    .split('\n')
+    .filter(Boolean);
+  // Every commit in the fixture's graph must carry the same replacement-tree
+  // topology. Replacing only ref tips changes the parent tree of an ordinary
+  // child commit, making the fixture docs look like a child-owned deletion.
+  const revisions = [...new Set(['main', ...branches, ...closedRefs])];
+  const commits = (await execFile('git', ['--no-replace-objects', 'rev-list', ...revisions], { cwd: repo })).stdout
+    .split('\n')
+    .filter(Boolean);
+  try {
+    for (const commit of commits) {
+      await execFile('git', ['checkout', '-q', '--detach', commit], { cwd: repo });
+      await writeSliceTopologyFixture(repo, fixture, envelopeFilesystem);
+    }
+  } finally {
+    await execFile('git', ['checkout', '-q', original], { cwd: repo });
+  }
 }
 
 export async function removeAll(cleanup: string[]): Promise<void> {

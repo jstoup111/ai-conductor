@@ -558,7 +558,7 @@ describe('engine/resolved-config', () => {
           min_confidence: 0.8,
         },
       });
-      expect(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.contract.output.version : undefined).toBe('v1');
+      expect(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.contract.output.version : undefined).toBe('v2');
       expect(Object.isFrozen(resolved.catalog)).toBe(true);
       expect(Object.isFrozen(testQuality)).toBe(true);
       expect(Object.isFrozen(testQuality?.policy)).toBe(true);
@@ -723,7 +723,6 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_RETRIES.finish).toBeGreaterThanOrEqual(6);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
       expect(DEFAULT_STEP_RETRIES.test_suite).toBe(1);
-      expect(DEFAULT_STEP_RETRIES.coverage_binding).toBeGreaterThanOrEqual(2);
     });
 
     it('fallbacks are sensible', () => {

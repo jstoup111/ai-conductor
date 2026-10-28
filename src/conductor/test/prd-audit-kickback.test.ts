@@ -281,6 +281,7 @@ async function createPrdAuditRemediationFixture(input: {
   criteria: string[];
   config?: Record<string, unknown>;
   priorLaps?: number;
+  complexityTier?: 'S' | 'M' | 'L';
   priorGrowthAdded?: number;
   existingTask?: boolean;
   repairTaskId?: string;
@@ -803,6 +804,12 @@ async function runRefusalReworkRun(input: {
   reports: string[];
   decisionId?: string;
   lapCap?: number;
+  /** Seed durable PRD-audit laps before the run starts. */
+  priorLaps?: number;
+  /** Start unrecorded and have the interactive complexity step record tier L. */
+  recordTierLAtComplexity?: boolean;
+  /** Seed the feature's recorded complexity tier before the SHIP-tail run. */
+  complexityTier?: 'S' | 'M' | 'L';
   mode?: 'auto' | 'default';
   manualTestFail?: boolean;
   asBuilt?: 'approved' | 'blocked-remediable';
@@ -861,7 +868,7 @@ async function runRefusalReworkRun(input: {
 
   const state: Record<string, unknown> = {
     feature_desc: 'feature',
-    complexity_tier: 'M',
+    ...(input.recordTierLAtComplexity ? {} : { complexity_tier: input.complexityTier ?? 'M' }),
     track: 'product',
     run_started_at: Date.now() - 1_000,
     rebase: 'done',
@@ -872,15 +879,36 @@ async function runRefusalReworkRun(input: {
     state[step.name] = 'done';
   }
   await writeState(statePath, state as ConductState);
+  if (input.priorLaps !== undefined) {
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
+          resolvedBefore: 0, laps: input.priorLaps,
+        },
+      },
+    });
+  }
 
   const calls: StepName[] = [];
   const retryReasons: string[] = [];
   const kickbacks: Array<{ from: string; to: string; count: number; evidence?: string }> = [];
   let prdAuditDispatches = 0;
   const runner: StepRunner = {
-    run: async (step, _state, options) => {
+    run: async (step, _stepState, options) => {
       calls.push(step);
       if (step === 'manual_test') {
+        if (input.recordTierLAtComplexity) {
+          // Execute the engine-owned complexity transition after run() has
+          // installed its pre-loop state, without broadening this fixture to
+          // re-run the complete BUILD path.
+          const internal = conductor as unknown as {
+            haltState: ConductState;
+            runComplexityStep: (state: ConductState) => Promise<unknown>;
+          };
+          await internal.runComplexityStep(internal.haltState);
+        }
         await writeFile(
           join(root, '.pipeline', 'manual-test-results.md'),
           input.manualTestFail
@@ -963,7 +991,14 @@ async function runRefusalReworkRun(input: {
     verifyArtifacts: true,
     maxRetries: 1,
     fromStep: 'manual_test',
-    config: { prd_audit: { max_remediation_laps: input.lapCap ?? 1 } } as never,
+    config: {
+      prd_audit: input.lapCap === undefined
+        ? (input.recordTierLAtComplexity || input.complexityTier !== undefined ? {} : { max_remediation_laps: 1 })
+        : { max_remediation_laps: input.lapCap },
+    } as never,
+    ...(input.recordTierLAtComplexity
+      ? { onComplexityAssessment: async () => 'L' as const }
+      : {}),
     gh: async () => ({ stdout: 'operator@example.test\n' }),
   });
   if (input.remediationMode === 'stale') {
@@ -1209,6 +1244,40 @@ describe('prd_audit kickback', () => {
     const ledger = await readKickbackLedger(fixture.root);
     expect(ledger.gates.prd_audit).toMatchObject({ laps: 1 });
     expect(ledger.growth).toMatchObject({ added: 1, byGate: { prd_audit: 1 } });
+  });
+
+  it('dispatches BUILD against the tier-L prd_audit allowance recorded at complexity', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      priorLaps: 3,
+      recordTierLAtComplexity: true,
+    });
+
+    expect(fixture.calls).toContain('build');
+    expect((await readKickbackLedger(fixture.root)).gates.prd_audit).toMatchObject({ laps: 4 });
+  });
+
+  it('admits refusal rework against the tier-L allowance recorded at complexity', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      priorLaps: 3,
+      recordTierLAtComplexity: true,
+    });
+
+    expect(fixture.calls).toContain('build');
+  });
+
+  // Covers: task:7
+  it('names the current tier-S default allowance when refusal rework is spent', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      priorLaps: 2,
+      complexityTier: 'S',
+    });
+
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Refusal rework halted: prd_audit laps allowance exhausted.\nKickback budget (prd_audit): 2/2 consumed; 0 remaining — tier S allowance 2 (default)',
+    );
   });
 
   it('appends and charges every task in an admitted multi-task refusal gap', async () => {
@@ -1728,7 +1797,13 @@ describe('prd_audit kickback', () => {
     report: string,
     stories: string,
     setup?: (root: string) => Promise<void>,
-    options?: { root?: string; mode?: 'auto' | 'default'; daemon?: boolean },
+    options?: {
+      root?: string;
+      mode?: 'auto' | 'default';
+      daemon?: boolean;
+      complexityTier?: 'S' | 'M' | 'L';
+      configureConductor?: (conductor: Conductor) => void;
+    },
   ) {
     const root = options?.root ?? await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
     if (!options?.root) dirs.push(root);
@@ -1743,7 +1818,7 @@ describe('prd_audit kickback', () => {
 
     const state: Record<string, unknown> = {
       feature_desc: 'feature',
-      complexity_tier: 'M',
+      complexity_tier: options?.complexityTier ?? 'M',
       track: 'product',
       run_started_at: Date.now() - 1_000,
       rebase: 'done',
@@ -1820,6 +1895,7 @@ describe('prd_audit kickback', () => {
       fromStep: 'manual_test',
       gh: async () => ({ stdout: 'operator@example.test\n' }),
     });
+    options?.configureConductor?.(conductor);
     await conductor.run();
     return { root, calls, gateBlocks, state: await readState(statePath) };
   }
@@ -2708,7 +2784,7 @@ describe('prd_audit kickback', () => {
     expect(
       remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0),
     ).toBe(1);
-    expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(1);
+    expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(3);
     expect(
       remediationLapCapForGate(
         'architecture_review_as_built',
@@ -2723,7 +2799,7 @@ describe('prd_audit kickback', () => {
     const root = await mkdtemp(join(tmpdir(), 'join-round-cap-'));
     dirs.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
-    expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(2);
+    expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(3);
     await writeKickbackLedger(root, {
       version: 1,
       gates: {
@@ -2734,6 +2810,47 @@ describe('prd_audit kickback', () => {
       },
     } as never);
     expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(6);
+  });
+
+  it('dispatches a fourth validation-join remediation round for an unconfigured tier-L feature', async () => {
+    let remediationDispatches = 0;
+    const fixture = await runGroupedPrdAudit(
+      [
+        '**PRD:** present',
+        '',
+        '## Verdict Table',
+        '| Criterion | Grade | Plan task | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| S2.1 | FIXABLE | 1 | Fixture repair is still required. |',
+      ].join('\n'),
+      storiesWithCriterion('Happy Path'),
+      undefined,
+      {
+        complexityTier: 'L',
+        configureConductor: (conductor) => {
+          (conductor as unknown as {
+            planRemediation: () => Promise<{
+              kind: 'route' | 'halt';
+              target?: StepName;
+              hint?: string;
+              evidence?: string;
+              detail?: string;
+              haltClass?: string;
+            }>;
+          }).planRemediation = async () => {
+            remediationDispatches++;
+            return remediationDispatches === 4
+              ? { kind: 'halt', detail: 'sentinel: fourth remediation round reached', haltClass: 'mechanical' }
+              : { kind: 'route', target: 'manual_test', hint: 'fixture retry', evidence: 'fixture evidence' };
+          };
+        },
+      },
+    );
+
+    expect(remediationDispatches).toBe(4);
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'sentinel: fourth remediation round reached',
+    );
   });
 
   it('halts a malformed PRD-audit report before remediation can append its task', async () => {

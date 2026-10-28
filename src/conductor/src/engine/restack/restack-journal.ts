@@ -4,7 +4,8 @@ import { hostname } from 'node:os';
 import type { ChildId } from '../child-context.js';
 import { parseChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import { parseRevalidationQueueRecord, parseRoundId, type RevalidationQueueEntry, type RoundId } from '../routing/route-types.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalChildStatusTransition,
@@ -45,6 +46,21 @@ export interface RestackJournalRewrite {
   readonly to: CommitSha;
 }
 
+export interface RestackJournalRouted {
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly routeOld: CommitSha;
+  readonly markerOld: CommitSha;
+  readonly queueOld?: CommitSha;
+  readonly routeNew?: CommitSha;
+  readonly queueNew?: CommitSha;
+}
+
+export interface RestackJournalInvalidation {
+  readonly child: ChildId;
+  readonly gates: readonly string[];
+}
+
 /** The immutable data supplied by the planner before a journal is created. */
 export interface RestackJournalDraft {
   readonly opId: RestackOpId;
@@ -57,6 +73,18 @@ export interface RestackJournalDraft {
   readonly comparisonCommits?: readonly CommitSha[];
   /** Repair origins whose cascade counters are charged when this journal applies. */
   readonly originatingChildren?: readonly ChildId[];
+  /** Routing refs and precomputed replacement blobs owned by this restack. */
+  readonly routed?: RestackJournalRouted;
+  /** Closed-child gates invalidated by the restack. */
+  readonly invalidation?: readonly RestackJournalInvalidation[];
+  /** Whether this operation owns a revalidation queue compare-and-swap. */
+  readonly queueTracked?: true;
+  /** Queue ref value captured before this operation starts; omitted for an absent ref. */
+  readonly queueOld?: CommitSha;
+  /** Precomputed replacement queue blob, written only by the applied transaction. */
+  readonly queueNew?: CommitSha;
+  /** Complete queue entries produced by the transition. */
+  readonly queueInvalidation?: readonly RevalidationQueueEntry[];
   readonly dirtyPaths: readonly string[];
   readonly refs: readonly RestackJournalRef[];
   readonly ranges: readonly ChildRange[];
@@ -86,6 +114,18 @@ export type CreateRestackJournalResult =
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 export type UpdateRestackChildStatusResult =
+  | { readonly kind: 'updated'; readonly journal: StoredRestackJournal }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
+export interface RoutedApplyPlan {
+  readonly routeNew?: CommitSha;
+  readonly queueNew?: CommitSha;
+  readonly invalidation: readonly RestackJournalInvalidation[];
+  readonly queueInvalidation?: readonly RevalidationQueueEntry[];
+}
+
+export type RecordRoutedApplyPlanResult =
   | { readonly kind: 'updated'; readonly journal: StoredRestackJournal }
   | { readonly kind: 'stale' }
   | { readonly kind: 'unavailable'; readonly detail: string };
@@ -199,6 +239,48 @@ function parseRewrites(value: unknown): readonly RestackJournalRewrite[] | undef
   return rewrites;
 }
 
+function parseRouted(value: unknown): RestackJournalRouted | undefined {
+  if (!isRecord(value) || typeof value.roundId !== 'string' || typeof value.host !== 'number'
+    || typeof value.routeOld !== 'string' || typeof value.markerOld !== 'string') return undefined;
+  const roundId = parseRoundId(value.roundId);
+  const host = parseChildId(value.host);
+  const routeOld = parseCommitSha(value.routeOld);
+  const markerOld = parseCommitSha(value.markerOld);
+  const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
+  const routeNew = value.routeNew === undefined ? undefined : typeof value.routeNew === 'string' ? parseCommitSha(value.routeNew) : undefined;
+  const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
+  if (!roundId || !host || !routeOld || !markerOld
+    || (value.queueOld !== undefined && !queueOld)
+    || (value.routeNew !== undefined && !routeNew)
+    || (value.queueNew !== undefined && !queueNew)) return undefined;
+  return {
+    roundId,
+    host,
+    routeOld,
+    markerOld,
+    ...(queueOld === undefined ? {} : { queueOld }),
+    ...(routeNew === undefined ? {} : { routeNew }),
+    ...(queueNew === undefined ? {} : { queueNew }),
+  };
+}
+
+function parseInvalidation(value: unknown): readonly RestackJournalInvalidation[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const invalidation: RestackJournalInvalidation[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.child !== 'number' || !isStringArray(item.gates)) return undefined;
+    const child = parseChildId(item.child);
+    if (!child) return undefined;
+    invalidation.push({ child, gates: [...item.gates] });
+  }
+  return invalidation;
+}
+
+function parseQueueInvalidation(value: unknown): readonly RevalidationQueueEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return parseRevalidationQueueRecord(JSON.stringify({ generation: 0, entries: value, outbox: [] }))?.entries;
+}
+
 function parseJournal(value: unknown): RestackJournal | undefined {
   if (!isRecord(value) || typeof value.opId !== 'string' || value.opId === '' || typeof value.state !== 'string') return undefined;
   const cause = parseCause(value.cause);
@@ -217,11 +299,22 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     : Array.isArray(value.originatingChildren)
       ? value.originatingChildren.map((child) => typeof child === 'number' ? parseChildId(child) : undefined)
       : undefined;
+  const routed = value.routed === undefined ? undefined : parseRouted(value.routed);
+  const invalidation = value.invalidation === undefined ? undefined : parseInvalidation(value.invalidation);
+  const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
+  const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
+  const queueInvalidation = value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
   if (!cause || (value.followOnCause !== undefined && !followOnCause) || !journalStates.has(value.state as JournalState) || !owner || !committer
     || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children
     || (value.newDefault !== undefined && !newDefault)
     || (value.comparisonCommits !== undefined && (!comparisonCommits || comparisonCommits.some((commit) => !commit)))
-    || (value.originatingChildren !== undefined && (!originatingChildren || originatingChildren.some((child) => !child)))) return undefined;
+    || (value.originatingChildren !== undefined && (!originatingChildren || originatingChildren.some((child) => !child)))
+    || (value.routed !== undefined && !routed)
+    || (value.invalidation !== undefined && !invalidation)
+    || (value.queueTracked !== undefined && value.queueTracked !== true)
+    || (value.queueOld !== undefined && !queueOld)
+    || (value.queueNew !== undefined && !queueNew)
+    || (value.queueInvalidation !== undefined && !queueInvalidation)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     cause,
@@ -230,6 +323,12 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(newDefault === undefined ? {} : { newDefault }),
     ...(comparisonCommits === undefined ? {} : { comparisonCommits: comparisonCommits as CommitSha[] }),
     ...(originatingChildren === undefined ? {} : { originatingChildren: originatingChildren as ChildId[] }),
+    ...(routed === undefined ? {} : { routed }),
+    ...(invalidation === undefined ? {} : { invalidation }),
+    ...(value.queueTracked === true ? { queueTracked: true as const } : {}),
+    ...(queueOld === undefined ? {} : { queueOld }),
+    ...(queueNew === undefined ? {} : { queueNew }),
+    ...(queueInvalidation === undefined ? {} : { queueInvalidation }),
     dirtyPaths: [...value.dirtyPaths],
     refs,
     ranges,
@@ -320,6 +419,41 @@ export async function createRestackJournal(
     return { kind: 'refused', reason: 'restack-outstanding' };
   }
   return { kind: 'unavailable', detail: 'Git unavailable while creating restack journal' };
+}
+
+/** Persist the routed refs' precomputed replacement blobs before applying them. */
+export async function recordRoutedApplyPlan(
+  worktree: string,
+  previous: StoredRestackJournal,
+  plan: RoutedApplyPlan,
+  dependencies: RestackJournalDependencies = {},
+): Promise<RecordRoutedApplyPlanResult> {
+  if (previous.journal.state !== 'synced' || (plan.routeNew !== undefined && !previous.journal.routed)) return { kind: 'stale' };
+  const journal: RestackJournal = {
+    ...previous.journal,
+    ...(previous.journal.routed === undefined ? {} : {
+      routed: {
+        ...previous.journal.routed,
+        ...(plan.routeNew === undefined ? {} : { routeNew: plan.routeNew }),
+        ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
+      },
+    }),
+    ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
+    invalidation: plan.invalidation.map((entry) => ({ ...entry, gates: [...entry.gates] })),
+    ...(plan.queueInvalidation === undefined ? {} : {
+      queueInvalidation: plan.queueInvalidation.map((entry) => ({
+        ...entry,
+        gates: [...entry.gates],
+        replay: { ...entry.replay },
+      })),
+    }),
+  };
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const blob = await writeRestackJournalBlob(worktree, journal, { git });
+  const updated = await runGit(git, ['update-ref', journalRefFor(previous.slug), blob, previous.blob]);
+  if (!updated) return { kind: 'unavailable', detail: 'Git unavailable while recording routed apply plan' };
+  if (updated.exitCode !== 0) return { kind: 'stale' };
+  return { kind: 'updated', journal: { slug: previous.slug, blob, journal } };
 }
 
 /** Lines for a caller-owned update-ref transaction. The old blob is always pinned. */

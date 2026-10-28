@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import {
@@ -62,7 +62,7 @@ async function fixture() {
   await git(['checkout', '-q', 'feat/c1/demo']);
   const operatorX = await commit('operator change', 'operator.txt', 'X\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -126,14 +126,15 @@ describe('restack-outstanding refusals (real local Git)', () => {
     expect(winnerJournal).toMatchObject({ kind: 'journal', journal: { opId: winnerOpId, state: 'planned' } });
 
     releaseLoser.resolve();
-    await expect(cliResume).resolves.toEqual({ kind: 'halted' });
+    await expect(cliResume).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     expect(cliSeen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'restack-outstanding' })]);
     // No journal of its own, no ref moved, no halt-record commit, and the
-    // winner's journal is untouched (same blob, same state).
+    // winner's journal is untouched (same blob, same state). The losing
+    // preflight is still a durable terminal stop for its own run.
     expect(await subject.refs()).toBe(refsWhileWinnerOwnsJournal);
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toEqual(winnerJournal);
-    expect(await haltMarkerExists(subject.repo)).toBe(false);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('feature-repair restack halted');
     await expect(subject.git(['show', 'HEAD:.docs/halted/demo.md'])).rejects.toBeDefined();
 
     releaseWinner.resolve();
@@ -143,7 +144,7 @@ describe('restack-outstanding refusals (real local Git)', () => {
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(subject.operatorX);
     expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
     await expect(subject.git(['rev-parse', '--verify', journalRef])).rejects.toBeDefined();
-    expect(await haltMarkerExists(subject.repo)).toBe(false);
+    expect(await haltMarkerExists(subject.repo)).toBe(true);
   });
 
   // Covers: S9.13, task:rem-prd-audit-R1-2, task:rem-prd-audit-R3

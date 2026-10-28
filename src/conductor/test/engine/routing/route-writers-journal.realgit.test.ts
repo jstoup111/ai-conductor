@@ -1,15 +1,19 @@
-// Covers: task:201
+// Covers: task:201, task:2
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import { writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
+import * as routeRecordStore from '../../../src/engine/routing/route-record-store.js';
+import { routingFenceOpen, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { rejectedPinRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
-import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import { journalRefFor, readRestackJournal, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const roundId = parseRoundId('r1')!;
 const branchRef = 'refs/heads/feat/c1/demo';
@@ -64,6 +68,22 @@ async function writeMovedJournal(subject: Awaited<ReturnType<typeof fixture>>): 
   await subject.git(['update-ref', journalRefFor('demo'), blob]);
 }
 
+async function writeSyncedJournal(subject: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+  const journal: RestackJournal = {
+    opId: 'op-1' as RestackOpId,
+    cause: 'feature-repair',
+    committer: { name: 'Routing', email: 'routing@example.invalid', date: '2030-01-01T00:00:00Z' },
+    dirtyPaths: [],
+    refs: [],
+    ranges: [],
+    children: [],
+    state: 'synced',
+    owner: { host: 'test-host', pid: 1, processStartTime: '1' },
+  };
+  const blob = await writeRestackJournalBlob(subject.repo, journal);
+  await subject.git(['update-ref', journalRefFor('demo'), blob]);
+}
+
 function allOps(subject: Awaited<ReturnType<typeof fixture>>) {
   return [
     { kind: 'update-branch' as const, ref: branchRef, old: subject.old, new: subject.next },
@@ -73,6 +93,69 @@ function allOps(subject: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('routing transaction journal fence (real local Git)', () => {
+  it('opens a synced journal fence only for its owning operation', async () => {
+    const subject = await fixture();
+    try {
+      await writeSyncedJournal(subject);
+      const journal = await readRestackJournal(subject.repo, 'demo');
+
+      expect([
+        routingFenceOpen(journal, 'op-1' as RestackOpId),
+        routingFenceOpen(journal, 'op-2' as RestackOpId),
+        routingFenceOpen(journal),
+      ]).toEqual([true, false, false]);
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a synced journal marker update without changing routing refs', async () => {
+    const subject = await fixture();
+    try {
+      await writeSyncedJournal(subject);
+      const result = await writeRoutingTransaction(subject.repo, 'demo', [
+        { kind: 'update-marker', old: subject.old, new: subject.next },
+      ]);
+
+      expect({
+        result,
+        route: await refAt(subject.git, routeRecordRefFor('demo', roundId)),
+        marker: await refAt(subject.git, repairMarkerRefFor('demo')),
+      }).toEqual({ result: { kind: 'restack-journal-open' }, route: subject.old, marker: subject.old });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses host entry through the synced shared journal fence without writing routing refs', async () => {
+    const subject = await fixture();
+    const fence = vi.spyOn(routeRecordStore, 'routingFenceOpen');
+    try {
+      await writeSyncedJournal(subject);
+      const result = await enterHostRegion({
+        worktree: subject.repo,
+        slug: 'demo',
+        roundId,
+        host: parseChildId(1)!,
+        emitter: new ConductorEventEmitter(),
+        git: subject.git,
+      });
+
+      expect({
+        result,
+        calls: fence.mock.calls.length,
+        route: await refAt(subject.git, routeRecordRefFor('demo', roundId)),
+      }).toEqual({
+        result: { kind: 'refused', detail: 'restack journal is non-terminal' },
+        calls: 1,
+        route: subject.old,
+      });
+    } finally {
+      fence.mockRestore();
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
   it('refuses each new ref operation while a moved journal keeps every prior ref intact', async () => {
     for (const operation of ['update-branch', 'create-pin', 'update-marker'] as const) {
       const subject = await fixture();

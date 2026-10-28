@@ -16,7 +16,7 @@ import {
 import {
   BUILT_IN_PROVIDERS,
   type BuiltInProviderDescriptor,
-} from '../execution/provider-catalog.js';
+} from '../engine/provider-catalog.js';
 import {
   STEP_RATIONALE,
   MODEL_FREE_ENGINE_STEPS,
@@ -239,10 +239,6 @@ const DISPLAY_NAME_OVERRIDES: Partial<Record<StepName, string>> = {
   acceptance_specs: 'writing-system-tests',
   architecture_review_as_built: 'architecture-review --as-built',
   conflict_check: 'conflict-check',
-  // The engine gate and its separately documented auxiliary judge deliberately
-  // have different table identities; otherwise the generated table cannot
-  // represent both without a duplicate row name.
-  coverage_binding: 'coverage_binding (engine gate)',
 };
 
 export function stepDisplayName(step: StepName): string {

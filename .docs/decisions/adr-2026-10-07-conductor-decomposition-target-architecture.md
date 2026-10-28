@@ -102,6 +102,8 @@ Governing decisions this ADR must respect:
      existing SCC. Any unlisted value edge that runs against the layer order, or that closes a
      cycle, fails. Removing an edge deletes a file, so parallel
      lanes never conflict on a shared baseline.
+
+     > **Amended 2026-10-26 (operator-directed):** The allowlist is one sorted, committed text file, `src/conductor/test/structural/layer-allowlist.txt`, with one `from -> to` line per allowed edge (paths relative to `src/conductor/src/`), not a directory of one empty file per edge. Per-edge file names had to be percent-encoded, which produced 277 unreadable paths and forced `build_review`'s repository-path grammar to accept `%` (#3430, now reverted). Removing an edge deletes a line. Two lanes that delete adjacent lines can conflict textually; the operator accepted that as a rare conflict resolved by keeping both deletions. The shrink-only rule is unchanged.
    - The check fails when an allowlisted edge no longer exists, so the allowlist can only shrink.
    - There is **no file-size, line-count or net-growth budget** on `conductor.ts` or
      `class Conductor`, whether as a central baseline or as a diff-relative check. This is an
