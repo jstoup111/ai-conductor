@@ -1,5 +1,5 @@
 import type { ChildId } from '../child-context.js';
-import { leafBranchFor } from '../feature-branch-identity.js';
+import { featureSlugOf, leafBranchFor, parseFeatureRef } from '../feature-branch-identity.js';
 import { writeHaltMarker, type HaltMarkerWriteResult } from '../halt-marker.js';
 import {
   confirmUntrackedRebasePaths,
@@ -8,6 +8,11 @@ import {
   type GitRunner,
 } from '../rebase.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+} from '../feature-ownership.js';
 import { resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
@@ -35,6 +40,9 @@ export interface RestackMoveRef {
 
 export interface RestackMoveDependencies {
   readonly git?: GitRunner;
+  /** Feature and base supplied by the executor's pre-replay ownership check. */
+  readonly featureSlug?: string;
+  readonly ownershipBaseRef?: string;
   /** Number of retries after the first lock failure. */
   readonly retries?: number;
   readonly sleep?: () => Promise<void>;
@@ -79,6 +87,36 @@ async function runGit(git: GitRunner, args: string[], input?: string) {
 
 function paths(output: string): string[] {
   return output.split('\n').map((path) => path.trim()).filter(Boolean);
+}
+
+async function resolveOwnershipBaseRef(git: GitRunner): Promise<string | undefined> {
+  const remoteHead = await runGit(git, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD']);
+  if (remoteHead?.exitCode === 0 && remoteHead.stdout.trim()) return remoteHead.stdout.trim();
+  for (const candidate of ['refs/heads/main', 'refs/heads/master', 'refs/heads/trunk']) {
+    const exists = await runGit(git, ['rev-parse', '-q', '--verify', candidate]);
+    if (exists?.exitCode === 0 && exists.stdout.trim()) return candidate;
+  }
+  return undefined;
+}
+
+async function ownershipRefusal(
+  worktree: string,
+  checkedOut: RefName,
+  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBaseRef'>,
+): Promise<string | undefined> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const slug = dependencies.featureSlug ?? featureSlugOf(parseFeatureRef(checkedOut));
+  if (slug === undefined) return undefined;
+  const baseRef = dependencies.ownershipBaseRef ?? await resolveOwnershipBaseRef(git);
+  if (baseRef === undefined) return undefined;
+  try {
+    const ownership = await computeFeatureOwnership(worktreeFeatureOwnershipSource(worktree, git), slug, baseRef);
+    return ownership.kind === 'malformed' || ownership.kind === 'drift'
+      ? renderOwnershipRefusal(ownership)
+      : undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 function worktreeRecords(output: string): { readonly path: string; readonly branch?: string }[] {
@@ -181,6 +219,9 @@ export async function checkRestackPreMove(
       detail: untracked[0] ?? (dryRun?.stderr.trim() || 'read-tree dry run failed'),
     };
   }
+
+  const drift = await ownershipRefusal(worktree, checkedOut, dependencies);
+  if (drift !== undefined) return { kind: 'seal-refused', detail: drift };
 
   try {
     const seal = await verifyProtectedArtifactSeal({

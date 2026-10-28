@@ -34,6 +34,11 @@ import {
 } from './artifacts.js';
 import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
 import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+} from './feature-ownership.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
 import {
@@ -1317,6 +1322,14 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
   }
 }
 
+/** Resolve ownership from the same active-plan → plan → feature-desc order as artifacts. */
+async function resolveFeatureOwnershipSlug(projectRoot: string): Promise<string | undefined> {
+  const featureDesc = await resolveFeatureDesc(projectRoot);
+  const context = await buildArtifactResolutionContext(projectRoot, { featureDesc });
+  const planPath = context.activePlanPath ?? await resolveFeaturePlanPath(projectRoot, featureDesc);
+  return planPath ? basename(planPath, '.md') : featureDesc;
+}
+
 /** Resolve review inputs.  Ordinary callers resolve only for a document
  * delta; preservation additionally requests the full declared set to bind
  * authority against later input edits. */
@@ -1501,6 +1514,17 @@ export async function performRebase(
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
   // authority first so a stale or tampered seal fails before history changes.
   // Repositories predating seals retain the legacy rebase behavior.
+  const ownershipSlug = await resolveFeatureOwnershipSlug(projectRoot);
+  if (ownershipSlug) {
+    const ownership = await computeFeatureOwnership(
+      worktreeFeatureOwnershipSource(projectRoot, git),
+      ownershipSlug,
+      base.ref,
+    );
+    if (ownership.kind === 'malformed' || ownership.kind === 'drift') {
+      throw new ProtectedArtifactSealRejection(renderOwnershipRefusal(ownership));
+    }
+  }
   try {
     await access(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
     const verdict = await verifyProtectedArtifactSeal({
