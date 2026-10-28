@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:8, task:1
+// Covers: task:3, task:5, task:6, task:8, task:1
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({

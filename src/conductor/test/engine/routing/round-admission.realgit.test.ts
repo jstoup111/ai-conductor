@@ -1,4 +1,4 @@
-// Covers: tasks:40,41,42,101,102, task:3, task:rem-as-built-W13
+// Covers: tasks:40,41,42,101,102, task:1, task:3, task:8, task:12, task:rem-as-built-W13
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
