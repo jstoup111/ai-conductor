@@ -2106,7 +2106,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       generateId: sequentialIds('semantic-window'), emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case repeat case-live' });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case repeat case-live;/) });
     expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
       expect.objectContaining({ type: 'remediation_semantic_repeat_halt', caseId: 'case-live' }),
     ]);
@@ -2402,7 +2402,10 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-durable' });
+    expect(result).toMatchObject({
+      ok: false,
+      detail: `semantic remediation case regression case-durable; accept with ai-conductor build-review accept --feature feature --lap lap-1 --finding ${findingId} --rationale "<why>", or fix the finding in the feature worktree`,
+    });
     // The halt precedes reconciliation, so nothing is reconciled or reserved.
     expect(events.map((event) => event.type)).toEqual([
       'remediation_adjudication_started',
@@ -2411,6 +2414,31 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
     }));
+  });
+
+  it('names a fix, not an unavailable accept, for a regression on a stacked child', async () => {
+    const root = await projectRoot();
+    const child = parseChildId(2)!;
+    await seedCases(new RemediationCaseStore(root, feature, { child }), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    const repeated: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable' }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, async () => repeated), child });
+
+    expect(result).toMatchObject({
+      ok: false,
+      detail: 'semantic remediation case regression case-durable; fix the finding on child 2 (build-review accept has no --child yet)',
+    });
   });
 
   // Covers: task:11, task:rem-prd-audit-R11a
@@ -2453,7 +2481,10 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, async () => repeated), emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case repeat case-repeat' });
+    expect(result).toMatchObject({
+      ok: false,
+      detail: 'semantic remediation case repeat case-repeat; resolve with ai-conductor build-review resolve-case --feature feature --case case-repeat --rationale "<why>"',
+    });
     const after = await store.read();
     if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
     expect(after.state.cases.find((record) => record.id === sibling.id)).toEqual(siblingBefore);
@@ -2486,7 +2517,7 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     // The prior lap's source is never live now. Treating that as acceptance
     // finalized the halt as an unexplained source-coverage gap.
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-prior-lap' });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case regression case-prior-lap;/) });
     expect(events.map((event) => event.type)).toEqual([
       'remediation_adjudication_started',
       'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
@@ -2516,7 +2547,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-never-built' });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case regression case-never-built;/) });
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-never-built', effectId: 'effect-never-built', reason: 'regressed',
     }));
@@ -2720,7 +2751,7 @@ describe('coordinateBuildReviewAdjudication', () => {
         ...actionJudgement(), cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'R' }],
       })), generateId: sequentialIds('must-not-reserve'),
     });
-    expect(regression).toEqual({ ok: false, detail: 'semantic remediation case regression R' });
+    expect(regression).toEqual({ ok: false, detail: expect.stringMatching(/^semantic remediation case regression R;/) });
     await expect(regressionStore.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'R' })] } });
 
     const root = await projectRoot();
@@ -2799,7 +2830,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-regressed' });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case regression case-regressed;/) });
     const after = await store.read();
     if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
     // No reservation survives the halt, so the next lap is not blocked by an
@@ -2869,7 +2900,7 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(judge).toHaveBeenCalledTimes(1);
     expect(contexts[0]).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })] });
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-mixed-outcomes' });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case regression case-mixed-outcomes;/) });
   });
 
   it('keeps a merged source live while its applied action case remains open', async () => {
@@ -3212,7 +3243,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, async () => repeated), emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case repeat case-durable' });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case repeat case-durable;/) });
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'already-attempted',
     }));

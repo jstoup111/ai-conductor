@@ -41,18 +41,18 @@ As an operator, I want introducing Astra support to preserve the model choices o
 
 #### Happy Path
 
-- Given no explicit Astra selection, when existing Claude and Codex steps are resolved at each complexity tier, then model and effort choices match the pre-feature policies.
+- Given no explicit Astra selection, when existing Claude and Codex steps are resolved at each complexity tier, then model and effort choices match the built-in policies, where each Codex model is a floor that a dispatching process may upgrade to a newer listed model of the same tier (codex-steps-resolve-the-newest-catalog-model-per-t Story 1).
 - Given Astra is explicitly selected and ordinary retries are enabled, when later attempts are resolved, then the model remains Astra and effort follows the existing bounded retry policy.
 
 #### Negative Paths
 
-- Given Sol is selected by an unchanged default and retries occur, when automatic model escalation runs, then it does not introduce Astra; unchanged default fallback behavior likewise never selects Astra without explicit configuration.
+- Given Sol is selected by an unchanged default and retries occur, when automatic model escalation runs, then Astra is reached only at attempt 3 or later as the escalation rung above Sol; default fallback behavior never selects Astra without explicit configuration.
 - Given Astra is selected with escalation disabled or effort already at its maximum, when work retries, then disabled escalation preserves both settings and maximum effort is not exceeded.
 
 ### Done When
 
 - [ ] Regression evidence compares default resolution across both providers and all supported tiers with the unchanged policy expectations.
-- [ ] Retry evidence captures Astra retention, effort bounds, disabled escalation, and absence of implicit Astra promotion from Sol.
+- [ ] Retry evidence captures Astra retention, effort bounds, disabled escalation, and Astra reached from Sol only as the top escalation rung, never by fallback.
 
 ## Story 3: Recover from Astra unavailability using declared fallback
 

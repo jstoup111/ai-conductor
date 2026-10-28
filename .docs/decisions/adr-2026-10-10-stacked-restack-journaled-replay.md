@@ -623,6 +623,16 @@ Operator decisions (2026-10-10):
 > allowance is the separate `routedRepairCredit` (`adr-2026-10-12-routed-whole-feature-repair`
 > decisions 12 and 13).
 
+> **Amended 2026-10-28 by #3472:** The bound is no longer one constant. Each originating child's
+> allowance resolves at each use from the feature's complexity tier: Small 3, Medium 3, Large 8.
+> An unrecorded tier is treated as Medium. `stacked_prs.max_restack_cascades` may override it with
+> a positive integer (every tier) or an `{S, M, L}` map. A per-child `limits` entry written to the
+> `cascades` ref by an operator raise still takes precedence. The cap halt, `kickback-budget
+> inspect` and `daemon status` name the tier, the allowance and its source. Wherever another ADR
+> cites `MAX_RESTACK_CASCADES_PER_CHILD` as a bound (for example the re-validation bound in
+> `adr-2026-10-12-routed-whole-feature-repair`), it now means this resolved per-child allowance,
+> which is still finite.
+
 11. **Force pushes lease against the remote tip the engine expects.**
     - **Recording.** `executeRemoteGit` is the single chokepoint for engine pushes. On every
       successful push to a feature branch, plain or forced, from the branch's creation onward, it

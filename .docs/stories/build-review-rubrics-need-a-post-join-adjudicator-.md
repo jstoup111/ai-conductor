@@ -193,8 +193,8 @@ semantic non-progress stops instead of cycling.
 
 #### Negative Paths
 
-- Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case with any disposition other than an admitted `refute` row, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved.
-- Given an action case not resolved by refutation was marked resolved, holds no operator acceptance and no operator resolution, and the judgement binds a reappearing finding to that case by `existingCaseId` with disposition `act`, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback.
+- Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case with any disposition other than an admitted `refute` row, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved, and the halt names its recovery: `ai-conductor build-review resolve-case --feature <slug> [--child <k>] --case <case> --rationale "<why>"`.
+- Given an action case not resolved by refutation was marked resolved, holds no operator acceptance and no operator resolution, and the judgement binds a reappearing finding to that case by `existingCaseId` with disposition `act`, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback, and the halt names its recovery: on a flat feature, `ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"` for each re-raised finding, or a fix; on a stacked child, a fix on that child, because `accept` has no `--child`.
 
 ### Done When
 
