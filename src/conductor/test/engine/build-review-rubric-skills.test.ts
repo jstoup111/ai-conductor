@@ -1,7 +1,8 @@
-// Covers: task:12, task:rem-prd-audit-10-2
+// Covers: task:4, task:12, task:rem-prd-audit-10-2
 import { createHash } from 'node:crypto';
 import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -12,7 +13,10 @@ import {
   parseBuildReviewFindingAnchor,
   parseBuildReviewFindingConcernKind,
 } from '../../src/engine/build-review-domain.js';
-import { renderRubricContractShape } from '../../src/engine/build-review-contract.js';
+import {
+  BUILD_REVIEW_SEVERITY_DEFINITIONS,
+  renderRubricContractShape,
+} from '../../src/engine/build-review-contract.js';
 import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
@@ -20,6 +24,7 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 const skill = fileURLToPath(new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url));
 const securitySkill = fileURLToPath(new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url));
 const implementationQualitySkill = fileURLToPath(new URL('../../../../skills/build-review-implementation-quality/SKILL.md', import.meta.url));
+const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const retired = ['build-review-scope', 'build-review-root-cause', 'build-review-completeness'];
 const hash = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
 
@@ -58,6 +63,21 @@ function judgedSecurityFixture(path: string, concernKind?: string, evidenceLocat
 }
 
 describe('build-review rubric skill catalog', () => {
+  it.each(Object.entries(BUILD_REVIEW_RUBRIC_REGISTRY).map(([rubric, descriptor]) => [
+    rubric,
+    descriptor.skillName,
+  ] as const))(
+    'keeps %s (%s) free of engine-owned severity definitions',
+    async (_rubric, skillName) => {
+      const content = await readFile(join(repositoryRoot, 'skills', skillName, 'SKILL.md'), 'utf8');
+
+      for (const meaning of Object.values(BUILD_REVIEW_SEVERITY_DEFINITIONS)) {
+        expect(content).not.toContain(meaning);
+      }
+      expect(content).not.toMatch(/`(?:critical|major|minor|nit)`/);
+    },
+  );
+
   it('pins implementation-quality defect and non-finding payload fixtures at changed hunks', () => {
     const kinds = ['duplication', 'excess-complexity', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match'] as const;
     const failFixtures = kinds.map((concernKind, index) => {
