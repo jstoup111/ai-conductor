@@ -15640,6 +15640,12 @@ export class Conductor {
                   return;
                 }
                 if (consumed.kind === 'stalled') {
+                  const stalled = await reconcileRounds(this.projectRoot, slug);
+                  if (stalled.kind === 'stalled') {
+                    const stall = await recordRoundStall(this.projectRoot, slug, stalled, this.events);
+                    await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
+                    return;
+                  }
                   await this.haltChildRegionRefusal(consumed.detail ?? 'routing queue consumption stalled', 'mechanical');
                   return;
                 }

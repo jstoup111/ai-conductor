@@ -189,11 +189,12 @@ describe('stack preflight routing', () => {
     }
   });
 
-  it('uses the resume-exit continuation result and never restacks its pre-exit cursor', async () => {
+  it('returns repaired after a terminal resume-exit leaf return and never restacks its pre-exit cursor', async () => {
     const subject = await fixture();
     const child = parseChildId(1)!;
     const roundId = parseRoundId('r1')!;
     const continuation = vi.fn(async () => ({ kind: 'continued' as const, next: { kind: 'leaf-returned' as const, roundId } }));
+    const terminalRoutingState = vi.fn(async () => false);
     let reconciliations = 0;
 
     await expect(runStackPreflight({
@@ -207,7 +208,8 @@ describe('stack preflight routing', () => {
           : { kind: 'leaf-returned' as const, roundId };
       },
       exitRoutedHostAndReconcile: continuation,
-    })).resolves.toEqual({ kind: 'clear' });
+      routedRoundOpen: terminalRoutingState,
+    })).resolves.toEqual({ kind: 'repaired' });
 
     expect(continuation).toHaveBeenCalledWith(expect.objectContaining({
       roundId,
@@ -215,6 +217,7 @@ describe('stack preflight routing', () => {
       skipBuiltCompareAndSwap: true,
       persist: expect.any(Function),
     }));
+    expect(terminalRoutingState).toHaveBeenCalledOnce();
     expect(runRestack).not.toHaveBeenCalled();
   });
 

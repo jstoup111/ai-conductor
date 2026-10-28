@@ -282,11 +282,26 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       const consumed = await consumeLowestQueued(options.worktree, options.slug, { git: options.git });
       if (consumed.kind === 'admitted') return { kind: 'navigate-host', roundId: consumed.roundId, host: consumed.host };
       if (consumed.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
-      if (consumed.kind === 'stalled') return { kind: 'halted', detail: consumed.detail ?? 'routing queue consumption stalled', haltClass: 'mechanical' };
+      if (consumed.kind === 'stalled') {
+        // Queue admission discovered an unreadable durable round. Reconcile
+        // again to preserve the round set and bounded escalation on the
+        // existing routing-stall event spine.
+        const stalled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
+        if (stalled.kind === 'stalled') {
+          const recorded = await recordRoundStall(options.worktree, options.slug, stalled, options.events);
+          return { kind: 'halted', ...recorded };
+        }
+        return { kind: 'halted', detail: consumed.detail ?? 'routing queue consumption stalled', haltClass: 'mechanical' };
+      }
       // The exit continuation has already reconciled the durable return. Do
       // not reuse the pre-exit cursor and manufacture a feature-repair
       // restack from the former host's closure.
-      if (reconciled.kind === 'leaf-returned' && consumed.kind === 'none') return { kind: 'clear' };
+      if (reconciled.kind === 'leaf-returned' && consumed.kind === 'none') {
+        if (!await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+          return { kind: 'repaired' };
+        }
+        return { kind: 'unavailable', detail: 'routing leaf return did not reach a terminal routing state' };
+      }
     }
     if (reconciled.kind === 'navigate-leaf-to-build' || reconciled.kind === 'navigate-host') return reconciled;
   }
