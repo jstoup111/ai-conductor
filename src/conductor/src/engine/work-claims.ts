@@ -1,3 +1,28 @@
+/** A claim belongs either to a dispatched feature or to a pooled PR repair. */
+export type WorkClaim =
+  | { readonly kind: 'feature'; readonly slug: string }
+  | { readonly kind: 'repair'; readonly prUrl: string };
+
+/** Preserve feature slugs while reserving `repair:` for pooled repair claims. */
+export function encodeClaimKey(claim: WorkClaim): string {
+  return claim.kind === 'feature' ? claim.slug : `repair:${claim.prUrl}`;
+}
+
+/** Parse the one durable claim-key representation used by the daemon pool. */
+export function decodeClaimKey(key: string): WorkClaim {
+  return key.startsWith('repair:')
+    ? { kind: 'repair', prUrl: key.slice('repair:'.length) }
+    : { kind: 'feature', slug: key };
+}
+
+/** Project a mixed claim inventory onto the feature slugs its consumers own. */
+export function featureSlugs(claims: Pick<WorkClaims, 'list'>): readonly string[] {
+  return claims.list().flatMap((key) => {
+    const claim = decodeClaimKey(key);
+    return claim.kind === 'feature' ? [claim.slug] : [];
+  });
+}
+
 export interface WorkClaims {
   claim(slug: string): boolean;
   release(slug: string): void;

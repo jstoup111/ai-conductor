@@ -3,14 +3,17 @@ import type {
   RemediationCaseRow,
   RemediationCaseSourceRow,
 } from './remediation-case-artifact.js';
+import { isBelowSeverityThreshold } from './build-review-domain.js';
 
 export type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 
 export type RemediationCaseGraphRejection =
+  | 'invalid-case-keys'
   | 'duplicate-current-source'
   | 'unknown-source'
   | 'duplicate-source'
   | 'missing-source'
+  | 'operator-owned-carried-source-outcome'
   | 'unknown-case-reference'
   | 'duplicate-case-reference'
   | 'contradictory-case-disposition'
@@ -19,6 +22,8 @@ export type RemediationCaseGraphRejection =
   | 'invalid-action-effect'
   | 'invalid-deferral-effect'
   | 'invalid-reject-effect'
+  | 'operator-owned-acceptance'
+  | 'operator-owned-resolution'
   | 'refute-without-binding'
   | 'refutation-without-refuted-assertion'
   | 'refutation-confidence-not-high'
@@ -35,12 +40,23 @@ export type RemediationCaseGraphRejection =
   | 'missing-admission-task'
   | 'duplicate-admission-task'
   | 'unknown-admission-task'
-  | 'missing-admission-rationale';
+  | 'missing-admission-rationale'
+  | 'invalid-advisory-threshold';
 
 /** Engine-supplied identities; provider output cannot expand either set. */
 export interface RemediationCaseValidationReferences {
   readonly existingCaseIds?: readonly string[];
   readonly admittedTaskIds?: readonly string[];
+  /** Every plan task id, including tasks whose body was not supplied. */
+  readonly planTaskIds?: readonly string[];
+  /** Rubric identity for each frozen source supplied to the judgement. */
+  readonly sourceRubrics?: Readonly<Record<string, string>>;
+  /** Reviewer-owned severity for each frozen source supplied to the judgement. */
+  readonly sourceReviewerSeverities?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  /** Resolved non-nit thresholds declared by the operator, keyed by rubric. */
+  readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  /** Engine-selected exact owners and repair provenance candidates for each proposed row. */
+  readonly allowedDistinctFromCaseIdsByCaseRef?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface ProposedRemediationCase {
@@ -57,9 +73,19 @@ export interface RemediationCaseGraph {
   readonly cases: readonly ProposedRemediationCase[];
 }
 
+export interface UnknownAdmissionTaskRejection {
+  readonly ok: false;
+  readonly reason: 'unknown-admission-task';
+  /** Known plan ids whose full task bodies were not supplied to the provider. */
+  readonly indexOnlyTaskIds: readonly string[];
+  /** Admitted ids that do not occur in the plan index. */
+  readonly absentTaskIds: readonly string[];
+}
+
 export type ValidateRemediationCaseGraphResult =
   | { readonly ok: true; readonly graph: RemediationCaseGraph }
-  | { readonly ok: false; readonly reason: RemediationCaseGraphRejection };
+  | UnknownAdmissionTaskRejection
+  | { readonly ok: false; readonly reason: Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> };
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -69,17 +95,51 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
+function hasValidDistinctFrom(caseRow: RemediationCaseRow): boolean {
+  if (caseRow.distinctFrom === undefined) return true;
+  return Array.isArray(caseRow.distinctFrom) && caseRow.distinctFrom.length > 0 && caseRow.distinctFrom.length <= 128 &&
+    caseRow.distinctFrom.every((entry) => {
+      const candidate = entry as unknown as Record<string, unknown>;
+      return typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+        Object.keys(candidate).length === 2 && Object.hasOwn(candidate, 'caseId') && Object.hasOwn(candidate, 'reason') &&
+        typeof candidate.caseId === 'string' && candidate.caseId.length > 0 && candidate.caseId.length <= 256 &&
+        typeof candidate.reason === 'string' && candidate.reason.length > 0 && candidate.reason.length <= 8_000;
+    });
+}
+
+function retainAllowedDistinctFrom(
+  caseRow: RemediationCaseRow,
+  references: RemediationCaseValidationReferences,
+): RemediationCaseRow {
+  const allowed = references.allowedDistinctFromCaseIdsByCaseRef?.[caseRow.caseRef];
+  if (allowed === undefined || caseRow.distinctFrom === undefined) return caseRow;
+  const allowedCaseIds = new Set(allowed);
+  const distinctFrom = caseRow.distinctFrom.filter((entry) => allowedCaseIds.has(entry.caseId));
+  if (distinctFrom.length > 0) return { ...caseRow, distinctFrom };
+  const { distinctFrom: _distinctFrom, ...withoutDistinctFrom } = caseRow;
+  return withoutDistinctFrom;
+}
+
 function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
   const candidate = caseRow as unknown as Record<string, unknown>;
   const effect = caseRow.effect as unknown as Record<string, unknown>;
   return ['caseId', 'effectId', 'id'].some((key) => hasOwn(candidate, key) || hasOwn(effect, key));
 }
 
+function providerOperatorOwnedState(caseRow: RemediationCaseRow):
+  | 'operator-owned-acceptance'
+  | 'operator-owned-resolution'
+  | undefined {
+  const candidate = caseRow as unknown as Record<string, unknown>;
+  if (hasOwn(candidate, 'operatorAcceptance')) return 'operator-owned-acceptance';
+  if (hasOwn(candidate, 'operatorResolution')) return 'operator-owned-resolution';
+  return undefined;
+}
+
 function validateEffect(
   caseRow: RemediationCaseRow,
   judgement: RemediationCaseJudgement,
-  references: RemediationCaseValidationReferences,
-): RemediationCaseGraphRejection | undefined {
+): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> | undefined {
   const effect = caseRow.effect as unknown as Record<string, unknown>;
   if (caseRow.disposition === 'act') {
     if (effect.kind !== 'action' || effect.route !== 'build' || !Array.isArray(effect.tasks) || effect.tasks.length === 0) {
@@ -91,7 +151,6 @@ function validateEffect(
       && nonEmptyString((task as Record<string, unknown>).title)
     ))) return 'invalid-action-effect';
     if (judgement.mode !== 'case-v2') return undefined;
-    const admittedTaskIds = new Set(references.admittedTaskIds ?? []);
     for (const task of effect.tasks) {
       const admission = task as Record<string, unknown>;
       if (!Array.isArray(admission.admittedTaskIds) || admission.admittedTaskIds.length === 0) {
@@ -100,7 +159,7 @@ function validateEffect(
       if (!nonEmptyString(admission.admissionRationale)) return 'missing-admission-rationale';
       const seen = new Set<string>();
       for (const taskId of admission.admittedTaskIds) {
-        if (!nonEmptyString(taskId) || !admittedTaskIds.has(taskId)) return 'unknown-admission-task';
+        if (!nonEmptyString(taskId)) return 'invalid-action-effect';
         if (seen.has(taskId)) return 'duplicate-admission-task';
         seen.add(taskId);
       }
@@ -123,7 +182,43 @@ function validateEffect(
       ? undefined
       : effect.kind === 'deferral' ? 'invalid-deferral-effect' : 'invalid-refute-effect';
   }
+  if (caseRow.disposition === 'advisory') return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
   return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
+}
+
+function unknownAdmissionTaskIds(
+  judgement: Extract<RemediationCaseJudgement, { readonly mode: 'case-v2' }>,
+  references: RemediationCaseValidationReferences,
+): Pick<UnknownAdmissionTaskRejection, 'indexOnlyTaskIds' | 'absentTaskIds'> | undefined {
+  const admittedTaskIds = new Set(references.admittedTaskIds ?? []);
+  const planTaskIds = new Set(references.planTaskIds ?? []);
+  const indexOnlyTaskIds: string[] = [];
+  const absentTaskIds: string[] = [];
+  const indexOnlySeen = new Set<string>();
+  const absentSeen = new Set<string>();
+
+  for (const caseRow of judgement.cases) {
+    if (caseRow.disposition !== 'act') continue;
+    if (caseRow.effect.kind !== 'action') continue;
+    for (const task of caseRow.effect.tasks) {
+      if (!('admittedTaskIds' in task)) continue;
+      const taskIds = task.admittedTaskIds;
+      for (const taskId of taskIds) {
+        if (!nonEmptyString(taskId) || admittedTaskIds.has(taskId)) continue;
+        if (planTaskIds.has(taskId)) {
+          if (!indexOnlySeen.has(taskId)) indexOnlyTaskIds.push(taskId);
+          indexOnlySeen.add(taskId);
+        } else {
+          if (!absentSeen.has(taskId)) absentTaskIds.push(taskId);
+          absentSeen.add(taskId);
+        }
+      }
+    }
+  }
+
+  return indexOnlyTaskIds.length > 0 || absentTaskIds.length > 0
+    ? { indexOnlyTaskIds, absentTaskIds }
+    : undefined;
 }
 
 function outcomeMatchesDisposition(
@@ -134,14 +229,26 @@ function outcomeMatchesDisposition(
     || (outcome === 'acted' && disposition === 'act')
     || (outcome === 'deferred' && disposition === 'defer')
     || (outcome === 'rejected' && disposition === 'reject')
-    || (outcome === 'refuted' && disposition === 'refute');
+    || (outcome === 'refuted' && disposition === 'refute')
+    || (outcome === 'advisory' && disposition === 'advisory');
+}
+
+function advisoryThresholdForSource(
+  sourceId: string,
+  references: RemediationCaseValidationReferences,
+): import('./build-review-domain.js').BuildReviewSeverity | undefined {
+  const rubric = references.sourceRubrics?.[sourceId];
+  const threshold = rubric === undefined
+    ? undefined
+    : references.declaredSeverityThresholds?.[rubric];
+  return threshold !== 'nit' ? threshold : undefined;
 }
 
 function validateConsistency(
   currentSources: ReadonlySet<string>,
   casesByRef: ReadonlyMap<string, RemediationCaseRow>,
   judgement: Extract<RemediationCaseJudgement, { readonly mode: 'case-v2' }>,
-): RemediationCaseGraphRejection | undefined {
+): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> | undefined {
   const consistency = judgement.consistency as unknown as Record<string, unknown>;
   if (!nonEmptyString(consistency.rationale)) return 'missing-consistency-rationale';
   // The consistency record names the *implicated* sources and cases
@@ -182,12 +289,18 @@ export function validateRemediationCaseGraph(
 
   const casesByRef = new Map<string, RemediationCaseRow>();
   for (const caseRow of judgement.cases) {
+    if (!hasValidDistinctFrom(caseRow)) return { ok: false, reason: 'invalid-case-keys' };
     if (hasProviderDurableId(caseRow)) return { ok: false, reason: 'provider-durable-id' };
+    const operatorState = providerOperatorOwnedState(caseRow);
+    if (operatorState) return { ok: false, reason: operatorState };
     if (judgement.mode === 'case-v2' && caseRow.existingCaseId &&
       !(references.existingCaseIds ?? []).includes(caseRow.existingCaseId)) {
       return { ok: false, reason: 'unknown-existing-case' };
     }
-    const effectError = validateEffect(caseRow, judgement, references);
+    if (caseRow.disposition === 'advisory' && !nonEmptyString(caseRow.rationale)) {
+      return { ok: false, reason: 'invalid-advisory-threshold' };
+    }
+    const effectError = validateEffect(caseRow, judgement);
     if (effectError) return { ok: false, reason: effectError };
 
     const prior = casesByRef.get(caseRow.caseRef);
@@ -202,9 +315,15 @@ export function validateRemediationCaseGraph(
     casesByRef.set(caseRow.caseRef, caseRow);
   }
 
+  if (judgement.mode === 'case-v2') {
+    const unknownAdmissions = unknownAdmissionTaskIds(judgement, references);
+    if (unknownAdmissions) return { ok: false, reason: 'unknown-admission-task', ...unknownAdmissions };
+  }
+
   const sourcesByCase = new Map<string, RemediationCaseSourceRow[]>();
   const seenSources = new Set<string>();
   for (const source of judgement.sourceOutcomes) {
+    if (source.outcome === 'carried') return { ok: false, reason: 'operator-owned-carried-source-outcome' };
     if (!currentSources.has(source.sourceId)) return { ok: false, reason: 'unknown-source' };
     if (seenSources.has(source.sourceId)) return { ok: false, reason: 'duplicate-source' };
 
@@ -216,6 +335,16 @@ export function validateRemediationCaseGraph(
       }
     } else if (!outcomeMatchesDisposition(source.outcome, caseRow.disposition)) {
       return { ok: false, reason: 'contradictory-source-outcome' };
+    }
+    if (caseRow.disposition === 'advisory') {
+      const threshold = advisoryThresholdForSource(source.sourceId, references);
+      const reviewerSeverity = references.sourceReviewerSeverities?.[source.sourceId];
+      if (threshold === undefined || caseRow.adjudicatedSeverity === undefined ||
+        reviewerSeverity === undefined ||
+        !isBelowSeverityThreshold(caseRow.adjudicatedSeverity, threshold) ||
+        isBelowSeverityThreshold(reviewerSeverity, caseRow.adjudicatedSeverity)) {
+        return { ok: false, reason: 'invalid-advisory-threshold' };
+      }
     }
 
     seenSources.add(source.sourceId);
@@ -240,9 +369,39 @@ export function validateRemediationCaseGraph(
     graph: {
       sourceOutcomes: judgement.sourceOutcomes,
       cases: judgement.cases.map((caseRow) => ({
-        case: caseRow,
+        case: retainAllowedDistinctFrom(caseRow, references),
         sources: sourcesByCase.get(caseRow.caseRef)!,
       })),
     },
   };
+}
+
+export type IndexOnlyAdmissionClassification =
+  | { readonly kind: 'index-only'; readonly taskIds: readonly string[] }
+  | { readonly kind: 'other'; readonly reason: RemediationCaseGraphRejection };
+
+/**
+ * Determines whether adding index-only task bodies is the sole defect in a
+ * rejected case-v2 graph. Re-validation, rather than reason-text parsing,
+ * preserves the validator's ordinary failure ordering.
+ */
+export function classifyIndexOnlyAdmission(
+  currentSourceIds: readonly string[],
+  judgement: RemediationCaseJudgement,
+  references: RemediationCaseValidationReferences,
+  rejection: UnknownAdmissionTaskRejection,
+): IndexOnlyAdmissionClassification {
+  if (rejection.absentTaskIds.length > 0 || rejection.indexOnlyTaskIds.length === 0) {
+    return { kind: 'other', reason: 'unknown-admission-task' };
+  }
+  const revalidation = validateRemediationCaseGraph(currentSourceIds, judgement, {
+    ...references,
+    admittedTaskIds: [...new Set([
+      ...(references.admittedTaskIds ?? []),
+      ...rejection.indexOnlyTaskIds,
+    ])],
+  });
+  return revalidation.ok
+    ? { kind: 'index-only', taskIds: rejection.indexOnlyTaskIds }
+    : { kind: 'other', reason: revalidation.reason };
 }

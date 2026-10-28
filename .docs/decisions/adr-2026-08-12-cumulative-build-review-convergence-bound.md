@@ -85,6 +85,10 @@ in-flight feature mid-run when this ships gets a fresh cumulative budget, never 
 
 > **Amended 2026-10-07 by #2942:** The cumulative field lives on the active child's ledger entry; every caller passes the child (`adr-2026-10-07-per-child-build-region` decision 10).
 
+> **Amended 2026-10-12 by #2944:** A routed or re-validation pass on a stacked child also has one
+> `routedRepairCredit {roundId}`. It is a separate allowance in that child's ledger and never counts
+> as a convergence refund (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
+
 ### D2 — A PASS clears the gate's cumulative count
 
 Today nothing clears a gate entry on PASS; the only clear is `clearKickbackLedger` at

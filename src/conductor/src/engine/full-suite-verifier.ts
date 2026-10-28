@@ -17,6 +17,7 @@ import {
   readFullSuiteEvidence,
   sanitizeFullSuiteDiagnosticOutput,
   writeFullSuiteEvidence,
+  writeFullSuiteOutputLog,
   type FullSuiteEvidenceUnusableReason,
   type FullSuiteFailEvidence,
   type FullSuiteFailureReason,
@@ -756,13 +757,10 @@ async function quarantineClaimedStaleLock(
     };
   }
   if (currentOwner !== expectedOwner || currentClaim !== serializedClaim) {
+    // Another caller recovered the stale lock first and now owns a fresh one.
+    // Losing that race is contention, not a fault: wait on the new owner.
     const released = await removeOwnedRecoveryClaim(lockPath, serializedClaim);
-    return {
-      status: 'FAILED',
-      message: released.ok
-        ? 'Full-suite lock ownership changed during stale recovery'
-        : released.message,
-    };
+    return released.ok ? { status: 'OCCUPIED' } : { status: 'FAILED', message: released.message };
   }
 
   const quarantine = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
@@ -1315,7 +1313,13 @@ export class FullSuiteVerifier {
             freshness,
           };
         }
-        const message = buildExecutionFailureMessage(execution, secretValues);
+        let outputLog: { path: string; bytes: number } | undefined;
+        try {
+          outputLog = await writeFullSuiteOutputLog(projectRoot, execution, secretValues, activeChild?.child);
+        } catch {
+          // The bounded message below still carries the head and tail.
+        }
+        const message = buildExecutionFailureMessage(execution, secretValues, outputLog);
         return {
           status: 'FAILED',
           reason: execution.reason,
@@ -1889,9 +1893,19 @@ function buildPreflightFailEvidence(
 function buildExecutionFailureMessage(
   execution: FullSuiteExecutionFailure,
   secretValues: readonly string[],
+  outputLog?: { path: string; bytes: number },
 ): string {
+  // The excerpt below shows one stream, head and tail only. When that drops
+  // output, lead with the full log's location so every failure gets fixed in
+  // one round instead of one visible batch per test_suite retry.
+  const omitsOutput = (execution.stderr !== '' && execution.stdout !== '')
+    || Buffer.byteLength(execution.stderr || execution.stdout, 'utf8') > FULL_SUITE_DIAGNOSTIC_LIMIT;
+  const logNote = outputLog !== undefined && omitsOutput
+    ? `Excerpt only. The complete suite output (${outputLog.bytes} bytes, every failure) is in ${outputLog.path}; read it and fix every failure it lists before rerunning.\n`
+    : '';
   if (execution.entries === undefined || execution.failedEntryIndex === undefined) {
-    return sanitizeFullSuiteDiagnosticOutput(execution.stderr || execution.stdout, secretValues) || 'Full test suite failed';
+    const diagnostic = sanitizeFullSuiteDiagnosticOutput(execution.stderr || execution.stdout, secretValues);
+    return diagnostic === '' ? `${logNote}Full test suite failed` : `${logNote}${diagnostic}`;
   }
   const attempt = execution.entries[execution.failedEntryIndex]!;
   const command = boundedMessagePart(execution.command, secretValues);
@@ -1901,7 +1915,7 @@ function buildExecutionFailureMessage(
     : attempt.exitCode !== null
       ? `exit code ${attempt.exitCode}`
       : `reason ${attempt.terminationReason ?? execution.reason}`;
-  const header = `Suite #${attempt.index + 1}/${execution.plannedEntryCount} (index ${attempt.index}) failed: command ${command}; directory ${directory}; duration ${attempt.durationMs}ms; ${termination}; ${execution.plannedEntryCount! - attempt.index - 1} unexecuted.`;
+  const header = `${logNote}Suite #${attempt.index + 1}/${execution.plannedEntryCount} (index ${attempt.index}) failed: command ${command}; directory ${directory}; duration ${attempt.durationMs}ms; ${termination}; ${execution.plannedEntryCount! - attempt.index - 1} unexecuted.`;
   const diagnostic = sanitizeFullSuiteDiagnosticOutput(execution.stderr || execution.stdout, secretValues);
   if (diagnostic === '') return header;
   const available = FULL_SUITE_DIAGNOSTIC_LIMIT - Buffer.byteLength(header, 'utf8') - 1;

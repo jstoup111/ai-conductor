@@ -28,12 +28,17 @@ import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, type GhRunner, type GithubMutationExecutionContext } from './tracker-client.js';
+import { activePublicationRecord } from './stack-publication-record.js';
+
+/** Stable eligibility reason consumed by the sweep's published-stack escalation path. */
+export const PUBLISHED_STACK_CI_FIX_REASON = 'published-stack';
 
 export const CI_FIX_HINT_MAX_BYTES = 24_576;
 export const CI_FIX_METADATA_MAX_BYTES = 12_288;
 export const CI_FIX_MAX_FAILED_ENTRIES = 64;
 export const CI_FIX_LOG_TIMEOUT_MS = 10_000;
-export const CI_FIX_LOG_MAX_BUFFER = 65_536;
+export const CI_FIX_LOG_MAX_BUFFER = 8 * 1024 * 1024;
+export const CI_FIX_LOG_EXCERPT_MAX_BYTES = 12_288;
 
 function truncateUtf8(value: string, maxBytes: number, marker = '[truncated]'): string {
   if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
@@ -44,6 +49,70 @@ function truncateUtf8(value: string, maxBytes: number, marker = '[truncated]'): 
     result += char;
   }
   return result + marker;
+}
+
+function truncateUtf8Tail(value: string, maxBytes: number, marker = '[truncated]'): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  if (markerBytes >= maxBytes) return truncateUtf8(marker, maxBytes, '');
+  const limit = maxBytes - markerBytes;
+  let result = '';
+  for (const char of [...value].reverse()) {
+    if (Buffer.byteLength(char + result, 'utf8') > limit) break;
+    result = char + result;
+  }
+  return marker + result;
+}
+
+const FAILURE_LINE = /##\[error\]|\bFAIL\b|✗|×|Error:|\[ci-progress\] (?:failed test:|stalled |still running at run end:|process exiting|done \S+ failed\b)/;
+const FAILURE_SECTION_LABEL = '[failure lines]';
+const TAIL_SECTION_LABEL = '[log tail: earlier lines omitted]';
+
+/** Build a bounded, UTF-8-safe CI excerpt with failure evidence followed by log tail context. */
+export function buildCiLogExcerpt(log: string, budget = CI_FIX_LOG_EXCERPT_MAX_BYTES): string {
+  if (!log || budget <= 0) return '';
+  if (Buffer.byteLength(log, 'utf8') <= budget) return log;
+
+  const lines = (log.endsWith('\n') ? log.slice(0, -1) : log).split('\n');
+  const failures = lines.filter((line) => FAILURE_LINE.test(line))
+    .map((line) => truncateUtf8(line, 512, ' [line truncated]'));
+  const failureBudget = Math.floor(budget / 2);
+  let failureSection = '';
+
+  if (failures.length) {
+    let selected: string[] = [];
+    for (let count = 0; count <= failures.length; count += 1) {
+      const omitted = failures.length - count;
+      const candidate = [
+        FAILURE_SECTION_LABEL,
+        ...failures.slice(0, count),
+        ...(omitted ? [`[${omitted} failure lines omitted]`] : []),
+      ].join('\n');
+      if (Buffer.byteLength(candidate, 'utf8') <= failureBudget) selected = failures.slice(0, count);
+      else break;
+    }
+    const omitted = failures.length - selected.length;
+    failureSection = [
+      FAILURE_SECTION_LABEL,
+      ...selected,
+      ...(omitted ? [`[${omitted} failure lines omitted]`] : []),
+    ].join('\n');
+  }
+
+  const prefix = failureSection ? `${failureSection}\n${TAIL_SECTION_LABEL}` : TAIL_SECTION_LABEL;
+  let tailSection = prefix;
+  const tailLines: string[] = [];
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const candidate = [lines[index], ...tailLines].join('\n');
+    const next = `${prefix}\n${candidate}`;
+    if (Buffer.byteLength(next, 'utf8') > budget) break;
+    tailLines.unshift(lines[index]);
+  }
+  if (tailLines.length) return `${prefix}\n${tailLines.join('\n')}`;
+
+  const available = budget - Buffer.byteLength(`${prefix}\n`, 'utf8');
+  if (available > 0) tailSection = `${prefix}\n${truncateUtf8Tail(lines.at(-1) ?? '', available, '[line truncated] ')}`;
+  return tailSection;
 }
 
 /**
@@ -189,7 +258,7 @@ export async function enrichCiFixHint(
       });
       // Buffer slicing can split a multibyte code point and decode it as U+FFFD.
       // Iterate strings instead so the excerpt remains valid UTF-8 text.
-      const excerpt = truncateUtf8(stdout, 12_288, '[log excerpt truncated]');
+      const excerpt = buildCiLogExcerpt(stdout);
       if (excerpt) excerpts.push(`\nWorkflow run ${run} log excerpt:\n${excerpt}`);
     } catch {
       degradations.push('log-unavailable');
@@ -265,6 +334,7 @@ export interface EligibilityResult {
  * Determine if a PR is eligible for CI fix dispatch.
  *
  * Checks all eligibility gates in this order:
+ *   0. The feature has no active published stack
  *   1. Attempts < 2 (cap gate)
  *   2. PR does not have needs-remediation label (sticky)
  *   3. PR mergeable !== 'CONFLICTING' (conflict resolution takes precedence)
@@ -294,6 +364,18 @@ export async function isEligibleForCiFix(
   now: Date,
   logger?: (msg: string) => void,
 ): Promise<EligibilityResult> {
+  // A published stack is immutable until a human resolves its red CI.  Read
+  // the durable publication record rather than child state: unpublished child
+  // branches remain eligible, while a torn-down record does not freeze a later
+  // flat feature with the same slug.
+  const publication = await activePublicationRecord(entry.repoCwd, entry.slug);
+  if (publication && publication.record.members.length > 0) {
+    const result = { eligible: false, reason: PUBLISHED_STACK_CI_FIX_REASON };
+    const log = logger ?? console.log;
+    logOutcome(log, entry.prUrl, 'eligibility', `skipped(${result.reason})`);
+    return result;
+  }
+
   const result = await evaluateEligibilityGates(entry, prState, cfg, now);
 
   if (!result.eligible) {
@@ -663,6 +745,8 @@ export async function runCiFix(
         remoteGit: deps.remoteGit,
         mutation: remoteMutation,
         events: deps.events,
+        cwd: worktreePath,
+        slug,
       });
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);

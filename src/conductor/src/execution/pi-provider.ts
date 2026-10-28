@@ -1,5 +1,6 @@
-import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { access, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
 import type {
@@ -25,7 +26,7 @@ import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -42,6 +43,7 @@ export type PiSubprocessFactory = (
 /** Filesystem and process environment Pi uses to locate installed skills. */
 export interface PiEnvironment {
   readonly stat: (path: string) => Promise<{ isFile: () => boolean; isDirectory: () => boolean }>;
+  readonly access: (path: string, mode: number) => Promise<void>;
   readonly env: NodeJS.ProcessEnv;
   readonly homeDir: () => string;
   readonly cwd: () => string;
@@ -58,6 +60,7 @@ export type PiSkillResolution = {
 
 const defaultPiEnvironment: PiEnvironment = {
   stat,
+  access,
   env: process.env,
   homeDir: homedir,
   cwd: process.cwd,
@@ -71,12 +74,31 @@ async function isFile(path: string, environment: PiEnvironment): Promise<boolean
   }
 }
 
+async function isReadableRegularFile(path: string, environment: PiEnvironment): Promise<boolean> {
+  if (!await isFile(path, environment)) return false;
+  try {
+    await environment.access(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function isDirectory(path: string, environment: PiEnvironment): Promise<boolean> {
   try {
     return (await environment.stat(path)).isDirectory();
   } catch {
     return false;
   }
+}
+
+/** Write one invocation's system prompt to a private temp file Pi appends at startup. */
+async function writePiSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
+  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const dir = await mkdtemp(join(tempRoot, 'ai-conductor-pi-system-prompt-'));
+  const path = join(dir, 'system-prompt.md');
+  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }
 
 /**
@@ -463,6 +485,7 @@ export class PiProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
 
   constructor(
     private readonly executable = 'pi',
@@ -540,6 +563,28 @@ export class PiProvider implements LLMProvider {
     // ADR D18: -na keeps project-local Pi files untrusted unless the operator
     // opts in; a read-only review (D17) always keeps -na.
     const args = ['-p', ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    let systemPromptFile: Awaited<ReturnType<typeof writePiSystemPromptFile>> | undefined;
+    if (typeof options.systemPrompt === 'string' && options.systemPrompt.length > 0) {
+      try {
+        systemPromptFile = await writePiSystemPromptFile(options.systemPrompt);
+      } catch (error) {
+        return {
+          success: false,
+          output: `${piDisplayName()} could not prepare the system prompt for delivery: ${error instanceof Error ? error.message : String(error)}`,
+          exitCode: 1,
+        };
+      }
+      if (!await isReadableRegularFile(systemPromptFile.path, this.environment)) {
+        await systemPromptFile.dispose();
+        return {
+          success: false,
+          output: `${piDisplayName()} system-prompt file ${systemPromptFile.path} is not a readable regular file.`,
+          exitCode: 1,
+        };
+      }
+      args.push('--append-system-prompt', systemPromptFile.path);
+    }
+    try {
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);
@@ -708,6 +753,9 @@ export class PiProvider implements LLMProvider {
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
       gitGuardInstalled: guardDir !== null,
     };
+    } finally {
+      await systemPromptFile?.dispose();
+    }
   }
 
 }

@@ -23,6 +23,9 @@ import {
 import { basename, join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
+import { makeGitRunner } from './rebase.js';
+import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 
 export interface RewindStateInput {
   state: ConductState;
@@ -380,19 +383,25 @@ export async function dispatchRewindCommand(
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
   const cursor = await resolveActiveChildForCurrentFeature(cwd);
-  if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
-    console.error(`rewind: active child resolution refused (${cursor.kind})`);
+  if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
+    const detail = cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+    console.error(`rewind: active child resolution refused (${detail})`);
     return 1;
   }
-  const requestedChild = command.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
+  const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
+  const slug = head?.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
+  const execution = resolveExecutionChild(cursor, slug ?? 'rewind');
+  const executionChild = 'target' in execution ? execution.target.child : undefined;
+  const requestedChild = command.child ?? (executionChild === undefined ? undefined : String(executionChild));
   if (requestedChild !== undefined) {
     const child = parseChildId(requestedChild);
     if (child === undefined) {
       console.error(`rewind: invalid child id "${requestedChild}" (expected 1-9)`);
       return 1;
     }
-    if (command.child !== undefined && cursor.kind === 'active' && child < cursor.child) {
-      console.error(`rewind: child ${child} is closed and cannot be rewound (#2943)`);
+    const closed = slug === undefined ? false : (await makeGitRunner(cwd)(['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/closed/c${child}`])).exitCode === 0;
+    if (command.child !== undefined && executionChild !== child && closed) {
+      console.error(`rewind: child ${child} is closed and cannot be rewound (#3203)`);
       return 1;
     }
     if (!(await childStateExists(cwd, child))) {

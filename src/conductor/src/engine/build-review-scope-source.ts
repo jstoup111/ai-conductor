@@ -60,6 +60,23 @@ export function safeRepoRelativePath(path: string): string {
   return path;
 }
 
+/**
+ * Whether a plan task `Files` hint names one readable blob. Directory hints
+ * (`dir/`) and globs (`dir/*.golden`) describe task scope, not a blob, and a
+ * hint is optional evidence: reading one must never fail input assembly.
+ * Changed files beneath either form arrive independently through the Git
+ * inventory.
+ */
+export function isPlanFileHint(path: string): boolean {
+  if (path.endsWith('/')) return false;
+  try {
+    safeRepoRelativePath(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Parse Git's machine-readable `--name-status -z` output without splitting filenames on whitespace. */
 export function parseNameStatusZ(stdout: string): readonly BuildReviewPathChange[] {
   const fields = stdout.split('\0');

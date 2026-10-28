@@ -338,6 +338,14 @@ Four entries carry extra caveats:
   existence is its entire signal and its content is always empty, so excluding it costs no leak
   detection.
 
+One Claude config file is **normalized, not excluded**. Claude refreshes a semantically empty
+root-level `remote-settings.json` between zero bytes and `{}`, which halted two self-host builds on
+2026-10-10 (#3096). The manifest gives every empty form one digest: zero bytes, whitespace only,
+or a JSON object with no keys. Any other content is hashed byte for byte. A file with real
+managed-settings content still trips the guard when it changes, as does creating or deleting the
+file. The rule applies only to the Claude home root. A nested `remote-settings.json`, or one in a
+Codex or Pi home, is hashed normally.
+
 Every entry is usage, log, or cache telemetry that any concurrent provider process writes whether or
 not a build is running. Config surfaces are deliberately **not** excluded: `settings.json` on Claude,
 `config.toml` and `hooks.json` on Codex, plus `rules/`, `skills/`, and `CLAUDE.md`. A leak reaching
@@ -373,6 +381,33 @@ Every reclaim, retention, and failed cleanup emits a `scratch_cleanup_reclaimed`
 `.pipeline/events.jsonl`) naming the path and the reason — see
 [`.pipeline/events.jsonl`](../reference/artifacts.md#pipelineeventsjsonl).
 
+### Provider transcripts
+
+Before a provider home is removed, by ordinary teardown or by the dead-owner sweep, the engine
+copies that provider's session transcripts into the worktree. This lets you read what a failed
+self-build actually did.
+
+- **What is copied.** Only regular files matching the provider's declared allowlist: Claude
+  `projects/**/*.jsonl`, Codex and Pi `sessions/**/*.jsonl`. Symlinks are never followed.
+- **Sanitizing.** Every string value passes through the safety redactor. Values under keys named
+  `api_key`, `token`, `secret`, `password`, `credential`, or `authorization` become `"[REDACTED]"`.
+  Secrets from the home's credential file and the daemon build token are masked. A line the
+  sanitizer cannot process is omitted and counted.
+- **Destination.** `<worktree>/.pipeline/transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/`.
+  `<step>` is the configured member name for a configured group member, or `unknown-step` for a
+  lease written before steps were recorded.
+- **Retention.** A capture is pruned only when its step completes with progress. A step that fails,
+  stalls, halts, is interrupted, retries, needs a human, or completes without progress keeps its
+  captures. So does a home recovered by the dead-owner sweep (`interrupted: true`), and so does any
+  capture still pending when the daemon died. At most 20 captures and 1 GiB are kept per worktree.
+  The oldest are evicted first, and the newest capture is never evicted.
+- **Failure.** A failed capture never blocks home removal. It emits
+  `provider_transcripts_harvest_failed` and the home is still retired.
+
+Each transition emits `provider_transcripts_captured`, `_retained`, `_pruned`, `_evicted`, or
+`_retention_failed` on `.pipeline/events.jsonl`. To read the kept captures, use
+[`ai-conductor transcripts`](../reference/cli.md#ai-conductor-transcripts).
+
 ### Pi self-host credential
 
 A `pi` self-host candidate gets a throwaway `PI_CODING_AGENT_DIR` holding one credential, not a copy
@@ -395,27 +430,37 @@ way.
 
 ## The engine republish loop
 
-Under self-host, and only under self-host, the daemon keeps its own engine current before each
-dispatch:
+Under self-host, and only under self-host, the daemon keeps its engine current from its background
+maintenance job, which runs whether or not features are in flight:
 
 1. **Fast-forward the checkout.** The daemon fetches and fast-forwards the harness checkout to origin
    so the rebuild sees merge-driven drift rather than a stale local branch. Throttled by
-   `engine_refresh_min_interval_seconds` (default 300) so an idle daemon does not fetch every poll.
-   Degraded outcomes with a determinable origin head (dirty tree, diverged branch, failed fetch) are
-   routed into a deduped staleness warning; clean outcomes never warn.
+   `engine_refresh_min_interval_seconds` (default 300) so the daemon does not fetch every poll; a
+   throttled pass skips the rebuild too. Degraded outcomes with a determinable origin head (dirty
+   tree, diverged branch, failed fetch) are routed into a deduped staleness warning; clean outcomes
+   never warn.
 2. **Rebuild the engine.** It runs `npm run build` inside `src/conductor` as a subprocess. That is a
    content-addressed publish: build into a staging dir, finalize it as an immutable
    `dist-versions/<id>/`, then atomically flip the `dist` symlink. It no-ops when the source key is
-   unchanged, and the running daemon is never disturbed because it executes from its own pinned
-   `dist-versions/<id>` rather than the floating symlink. A non-zero build is logged and the daemon
-   degrades to the current engine; it never restarts on a failed rebuild.
-3. **Restart when stale.** With `auto_restart_on_stale_engine: true` (armed in this repo's config),
-   the daemon compares its running engine against what `dist` now points at, and requests a restart
-   at the next idle boundary. It fires only when quiescent, so a restart never interrupts an
-   in-flight build.
+   unchanged, and no running process is disturbed because each executes from its own pinned
+   `dist-versions/<id>` rather than the floating symlink. A failed build logs
+   `[daemon] background engine rebuild failed (<reason>); a later pass will retry` and the current
+   engine stays in use.
+3. **Pin each dispatch.** With [`executor_isolation: child`](../reference/configuration.md#executor_isolation)
+   (the default), each claimed feature runs in a child process forked from the build `dist` names at
+   claim time. A merged engine change reaches the next claim without a restart; features already in
+   flight finish on the build they started with.
+4. **Restart the stale supervisor.** With `auto_restart_on_stale_engine: true` (armed in this repo's
+   config), the supervisor compares its own engine against `dist` and restarts at its next natural
+   idle, logging `[daemon] stale supervisor at idle — captured: <id>, target: <id> — restarting
+   before next task`. A restart never interrupts an in-flight build. A supervisor stale longer than
+   [`supervisor_max_stale_hours`](../reference/configuration.md#supervisor_max_stale_hours)
+   (default 24), or one whose child failed the executor protocol handshake, stops claiming and
+   drains so the restart can happen.
 
-The restart gate needs all four of: continuous mode, self-host active, the config flag enabled, and
-the checker armed. A bare `ai-conductor daemon` drain (`--once` semantics) never auto-restarts.
+The background rebuild and the restart need all four of: continuous mode, self-host active, the
+config flag enabled, and the checker armed. A bare `ai-conductor daemon` drain (`--once` semantics)
+never auto-restarts.
 
 `npm run build` is the only supported entry point. Running `tsup` directly is refused:
 `Refusing to run tsup directly: the engine build now uses a versioned dist-versions/<id> + dist
@@ -499,9 +544,11 @@ stale install leaves newly added skills unregistered, and daemon-dispatched skil
 silently.
 
 **The daemon is running a different engine than the one you just built.** `ai-conductor daemon status`
-prints `version:<engine-version-id>` per repo. Compare it against
-`readlink src/conductor/dist`. A restart picks up the new version; see
-[daemon recovery](../runbooks/daemon-recovery.md).
+prints `version:<engine-version-id>` per repo, plus `EXECUTOR ENGINE CURRENT`, `SUPERVISOR ENGINE`,
+and per-feature `EXECUTOR [<slug>]` lines marked `(older than current)` when stale. In child mode, the
+next claimed feature runs the new build without a restart; an in-flight feature keeps its pin. A
+restart picks up the new version for the supervisor; see
+[daemon recovery](../runbooks/daemon-recovery.md#stale-engine).
 
 **A gate halted and you want to change what runs.** Do not disable a guardrail to get past it. The
 gates are described in [gates](../explanation/gates.md); the validation suite every harness change

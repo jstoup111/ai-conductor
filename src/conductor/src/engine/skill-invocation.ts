@@ -22,6 +22,7 @@ export const STEP_SKILL_INVOCATIONS: Readonly<
   conflict_check: { kind: 'skill', skillName: 'conflict-check', arguments: [] },
   plan: { kind: 'skill', skillName: 'plan', arguments: [] },
   coherence_check: { kind: 'skill', skillName: 'coherence-check', arguments: [] },
+  plan_review: { kind: 'skill', skillName: 'plan-review', arguments: [] },
   architecture_diagram: { kind: 'skill', skillName: 'architecture-diagram', arguments: [] },
   architecture_review: { kind: 'skill', skillName: 'architecture-review', arguments: [] },
   worktree: { kind: 'skill', skillName: 'conduct', arguments: ['worktree'] },
@@ -50,13 +51,14 @@ export const STEP_SKILL_INVOCATIONS: Readonly<
 export function renderSkillInvocation(
   descriptor: SkillInvocationDescriptor,
   providerKey: string,
+  resolvedName = descriptor.kind === 'skill' ? descriptor.skillName : undefined,
 ): string {
   if (descriptor.kind === 'engine-native') {
     throw new Error('Cannot render an engine-native step as a skill invocation');
   }
 
   const prefix = BUILT_IN_PROVIDERS.find((provider) => provider.id === providerKey)?.invocationPrefix ?? '/';
-  return [`${prefix}${descriptor.skillName}`, ...descriptor.arguments].join(' ');
+  return [`${prefix}${resolvedName}`, ...descriptor.arguments].join(' ');
 }
 
 /** Render a registry-owned auxiliary skill without pretending it is a StepName. */

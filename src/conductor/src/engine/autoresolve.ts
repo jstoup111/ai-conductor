@@ -48,6 +48,10 @@ import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-ope
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter, GithubOperationRunner } from './github-operations.js';
 import { isTestPath } from './gate-invalidation.js';
+import { hasDurableChildState } from './child-cursor.js';
+import { emitRestackRefused } from './restack/restack-events.js';
+import { forcePushWithExpectedLease } from './push-lease.js';
+import { daemonOwnedSlugOfBranch } from './feature-branch-identity.js';
 
 const execFile = promisify(execFileCb);
 
@@ -771,6 +775,10 @@ export interface PushRefreshedRemoteOptions {
   readonly remoteGit?: typeof executeRemoteGit;
   readonly mutation?: GithubMutationExecutionContext;
   readonly events?: GithubOperationEventEmitter;
+  /** Resolver worktree used for the local fetch/tracking-ref lease decision. */
+  readonly cwd?: string;
+  /** Feature identity already resolved by the caller, when available. */
+  readonly slug?: string;
 }
 
 /**
@@ -804,13 +812,18 @@ export async function pushRefreshedBranch(
 ): Promise<PushRefreshedResult> {
   const log = logger ?? console.log;
 
-  // Resolution runs in a detached worktree, so publish its rebased HEAD rather
-  // than the stale named branch ref. The lease still prevents unseen overwrites.
-  const destination = branch.startsWith('refs/') ? branch : `refs/heads/${branch}`;
-  const pushResult = await (remote.remoteGit ?? executeRemoteGit)(
-    ['push', 'origin', `HEAD:${destination}`, '--force-with-lease'],
-    {
-      cwd: '.',
+  const cwd = remote.cwd ?? '.';
+  const leaseBranch = branch.replace(/^refs\/heads\//, '');
+  const pushResult = await forcePushWithExpectedLease({
+    cwd,
+    slug: remote.slug ?? daemonOwnedSlugOfBranch(leaseBranch) ?? leaseBranch.replaceAll('/', '-'),
+    branch: leaseBranch,
+    git: async (args) => {
+      const result = await git([...args]);
+      return { stdout: result.stdout, exitCode: result.exitCode };
+    },
+    remoteGit: (args) => (remote.remoteGit ?? executeRemoteGit)(args, {
+      cwd,
       config: async (args) => ({ stdout: (await git(args)).stdout }),
       runRemoteGit: async (args, opts) => {
         const result = await git(args, opts);
@@ -819,8 +832,9 @@ export async function pushRefreshedBranch(
       },
       mutation: remote.mutation,
       events: remote.events,
-    },
-  );
+    }),
+    events: remote.events === undefined ? undefined : { emit: (event) => remote.events!.emit(event as never) },
+  });
 
   if (pushResult.kind === 'executed') {
     log(`pushRefreshedBranch: refreshed (${branch} pushed with lease)`);
@@ -828,12 +842,21 @@ export async function pushRefreshedBranch(
   }
 
   // Failure: lease rejected (concurrent push detected) or other error
-  const stderr = pushResult.kind === 'failed' ? pushResult.error : '';
+  const stderr = pushResult.kind === 'failed'
+    ? pushResult.error
+    : pushResult.kind === 'refused'
+      ? pushResult.reason
+      : '';
   let reason = 'push failed';
 
   // Detect lease rejection (typical error message from git)
   if (stderr.includes('stale') || stderr.includes('lease') || stderr.includes('rejected')) {
     reason = `lease push rejected (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
+  } else if (pushResult.kind === 'refused') {
+    // The expected-SHA decision can detect a moved ref before Git receives
+    // the push. Keep that refusal recognisably a lease outcome for callers
+    // and operators, just as Git's own stale-lease error is.
+    reason = `lease push refused (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
   } else if (stderr) {
     reason = `push error: ${stderr.slice(0, 100)}`;
   }
@@ -876,6 +899,8 @@ export interface PublishResolutionOptions {
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
   events?: GithubOperationEventEmitter;
+  /** Resolver checkout; required for an accurate tracking-ref lease decision. */
+  cwd?: string;
 }
 
 /**
@@ -918,7 +943,7 @@ export async function publishResolution(
     opts.git,
     opts.branch,
     log,
-    { remoteGit: opts.remoteGit, mutation: opts.remoteMutation, events: opts.events },
+    { remoteGit: opts.remoteGit, mutation: opts.remoteMutation, events: opts.events, cwd: opts.cwd },
   );
 
   if (!pushResult.pushed) {
@@ -1078,9 +1103,26 @@ export async function resolveConflictingPr(
     /** Injectable preservation guard boundary for resolution-flow tests. */
     runAcceptanceGuards?: typeof runAcceptanceGuards;
   },
-): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
+): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' }> {
   const { prUrl, slug, repoCwd } = entry;
   const { log } = deps;
+
+  // A published stacked feature has one public leaf but several private
+  // branches whose replay would rewrite the stack under an already-open PR.
+  // Escalate before creating the resolution worktree: no rebase, merge-tree,
+  // or remote write is a valid recovery for this state (#2945).
+  if (await hasDurableChildState(repoCwd, slug) === true) {
+    const reason = 'published stacked feature requires manual resolution (#2945)';
+    await deps.events?.emit(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
+    await escalate(prUrl, 'published-stack', reason, {
+      runGh: deps.runGh,
+      operations: deps.operations,
+      cwd: repoCwd,
+      log,
+    });
+    logOutcome(log, prUrl, 'published-stack', 'escalated');
+    return { kind: 'published-stack' };
+  }
 
   return withResolveWorktree(slug, branch, repoCwd, async (worktreePath) => {
     const emitResolutionStage = async (
@@ -1387,6 +1429,7 @@ export async function resolveConflictingPr(
       remoteMutation,
       remoteGit: deps.remoteGit,
       events: deps.events,
+      cwd: worktreePath,
       // No earlierFailure → attempt the lease push
     });
 

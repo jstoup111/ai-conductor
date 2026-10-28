@@ -8,7 +8,7 @@
   "conflict_check": "done",
   "plan": "done",
   "coherence_check": "done",
-  "coverage_binding": "done",
+  "plan_review": "skipped",
   "architecture_diagram": "done",
   "architecture_review": "done",
   "prd": "done",

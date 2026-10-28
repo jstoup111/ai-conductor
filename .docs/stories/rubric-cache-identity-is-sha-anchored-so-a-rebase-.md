@@ -20,7 +20,7 @@ content so that a history rewrite that changes no content re-uses prior judgemen
 #### Happy Path
 - Given a rubric judgement cached from a source snapshot, when a new lap presents a
   snapshot whose diff text, plan body, and per-rubric context (repair context, accepted
-  widenings, operator reseals, removal context, tautology inputs) are byte-identical but
+  widenings, operator reseals, removal context, tautology inputs, review scope) are byte-identical but
   whose `mergeBase`, `headSha`, `baseRef`, and lap id all differ (a rebase), then the
   cache lookup resolves as a hit for that rubric and no model dispatch occurs.
 - Given such a hit, when the current-lap result is materialized, then its `lapId` and

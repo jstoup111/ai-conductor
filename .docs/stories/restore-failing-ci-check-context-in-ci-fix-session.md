@@ -101,7 +101,7 @@ As an operator, I want bounded repair attempts to reflect actual repair opportun
 - Given an earlier candidate actually attempted repair and a later candidate is skipped or fails before execution, when the result is reconciled, then the consumed attempt remains; the final refusal cannot erase the earlier attempt.
 - Given a dispatch throws or returns an unknown/ambiguous result without affirmative no-start proof, when accounting completes, then the reserved attempt is retained and neither a refund nor a green reset occurs.
 - Given repair produces no committed change, fails, or verifies and publishes locally while GitHub is not yet green, when accounting completes, then the consumed attempt remains and the existing cooldown/cap still applies.
-- Given a PR is draft, conflicting, still has running checks, is cooling down, has sticky remediation, or is blocked by the existing serial guard, when the sweep runs, then it does not start that repair or consume a new attempt; at most one repair dispatch occurs per tick.
+- Given a PR is draft, conflicting, still has running checks, is cooling down, has sticky remediation, or already has a repair running for the same PR, when the sweep runs, then it does not queue that repair or consume a new attempt.
 - Given attempts are exhausted and CI remains failed, when the existing escalation path runs, then its sticky escalation behavior remains in force and local publication or a missing diagnostic cannot reset the counter.
 
 ### Done When

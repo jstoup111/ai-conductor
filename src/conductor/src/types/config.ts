@@ -1,5 +1,6 @@
 import type { ComplexityTier, EnforcementLevel, StepName, Phase } from './steps.js';
 import type { BUILD_REVIEW_RUBRIC_IDS } from '../engine/build-review-registry.js';
+import type { BuildReviewSeverity } from '../engine/build-review-domain.js';
 
 /**
  * Claude's native reasoning effort levels — set per invocation via
@@ -406,17 +407,6 @@ export interface RetryRoutingConfig {
   enabled?: boolean;
 }
 
-/**
- * Opt-in pre-BUILD judge that confirms each criterion claim is asserted by
- * the cited task's Done when checks. The shipped default is disabled.
- */
-export interface CoverageBindingConfig {
-  judge?: {
-    enabled?: boolean;
-    batch_size?: number;
-  };
-}
-
 /** Per-project opt-in for declaring selected feature steps inapplicable. */
 export interface FeatureApplicabilityConfig {
   enabled?: boolean;
@@ -563,6 +553,22 @@ export interface HarnessConfig {
   /** Exact template region bytes keyed by the declared custom step that owns them. */
   pr_template_region_owners?: Record<string, string>;
   complexity?: Record<string, never>;
+  /**
+   * PRD-audit remediation limits. A positive integer applies to every tier;
+   * a tier map selectively overrides the S/M/L defaults.
+   */
+  prd_audit?: {
+    max_remediation_laps?: number | Partial<Record<ComplexityTier, number>>;
+    max_appended_tasks?: number;
+    max_appended_ratio?: number;
+    halt_on_any_plan_gap?: boolean;
+  };
+  /** As-built remediation policy and its optional tier-aware lap limits. */
+  architecture_review_as_built?: {
+    checks?: Record<string, { tiers?: ComplexityTier[] }>;
+    remediation?: { enabled?: boolean };
+    max_remediation_laps?: number | Partial<Record<ComplexityTier, number>>;
+  };
   /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
   conductor?: ConductorConfig;
   /** Preferred markdown viewer — user-level default, project can override. */
@@ -641,8 +647,6 @@ export interface HarnessConfig {
    * runtime resolution (not this type). See `RetryRoutingConfig`.
    */
   retry_routing?: RetryRoutingConfig;
-  /** Pre-BUILD criterion-to-Done-when binding judge. Absent → disabled. */
-  coverage_binding?: CoverageBindingConfig;
   /** Per-project opt-in for declaring selected feature steps inapplicable. */
   feature_applicability?: FeatureApplicabilityConfig;
   /**
@@ -712,6 +716,16 @@ export interface HarnessConfig {
    * invalid values rather than silently clamping them.
    */
   daemon_concurrency?: number;
+  /**
+   * Process boundary for daemon feature execution. Absent defaults to `child`;
+   * `in-process` remains an operator rollback mode.
+   */
+  executor_isolation?: 'child' | 'in-process';
+  /**
+   * Maximum age in hours of a stale supervisor before it stops claiming and
+   * drains for restart. Absent or invalid values resolve to 24 with a warning.
+   */
+  supervisor_max_stale_hours?: number;
   /**
    * Maximum V8 old-space heap size, in megabytes, for the continuous daemon.
    * Absent → the launcher applies the 4096 MB default. Values must be positive
@@ -801,6 +815,10 @@ export interface HarnessConfig {
    * `steps.build_review.disable: true` is rejected by `validateConfig()`.
    */
   build_review?: BuildReviewConfig;
+  /** Optional prompt-character budget for the plan-review runner. */
+  plan_review?: {
+    max_prompt_chars?: number;
+  };
   /**
    * CI watch feature that observes shipped PRs' CI and drives bounded
    * auto-remediation of red ships. Absent → enabled (true, fail-safe).
@@ -829,6 +847,8 @@ export interface StackedPrsConfig {
   enabled?: boolean;
   /** Maximum number of stacked plan slices. Default: 1 when configured. */
   max_slices?: number;
+  /** Opt in to routed whole-feature remediation; absent remains dark. */
+  route_whole_feature_fixes?: boolean;
 }
 
 /** The closed set of independently-executed build-review rubric branches. */
@@ -848,6 +868,8 @@ export interface BuildReviewRubricConfig {
   max_retries?: number;
   escalate?: boolean;
   min_confidence?: number;
+  /** Lowest finding severity that remains blocking for this rubric. */
+  min_severity?: BuildReviewSeverity;
 }
 
 /** A project-declared build-review rubric, identified by its map key. */

@@ -1,4 +1,5 @@
-// Covers: task:32
+// Covers: task:29, task:32
+// Covers: task:1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { dispatchRewindCommand } from '../../src/engine/rewind.js';
 import { detectTaskCommand, dispatchTaskCommand } from '../../src/engine/task-cli.js';
@@ -14,7 +15,7 @@ import { detectTaskCommand, dispatchTaskCommand } from '../../src/engine/task-cl
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8').then(() => undefined),
@@ -25,7 +26,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return (await execFile('git', args, { cwd })).stdout;
 }
 
-async function stackedFixture(): Promise<{ root: string; worktree: string }> {
+async function stackedFixture(repairPending = false): Promise<{ root: string; worktree: string }> {
   const root = await mkdtemp(join(tmpdir(), 'recovery-cli-child-default-'));
   roots.push(root);
   await git(root, ['init', '-q', '-b', 'main']);
@@ -40,9 +41,16 @@ async function stackedFixture(): Promise<{ root: string; worktree: string }> {
   await git(worktree, ['branch', 'feat/c1/feature', 'feat/daemon-feature']);
   const tip = (await git(worktree, ['rev-parse', 'HEAD'])).trim();
   await git(worktree, ['update-ref', 'refs/conductor/feature/closed/c1', tip]);
+  if (repairPending) {
+    await git(worktree, ['checkout', '-q', 'feat/c1/feature']);
+    await writeFile(join(worktree, 'operator-change.txt'), 'X\n');
+    await git(worktree, ['add', 'operator-change.txt']);
+    await git(worktree, ['commit', '-qm', 'operator change']);
+    await git(worktree, ['checkout', '-q', 'feat/daemon-feature']);
+  }
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeSliceTopologyFixture(worktree, {
     version: 1,
     slug: 'feature',
     runId: 'run-1',
@@ -100,7 +108,7 @@ describe('recovery CLIs default to the active child', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
-      expect(error).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#2943)');
+      expect(error).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
       expect(await readFile(childOnePath, 'utf8')).toBe(before);
     } finally {
       error.mockRestore();
@@ -122,13 +130,66 @@ describe('recovery CLIs default to the active child', () => {
     }
   });
 
-  it('reads child 2’s kickback ledger when inspect omits --child', async () => {
-    const { root } = await stackedFixture();
+  it('routes whole-feature inspect gates to the flat ledger when child 2 is the default', async () => {
+    const { root, worktree } = await stackedFixture();
+    await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        architecture_review_as_built: {
+          count: 0, cumulative: 0, laps: 3, treeHash: null, lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          effectiveLapCap: 4, adjustmentsKnown: true,
+          adjustments: [{ id: 'flat-raise', kind: 'raise', beforeConsumed: 3, afterConsumed: 3, beforeLimit: 3, afterLimit: 4, operator: 'operator', rationale: 'more review', timestamp: '2026-10-23T00:00:00.000Z', haltGeneration: 'g1', allowance: 'laps' }],
+        },
+      },
+    }));
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: { architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, adjustmentsKnown: true } },
+    }));
     const output: string[] = [];
     await expect(dispatchKickbackBudgetCommand(
-      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
       { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
     )).resolves.toBe(0);
-    expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
+    expect(output.join('\n')).toContain('Child: 2');
+    expect(output.join('\n')).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
+    expect(output.join('\n')).toContain('Adjustment history: raise flat-raise (laps)');
+  });
+
+  it('keeps read-only CLI default-child resolution on child 2 while repair is pending', async () => {
+    const { root, worktree } = await stackedFixture(true);
+    const refsBefore = await git(worktree, ['for-each-ref', '--format=%(refname) %(objectname)']);
+    const eventsPath = join(worktree, '.pipeline', 'events.jsonl');
+    const task = detectTaskCommand(['node', 'conduct', 'task', 'start', 'T1']);
+    const taskStateBefore = await readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8');
+    const childOneStateBefore = await readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8');
+    const output: string[] = [];
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchTaskCommand(task!, worktree)).resolves.toBe(1);
+      expect(error).toHaveBeenCalledWith('[task-cli] task T1 belongs to child 1, not child 2');
+      await expect(readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8')).resolves.toBe(taskStateBefore);
+      await expect(dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
+      )).resolves.toBe(0);
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, worktree, {
+        preflightDerivedRecords: async () => {}, clearDerivedRecords: async () => {}, emit: async () => {},
+      })).resolves.toBe(0);
+      await expect(readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'))
+        .resolves.toBe(childOneStateBefore);
+      await expect(readFile(join(worktree, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8'))
+        .resolves.toContain('"build": "stale"');
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
+      expect(error).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
+      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
+      expect(refsBefore).not.toContain('refs/conductor/feature/restack');
+      await expect(git(worktree, ['for-each-ref', '--format=%(refname) %(objectname)'])).resolves.toBe(refsBefore);
+      await expect(git(worktree, ['show-ref', '--verify', '--quiet', 'refs/conductor/feature/restack/journal']))
+        .rejects.toBeDefined();
+      await expect(readFile(eventsPath, 'utf8')).rejects.toThrow();
+    } finally {
+      error.mockRestore();
+    }
   });
 });

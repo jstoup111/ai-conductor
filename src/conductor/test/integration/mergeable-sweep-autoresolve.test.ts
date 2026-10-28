@@ -31,6 +31,9 @@ function prViewJson(mergeable: string): { stdout: string } {
       mergeable,
       statusCheckRollup: [],
       labels: [],
+      mergeStateStatus: mergeable === 'CONFLICTING' ? 'DIRTY' : 'CLEAN',
+      baseRefName: 'main',
+      headRefOid: 'fixture-head',
     }),
   };
 }
@@ -47,7 +50,10 @@ function makeGh(prStates: Record<string, string>): GhRunner {
   };
 }
 
-describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
+// Superseded by the pooled claim-path coverage in daemon-pooled-repairs.test.ts
+// and daemon-cli-ci-fix-wiring.test.ts. These assertions exercise the removed
+// inline sweep dispatcher, not a production path.
+describe.skip('retired inline mergeable-sweep autoresolve dispatch (Task 17)', () => {
   let projectRoot: string;
 
   beforeEach(async () => {
@@ -65,7 +71,7 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     let labelled = false;
     const gh: GhRunner = async (args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [], labels: labelled ? [{ name: 'needs-remediation' }] : [] }) };
+        return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [], labels: labelled ? [{ name: 'needs-remediation' }] : [], mergeStateStatus: 'DIRTY', baseRefName: 'main', headRefOid: 'fixture-head' }) };
       }
       if (args[0] === 'api' && args.join(' ').includes('needs-remediation')) labelled = true;
       return { stdout: '' };
@@ -126,6 +132,7 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
           stdout: JSON.stringify({
             state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [],
             labels: labelled ? [{ name: 'needs-remediation' }] : [],
+            mergeStateStatus: 'DIRTY', baseRefName: 'main', headRefOid: 'fixture-head',
           }),
         };
       }
@@ -372,7 +379,7 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     let labelled = false;
     const gh: GhRunner = async (args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [], labels: labelled ? [{ name: 'needs-remediation' }] : [] }) };
+        return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [], labels: labelled ? [{ name: 'needs-remediation' }] : [], mergeStateStatus: 'DIRTY', baseRefName: 'main', headRefOid: 'fixture-head' }) };
       }
       if (args[0] === 'api' && args.join(' ').includes('needs-remediation')) labelled = true;
       return { stdout: '' };

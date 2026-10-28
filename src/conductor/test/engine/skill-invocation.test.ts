@@ -1,3 +1,6 @@
+// Covers: task:2, task:11
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   STEP_SKILL_INVOCATIONS,
@@ -30,6 +33,7 @@ const EXPECTED_INVOCATIONS = {
     skillName: 'coherence-check',
     arguments: [],
   },
+  plan_review: { kind: 'skill', skillName: 'plan-review', arguments: [] },
   architecture_diagram: {
     kind: 'skill',
     skillName: 'architecture-diagram',
@@ -63,8 +67,32 @@ const EXPECTED_INVOCATIONS = {
 } as const satisfies Partial<Record<StepName, SkillInvocationDescriptor>>;
 
 describe('provider-native skill invocation', () => {
+  it.each([
+    ['claude', '/ac-explore'],
+    ['codex', '$ac-explore'],
+    ['pi', '/skill:ac-explore'],
+  ])('renders a resolved frontmatter name for %s', (providerKey, expected) => {
+    expect(renderSkillInvocation(STEP_SKILL_INVOCATIONS.explore!, providerKey, 'ac-explore')).toBe(expected);
+  });
+
   it('defines the exhaustive semantic invocation map', () => {
     expect(STEP_SKILL_INVOCATIONS).toEqual(EXPECTED_INVOCATIONS);
+  });
+
+  it('publishes the distinct re-raise contract through the shared remediate skill', async () => {
+    const skill = await readFile(resolve(process.cwd(), '../../skills/remediate/SKILL.md'), 'utf8');
+
+    expect({
+      claude: renderSkillInvocation(STEP_SKILL_INVOCATIONS.remediate!, 'claude'),
+      codex: renderSkillInvocation(STEP_SKILL_INVOCATIONS.remediate!, 'codex'),
+      contract: [
+        'distinctFrom',
+        'caseId',
+        'reason must be non-empty',
+        'three applied attempts',
+        'entry not naming a resolved action owner of a row source is ignored',
+      ].every((text) => skill.includes(text)),
+    }).toEqual({ claude: '/remediate', codex: '$remediate', contract: true });
   });
 
   it.each([
@@ -119,7 +147,7 @@ describe('provider-native skill invocation', () => {
 
   it.each([
     ['build-review-security', '/skill:build-review-security'],
-    ['coverage-binding', '/skill:coverage-binding'],
+    ['rebase-regrade', '/skill:rebase-regrade'],
   ])('renders Pi auxiliary skill %s', (skillName, expected) => {
     expect(renderAuxiliarySkillInvocation(skillName, 'pi')).toBe(expected);
   });

@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
 import type {
   LLMProvider,
@@ -26,7 +29,6 @@ import {
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withGitGuardPath } from './child-environment.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
@@ -38,6 +40,7 @@ import {
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function claudeDisplayName(): string {
   return providerDescriptor('claude').displayName;
@@ -566,6 +569,7 @@ export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
   private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
@@ -587,8 +591,12 @@ export class ClaudeProvider implements LLMProvider {
   readOnlyReviewObservedCommandReach(
     options: Pick<InvokeOptions, 'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'>,
   ): 'none' | 'possible' {
+    const selfHost = options.selfHost?.launcherArgCount
+      ? { ...options.selfHost, args: options.selfHost.args.slice(options.selfHost.launcherArgCount) }
+      : options.selfHost;
     return claudeLaunchObservedCommandReach(this.buildArgs({
       ...options,
+      ...(selfHost ? { selfHost } : {}),
       prompt: '',
       sessionId: '00000000-0000-4000-8000-000000000000',
       resume: false,
@@ -606,19 +614,20 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'interactive' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, interactive, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`${claudeDisplayName()} process spawn denied: ${permit.reason}`);
     }
     const subprocess = this.subprocessFactory(selfHost?.executable ?? this.executable, args, {
       ...execaOptions,
-      // A daemon feature must retain the diagnostic in its scoped/persisted
-      // log. Other callers preserve the existing live inherited stdio path.
-      stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
-      stderr: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
+      // Only the REPL inherits stdio. Print-mode stream-json reaches the
+      // operator through the stream consumer, never the parent's stdout
+      // (adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope D3/D4).
+      stdout: diagnosticLog || !interactive ? 'pipe' : ['pipe', 'inherit'],
+      stderr: diagnosticLog || !interactive ? 'pipe' : ['pipe', 'inherit'],
     });
     // Wire optional spawn and activity observations on the LIVE subprocess
     // before awaiting, so observers receive the spawn event and streamed
@@ -704,7 +713,8 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
     const hasMachineEnvelope = !options.interactive;
-    const args = this.buildArgs(options);
+    const systemPromptFile = options.systemPrompt ? await writeSystemPromptFile(options.systemPrompt) : undefined;
+    const args = this.buildArgs(options, systemPromptFile?.path);
 
     const promptOnStdin =
       typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
@@ -727,6 +737,7 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
           ...(options.abortSignal === undefined ? {} : { cancelSignal: options.abortSignal }),
           diagnosticLog: options.diagnosticLog,
+          interactive: options.interactive,
           onActivity: options.onActivity,
           onProviderStream: options.interactive
             ? undefined
@@ -762,6 +773,8 @@ export class ClaudeProvider implements LLMProvider {
         };
       }
       throw error;
+    } finally {
+      await systemPromptFile?.dispose();
     }
   }
 
@@ -930,7 +943,7 @@ export class ClaudeProvider implements LLMProvider {
     }
   }
 
-  private buildArgs(options: InvokeOptions): string[] {
+  private buildArgs(options: InvokeOptions, systemPromptFile = SYSTEM_PROMPT_FILE_PLACEHOLDER): string[] {
     const args: string[] = [];
 
     if (options.selfHost?.args) args.push(...options.selfHost.args);
@@ -949,8 +962,11 @@ export class ClaudeProvider implements LLMProvider {
       args.push('--name', options.sessionName);
     }
 
+    // The system prompt travels in a file: a single argv string is capped at
+    // 128 KiB (MAX_ARG_STRLEN), and a larger one fails the spawn with E2BIG
+    // before Claude starts.
     if (options.systemPrompt) {
-      args.push('--append-system-prompt', options.systemPrompt);
+      args.push('--append-system-prompt-file', systemPromptFile);
     }
 
     if (options.model) {
@@ -1003,4 +1019,18 @@ export class ClaudeProvider implements LLMProvider {
       ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
       : environment);
   }
+}
+
+/** Stands in for the per-invocation file when argv is only inspected, never launched. */
+const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
+
+/** Write one invocation's system prompt to a private temp file Claude reads at startup. */
+async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
+  // Resolve this at invocation time: Vitest installs its run root after some
+  // modules have already loaded, and fixtures can temporarily change TMPDIR.
+  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const dir = await mkdtemp(join(tempRoot, 'ai-conductor-claude-system-prompt-'));
+  const path = join(dir, 'system-prompt.md');
+  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }

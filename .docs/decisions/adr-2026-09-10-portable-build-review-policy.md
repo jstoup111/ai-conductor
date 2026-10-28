@@ -101,6 +101,8 @@ Extend the existing `build_review` case context with each current rubric's decla
 
 One `remediate` judgment decides semantic overlap, cross-case contradictions, review-question ownership, and whether a proposed repair is admitted by the approved plan. It may merge equivalent findings, reject a finding that attempts to reclaim another authority's question, or stop for a product/plan/architecture decision. A declared question is contextual policy, not a string-matched proof of exclusive ownership. No second model judges the adjudicator's semantic answer and no prompt-text matcher re-derives it.
 
+> **Amended 2026-10-23 by #3291:** "The full admitted task contracts needed to judge repairs" are engine-selected. They are the complete bodies of the tasks whose declared files contain a current finding's evidence path, the tasks named by the dispatched findings' pointers, and the tasks admitted by open prior action cases, plus an index of every active plan task by id, title and declared dependencies. Admission is valid only against a supplied body. A case-v2 judgement that admits only index-listed tasks beyond the supplied set gets one engine-run expansion round with those bodies added (adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication D2 amendment of the same date). That round is the only way the admitted set widens within a lap. All prior cases remain in the context. One judgement remains authoritative, because the discarded first round is never merged.
+
 ### D9 — Extend the existing case contract with explicit consistency and escalation
 
 Add a versioned `case-v2` mode to the existing remediation artifact/parser/store flow; retain `case-v1` and existing non-case remediation compatibility. The v2 result contains the existing complete source-to-case graph plus a consistency decision (`consistent` or `blocked`), implicated source/case references, and a non-empty rationale. Each `act` task also names the existing plan task ids that admit the repair and an admission rationale. Add an `escalate` case/source outcome naming `product`, `plan`, or `architecture`, with no autonomous external effect and with required operator-facing evidence.
@@ -108,6 +110,10 @@ Add a versioned `case-v2` mode to the existing remediation artifact/parser/store
 Mechanical validation checks exhaustive source coverage, bounded fields, recognized references, actual task ids, graph consistency, and effect legality. Semantic compatibility of different repairs remains the adjudicator's schema-constrained judgment. A `blocked` consistency result, any escalation, invalid output, or missing required admission evidence prevents all action effects for that adjudication and produces a durable decision stop. The implementation worker never receives a partly unresolved contradictory set. A consistent result with admitted actions uses the existing one-work-order effect path. Existing independently blocking infrastructure remains blocking even when mixed-lap content authorizes a repair.
 
 A current requirement/plan/architecture gap cannot be converted to a non-blocking deferred issue merely to settle the lap. Existing deferral remains available only for work outside the current approved outcome and is subject to its existing durable effect contract. Escalation does not append tasks, rewrite sealed artifacts, grant risk acceptance, or spend a BUILD charge. On explicit decision resolution, recovery re-evaluates against the new approved baseline rather than editing an old verdict into PASS.
+
+> **Amended 2026-10-23 by #3291:** "Invalid output, or missing required admission evidence … produces a durable decision stop" has one exception. When a case-v2 judgement's only defect is admitting plan tasks the context listed in its index without their bodies, the engine discards that judgement and runs the single expansion round of the same-date D8 and mixed-laps D2 amendments instead of stopping. Any other invalid output, an admitted id absent from the plan, or an invalid expansion-round judgement stops as before, and no action effect is applied from a discarded judgement.
+
+> **Amended 2026-10-20 by #3271:** An `escalate` proposal bound to a carry-eligible case is classified `carry` before the escalation split. It produces no decision stop, never yields `conflicting-case-id`, and does not deny sibling action effects. An escalation bound to any other case, or unbound, is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
 ### D10 — One authority across attended and daemon execution
 
@@ -145,6 +151,14 @@ Execution bundles, validated verdicts, and case state are durable evidence under
 > `custom-v1` finding identity grammar and the case-v2 adjudication contract are unchanged. A custom
 > reviewer's unsupported-policy result is a valid structured result under the schema, not a parse
 > failure.
+
+> **Amended 2026-10-19 by #3298:** D7.1's custom-review result contract was the `custom-findings`
+> v1 payload. Custom findings now carry a required `severity` (critical, major, minor, nit), so the
+> fresh custom result contract moves to `v2`. The `custom-v1` finding identity grammar is unchanged
+> and pins its own version, so custom finding ids do not re-key. Persisted `v1` results still parse
+> for reads and are never advisory. `build_review.custom_rubrics.<id>.min_severity` applies the same advisory threshold as
+> built-in rubrics, through one shared threshold helper
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D1-D4).
 
 > **Amended 2026-09-24 by #2735:** D5 required an OS-proven read-only boundary for every member of
 > a custom-policy lap: a Linux bubblewrap mount profile, a two-sided probe that also demanded a

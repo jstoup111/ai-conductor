@@ -1,3 +1,4 @@
+// Covers: task:22
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,8 @@ import {
   supersedeHaltRecordText,
   type HaltRecordRemoteOptions,
 } from '../../src/engine/halt-record.js';
+import { writeHaltMarker } from '../../src/engine/halt-marker.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { clearHaltForResume } from '../../src/engine/daemon-rekick.js';
 import type { RemoteGitExecutionResult } from '../../src/engine/remote-git-operations.js';
 
@@ -29,6 +32,29 @@ const input = {
 } as const;
 
 describe('halt record rendering', () => {
+  // Covers: task:22
+  it('classifies a published-stack guard refusal without overwriting the halt record', async () => {
+    const root = await makeFeatureRepository();
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ path: string; reason: string }> = [];
+    events.on('halt_record_push_failed', (event) => {
+      if (event.type === 'halt_record_push_failed') failures.push({ path: event.path, reason: event.reason });
+    });
+
+    await expect(writeHaltMarker(root, input.haltBody, input.haltClass, events, {
+      ...successfulRemote(),
+      remoteGit: async (): Promise<RemoteGitExecutionResult> => ({
+        kind: 'failed', error: 'published stack tip mismatch', targets: [],
+      }),
+    })).resolves.toEqual({ status: 'written' });
+
+    expect(failures).toEqual([{ path: haltRecordPath(basename(root)), reason: 'stack-tip-mismatch' }]);
+    await expect(readFile(join(root, haltRecordPath(basename(root))), 'utf8')).resolves.toContain(
+      'Push status: this record may be ahead of the remote; push is not guaranteed.',
+    );
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(input.haltBody);
+  });
+
   it('renders every operator pickup field for a halted feature', () => {
     expect(renderHaltRecord(input)).toBe(
       '# Halt record\n\n' +
@@ -249,6 +275,9 @@ async function commitCount(cwd: string): Promise<number> {
 
 function successfulRemote(): HaltRecordRemoteOptions {
   return {
+    git: async (args: string[]) => ({
+      stdout: args[0] === 'rev-parse' ? `${'a'.repeat(40)}\n` : '',
+    }),
     remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'executed', targets: [] }),
   };
 }

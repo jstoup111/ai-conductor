@@ -7,6 +7,14 @@ HOOK="$HARNESS_DIR/hooks/claude/rate-limit-wait.sh"
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
+# The hook parses StopFailure JSON with python3. Keep that runtime available
+# after the isolated shell runner swaps HOME, which can make a version-manager
+# shim unable to resolve its interpreter.
+TEST_BIN="$TMP_ROOT/bin"
+mkdir -p "$TEST_BIN"
+ln -s "$(command -p -v python3)" "$TEST_BIN/python3"
+PATH="$TEST_BIN:$PATH"
+
 run_hook() {
   local fixture_dir=$1
   local payload=$2

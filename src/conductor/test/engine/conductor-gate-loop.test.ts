@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execa } from 'execa';
@@ -252,9 +252,51 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     await cp(source, projectRoot, { recursive: true });
     const stateFilePath = join(projectRoot, 'conduct-state.json');
     const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
-    await writeFile(stateFilePath, JSON.stringify({ ...state, coverage_binding: 'done' }));
+    await writeFile(stateFilePath, JSON.stringify({ ...state, plan_review: 'done', coverage_binding: 'done' }));
     return stateFilePath;
   }
+
+  // Covers: task:rem-prd-audit-refusal-3a6c2bd7-e9cf-4155-8dbc-1410c2aa7453
+  it('does not HALT after an unsatisfied non-architecture pre-loop DECIDE verdict', async () => {
+    const events = new ConductorEventEmitter();
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events,
+      verifyArtifacts: true,
+      mode: 'auto',
+    });
+    const stories = ALL_STEPS.find((step) => step.name === 'stories')!;
+    const state: ConductState = { complexity_tier: 'M', stories: 'done' };
+
+    const result = await (conductor as unknown as {
+      advanceTail: (
+        step: typeof stories,
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ) => Promise<number | null | 'halt'>;
+    }).advanceTail(
+      stories,
+      state,
+      new Map(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    );
+
+    // With the old broad pre-loop guard this unsatisfied stories verdict
+    // restaged the gate, wrote HALT, emitted loop_halt, and returned 'halt'.
+    expect(result).toBeNull();
+    expect(state.stories).toBe('done');
+    expect(loopHalts).toEqual([]);
+    await expect(access(join(projectRoot, '.pipeline/HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   function staleSuiteVerifier(
     observed: StepName[],
@@ -310,7 +352,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       complexity_tier: 'S',
       track: 'technical',
       worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
-      conflict_check: 'skipped', plan: 'done', coherence_check: 'done', coverage_binding: 'done', architecture_diagram: 'skipped',
+      conflict_check: 'skipped', plan: 'done', coherence_check: 'done', architecture_diagram: 'skipped',
       architecture_review: 'skipped', acceptance_specs: 'skipped',
       build: 'done',  test_suite: 'done', build_review: 'pending',
     } satisfies Partial<ConductState>));

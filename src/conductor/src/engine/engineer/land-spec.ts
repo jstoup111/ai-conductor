@@ -62,6 +62,9 @@ import {
   readCommittedIntakeOutcomes,
 } from './outcome-staging.js';
 import { runCoherenceGate } from './coherence-validator.js';
+import { runPlanReviewGate } from './plan-review-gate.js';
+import { PLAN_REVIEW_ARTIFACT_DIR } from '../plan-review-artifact.js';
+import { resolveIdeaFiles } from './spec-change-set.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import {
   checkDiagramsForFile,
@@ -86,6 +89,14 @@ import { loadConfig } from '../config.js';
 import { resolveFeatureApplicabilityConfig } from '../resolved-config.js';
 import { validateApplicability } from '../feature-applicability.js';
 import { ALL_STEPS, buildStepRegistry } from '../steps.js';
+import type { GitRunner as DependencyGitRunner } from '../rebase.js';
+import {
+  computeLandDependencyProposals,
+  decideLandDependencies,
+} from './land-dependency-gate.js';
+import type { LandDependencyDecision, LandDependencyProposalResult } from './land-dependency-gate.js';
+import { parseSourceRef } from './issue-ref.js';
+import { evaluateAdrAssumptionLedgers } from '../adr-assumption-ledger-scope.js';
 
 const execFile = promisify(execFileCb);
 
@@ -113,12 +124,24 @@ export interface LandSpecOptions {
    * browser.
    */
   renderDeps?: Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
+  /** Tracker/git seams for the intake-only dependency proposal gate. */
+  dependencyGit?: DependencyGitRunner;
+  acceptedDependencies?: string[];
+  declinedDependencies?: string[];
+  skipDependencyCheck?: string;
 }
 
 export interface LandSpecResult {
   slug: string;
   branch: string;
   repoPath: string;
+  /** Present only for an intake-originated land that passed the proposal gate. */
+  dependency?: LandDependencyContext;
+}
+
+export interface LandDependencyContext {
+  proposals: LandDependencyProposalResult;
+  decision: LandDependencyDecision;
 }
 
 /** Closed identifiers for every rejection produced by the land gate. */
@@ -126,6 +149,7 @@ export type LandGateIdentifier =
   | 'worktree-missing'
   | 'worktree-dirty'
   | 'owner-identity-unresolved'
+  | 'draft-amendment-note'
   | 'required-artifacts-missing'
   | 'plan-protected-targets'
   | 'plan-done-when'
@@ -141,23 +165,36 @@ export type LandGateIdentifier =
   | 'applicability-invalid'
   | 'adr-not-approved'
   | 'adr-uncitable-decision'
+  | 'adr-assumption-ledger'
   | 'adr-filename'
   | 'coherence'
+  | 'plan-review'
   | 'mermaid-render'
   | 'mermaid-tool-missing'
   | 'artifact-empty'
   | 'artifact-draft-status'
-  | 'artifact-stub';
+  | 'artifact-stub'
+  | 'dependency-proposals-undecided'
+  | 'dependency-check-unavailable'
+  | 'dependency-decisions-invalid';
 
 export class LandGateError extends Error {
-  constructor(public readonly gate: LandGateIdentifier, message: string) {
+  constructor(
+    public readonly gate: LandGateIdentifier,
+    message: string,
+    public readonly dependency?: LandDependencyContext,
+  ) {
     super(message);
     this.name = 'LandGateError';
   }
 }
 
-export function landGateError(gate: LandGateIdentifier, message: string): LandGateError {
-  return new LandGateError(gate, message);
+export function landGateError(
+  gate: LandGateIdentifier,
+  message: string,
+  dependency?: LandDependencyContext,
+): LandGateError {
+  return new LandGateError(gate, message, dependency);
 }
 
 export type LandGateRejectionIdentifier = LandGateIdentifier | 'unclassified';
@@ -312,6 +349,26 @@ export async function landSpec(
   // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
   // /explore); a missing marker defaults to `product` (back-compat).
   const ideaFiles = await resolveIdeaFiles(worktreePath, canonical);
+  const baseDocsPaths = await listDocsPathsAtMergeBase(worktreePath, canonical);
+  const draftAmendmentPaths: string[] = [];
+  for (const path of ideaFiles) {
+    const normalizedPath = path.replaceAll('\\', '/');
+    if (baseDocsPaths.has(normalizedPath) || !normalizedPath.endsWith('.md')) continue;
+    try {
+      if (findDraftAmendmentNoteLines(await readFile(join(worktreePath, normalizedPath), 'utf-8')).length > 0) {
+        draftAmendmentPaths.push(normalizedPath);
+      }
+    } catch (error) {
+      // A deleted path may appear in the branch diff but cannot contain a note.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (draftAmendmentPaths.length > 0) {
+    throw landGateError('draft-amendment-note',
+      `landSpec: draft artifacts contain dated amendment notes: ${draftAmendmentPaths.sort().join(', ')}. ` +
+      'Fold the correction into the artifact text, removing the obsolete text, before landing.',
+    );
+  }
   const featureSlug = slugify(idea);
   const featureFiles = await resolveFeatureFiles(worktreePath, canonical, ideaFiles, featureSlug);
   const trackDir = join(worktreePath, '.docs', 'track');
@@ -578,6 +635,10 @@ export async function landSpec(
         step: 'coherence_check',
         paths: await familyPaths('coherence_check', join(worktreePath, '.docs', 'coherence')),
       },
+      {
+        step: 'plan_review',
+        paths: await familyPaths('plan_review', join(worktreePath, '.docs', 'plan-review')),
+      },
     ],
     featureSlug,
   );
@@ -655,7 +716,28 @@ export async function landSpec(
   if (nonCanonicalNewAdrs.length > 0) {
     throw landGateError('adr-filename',
       `landSpec: newly added ADRs must use canonical filenames: ${nonCanonicalNewAdrs.join('; ')}. ` +
-        'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
+      'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
+    );
+  }
+  const ledgerEvaluation = await evaluateAdrAssumptionLedgers({
+    worktreePath,
+    baseRef: defaultBranch,
+    mergeBase,
+  });
+  if (ledgerEvaluation.kind === 'merge-base-unresolved') {
+    throw landGateError('adr-assumption-ledger',
+      `landSpec: ADR assumption-ledger evaluation could not resolve the merge base: ${ledgerEvaluation.detail}. ` +
+      'Ensure the feature branch has a resolvable merge base before landing.',
+    );
+  }
+  if (ledgerEvaluation.failures.length > 0) {
+    const offenders = ledgerEvaluation.failures
+      .flatMap(({ path, diagnostics }) => diagnostics.map((diagnostic) =>
+        `${path}: ${diagnostic.rule}${diagnostic.entryId ? ` (${diagnostic.entryId})` : ''}`))
+      .join('; ');
+    throw landGateError('adr-assumption-ledger',
+      `landSpec: ADR assumption ledgers are invalid: ${offenders}. ` +
+      'Repair each ADR using the template\'s ## Assumptions section before landing.',
     );
   }
   // 4e2. Coherence gate (DECIDE artifact coherence check): the traceability
@@ -693,6 +775,53 @@ export async function landSpec(
     });
   } catch (error) {
     throw landGateError('coherence', error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await runPlanReviewGate({ worktreePath, canonicalPath: canonical, planStem: markerSlug!, tier: tier!, planText: planContent, storiesText: storiesContent });
+  } catch (error) {
+    throw landGateError('plan-review', error instanceof Error ? error.message : String(error));
+  }
+
+  // D6: intake land is the sole blocking dependency-read path.  Markerless
+  // lands remain offline, but still validate accidental decision flags here so
+  // the normal land-gate rejection event is emitted by the CLI.
+  const acceptedDependencies = opts.acceptedDependencies ?? [];
+  const declinedDependencies = opts.declinedDependencies ?? [];
+  const emptyProposalResult = { kind: 'computed' as const, proposals: [], satisfied: [], advisory: [] };
+  // Native dependency edges exist only for GitHub issue references.  Other
+  // tracker refs (for example Jira keys) retain their established no-op land
+  // behavior; dependency flags against them are still rejected below.
+  const dependencySourceRef = parseSourceRef(sourceRef) ? sourceRef : undefined;
+  const proposalResult = dependencySourceRef
+    ? await computeLandDependencyProposals({
+      sourceRef: dependencySourceRef,
+      planText: planContent,
+      gh: opts.gh ?? (async () => { throw new Error('tracker runner unavailable'); }),
+      git: opts.dependencyGit ?? (async () => ({ exitCode: 1, stdout: '', stderr: '' })),
+      cwd: canonical,
+      baseRef: defaultBranch,
+    })
+    : emptyProposalResult;
+  const dependencyDecision = decideLandDependencies({
+    sourceRef: dependencySourceRef,
+    proposalResult,
+    accepted: acceptedDependencies,
+    declined: declinedDependencies,
+    skipReason: opts.skipDependencyCheck,
+  });
+  const dependency = { proposals: proposalResult, decision: dependencyDecision };
+  if (dependencyDecision.kind === 'refused-undecided') {
+    throw landGateError(
+      'dependency-proposals-undecided',
+      `${dependencyDecision.message}${dependencyDecision.skipUnused ? `\n${dependencyDecision.skipUnused}` : ''}`,
+      dependency,
+    );
+  }
+  if (dependencyDecision.kind === 'refused-unavailable') {
+    throw landGateError('dependency-check-unavailable', dependencyDecision.message, dependency);
+  }
+  if (dependencyDecision.kind === 'invalid') {
+    throw landGateError('dependency-decisions-invalid', dependencyDecision.message, dependency);
   }
 
   // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the
@@ -750,8 +879,9 @@ export async function landSpec(
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
   // this idea's artifacts, so the commit is idea-scoped and no foreign untracked file
   // can bleed in (FR-9). Commit in place on the worktree's branch — no checkout of the
-  // primary tree (FR-2).
-  await execFile('git', ['add', '.docs'], { cwd: worktreePath });
+  // primary tree (FR-2). The plan-review record was verified above and stays
+  // uncommitted: nothing downstream reads it from a merged spec.
+  await execFile('git', ['add', '--', '.docs', `:(exclude)${PLAN_REVIEW_ARTIFACT_DIR}`], { cwd: worktreePath });
   const hasStagedDocs = await execFile('git', ['diff', '--cached', '--quiet'], { cwd: worktreePath })
     .then(() => false)
     .catch((error: { code?: number }) => {
@@ -766,7 +896,12 @@ export async function landSpec(
     );
   }
 
-  return { slug, branch, repoPath: worktreePath };
+  return {
+    slug,
+    branch,
+    repoPath: worktreePath,
+    ...(dependencySourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
+  };
 }
 
 /** Existing paths retain their owning feature during DECIDE amendments. New paths,
@@ -779,19 +914,14 @@ async function resolveFeatureFiles(
   ideaFiles: Set<string>,
   featureSlug: string,
 ): Promise<Set<string>> {
-  const defaultBranch = await deriveDefaultBranch(canonicalPath);
-  const { stdout: base } = await execFile('git', ['merge-base', 'HEAD', defaultBranch], { cwd: worktreePath });
-  const { stdout: tree } = await execFile('git', ['ls-tree', '-r', '-z', base.trim(), '--', '.docs'], { cwd: worktreePath });
-  const existing = new Set(tree.split('\0').flatMap((entry) => {
-    const match = entry.match(/^100(?:644|755) blob [a-f0-9]+\t([\s\S]+)$/);
-    return match ? [match[1]] : [];
-  }));
+  const existing = await listDocsPathsAtMergeBase(worktreePath, canonicalPath);
   const families: Array<{ step: StepName; directory: string }> = [
     { step: 'prd', directory: 'specs' },
     { step: 'stories', directory: 'stories' },
     { step: 'plan', directory: 'plans' },
     { step: 'conflict_check', directory: 'conflicts' },
     { step: 'coherence_check', directory: 'coherence' },
+    { step: 'plan_review', directory: 'plan-review' },
   ];
   const amendments = validateFeatureArtifactStems(families.map(({ step, directory }) => ({
     step,
@@ -800,6 +930,27 @@ async function resolveFeatureFiles(
   const featureFiles = new Set(ideaFiles);
   for (const amendment of amendments) featureFiles.delete(amendment.path);
   return featureFiles;
+}
+
+/** Return the `.docs` paths present at this worktree's merge base. Shared by
+ * feature attribution and draft-artifact gates so both use the same lifecycle
+ * boundary rather than independently deriving it. */
+async function listDocsPathsAtMergeBase(worktreePath: string, canonicalPath: string): Promise<Set<string>> {
+  const defaultBranch = await deriveDefaultBranch(canonicalPath);
+  const { stdout: base } = await execFile('git', ['merge-base', 'HEAD', defaultBranch], { cwd: worktreePath });
+  const { stdout: tree } = await execFile('git', ['ls-tree', '-r', '-z', base.trim(), '--', '.docs'], { cwd: worktreePath });
+  return new Set(tree.split('\0').flatMap((entry) => {
+    const match = entry.match(/^100(?:644|755) blob [a-f0-9]+\t([\s\S]+)$/);
+    return match ? [match[1].replaceAll('\\', '/')] : [];
+  }));
+}
+
+/** Locate the dated amendment-note form. Templates retain YYYY-MM-DD and do
+ * not match; a real date makes the note an obsolete draft correction. */
+export function findDraftAmendmentNoteLines(content: string): string[] {
+  return content.split(/\r?\n/).filter((line) =>
+    /^\s*(?:>\s*)*\*\*Amended \d{4}-\d{2}-\d{2}\b/.test(line),
+  );
 }
 
 // ── Idea-scoped attribution (foundational helper; wired in later tasks) ───────
@@ -817,45 +968,7 @@ async function resolveFeatureFiles(
  * @param canonicalPath - the target's registry canonical path, used to derive the
  *   default branch the same way the worktree primitive did at creation time.
  */
-export async function resolveIdeaFiles(
-  worktreePath: string,
-  canonicalPath: string,
-): Promise<Set<string>> {
-  const defaultBranch = await deriveDefaultBranch(canonicalPath);
-
-  const { stdout: baseOut } = await execFile(
-    'git',
-    ['merge-base', 'HEAD', defaultBranch],
-    { cwd: worktreePath },
-  );
-  const base = baseOut.trim();
-
-  const { stdout: diffOut } = await execFile(
-    'git',
-    ['diff', '--name-only', base, 'HEAD'],
-    { cwd: worktreePath },
-  );
-  const committed = diffOut.trim() === '' ? [] : diffOut.trim().split('\n');
-
-  const { stdout: porcelainOut } = await execFile(
-    'git',
-    ['status', '--porcelain', '--untracked-files=all'],
-    { cwd: worktreePath },
-  );
-  const porcelainLines = porcelainOut.trim() === '' ? [] : porcelainOut.trim().split('\n');
-  const untracked = porcelainLines
-    .filter((line) => line.slice(0, 2) === '??')
-    .map((line) => line.slice(3).trim().replace(/^"(.*)"$/, '$1'));
-
-  const all = [...committed, ...untracked];
-  const ideaFiles = new Set<string>();
-  for (const p of all) {
-    if (p.startsWith('.docs/') || p.startsWith('.docs\\')) {
-      ideaFiles.add(p);
-    }
-  }
-  return ideaFiles;
-}
+export { resolveIdeaFiles } from './spec-change-set.js';
 
 /**
  * List EVERY artifact `.md` file in `dir` attributable to this idea — the files

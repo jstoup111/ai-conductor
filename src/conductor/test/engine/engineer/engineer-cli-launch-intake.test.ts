@@ -5,7 +5,7 @@
 // `--source-ref` write-back on land/handoff. gh is injected; no network.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -39,9 +39,11 @@ import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
 import { DEFAULT_PROVIDER, requireProviderCapability } from '../../../src/execution/provider-catalog.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
@@ -65,6 +67,9 @@ function makeGh(
       };
     }
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
+    if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+      return { stdout: JSON.stringify({ body: '' }) };
+    }
     if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
       return { stdout: JSON.stringify({ assignees: [{ login: 'test-owner' }] }) };
     }
@@ -92,11 +97,11 @@ async function makeGitRepo(name: string, baseDir: string): Promise<string> {
   return repoPath;
 }
 
-async function writeDocsArtifacts(repoPath: string, idea: string): Promise<void> {
+async function writeDocsArtifacts(worktreePath: string, canonicalPath: string, idea: string): Promise<void> {
   const slug = idea.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
-  const specsDir = join(repoPath, '.docs', 'specs');
-  const storiesDir = join(repoPath, '.docs', 'stories');
-  const plansDir = join(repoPath, '.docs', 'plans');
+  const specsDir = join(worktreePath, '.docs', 'specs');
+  const storiesDir = join(worktreePath, '.docs', 'stories');
+  const plansDir = join(worktreePath, '.docs', 'plans');
   await mkdir(specsDir, { recursive: true });
   await mkdir(storiesDir, { recursive: true });
   await mkdir(plansDir, { recursive: true });
@@ -110,6 +115,23 @@ async function writeDocsArtifacts(repoPath: string, idea: string): Promise<void>
     join(plansDir, `${slug}.md`),
     `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- The planned behavior is implemented.\n- The scoped tests pass.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
     'utf-8',
+  );
+  const planText = await readFile(join(plansDir, `${slug}.md`), 'utf8');
+  const storiesText = await readFile(join(storiesDir, `${slug}.md`), 'utf8');
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${slug}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, canonicalPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', `${slug}.md`),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
   );
 }
 
@@ -485,13 +507,16 @@ describe('write-back via --source-ref', () => {
     await writeRegistry([{ name: 'target-repo', path: repoPath }]);
     const wt = await createEngineerWorktree(repoPath, idea);
     await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
-    await writeDocsArtifacts(wt.worktreePath, idea);
+    await writeDocsArtifacts(wt.worktreePath, repoPath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'owner/target-repo#7' });
 
     const { gh, calls } = makeGh();
     const code = await dispatchEngineer(
-      { kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath, sourceRef: 'owner/target-repo#7' },
+      {
+        kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath,
+        sourceRef: 'owner/target-repo#7', skipDependencyCheck: 'legacy write-back coverage',
+      },
       baseOpts({ gh }),
     );
     expect(code).toBe(0);
@@ -505,7 +530,7 @@ describe('write-back via --source-ref', () => {
     await writeRegistry([{ name: 'target-repo', path: repoPath, remote: 'https://example.invalid/repo.git' }]);
     const wt = await createEngineerWorktree(repoPath, idea);
     await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
-    await writeDocsArtifacts(wt.worktreePath, idea);
+    await writeDocsArtifacts(wt.worktreePath, repoPath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'owner/target-repo#7' });
 

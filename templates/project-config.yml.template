@@ -195,6 +195,14 @@
 # Allowed: an integer >= 1; zero, negative, fractional, or non-numeric values fail the load.
 # Default: 1 (serial).
 # Changing it: anything above 1 shares one repository between builds, so expect more rebase kickbacks and provider spend that scales with the width; a daemon --concurrency flag overrides it.
+# Controls: executor_isolation — whether each daemon feature runs in a separate child process or in the supervisor process.
+# Allowed: child or in-process; any other value fails the load.
+# Default: child.
+# Changing it: child adopts the engine build current at each claim; in-process is the rollback mode and keeps the supervisor's boot build for every feature.
+# Controls: supervisor_max_stale_hours — how long a stale self-host supervisor may keep claiming before it drains and restarts.
+# Allowed: a finite number of hours greater than 0; invalid values warn and resolve to the default.
+# Default: 24.
+# Changing it: a smaller value reaches a fresh supervisor sooner but can stop claims more often; it applies only when stale-engine restart is active.
 # Controls: daemon_heap_limit_mb — the V8 old-space heap cap in megabytes for the continuous daemon.
 # Allowed: an integer >= 256.
 # Default: 4096.
@@ -236,7 +244,7 @@
 # Controls: stacked_prs — stacked delivery of a plan's ## Slices manifest.
 # Allowed: an object with enabled (true or false) and max_slices (integer 1-9; above 5 warns).
 # Default: unset; when present, enabled false and max_slices 1.
-# Changing it: enabling adds stacked-delivery checks at engineer/land and coverage_binding.
+# Changing it: enabling adds stacked-delivery checks at engineer/land.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
 # Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.
@@ -264,6 +272,15 @@
 # Allowed: a positive integer.
 # Default: 1.
 # Changing it: a higher cap lets the harness retry fixes unattended for longer, spending more before it asks for a human.
+# Controls: plan_review — policy for the DECIDE-phase plan review prompt.
+# Allowed: an object with only max_prompt_chars, a positive integer.
+# Default: unset; the runner allows prompts up to 400000 characters.
+# Changing it: raises the refusal threshold for unusually large plans when the operator accepts the additional review context.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: plan_review.max_prompt_chars — maximum characters the plan-review prompt may contain before review refuses to dispatch.
+# Allowed: a positive integer.
+# Default: 400000 in the runner.
+# Changing it: a higher value permits a larger review prompt and can increase provider context use.
 # Controls: architecture_review_as_built — policy for the as-built architecture review that runs on every feature.
 # Allowed: an object with checks (reachability, planGap, adrCompliance, diagramDrift, each with tiers: an array of S, M, L), remediation (enabled true or false), and max_remediation_laps (a positive integer).
 # Default: remediation.enabled true, max_remediation_laps 1; reachability and planGap run on every tier, adrCompliance and diagramDrift when approved ADRs or diagrams exist.
@@ -295,11 +312,6 @@
 # Allowed: an object with the single key enabled (true or false); any other key fails the load.
 # Default: enabled true.
 # Changing it: false makes every retry a plain rerun of the same step.
-# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
-# Controls: coverage_binding — the opt-in pre-BUILD judge that checks each acceptance criterion is asserted by its task's Done when checks.
-# Allowed: an object with judge, itself an object with the single key enabled (true or false).
-# Default: judge.enabled false.
-# Changing it: judge.enabled true adds a provider dispatch before BUILD and can stop a plan whose criteria are not bound to tasks.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: feature_applicability — whether merged DECIDE artifacts may declare selected feature steps inapplicable.
 # Allowed: an object with the single key enabled (true or false); any other key fails the load.
@@ -386,7 +398,7 @@ build_review:
     testQuality:
       enabled: false
 
-# enabled adds stacked-delivery checks at engineer/land and coverage_binding; build-loop slice
+# enabled adds stacked-delivery checks at engineer/land; build-loop slice
 # checkpoints remain reserved for the stacked child-plans chain (#2940–#2949).
 # stacked_prs:
 #   enabled: false

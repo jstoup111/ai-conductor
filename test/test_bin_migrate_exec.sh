@@ -25,6 +25,11 @@ assert() {
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
+TEST_BIN="$TMP_ROOT/bin"
+mkdir -p "$TEST_BIN"
+ln -s "$(command -p -v python3)" "$TEST_BIN/python3"
+PATH="$TEST_BIN:$PATH"
+
 # shellcheck disable=SC1090
 source <(sed '/# ─── Main/,$d' "$MIGRATE_SRC")
 

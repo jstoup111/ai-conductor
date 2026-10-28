@@ -1,4 +1,4 @@
-// Covers: task:5, task:8
+// Covers: task:2, task:3, task:5, task:8, task:rem-as-built-1-r2, task:rem-as-built-8-r1, task:rem-as-built-8-r2
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -6,10 +6,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { createProgram } from '../../src/cli.js';
-import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
+import { describeResealRecovery, detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
@@ -201,8 +200,226 @@ describe('detectResealCommand', () => {
   );
 });
 
+describe('describeResealRecovery', () => {
+  async function makeRecoveryFixture(
+    paths: Record<string, string>,
+    layout = '.worktrees',
+  ): Promise<{ root: string; worktree: string }> {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-recovery-'));
+    const worktree = join(root, layout, 'feat-x');
+    const git = (args: string[]) => execFile('git', args, { cwd: worktree });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await initTestRepo(worktree);
+      for (const path of Object.keys(paths)) {
+        await mkdir(dirname(join(worktree, path)), { recursive: true });
+        await writeFile(join(worktree, path), 'approved\n');
+      }
+      await git(['add', '.']);
+      await git(['commit', '-q', '-m', 'approved artifacts']);
+      await createProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim() });
+      await git(['checkout', '-q', '-b', 'feat-x']);
+      for (const [path, content] of Object.entries(paths)) await writeFile(join(worktree, path), content);
+      await git(['add', '.docs']);
+      await git(['commit', '-q', '-m', 'amend approved artifacts']);
+      return { root, worktree };
+    } catch (error) {
+      await rm(root, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  it('renders the exact operator recovery command for one committed sealed change', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-example.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await expect(describeResealRecovery(worktree, path)).resolves.toBe([
+        'Approve this change as an operator amendment by running, from the repository root that contains .worktrees/feat-x, in an interactive terminal:',
+        '  ai-conductor reseal --slug feat-x --path .docs/decisions/adr-2026-10-17-example.md --reason "«why»" --clear-halt',
+      ].join('\n'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accumulates every committed sealed change in path order', async () => {
+    const first = '.docs/decisions/adr-2026-10-17-a.md';
+    const second = '.docs/decisions/adr-2026-10-17-b.md';
+    const { root, worktree } = await makeRecoveryFixture({ [first]: 'corrected a\n', [second]: 'corrected b\n' });
+    try {
+      await expect(describeResealRecovery(worktree, first)).resolves.toBe([
+        'Approve this change as an operator amendment by running, from the repository root that contains .worktrees/feat-x, in an interactive terminal:',
+        '  ai-conductor reseal --slug feat-x --path .docs/decisions/adr-2026-10-17-a.md --path .docs/decisions/adr-2026-10-17-b.md --reason "«why»" --clear-halt',
+      ].join('\n'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('shell-quotes a changed path that contains a space', async () => {
+    const path = '.docs/decisions/adr 2026 space.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await expect(describeResealRecovery(worktree, path)).resolves.toContain("--slug feat-x --path '.docs/decisions/adr 2026 space.md'");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined outside the .worktrees layout', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-example.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' }, 'work');
+    try {
+      await expect(describeResealRecovery(worktree, path)).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  async function noApprovalState(worktree: string, path: string): Promise<{
+    seal: string;
+    events: boolean;
+    hint: string | undefined;
+  }> {
+    const sealPath = join(worktree, PROTECTED_ARTIFACT_SEAL_PATH);
+    const hint = await describeResealRecovery(worktree, path);
+    return {
+      seal: await readFile(sealPath, 'utf8'),
+      events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false),
+      hint,
+    };
+  }
+
+  it('returns no hint or approval for an added unsealed protected artifact', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const added = '.docs/decisions/adr-2026-10-17-new.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await writeFile(join(worktree, added), 'new decision\n');
+      await execFile('git', ['add', '.docs'], { cwd: worktree });
+      await execFile('git', ['commit', '-q', '-m', 'add unsealed decision'], { cwd: worktree });
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no hint or approval for an uncommitted sealed change', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await writeFile(join(worktree, path), 'uncommitted correction\n');
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no hint or approval for a feature-branch deletion', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await unlink(join(worktree, path));
+      await execFile('git', ['add', '-A'], { cwd: worktree });
+      await execFile('git', ['commit', '-q', '-m', 'delete protected decision'], { cwd: worktree });
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined without throwing for an unreadable seal or non-Git worktree', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const fixture = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    const nonGitRoot = await mkdtemp(join(tmpdir(), 'reseal-recovery-non-git-'));
+    const nonGitWorktree = join(nonGitRoot, '.worktrees', 'feat-x');
+    try {
+      await writeFile(join(fixture.worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'not json');
+      await mkdir(join(nonGitWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(nonGitWorktree, PROTECTED_ARTIFACT_SEAL_PATH), JSON.stringify({
+        version: 2, baselineCommit: 'base', protectedArtifacts: [{ path, fingerprint: 'sha256:before' }], rebaselines: [],
+      }));
+
+      await expect(Promise.all([
+        describeResealRecovery(fixture.worktree, path),
+        describeResealRecovery(nonGitWorktree, path),
+      ])).resolves.toEqual([undefined, undefined]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(nonGitRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not approve the successful two-path recovery preview', async () => {
+    const first = '.docs/decisions/adr-2026-10-17-a.md';
+    const second = '.docs/decisions/adr-2026-10-17-b.md';
+    const { root, worktree } = await makeRecoveryFixture({ [first]: 'corrected a\n', [second]: 'corrected b\n' });
+    try {
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, first)).resolves.toEqual({
+        seal: before,
+        events: false,
+        hint: expect.stringContaining('--path .docs/decisions/adr-2026-10-17-b.md'),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('dispatchResealCommand', () => {
-  it.each(['done', 'disabled'] as const)('invalidates %s coverage binding after resealing a changed feature ADR', async (coverageStatus) => {
+  async function stackFixture(
+    slices: Readonly<Record<number, readonly number[]>>,
+    recordedPositions: readonly number[],
+  ): Promise<{ root: string; worktree: string; planPath: string }> {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-stack-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const planPath = '.docs/plans/repair.md';
+    await mkdir(worktree, { recursive: true });
+    await initTestRepo(worktree);
+    await Promise.all([
+      mkdir(join(worktree, '.pipeline', 'children', '1'), { recursive: true }),
+      mkdir(join(worktree, '.ai-conductor'), { recursive: true }),
+      mkdir(join(worktree, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(worktree, '.docs', 'stories'), { recursive: true }),
+      mkdir(join(worktree, '.docs', 'complexity'), { recursive: true }),
+    ]);
+    const positions = Object.keys(slices).map(Number).sort((left, right) => left - right);
+    const taskBlocks = positions.flatMap((position) => slices[position].flatMap((task) => [
+      `### Task ${task}: Task ${task}`,
+      `**Story:** Story ${position}`,
+      '**Dependencies:** none',
+      '',
+    ]));
+    await Promise.all([
+      writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n'),
+      writeFile(join(worktree, planPath), [
+        '# Implementation Plan: repair', '', '**Stories:** .docs/stories/repair.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |',
+        ...positions.map((position) => `| ${position} | Slice ${position} | ${slices[position].join(', ')} |`),
+        '', ...taskBlocks,
+      ].join('\n')),
+      writeFile(join(worktree, '.docs', 'stories', 'repair.md'), positions.map((position) => `## Story ${position}: Slice ${position}`).join('\n\n')),
+      writeFile(join(worktree, '.docs', 'complexity', 'repair.md'), 'Tier: M\nStacked-Delivery: approved\n'),
+    ]);
+    await writeFile(join(worktree, 'positions.json'), JSON.stringify(recordedPositions));
+    const blob = (await execFile('git', ['hash-object', '-w', 'positions.json'], { cwd: worktree })).stdout.trim();
+    await execFile('git', ['update-ref', 'refs/conductor/repair/positions', blob], { cwd: worktree });
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+      baselineCommit: 'base', protectedArtifacts: [{ path: planPath, fingerprint: 'sha256:before' }], rebaselines: [], version: 2,
+    }));
+    return { root, worktree, planPath };
+  }
+
+  it('does not change retired coverage-binding state after resealing a changed feature ADR', async () => {
     const root = await mkdtemp(join(tmpdir(), 'reseal-cli-coverage-void-'));
     const worktree = join(root, '.worktrees', 'repair');
     const adrPath = '.docs/decisions/adr-repair.md';
@@ -219,20 +436,18 @@ describe('dispatchResealCommand', () => {
         rebaselines: [], version: 2,
       }));
       await writeFile(join(worktree, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-        version: 1, slug: 'repair', runId: 'coverage-run', status: coverageStatus, entries: [],
+        version: 1, slug: 'repair', runId: 'coverage-run', status: 'done', entries: [],
       }) + '\n');
       await writeFile(join(worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({
-        coverage_binding: 'done', build: 'done', last_step: 'build',
+        build: 'done', last_step: 'build',
       }) + '\n');
-      await writeVerdict(worktree, 'coverage_binding', {
-        satisfied: true, checkedAt: 1, reason: 'coverage binding complete',
-      });
+      const coverageBefore = await readFile(join(worktree, '.pipeline', 'coverage-binding.json'), 'utf8');
+      const stateBefore = await readFile(join(worktree, '.pipeline', 'conduct-state.json'), 'utf8');
       await expect(dispatchResealCommand(command, {
         cwd: root,
         isInteractive: true,
         resolveHead: vi.fn().mockResolvedValue('target'),
         resolveBaseBranch: vi.fn().mockResolvedValue('main'),
-        resolveCoverageBindingDecideSet: vi.fn().mockResolvedValue({ paths: new Set([adrPath]) }),
         reseal: vi.fn().mockResolvedValue({
           baselineCommit: 'target',
           protectedArtifacts: [{ path: adrPath, fingerprint: 'sha256:after' }],
@@ -240,68 +455,135 @@ describe('dispatchResealCommand', () => {
         }),
       })).resolves.toBe(0);
 
-      expect(JSON.parse(await readFile(join(worktree, '.pipeline', 'conduct-state.json'), 'utf8'))).toMatchObject({
-        coverage_binding: 'stale',
-      });
-      await expect(readVerdict(worktree, 'coverage_binding')).resolves.toMatchObject({ satisfied: false });
-      expect(JSON.parse(await readFile(join(worktree, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        status: 'invalidated',
-      });
-      expect((await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).split('\n').filter(Boolean)
-        .map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            type: 'coverage_binding_invalidated', paths: [adrPath], origin: 'decide-change',
-          }),
-        ]));
+      await expect(readFile(join(worktree, '.pipeline', 'coverage-binding.json'), 'utf8')).resolves.toBe(coverageBefore);
+      await expect(readFile(join(worktree, '.pipeline', 'conduct-state.json'), 'utf8')).resolves.toBe(stateBefore);
+      expect(JSON.parse(stateBefore)).not.toHaveProperty('coverage_binding');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('leaves coverage binding byte-identical and emits no invalidation when reseal is refused', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-coverage-refusal-'));
-    const worktree = join(root, '.worktrees', 'repair');
-    const adrPath = '.docs/decisions/adr-repair.md';
-    const command = detectResealCommand(
-      argv('--slug', 'repair', '--path', adrPath, '--reason', 'Corrected the governing decision.'),
-    );
+  it.each([
+    ['adds a slice', { 1: [1, 2], 2: [3], 3: [4] }, [1, 2, 3]],
+    ['removes a slice', { 2: [3, 4] }, [2]],
+  ] as const)('refuses resealing a plan that %s after children exist', async (_label, slices, proposed) => {
+    const fixture = await stackFixture(slices, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.', '--clear-halt'));
     if (!command) throw new Error('expected valid reseal command');
-
     try {
-      await mkdir(join(worktree, '.pipeline'), { recursive: true });
-      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
-        baselineCommit: 'base', protectedArtifacts: [{ path: adrPath, fingerprint: 'sha256:before' }],
-        rebaselines: [], version: 2,
-      }));
-      await writeFile(join(worktree, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-        version: 1, slug: 'repair', runId: 'coverage-run', status: 'done', entries: [],
-      }) + '\n');
-      await writeFile(join(worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ coverage_binding: 'done' }) + '\n');
-      await writeVerdict(worktree, 'coverage_binding', { satisfied: true, checkedAt: 1 });
-      const coveragePaths = [
-        join(worktree, '.pipeline', 'coverage-binding.json'),
-        join(worktree, '.pipeline', 'conduct-state.json'),
-        join(worktree, '.pipeline', 'gates', 'coverage_binding.json'),
-      ];
-      const before = await Promise.all(coveragePaths.map((path) => readFile(path, 'utf8')));
-      const events = new ConductorEventEmitter();
-      const invalidations: unknown[] = [];
-      events.on('coverage_binding_invalidated', (event) => { invalidations.push(event); });
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      const sealBefore = await readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8');
+      const reseal = vi.fn();
+      const err = vi.fn();
 
       await expect(dispatchResealCommand(command, {
-        cwd: root,
-        err: vi.fn(),
-        isInteractive: true,
-        resolveCoverageBindingDecideSet: vi.fn(),
-        reseal: vi.fn().mockRejectedValue(new Error('Protected artifact changed: .docs/stories/unlisted.md')),
-        events,
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
       })).resolves.toBe(1);
 
-      await expect(Promise.all(coveragePaths.map((path) => readFile(path, 'utf8')))).resolves.toEqual(before);
-      expect(invalidations).toEqual([]);
-      await expect(readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(err).toHaveBeenCalledWith(`reseal: cannot change sealed stack positions: recorded [1,2] and proposed [${proposed.join(',')}].`);
+      expect(reseal).not.toHaveBeenCalled();
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['removes all slices', async (worktree: string, planPath: string) =>
+      writeFile(join(worktree, planPath), '# Implementation Plan: repair\n\n### Task 1: Flat\n**Dependencies:** none\n'), []],
+    ['shrinks to one slice', async (worktree: string, planPath: string) => {
+      const plan = await readFile(join(worktree, planPath), 'utf8');
+      await writeFile(join(worktree, planPath), plan
+        .replace('| 1 | Slice 1 | 1 |\n| 2 | Slice 2 | 2 |', '| 1 | Slice 1 | 1, 2 |'));
+    }, [1]],
+  ] as const)('refuses resealing a plan that %s from a durable two-child stack', async (_label, rewrite, proposed) => {
+    const fixture = await stackFixture({ 1: [1], 2: [2] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.', '--clear-halt'));
+    if (!command) throw new Error('expected valid reseal command');
+    try {
+      await rewrite(fixture.worktree, fixture.planPath);
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      const sealBefore = await readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8');
+      const reseal = vi.fn();
+      const err = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith(`reseal: cannot change sealed stack positions: recorded [1,2] and proposed [${proposed.join(',')}].`);
+      expect(reseal).not.toHaveBeenCalled();
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['a membership error', (plan: string) => plan.replace('| 1 | Slice 1 | 1 |', '| 1 | Slice 1 | 1, 2 |')],
+    ['a dependency error', (plan: string) => plan.replace('### Task 1: Task 1\n**Story:** Story 1\n**Dependencies:** none', '### Task 1: Task 1\n**Story:** Story 1\n**Dependencies:** 2')],
+  ])('refuses before resealing when changed positions also carry %s', async (_label, invalidate) => {
+    const fixture = await stackFixture({ 1: [1], 3: [2] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.', '--clear-halt'));
+    if (!command) throw new Error('expected valid reseal command');
+    try {
+      const plan = await readFile(join(fixture.worktree, fixture.planPath), 'utf8');
+      await writeFile(join(fixture.worktree, fixture.planPath), invalidate(plan));
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      const sealBefore = await readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8');
+      const reseal = vi.fn();
+      const err = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith('reseal: cannot establish proposed sealed stack positions: recorded [1,2]; cause plan-invalid.');
+      expect(reseal).not.toHaveBeenCalled();
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
+      await expect(readFile(join(fixture.worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a position change before an unrelated unknown Story ID can mask it', async () => {
+    const fixture = await stackFixture({ 1: [1], 3: [3] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Correct plan.'));
+    if (!command) throw new Error('expected valid reseal command');
+    try {
+      const plan = await readFile(join(fixture.worktree, fixture.planPath), 'utf8');
+      await writeFile(join(fixture.worktree, fixture.planPath), plan.replace('**Story:** Story 3', '**Story:** Story 999'));
+      const err = vi.fn();
+      const reseal = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith('reseal: cannot change sealed stack positions: recorded [1,2] and proposed [1,3].');
+      expect(reseal).not.toHaveBeenCalled();
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('reseals a plan that moves a task between its existing positions', async () => {
+    const fixture = await stackFixture({ 1: [1, 2, 4], 2: [3] }, [1, 2]);
+    const command = detectResealCommand(argv('--slug', 'repair', '--path', fixture.planPath, '--reason', 'Move task four.'));
+    if (!command) throw new Error('expected valid reseal command');
+    const reseal = vi.fn().mockResolvedValue({
+      baselineCommit: 'target', protectedArtifacts: [{ path: fixture.planPath, fingerprint: 'sha256:after' }], rebaselines: [], version: 2,
+    });
+    try {
+      await expect(dispatchResealCommand(command, {
+        cwd: fixture.root, isInteractive: true, reseal, resolveHead: vi.fn().mockResolvedValue('target'), events: new ConductorEventEmitter(),
+      })).resolves.toBe(0);
+      expect(reseal).toHaveBeenCalledOnce();
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
     }
   });
 
@@ -1089,6 +1371,9 @@ describe('dispatchResealCommand', () => {
       }]);
       await expect(verifyProtectedArtifactSeal({ projectRoot: worktree, baseBranch: 'main' }))
         .resolves.toMatchObject({ ok: true });
+      const seal = JSON.parse(await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')) as { protectedArtifacts: { path: string }[] };
+      expect(seal.protectedArtifacts.map(({ path }) => path)).not.toContain(retired);
+      await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

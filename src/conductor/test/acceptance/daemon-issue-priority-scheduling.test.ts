@@ -1,3 +1,4 @@
+// Covers: task:4
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Daemon Issue-Priority Scheduling" (issue #200).
 //
@@ -6,7 +7,7 @@
 //
 // NONE of this feature's production code exists yet: `backlog-priority.ts`
 // (parsePriorityLabels / orderBacklog / createPriorityResolver /
-// ghIssueLabelReader) is a brand-new module, and the REAL, EXISTING entry
+// createPriorityResolver) is a brand-new module, and the REAL, EXISTING entry
 // points — `localWorkSource(...).discover()` and `scanInheritedState` /
 // `renderDashboard` — have not yet been widened to call it. Every test below
 // is therefore expected to FAIL, either with "Cannot find module
@@ -21,11 +22,10 @@
 //     daemon-backlog.test.ts / dependency-ordered-intake-and-dispatch.test.ts)
 //   - `LocalWorkSourceDeps.fastForwardRoot` / `.isProcessed` / `.hasWarned` /
 //     `.markWarned` (no real git/fs ledger needed for these flows)
-//   - the `IssueLabelReader` seam (`(refs) => Promise<Map<string, string[] |
-//     'not-found'>>`) — never a real `gh` call; one flow additionally exercises
-//     `ghIssueLabelReader` against a fake injected exec runner (mirrors the
-//     `GhRunner` pattern in pr-labels.ts) to prove the cross-repo-ref → argv →
-//     label-name derivation, not just the resolver in isolation.
+//   - a label-reader fixture used to compose an `OrderingSource` — never a real
+//     `gh` call; one flow additionally exercises the production ordering source
+//     against a fake injected exec runner to prove cross-repo argv and fact
+//     derivation, not just the resolver in isolation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, afterAll } from 'vitest';
@@ -38,6 +38,7 @@ import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daem
 import { scanInheritedState, renderDashboard, type ScanInheritedStateDeps } from '../../src/engine/daemon-dashboard.js';
 import { pickEligible, type PickEligibleCtx, type BacklogItem } from '../../src/engine/daemon.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
+import { createOrderingSource } from '../../src/engine/ordering-source.js';
 
 // `backlog-priority.ts` does not exist yet (pre-implementation). It is loaded
 // via a per-test dynamic import (mirrors the pattern already used in
@@ -49,19 +50,33 @@ import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 // the fakes below type-check without importing types from the missing file.
 const BACKLOG_PRIORITY_MOD = '../../src/engine/backlog-priority.js';
 async function loadPriorityMod(): Promise<{
-  createPriorityResolver: (reader: IssueLabelReader, log: (m: string) => void) => any;
+  createPriorityResolver: (source: ReturnType<typeof orderingSourceFor>, log: (m: string) => void) => any;
   orderBacklog: (items: BacklogItem[], res: PriorityResolution) => BacklogItem[];
-  ghIssueLabelReader: (runGh: GhRunner) => IssueLabelReader;
 }> {
   return (await import(BACKLOG_PRIORITY_MOD)) as any;
 }
 
-type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
+type LabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
 type PriorityResolution =
   | { mode: 'banded'; bands: Map<string, 'high' | 'medium' | 'low'> }
   | { mode: 'fallback' }
   | { mode: 'off' };
 type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+
+function orderingSourceFor(reader: LabelReader) {
+  return {
+    async readFacts(refs: string[]) {
+      const labelsByRef = await reader(refs);
+      return new Map([...labelsByRef].map(([ref, labels]) => [
+        ref,
+        labels === 'not-found'
+          ? 'not-found'
+          : { priority: labels.includes('priority: critical') ? 'critical' as const : labels.includes('priority: high') ? 'high' as const : labels.includes('priority: medium') ? 'medium' as const : labels.includes('priority: low') ? 'low' as const : undefined, size: undefined },
+      ]));
+    },
+    async readBlockers() { return []; },
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared fixture helpers (mirror dependency-ordered-intake-and-dispatch.test.ts)
@@ -139,13 +154,13 @@ afterAll(async () => {
   await Promise.all(workDirs.map((d) => rm(d, { recursive: true, force: true })));
 });
 
-/** Fake `IssueLabelReader`: resolves each ref from a fixed map, records every
+/** Fake label reader: resolves each ref from a fixed map, records every
  *  batch it was called with, and rejects the WHOLE call when any requested
  *  ref is mapped to the `'THROW'` sentinel — modeling a transport/auth outage
  *  (atomic per fetch, never a per-ref failure) at the resolver seam. */
 function makeFakeReader(
   labels: Record<string, string[] | 'not-found' | 'THROW'>,
-): IssueLabelReader & { calls: string[][] } {
+): LabelReader & { calls: string[][] } {
   const calls: string[][] = [];
   const reader = (async (refs: string[]) => {
     calls.push([...refs]);
@@ -158,7 +173,7 @@ function makeFakeReader(
       out.set(r, v === undefined ? 'not-found' : (v as string[] | 'not-found'));
     }
     return out;
-  }) as IssueLabelReader & { calls: string[][] };
+  }) as LabelReader & { calls: string[][] };
   reader.calls = calls;
   return reader;
 }
@@ -170,10 +185,10 @@ function makeFakeReader(
  *  until that task lands — this is the pre-implementation RED signal. */
 async function buildDeps(
   dir: string,
-  opts: { reader?: IssueLabelReader; log?: (m: string) => void } = {},
+  opts: { reader?: LabelReader; log?: (m: string) => void } = {},
 ): Promise<LocalWorkSourceDeps> {
   const log = opts.log ?? (() => {});
-  const resolver = opts.reader ? (await loadPriorityMod()).createPriorityResolver(opts.reader, log) : undefined;
+  const resolver = opts.reader ? (await loadPriorityMod()).createPriorityResolver(orderingSourceFor(opts.reader), log) : undefined;
   return {
     projectRoot: dir,
     baseBranch: 'main',
@@ -374,7 +389,7 @@ describe('Flow B — refresh caching and relabel reorders without a restart', ()
     await seedSpec(dir, '2026-06-10-relabel-target', { sourceRef: 'acme/app#1' });
     await seedSpec(dir, '2026-06-05-medium', { sourceRef: 'acme/app#2' });
     const labels: Record<string, string[]> = { 'acme/app#1': ['priority: low'], 'acme/app#2': ['priority: medium'] };
-    const reader: IssueLabelReader = async (refs) => {
+    const reader: LabelReader = async (refs) => {
       const out = new Map<string, string[] | 'not-found'>();
       for (const r of refs) out.set(r, labels[r] ?? 'not-found');
       return out;
@@ -407,7 +422,7 @@ describe('Flow B — refresh caching and relabel reorders without a restart', ()
     const dir = await freshDir();
     await seedSpec(dir, '2026-06-10-a', { sourceRef: 'acme/app#1' });
     const labels: Record<string, string[]> = { 'acme/app#1': ['priority: low'] };
-    const reader: IssueLabelReader = async (refs) => {
+    const reader: LabelReader = async (refs) => {
       const out = new Map<string, string[] | 'not-found'>();
       for (const r of refs) out.set(r, labels[r] ?? 'not-found');
       return out;
@@ -504,7 +519,7 @@ describe('Flow C — outage fail-soft through the real WorkSource', () => {
     await seedSpec(dir, '2026-06-05-b', { sourceRef: 'acme/app#2' });
     const log: string[] = [];
     const flags: Record<string, string[] | 'THROW'> = { 'acme/app#1': 'THROW', 'acme/app#2': ['priority: low'] };
-    const reader: IssueLabelReader = async (refs) => {
+    const reader: LabelReader = async (refs) => {
       if (refs.some((r) => flags[r] === 'THROW')) throw new Error('unreachable');
       const out = new Map<string, string[] | 'not-found'>();
       for (const r of refs) out.set(r, (flags[r] as string[]) ?? 'not-found');
@@ -692,11 +707,11 @@ describe('Flow E — dashboard shows effective build order, band, and fallback m
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Flow F — production gh label reader: cross-repo ref → argv → labels
+// Flow F — production ordering source: cross-repo ref → argv → facts
 // Stories: FR-3 happy path (cross-repo ref resolved per-ref); FR-7 (transport
 //          error classification at the real gh call site, not a hand-built fake)
 // ─────────────────────────────────────────────────────────────────────────────
-describe('Flow F — ghIssueLabelReader resolves a cross-repo sourceRef via the real parser', () => {
+describe('Flow F — ordering source resolves a cross-repo sourceRef via the real parser', () => {
   it('builds the correct gh argv for an issue in a DIFFERENT repo than the daemon\'s own', async () => {
     const calls: { args: string[]; cwd: string }[] = [];
     const runGh: GhRunner = async (args, opts) => {
@@ -704,12 +719,10 @@ describe('Flow F — ghIssueLabelReader resolves a cross-repo sourceRef via the 
       return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }, { name: 'bug' }] }) };
     };
 
-    const { ghIssueLabelReader } = await loadPriorityMod();
-    const reader = ghIssueLabelReader(runGh);
-    const result = await reader(['other-org/other-repo#42']);
+    const result = await createOrderingSource({ run: runGh }).readFacts(['other-org/other-repo#42']);
 
     expect(calls[0]?.args).toEqual(['api', 'repos/other-org/other-repo/issues/42']);
-    expect(result.get('other-org/other-repo#42')).toEqual(['priority: high', 'bug']);
+    expect(result.get('other-org/other-repo#42')).toEqual({ priority: 'high', size: undefined });
   });
 
   it('a 404 from gh maps to \'not-found\' (data), any other failure throws (transport)', async () => {
@@ -718,15 +731,12 @@ describe('Flow F — ghIssueLabelReader resolves a cross-repo sourceRef via the 
       err.stderr = 'HTTP 404: Not Found';
       throw err;
     };
-    const { ghIssueLabelReader } = await loadPriorityMod();
-    const reader1 = ghIssueLabelReader(notFoundRunner);
-    const result = await reader1(['acme/app#999']);
+    const result = await createOrderingSource({ run: notFoundRunner }).readFacts(['acme/app#999']);
     expect(result.get('acme/app#999')).toBe('not-found');
 
     const enoentRunner: GhRunner = async () => {
       throw Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
     };
-    const reader2 = ghIssueLabelReader(enoentRunner);
-    await expect(reader2(['acme/app#1'])).rejects.toThrow();
+    await expect(createOrderingSource({ run: enoentRunner }).readFacts(['acme/app#1'])).rejects.toThrow();
   });
 });

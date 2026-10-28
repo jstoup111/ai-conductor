@@ -45,7 +45,10 @@ describe('built-in build-review candidate runner', () => {
     };
     const discoverCustom = vi.fn(async () => []);
     const coordinator = vi.fn(async (_inputs, resolved) => {
-      expect(resolved.catalog).toEqual([expect.objectContaining({ id: 'testQuality', kind: 'builtin' })]);
+      expect(resolved.catalog).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'testQuality', kind: 'builtin' }),
+        expect.objectContaining({ id: 'implementationQuality', kind: 'builtin' }),
+      ]));
       return { success: true, output: 'built-in candidate settled' };
     });
     const runner = new DefaultStepRunner(provider, 'builtin-candidate', root, {

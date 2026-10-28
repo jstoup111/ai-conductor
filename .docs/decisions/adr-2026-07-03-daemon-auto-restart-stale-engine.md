@@ -58,6 +58,12 @@ tmux sessions or versions the dist is issue #215 and out of scope here.
    > **drained boundary**: the dispatcher stops claiming, in-flight executors finish, then the
    > check/rebuild/restart runs. The mid-build invariant this decision protects is unchanged —
    > no build is ever running when the engine is swapped.
+
+   > **Amended 2026-10-15 by #2392:** Executors are now pinned to an immutable engine version
+   > per dispatch, so a `dist` flip never swaps the engine under a running build. The rebuild
+   > therefore runs while executors are busy. The supervisor's own restart fires at a natural
+   > idle, or after a claim-stop drain once `supervisor_max_stale_hours` elapses or an executor
+   > protocol mismatch occurs. See adr-2026-10-15-per-dispatch-engine-pinned-executor D7 and D8.
    All gates must pass before acting: continuous mode, `selfHost` true
    (existing `classifySelfHost`), config flag `auto_restart_on_stale_engine: true`
    (new key, **default false**, read once at startup like all project config), verdict

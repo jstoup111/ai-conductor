@@ -1,9 +1,11 @@
+// Covers: task:rem-as-built-rem-as-built-R15
 import { describe, expect, it } from 'vitest';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 const SOURCE_ROOT = join(process.cwd(), 'src');
 const LAND_SPEC = 'engine/engineer/land-spec.ts';
+const RESTACK_REPLAY = 'engine/restack/restack-replay.ts';
 
 interface Violation { file: string; line: number; }
 
@@ -27,6 +29,8 @@ function scanCommitMessages(source: string, file: string): Violation[] {
     if (file === LAND_SPEC && args.includes('composeSpecCommitMessage(')) continue;
     const callEnd = source.indexOf(');', (match.index ?? 0) + args.length);
     const call = source.slice(match.index, callEnd === -1 ? undefined : callEnd + 2);
+    // adr-2026-10-10-stacked-restack-journaled-replay D3 preserves the historical message verbatim.
+    if (file === RESTACK_REPLAY && /\{\s*input:\s*replayedMessage\b/.test(call)) continue;
     if (call.includes('withDaemonCoAuthorTrailer(')) continue;
     const offset = match.index ?? 0;
     violations.push({ file, line: source.slice(0, offset).split('\n').length });
@@ -51,6 +55,19 @@ describe('daemon commit co-author guard', () => {
     expect(source).toContain("['commit', '-m', composeSpecCommitMessage(");
     expect(source).not.toContain('withDaemonCoAuthorTrailer(');
     expect(scanCommitMessages(source, LAND_SPEC)).toEqual([]);
+  });
+
+  it('allows only restack to replay the raw historical commit-tree message', async () => {
+    const source = await readFile(join(SOURCE_ROOT, RESTACK_REPLAY), 'utf8');
+    // D3 of adr-2026-10-10-stacked-restack-journaled-replay preserves this message verbatim.
+    expect(source).toMatch(/'commit-tree'[\s\S]*?\{ input: replayedMessage,/);
+    expect(source).not.toContain('withDaemonCoAuthorTrailer(');
+    expect(scanCommitMessages(source, RESTACK_REPLAY)).toEqual([]);
+
+    const replay = "await git(['commit-tree', 'tree'], { input: replayedMessage });\n";
+    expect(scanCommitMessages(replay, RESTACK_REPLAY)).toEqual([]);
+    expect(scanCommitMessages(replay, 'engine/restack/other.ts'))
+      .toEqual([{ file: 'engine/restack/other.ts', line: 1 }]);
   });
 
   it('reports an unwrapped commit fixture with its file and line', () => {

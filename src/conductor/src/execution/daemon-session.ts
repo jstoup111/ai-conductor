@@ -61,7 +61,7 @@ export function withDaemonSessionMarker(
  * list in lockstep with the referenced SKILL.md/hook contracts — do NOT add
  * daemon/engineer/state-mutating verbs here.
  */
-const SESSION_SANCTIONED_SUBCOMMANDS = [
+export const SESSION_SANCTIONED_SUBCOMMANDS = [
   // skills/tdd/SKILL.md + skills/pipeline/SKILL.md — scoped VERIFY runs the
   // affected-test union through `ai-conductor scoped-run <selectors...>`.
   'scoped-run',
@@ -76,8 +76,6 @@ const SESSION_SANCTIONED_SUBCOMMANDS = [
   // skills/manual-test/SKILL.md — records results/skip into the worktree's
   // own .pipeline; the manual-test gate reads this artifact.
   'manual-test-record',
-  // skills/pipeline/SKILL.md — evaluator closeout telemetry event.
-  'closeout-event',
   // hooks/claude/post-commit-derive-feedback.sh — the advisory post-commit
   // hook invokes the engine derive path from inside the session's git commit.
   'derive-feedback',
@@ -87,6 +85,10 @@ const SESSION_SANCTIONED_SUBCOMMANDS = [
   // git-hook-assets.ts — blocking child membership validation for a commit
   // authored inside the daemon-managed maker session.
   'task-membership-check',
+  // git-hook-assets.ts — the prepare-commit-msg hook adds the routed round's
+  // `Round:` trailer to the session's own commit message; it writes nothing
+  // but that message file.
+  'round-stamp',
   // engine/conductor.ts FINISH publication prompts + skills/pr/SKILL.md — the
   // author_pr_prose / repair passes submit PR edits as a guarded
   // `pull-request.edit` request. github-operations.ts enforces feature
@@ -107,7 +109,9 @@ export type DaemonSessionSubcommand =
   | 'config'
   | 'test-suite'
   | 'build-review'
+  | 'done-when'
   | 'finish-record'
+  | 'docs-prune'
   | 'unknown'
   | 'none';
 
@@ -116,7 +120,9 @@ const KNOWN_BLOCKED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'config',
   'test-suite',
   'build-review',
+  'done-when',
   'finish-record',
+  'docs-prune',
 ]);
 
 export type DaemonSessionGuardVerdict =

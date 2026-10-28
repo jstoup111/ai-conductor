@@ -1,14 +1,16 @@
-// Covers: task:27
+// Covers: task:2, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { joinBuildReviewRubricOutcomes, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
-import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
+import { joinBuildReviewRubricOutcomes, parseBuildReviewAggregate, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId, type BuildReviewFinding, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
-import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
+import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
+import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
+import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from '../../src/engine/build-review-cli.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
@@ -17,7 +19,7 @@ vi.mock('../../src/engine/config.js', async (importOriginal) => ({
 }));
 
 const lapId = parseBuildReviewLapId('lap-current')!;
-const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
+const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', severity: 'minor', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } } satisfies BuildReviewFinding;
 const infrastructureAggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
@@ -117,6 +119,47 @@ describe('build-review findings CLI', () => {
     caseRead.mockRestore();
   });
 
+  // Covers: task:19
+  it('reports an out-of-delta finding from the shared resolver using the persisted lap scope', async () => {
+    const raw = aggregateWithTestQuality({
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3',
+      findings: [finding], verdict: 'FAIL',
+    });
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const reviewScope = {
+      mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity: 'policy',
+      reviewedHunks: [{ path: 'test/a.test.ts', contentHash: finding.anchor.locus.contentHash }],
+      deltaHunks: [{ path: 'test/a.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }],
+      outOfDeltaSourceIds: [],
+    } as const;
+    const print = vi.fn();
+    const changedFileCalls: unknown[] = [];
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async (path) => path.endsWith('/testQuality.json')
+        ? JSON.stringify({ version: 2, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: raw.results.testQuality, provenance: { kind: 'fresh' }, reviewScope })
+        : JSON.stringify(raw),
+      readCurrentLapChangedFiles: async (input) => {
+        changedFileCalls.push(input);
+        return [{
+          path: 'test/a.test.ts', changeKind: 'modified', hunks: [
+            { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: finding.anchor.locus.contentHash },
+            { oldStart: 10, oldCount: 1, newStart: 10, newCount: 1, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+          ],
+        }];
+      },
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
+      readMechanicalFaults: async () => 0, print,
+    })).resolves.toBe(0);
+
+    expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
+      verdict: 'PASS', unresolvedFindingIds: [], outOfDeltaFindingIds: [identity.id],
+    });
+    expect(changedFileCalls).toEqual([{ projectRoot: '/main/.worktrees/review-rubrics', mergeBase: 'base', headSha: 'head' }]);
+  });
+
   // Covers: task:12
   it('renders refuted autonomous cases separately from operator dispositions in human and JSON output', async () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
@@ -152,6 +195,153 @@ describe('build-review findings CLI', () => {
       }],
       acceptedDispositions: [expect.objectContaining({ disposition: expect.objectContaining({ rationale: 'operator risk' }) })],
     });
+  });
+
+  // Covers: task:10
+  it('renders recurrence lineage and distinct-case declarations without changing unrelated case rows', async () => {
+    const recurring = {
+      ...refutedCaseStore.cases[0]!, id: 'N', disposition: 'act' as const, resolution: 'open' as const,
+      rationale: 'This recurrence needs another repair attempt.',
+      sources: [{ sourceId: 'testQuality:sha256:recurring', outcome: 'acted' as const, recordedAt: '2026-10-23T10:00:00.000Z' }],
+      effect: { id: 'effect-N', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work-order-N' },
+      recurrenceOf: ['R'], distinctFrom: [{ caseId: 'R', reason: 'The changed anchor is separate.' }],
+    };
+    const root = {
+      ...refutedCaseStore.cases[0]!, id: 'R', disposition: 'act' as const, resolution: 'resolved' as const,
+      sources: [{ sourceId: 'testQuality:sha256:root', outcome: 'acted' as const, recordedAt: '2026-10-22T10:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work-order-R' },
+    };
+    const unrelated = { ...refutedCaseStore.cases[0]!, id: 'U', rationale: 'No lineage relationship exists.' };
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [recurring, root, unrelated] } }) }),
+      readMechanicalFaults: async () => 0, print,
+    })).resolves.toBe(0);
+
+    expect((print.mock.calls[0]![0] as string).split('\n').filter((line) => line.startsWith('Autonomous case outcome:') || line.startsWith('distinct from ') || line.startsWith('recurs from ') || line.startsWith('declared distinct by '))).toEqual([
+      'Autonomous case outcome: N; disposition: act; resolution: open; source ids: testQuality:sha256:recurring; effect: action/applied; claim: The changed test does not observe the behavior.; assertions: The test omits the observable assertion. (refuted); The assertion is reachable. (upheld); rationale: This recurrence needs another repair attempt.',
+      'distinct from R: The changed anchor is separate.',
+      'recurs from R; 2 of 3 applied attempts',
+      'Autonomous case outcome: R; disposition: act; resolution: resolved; source ids: testQuality:sha256:root; effect: action/applied; claim: The changed test does not observe the behavior.; assertions: The test omits the observable assertion. (refuted); The assertion is reachable. (upheld); rationale: The cited assertion is contradicted by the current test.',
+      'declared distinct by N: The changed anchor is separate.',
+      'Autonomous case outcome: U; disposition: refute; resolution: resolved; source ids: testQuality:sha256:refuted; effect: none; claim: The changed test does not observe the behavior.; assertions: The test omits the observable assertion. (refuted); The assertion is reachable. (upheld); rationale: No lineage relationship exists.',
+    ]);
+  });
+
+  // Covers: task:23
+  it('renders child-scoped carried sources, operator resolutions, and pending case-store outbox entries', async () => {
+    const originOne = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const originTwo = canonicalizeBuildReviewFindingIdentity({
+      ...finding,
+      rubric: 'testQuality',
+      contractVersion: 'v3',
+      anchor: { rubric: 'testQuality', locus: { ...finding.anchor.locus, path: 'test/b.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } },
+    })!;
+    const carried = originOne;
+    const origins = [
+      { sourceId: `testQuality:${originOne.id}`, lapId: 'lap-origin-one' },
+      { sourceId: `testQuality:${originTwo.id}`, lapId: 'lap-origin-two' },
+    ];
+    const childState: RemediationCaseStoreState = {
+      version: 'v3', feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, prdWideningCases: [], suppressions: [],
+      cases: [{
+        ...refutedCaseStore.cases[0]!, id: 'case-carried', disposition: 'reject', rationale: 'Already accepted risk.',
+        sources: [{ sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        operatorAcceptance: { origins },
+      }, {
+        ...refutedCaseStore.cases[0]!, id: 'case-operator-resolved', disposition: 'act', rationale: 'Original autonomous case.',
+        sources: [{ sourceId: `testQuality:${originOne.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        effect: { id: 'effect-operator-resolved', kind: 'action', status: 'failed', diagnostic: 'Resolved by operator.' },
+        operatorResolution: { operator: 'release-operator', rationale: 'The remaining risk is accepted.', resolvedAt: '2026-10-22T11:00:00.000Z' },
+      }],
+      outbox: [{
+        eventId: 'pending-operator-resolution', occurredAt: '2026-10-22T11:00:00.000Z',
+        event: { type: 'remediation_case_operator_resolved', eventId: 'pending-operator-resolution', feature: 'review-rubrics', caseId: 'case-operator-resolved', sourceIds: [`testQuality:${originOne.id}`] },
+      }],
+    };
+    const records = [
+      { version: 'v1' as const, feature: childState.feature, finding: originOne, sourceLapId: parseBuildReviewLapId('lap-origin-one')!, summary: 'origin one', rationale: 'First accepted risk.', operator: 'first-operator', acceptedAt: '2026-10-20T10:00:00.000Z' },
+      { version: 'v1' as const, feature: childState.feature, finding: originTwo, sourceLapId: parseBuildReviewLapId('lap-origin-two')!, summary: 'origin two', rationale: 'Second accepted risk.', operator: 'second-operator', acceptedAt: '2026-10-21T10:00:00.000Z' },
+    ];
+    const createCaseStore = vi.fn((_worktree: string, _feature: unknown, child?: number) => {
+      expect(child).toBe(1);
+      return { read: async () => ({ ok: true as const, state: childState }) };
+    });
+    const human = vi.fn();
+    const json = vi.fn();
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records }), append: vi.fn() }),
+      createCaseStore, readMechanicalFaults: async () => 0,
+    };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '1', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '1', format: 'json' }, { ...deps, print: json })).resolves.toBe(0);
+
+    const humanOutput = human.mock.calls[0]![0] as string;
+    expect(humanOutput).toContain(`Carried source: testQuality:${carried.id}; case: case-carried; origin source ids: testQuality:${originOne.id}, testQuality:${originTwo.id}; origin laps: lap-origin-one, lap-origin-two; origin dispositions: first-operator (First accepted risk.), second-operator (Second accepted risk.)`);
+    expect(humanOutput).toContain(`Operator-resolved case: case-operator-resolved; source ids: testQuality:${originOne.id}; operator: release-operator; rationale: The remaining risk is accepted.; resolved at: 2026-10-22T11:00:00.000Z`);
+    expect(humanOutput).toContain('Pending case-store outbox entry: pending-operator-resolution');
+    expect(JSON.parse(json.mock.calls[0]![0] as string)).toMatchObject({
+      carriedSources: [{
+        sourceId: `testQuality:${carried.id}`, caseId: 'case-carried', originSourceIds: origins.map((origin) => origin.sourceId), originLapIds: origins.map((origin) => origin.lapId),
+        originDispositions: [
+          { sourceId: `testQuality:${originOne.id}`, lapId: 'lap-origin-one', operator: 'first-operator', rationale: 'First accepted risk.' },
+          { sourceId: `testQuality:${originTwo.id}`, lapId: 'lap-origin-two', operator: 'second-operator', rationale: 'Second accepted risk.' },
+        ],
+      }],
+      operatorResolvedCases: [{ caseId: 'case-operator-resolved', sourceIds: [`testQuality:${originOne.id}`], operator: 'release-operator', rationale: 'The remaining risk is accepted.', resolvedAt: '2026-10-22T11:00:00.000Z' }],
+      pendingOutbox: [{ eventId: 'pending-operator-resolution', event: { type: 'remediation_case_operator_resolved' } }],
+    });
+    expect(createCaseStore).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', childState.feature, 1);
+  });
+
+  // Covers: task:23
+  it('omits carried and operator-resolved rows when the selected store has neither', async () => {
+    const print = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
+      readMechanicalFaults: async () => 0, print,
+    })).resolves.toBe(0);
+    const output = JSON.parse(print.mock.calls[0]![0] as string);
+    expect(output).not.toHaveProperty('carriedSources');
+    expect(output).not.toHaveProperty('operatorResolvedCases');
+    expect(output).not.toHaveProperty('pendingOutbox');
+  });
+
+  it('passes the coordinator-equivalent unsettled set for resolved R and open N on S to the CLI verdict', async () => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const sourceId = `testQuality:${identity.id}`;
+    const resolved = {
+      ...refutedCaseStore.cases[0],
+      sources: [{ sourceId, outcome: 'refuted' as const, recordedAt: '2026-10-19T12:00:00.000Z' }],
+    };
+    const open = {
+      ...resolved,
+      id: 'case-open', disposition: 'act' as const, resolution: 'open' as const,
+      sources: [{ sourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T12:00:00.000Z' }],
+      effect: { id: 'case-open-effect', kind: 'action' as const, status: 'reserved' as const },
+    };
+    caseRead.mockResolvedValue({ ok: true, state: { ...refutedCaseStore, cases: [resolved, open] } });
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readMechanicalFaults: async () => 0,
+      print,
+    })).resolves.toBe(0);
+
+    expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
   });
 
   // Covers: task:12
@@ -499,11 +689,14 @@ describe('build-review findings CLI', () => {
     })).resolves.toBe(0);
     expect(readFile.mock.calls.map(([path]) => path)).toEqual([
       '/main/.worktrees/review-rubrics/.pipeline/build-review.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review/lap-current/testQuality.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review/lap-current/security.json',
+      '/main/.worktrees/review-rubrics/.pipeline/build-review/lap-current/implementationQuality.json',
     ]);
     expect(store.list).toHaveBeenCalledWith({ version: 'v1', repository: '/main', feature: 'review-rubrics' });
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
       feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'PASS',
-      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [],
+      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [],
       acceptedDispositions: [{
         findingId: identity.id,
         disposition: expect.objectContaining({
@@ -616,13 +809,13 @@ describe('build-review findings CLI', () => {
 
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [], acceptedDispositions: [],
       cases: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
       'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
-      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: security', 'Infrastructure failures: none',
+      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Out-of-delta findings: none', 'Advisory build-review findings: none', 'Skipped rubrics: security, implementationQuality', 'Infrastructure failures: none',
     ].join('\n'));
   });
 
@@ -840,8 +1033,8 @@ describe('build-review accept', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary' }],
     };
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
       }],
     }, stamp, references)!;
@@ -1041,13 +1234,15 @@ describe('build-review findings with current custom rubrics', () => {
   };
   const passingBuiltin = { testQuality: { kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3' as const, findings: [], verdict: 'PASS' as const } };
 
-  function customJudgedAggregate(confidence?: number) {
+  function customJudgedAggregate(input: { readonly confidence?: number; readonly severity?: 'critical' | 'major' | 'minor' | 'nit' } = {}) {
+    const finding = {
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
+      ...(input.severity === undefined ? {} : { severity: input.severity }),
+      ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+    };
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
-        evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
-        ...(confidence === undefined ? {} : { confidence }),
-      }],
+      kind: 'custom-findings', version: 'v2', findings: [{ ...finding, severity: input.severity ?? 'minor' }],
     }, stamp, references)!;
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: passingBuiltin,
@@ -1070,7 +1265,7 @@ describe('build-review findings with current custom rubrics', () => {
     return {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
       readFile: async () => JSON.stringify(aggregate),
-      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }) }),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
       createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
       readMechanicalFaults: async () => 0,
       ...overrides,
@@ -1084,7 +1279,7 @@ describe('build-review findings with current custom rubrics', () => {
   }
 
   it('fails the effective verdict on an unresolved custom finding while built-in rubrics pass', async () => {
-    const { aggregate, identity } = customJudgedAggregate();
+    const { aggregate, identity } = customJudgedAggregate({ severity: 'minor' });
 
     const output = await jsonFindings(findingsDeps(aggregate));
 
@@ -1110,7 +1305,7 @@ describe('build-review findings with current custom rubrics', () => {
   });
 
   it('suppresses a custom finding below the floor its own catalog entry declares', async () => {
-    const { aggregate, identity } = customJudgedAggregate(60);
+    const { aggregate, identity } = customJudgedAggregate({ confidence: 60, severity: 'minor' });
     const loadConfig = async () => ({
       ok: true as const, warnings: [],
       config: { build_review: { custom_rubrics: { portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_confidence: 70 } } } },
@@ -1119,6 +1314,138 @@ describe('build-review findings with current custom rubrics', () => {
     const output = await jsonFindings(findingsDeps(aggregate, { loadConfig }));
 
     expect(output).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [identity.id] });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-r16-1, task:rem-prd-audit-r16-2, task:rem-as-built-r16-3
+  it('projects threshold and adjudicated advisory findings with their source metadata and renders their local advisory details', async () => {
+    const adjudicated = customJudgedAggregate({ severity: 'critical' });
+    const thresholdFinding = {
+      concernKind: 'test-insensitive', summary: 'The minor finding is below the configured threshold.', severity: 'minor' as const,
+      evidenceLocations: ['test/a.test.ts:1'], anchor: finding.anchor,
+    };
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: {
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v4', findings: [thresholdFinding], verdict: 'FAIL' },
+      },
+      customResults: adjudicated.aggregate.customResults,
+      currentCustomRubrics: ['portablePolicy'],
+    });
+    const thresholdId = canonicalizeBuildReviewFindingIdentity({ ...thresholdFinding, rubric: 'testQuality', contractVersion: 'v4' })!.id;
+    const adjudicatedId = adjudicated.identity.id;
+    const state: RemediationCaseStoreState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low',
+        rationale: 'The reviewer downgraded this finding.', confidence: 'high', resolution: 'resolved',
+        sources: [{ sourceId: `portablePolicy:${adjudicatedId}`, outcome: 'advisory', recordedAt: '2026-10-23T00:00:00.000Z' }],
+        effect: { kind: 'none' }, adjudicatedSeverity: 'nit',
+      }],
+    };
+    const output = await jsonFindings(findingsDeps(aggregate, {
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+      loadConfig: async () => ({
+        ok: true as const, warnings: [],
+        config: { build_review: { custom_rubrics: {
+          portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_severity: 'minor' },
+        }, rubrics: { testQuality: { min_severity: 'major' } } } },
+      }),
+    }));
+
+    expect(output).toMatchObject({
+      advisoryFindings: [
+        { id: thresholdId, rubric: 'testQuality', severity: 'minor', threshold: 'major', origin: 'threshold' },
+        { id: adjudicatedId, rubric: 'portablePolicy', severity: 'nit', threshold: 'minor', origin: 'adjudicated' },
+      ],
+    });
+    expect(JSON.stringify(output)).not.toContain('The reviewer downgraded this finding.');
+
+    const human = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...findingsDeps(aggregate, {
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+        loadConfig: async () => ({
+          ok: true as const, warnings: [],
+          config: { build_review: { custom_rubrics: {
+            portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_severity: 'minor' },
+          }, rubrics: { testQuality: { min_severity: 'major' } } } },
+        }),
+      }),
+      print: human,
+    })).resolves.toBe(0);
+
+    expect(human).toHaveBeenCalledWith(expect.stringContaining(
+      `Advisory finding: ${thresholdId}; rubric: testQuality; severity: minor; summary: The minor finding is below the configured threshold.`,
+    ));
+    expect(human).toHaveBeenCalledWith(expect.stringContaining(
+      `Advisory finding: ${adjudicatedId}; rubric: portablePolicy; severity: nit; summary: The changed boundary lacks compatibility evidence.; adjudicator rationale: The reviewer downgraded this finding.`,
+    ));
+  });
+
+  // Covers: task:rem-as-built-rem-as-built-r16-4
+  it('reports a carried source attached to an operator-resolved advisory case only as carried', async () => {
+    const { aggregate, identity } = customJudgedAggregate({ severity: 'critical' });
+    const sourceId = `portablePolicy:${identity.id}`;
+    const state: RemediationCaseStoreState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low',
+        rationale: 'This source was already carried by the operator.', confidence: 'high', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' }],
+        effect: { kind: 'none' }, adjudicatedSeverity: 'nit',
+        operatorResolution: { operator: 'release-operator', rationale: 'The carried risk remains accepted.', resolvedAt: '2026-10-23T01:00:00.000Z' },
+      }],
+    };
+    const loadConfig = async () => ({
+      ok: true as const, warnings: [],
+      config: { build_review: { custom_rubrics: {
+        portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_severity: 'minor' },
+      } } },
+    });
+
+    const output = await jsonFindings(findingsDeps(aggregate, {
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+      loadConfig,
+    }));
+
+    expect(output).toMatchObject({ carriedSources: [{ sourceId, caseId: 'case-carried-advisory' }] });
+    expect(output).not.toHaveProperty('advisoryFindings');
+
+    const human = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...findingsDeps(aggregate, {
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+        loadConfig,
+      }),
+      print: human,
+    })).resolves.toBe(0);
+
+    const humanOutput = human.mock.calls[0]![0] as string;
+    expect(humanOutput).toContain(`Carried source: ${sourceId}; case: case-carried-advisory;`);
+    expect(humanOutput).not.toContain(`Advisory finding: ${identity.id};`);
+  });
+
+  // Covers: task:16, task:rem-prd-audit-r16-1
+  it('reads persisted v3 and custom-v1 findings with no severity without creating advisories', async () => {
+    const builtin = {
+      concernKind: 'test-insensitive', summary: 'The legacy finding has no severity.', evidenceLocations: ['test/a.test.ts:1'],
+      anchor: finding.anchor,
+    };
+    const custom = customJudgedAggregate({ severity: 'minor' }).aggregate;
+    const persisted = structuredClone(joinBuildReviewRubricOutcomes({
+      ...custom,
+      results: {
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [builtin], verdict: 'FAIL' },
+      },
+    }));
+    const customResult = persisted.customResults!.portablePolicy!.result;
+    if (customResult.kind !== 'judged') throw new Error('expected a persisted custom judged result');
+    delete (customResult.findings[0] as { severity?: unknown }).severity;
+    const aggregate = parseBuildReviewAggregate(persisted)!;
+
+    const output = await jsonFindings(findingsDeps(aggregate));
+
+    expect([output.verdict, Object.hasOwn(output, 'advisoryFindingIds'), Object.hasOwn(output, 'advisoryFindings')]).toEqual(['FAIL', false, false]);
   });
 
   it('reports an exhausted custom infrastructure failure and fails the effective verdict', async () => {
@@ -1140,5 +1467,160 @@ describe('build-review findings with current custom rubrics', () => {
       exhaustedMechanicalFaults: [{ rubric: 'portablePolicy', cause: 'policy-load-failed', diagnostic: 'policy could not be loaded' }],
     });
     await expect(jsonFindings(findingsDeps(aggregate, { readMechanicalFaults: async () => 2 }))).resolves.not.toHaveProperty('exhaustedMechanicalFaults');
+  });
+});
+
+describe('build-review resolve-case', () => {
+  const feature = { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' };
+
+  async function openCaseStore(root: string, child?: ChildId) {
+    const caseStore = new RemediationCaseStore(root, feature, { child });
+    await caseStore.mutate(async (state) => ({
+      value: undefined,
+      nextState: {
+        ...state,
+        cases: [{
+          id: 'case-open', domain: 'build_review', disposition: 'act', priority: 'high',
+          rationale: 'Missing behavioral coverage.', confidence: 'high', resolution: 'open',
+          sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: '2026-10-22T12:00:00.000Z' }],
+          effect: { id: 'effect-open', kind: 'action', status: 'reserved' },
+        }],
+      },
+    }));
+    return caseStore;
+  }
+
+  function command(child?: string) {
+    return {
+      kind: 'resolve-case' as const, feature: 'review-rubrics', caseId: 'case-open', rationale: 'Accepted for this release.',
+      ...(child === undefined ? {} : { child }),
+    };
+  }
+
+  function deps(caseStore: RemediationCaseStore, overrides: Record<string, unknown> = {}) {
+    return {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator',
+      resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      createCaseStore: () => caseStore, print: vi.fn(), now: () => new Date('2026-10-22T13:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('resolves an open remediation case for a verified interactive operator', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-'));
+    const caseStore = await openCaseStore(root);
+    const print = vi.fn();
+    const eventPath = join(root, '.pipeline', 'events.jsonl');
+    await writeFile(eventPath, '{"type":"existing"}\n');
+
+    try {
+      const result = await dispatchBuildReviewResolveCase(command(), deps(caseStore, { print }));
+      const stored = await caseStore.read();
+
+      expect({ result, stored, events: await readFile(eventPath, 'utf8'), output: print.mock.calls }).toMatchObject({
+        result: 0,
+        stored: {
+          ok: true,
+          state: {
+            cases: [{
+              id: 'case-open', resolution: 'resolved',
+              operatorResolution: {
+                operator: 'local-operator', rationale: 'Accepted for this release.', resolvedAt: '2026-10-22T13:00:00.000Z',
+              },
+              sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: '2026-10-22T12:00:00.000Z' }],
+              effect: { id: 'effect-open', kind: 'action', status: 'failed', diagnostic: 'Resolved by operator.' },
+            }],
+            outbox: [{
+              eventId: expect.any(String),
+              occurredAt: '2026-10-22T13:00:00.000Z',
+              event: { type: 'remediation_case_operator_resolved', eventId: expect.any(String), feature: 'review-rubrics', caseId: 'case-open', sourceIds: ['testQuality:finding-1'] },
+            }],
+          },
+        },
+        events: '{"type":"existing"}\n',
+        output: [['build-review resolve-case: resolved case-open.']],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes only the requested child case store', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-child-'));
+    await openCaseStore(root);
+    const child = await openCaseStore(root, parseChildId(1)!);
+    const flatBefore = await readFile(remediationCaseStorePath(root), 'utf8');
+
+    try {
+      await expect(dispatchBuildReviewResolveCase(command('1'), deps(child, {
+        createCaseStore: (_worktree: string, _feature: unknown, selectedChild?: number) => {
+          expect(selectedChild).toBe(1);
+          return child;
+        },
+      }))).resolves.toBe(0);
+
+      expect({
+        flat: await readFile(remediationCaseStorePath(root), 'utf8'),
+        child: await child.read(),
+      }).toMatchObject({
+        flat: flatBefore,
+        child: { ok: true, state: { cases: [{ resolution: 'resolved' }] } },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses invalid operator requests without changing the case store', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-refusal-'));
+    const caseStore = await openCaseStore(root);
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const print = vi.fn();
+
+    try {
+      const results = await Promise.all([
+        dispatchBuildReviewResolveCase(command(), deps(caseStore, { isInteractive: false, print })),
+        dispatchBuildReviewResolveCase(command(), deps(caseStore, { resolveOperator: () => undefined, print })),
+        dispatchBuildReviewResolveCase({ ...command(), rationale: '   ' }, deps(caseStore, { print })),
+        dispatchBuildReviewResolveCase({ ...command(), caseId: 'unknown-case' }, deps(caseStore, { print })),
+        dispatchBuildReviewResolveCase(command(), deps(new RemediationCaseStore(root, { ...feature, feature: 'other-feature' }), { print })),
+      ]);
+
+      expect({ results, after: await readFile(remediationCaseStorePath(root), 'utf8'), messages: print.mock.calls.flat() }).toMatchObject({
+        results: [1, 1, 1, 1, 1], after: before,
+        messages: expect.arrayContaining([
+          expect.stringContaining('interactive terminal'), expect.stringContaining('non-empty rationale'),
+          expect.stringContaining('unknown case'), expect.stringContaining('feature mismatch'),
+        ]),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an already resolved case and a lease timeout without changing the store', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-locked-'));
+    const caseStore = await openCaseStore(root);
+    const print = vi.fn();
+
+    try {
+      await expect(dispatchBuildReviewResolveCase(command(), deps(caseStore, { print }))).resolves.toBe(0);
+      const resolved = await readFile(remediationCaseStorePath(root), 'utf8');
+      const lock: ConductStateLease = {
+        acquire: async () => ({ ok: false, kind: 'timeout', message: 'case store remains held' }),
+      };
+      const lockedStore = new RemediationCaseStore(root, feature, { lock });
+      const outcomes = await Promise.all([
+        dispatchBuildReviewResolveCase(command(), deps(caseStore, { print })),
+        dispatchBuildReviewResolveCase({ ...command(), caseId: 'other-case' }, deps(lockedStore, { print })),
+      ]);
+
+      expect({ outcomes, after: await readFile(remediationCaseStorePath(root), 'utf8'), messages: print.mock.calls.flat() }).toMatchObject({
+        outcomes: [1, 1], after: resolved,
+        messages: expect.arrayContaining([expect.stringContaining('already resolved'), expect.stringContaining('lock-timeout')]),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

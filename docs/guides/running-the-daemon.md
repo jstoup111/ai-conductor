@@ -57,8 +57,8 @@ warnings until the spec is fixed.
 Run `ai-conductor daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
 machine-readable reason, remedy, and the latest scan age without invoking Git or the network. An
 empty snapshot reports that no specs are blocked; no valid snapshot means the blocked state is
-unknown until discovery completes. The startup dashboard does not yet render blocked specs;
-dashboard treatment is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
+unknown until discovery completes. The [startup dashboard](#read-the-startup-dashboard) also lists
+blocked specs under `BLOCKED (<n>)`.
 
 DECIDE artifacts are human-authored before merge. The daemon pre-seeds every DECIDE step (recording
 tier-skipped steps as skipped) and starts at BUILD; it never authors or reruns DECIDE work.
@@ -94,9 +94,8 @@ ai-conductor daemon status
 
 Sweeps the whole project registry and prints one badge line per repo — state, path, pid, since,
 engine version id, pause metadata, last log line and its mtime, and tmux session up/down. It then
-prints `GATED:` and `BLOCKED` sections plus an attribution-agreement line. `BLOCKED` reads the
-latest discovery snapshot and lists every blocked spec's reason and remedy; it is not yet part of
-the startup dashboard ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)). The nine
+prints `GATED:`, `BLOCKED`, and `SHIPPED PRS:` sections plus an attribution-agreement line. `BLOCKED` reads the
+latest discovery snapshot and lists every blocked spec's reason and remedy. The nine
 state badges and what each one means are in [cli reference](../reference/cli.md#daemon-status);
 `● running` is the one you want.
 
@@ -112,7 +111,7 @@ ai-conductor daemon logs --follow         # stream new lines until Ctrl-C
 ai-conductor daemon logs --all            # every registered repo, with ==> path <== headers
 ```
 
-`--lines`/`-n`, `-f`, and `--repo=<path>` all work but are absent from `--help`. `--follow` with
+`--follow` with
 `--all` prints `--follow is not supported with --all; showing a static snapshot.` and does not
 follow. A missing log prints `(no daemon log yet for <path>)`.
 
@@ -131,6 +130,32 @@ readable and greppable:
 Filter one feature's narrative with `ai-conductor daemon logs | grep '\[<slug>\]'`. Untagged `[daemon]`
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
+
+### Read the startup dashboard
+
+At startup the daemon prints an inherited-state dashboard built from its first discovery pass. Its
+first line is the attention summary: `NEEDS YOU: nothing`, or counts joined by ` · ` —
+`<n> halted`, `<n> blocked`, `<n> gated`, `<n> parked need review` (orphan or merged-ready), and
+`<n> retained need action` (any reason except `pr-open-awaiting-main`).
+
+Each slug lands in exactly one group, by precedence: PARKED, HALTED, IN-PROGRESS, RETAINED
+WORKTREES, PROCESSED, BLOCKED, GATED, WAITING, ELIGIBLE. Groups print in action order instead:
+HALTED, BLOCKED, GATED, IN-PROGRESS, WAITING, ELIGIBLE, PARKED, RETAINED WORKTREES, NEVER-STARTED,
+PROCESSED. Empty BLOCKED and WAITING groups are omitted.
+
+If the startup discovery pass did not complete, BLOCKED, GATED, WAITING, and ELIGIBLE each print
+`<GROUP>: unknown — discovery did not complete`, and the attention line ends with
+`· discovery state unknown`. Unknown is not empty.
+
+The dashboard goes to two sinks:
+
+| Sink | Render |
+| --- | --- |
+| `.daemon/daemon.log` | Full: every row of every group except PROCESSED. |
+| Console (default) | Compact: rows clipped to the terminal width (80 outside a TTY, minimum 40) with a trailing `…`. PARKED and RETAINED WORKTREES list only rows that need action; NEVER-STARTED and PROCESSED print counts only. HALTED, BLOCKED, GATED-spec, PARKED, and RETAINED rows put the reason and remedy on an indented second line. |
+| Console with `--completed`/`--all` | Full, including PROCESSED rows. |
+
+When a compact row is clipped, read the full row with `ai-conductor daemon logs`.
 
 ### Build-review rubric progress
 
@@ -158,7 +183,7 @@ the effective verdict. A `projection-oversized` infrastructure failure includes 
 counts and halts for an operator without consuming the shared mechanical-fault allowance. The optional
 excerpt, deterministic reason, and unresolved-marker count are included only when the event supplies them.
 
-A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
+A rebase that changes the active feature’s stories or PRD reruns its PRD audit. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
 
 ### Protected-artifact rebaselines
 
@@ -213,12 +238,19 @@ remains line-oriented. Older redirect events without this evidence retain the sh
 
 ### Provider attribution and result summaries
 
-Three line kinds tell you what a step actually did, which provider ran it, and what the feature
-cost in total — the per-step attribution matters because
+Four line kinds tell you which provider is running a step, what the step actually did, which
+provider ran it, and what the feature cost in total — the per-step attribution matters because
 providers are routed per step (`llm_provider` top level plus per-step overrides; see
 [configuration](../reference/configuration.md)), so the provider executing a given step is not
 necessarily the repo default.
 
+- **`·   ▸ <step> on <provider> (<model>)`** is logged when a provider candidate starts, so a
+  long-running step names its provider while it is still in flight. A configured member renders
+  as `<group> / <member>`. The `(<model>)` suffix is omitted when no model was resolved.
+  `▸ <step> provider unknown` marks a start with a blank provider identity. Each fallback
+  candidate and model-fallback rung logs its own start line. Recovery sessions (rebase-autoresolve,
+  ci-fix) log the same line under their feature tag. The interactive terminal renderer prints the
+  same line without the `·` prefix.
 - **`<provider>: done — <turns>, <duration>, <cost>`** followed by the agent's own prose is the
   provider subprocess's captured result. Non-interactive Claude `--print --output-format stream-json`
   stdout and Codex `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the
@@ -411,7 +443,8 @@ After spawn, activity is observation-only. While a step's provider subprocess is
 `.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
 boundary (throttled to at most once every few seconds — activity telemetry, not a transcript or
 termination control).
-The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) shows
+The IN-PROGRESS dashboard the daemon prints after its first dispatch decision (and re-prints at key
+transitions; see [dispatch-first maintenance](#dispatch-first-maintenance)) shows
 the current dispatch's elapsed time, the latest validated aggregate test outcome, its current
 input/output token totals when live provider observation is available, and the heartbeat's age when
 one exists:
@@ -525,7 +558,8 @@ succeeds — a failed reset deliberately leaves the marker in place for retry. Y
 
 ### Parked-feature reconciliation
 
-On startup and on every idle poll tick, the daemon classifies each parked slug: `merged`, `orphan`
+On every [background maintenance](#dispatch-first-maintenance) run, the daemon classifies each
+parked slug: `merged`, `orphan`
 (its source issue is closed but the work never merged), `normal`, or `unclassified` (the check was
 unavailable). `ai-conductor daemon status` annotates the parked list accordingly — `— orphan — needs
 manual review` or `— merged — ready to reconcile`.
@@ -550,6 +584,11 @@ It ignores nested worktrees and worktrees outside that directory. A registered c
 without attempting removal when it is in flight, belongs to an `engineer-*` or `resolve-*` lifecycle,
 has an unreadable or present `.pipeline/HALT`, has an invalid slug, or the worktree listing cannot be
 read. This scan does not depend on the mergeable-watch registry.
+
+A run whose inputs match the previous full run — parked slugs, registered worktrees, slug branches,
+shipped records on `origin/main`, markers, and the in-flight set — is skipped for up to 10 minutes
+and reuses the previous counts. It skips GitHub and every per-branch ancestry probe. Any input
+change, the 10-minute bound, or a daemon restart forces a full run.
 
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
 is unset or `true`), a `merged` parked slug with a `.docs/shipped/<slug>.md` record on `origin/main`
@@ -746,6 +785,12 @@ proof-gated cleanup paths.
   and does not stop the removal attempt. Do not treat that hook log as proof that Git removal failed;
   `daemon reclaim-worktree` and parked reconciliation surface their actual Git removal failures and
   retain the worktree for recovery.
+- **Published stack.** For a [stacked publication](../reference/configuration.md#stacked-publication),
+  the sweep then deletes each child's local branch by name, only when that child's PR is merged, its
+  merge commit is on `origin/main`, and the local tip equals the merged head. A child PR that is
+  open or closed unmerged, or whose merge is not on `origin/main`, is kept and the watch entry is
+  retained; an unreachable member emits `stack_members_unreachable` once and logs `retained <slug> —
+  reason: stack-members-unreachable`.
 
 `ai-conductor daemon status`'s startup dashboard groups every retained worktree under
 `RETAINED WORKTREES (<n>)`. A retained row includes an evidence-derived reason and a `remedy:`
@@ -770,9 +815,9 @@ ai-conductor daemon reclaim-worktree <slug>
 ```
 
 It refuses a slug with a resume in progress, refuses anything but a single plain slug (no globs, no
-paths, no lists), and is a no-op when the worktree is already gone. It never touches the branch —
-both manual reclaim and the automatic sweep remove only the worktree. The automatic sweep never
-deletes the feature branch, and its reap gate is shipped-record presence on `origin/main`, not
+paths, no lists), and is a no-op when the worktree is already gone. It never touches the feature
+branch — both manual reclaim and the automatic sweep remove only the worktree, plus the proven
+child branches of a published stack. The automatic sweep never deletes the feature branch, and its reap gate is shipped-record presence on `origin/main`, not
 branch ancestry.
 
 ## Operator safety rules
@@ -819,6 +864,11 @@ rely on it. See
 
 ## Restart after an engine change
 
+With the default [`executor_isolation: child`](../reference/configuration.md#executor_isolation),
+each claimed feature already runs the engine build `dist` names at claim time, so a published engine
+change reaches new dispatches without a restart. Restart to update the supervisor itself, or when
+running with `executor_isolation: in-process`.
+
 ```bash
 ai-conductor daemon restart
 ```
@@ -840,7 +890,7 @@ which loses scrollback) is reported explicitly.
 
 `pause`, `resume`, and `restart` accept fleet selectors: `--all`, or one or more bare repo names
 after the verb. With a selector the verb iterates the project registry instead of acting on the
-current directory. None of these selectors appear in `--help`.
+current directory.
 
 ```bash
 ai-conductor daemon pause --all
@@ -882,9 +932,8 @@ Three things shape the run itself. Every flag, its default, and its exact parsin
    At `N=1`, the daemon preserves the recorded serial dispatch and maintenance ordering.
 2. **Bound a `--continuous` run.** With no `--max-items`, `--max-cost`, `--max-runtime`, or
    `--max-idle-polls` it warns and then runs until you `Ctrl-C` it. Dispatching a feature restarts
-   the consecutive empty-poll count used by `--max-idle-polls`.
-3. **Pass `--idle-poll` explicitly** if the polling interval matters. Its effective default does not
-   match its help text.
+   the consecutive empty-poll count used by `--max-idle-polls`. Without `--idle-poll`, empty polls
+   are 60 seconds apart.
 
 `ai-conductor daemon --help` (or `-h`) anywhere after `daemon` prints the daemon help and exits 0. That
 guard runs before every daemon dispatcher on purpose: without it, `--help` would be treated as an
@@ -894,6 +943,44 @@ A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `reco
 `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown
 subcommand '<token>'.` followed by the daemon help, and exits 1.
 
+## Dispatch-first maintenance
+
+At startup the daemon runs one backlog refresh and then claims its first eligible feature. It does
+not first wait for the startup dashboard, reconciliation sweeps, or repair sessions. Best-effort
+maintenance starts only once that first claim has dispatched or been refused, or when there is
+nothing to dispatch.
+
+Maintenance is one single-flight background job. Each run performs these phases in order, each
+isolated so one failure does not stop the rest:
+
+1. `startup-dashboard` — first run only, and skipped when the daemon starts paused.
+2. `rekick` — base re-kick, followed by resume-authorization consumption.
+3. `halt-pr-reconcile` — the [halt-PR sweep](#halt-pr-presentation-is-cleared-when-the-halt-resolves).
+4. `parked-reconcile` — [parked-feature reconciliation](#parked-feature-reconciliation).
+5. `provider-scratch` — provider scratch cleanup.
+6. `mergeable-sweep` — the [finish-time mergeability](#finish-time-mergeability) sweep.
+
+Idle polls, busy polls at every pool width, and worker completions trigger the job. A trigger that
+arrives while a run is in progress folds into one rerun. Draining or stopping the daemon waits for
+the current run to settle.
+
+Every phase emits one `daemon_maintenance_phase` event to `.daemon/events.jsonl` with its
+`durationMs` and `outcome` (`completed`, `skipped-unchanged`, `failed`, or `deferred`). Startup
+also records `startup-refresh`, and `first-claim` records the time from scan start to the first
+claim. See
+[daemon events](../reference/artifacts.md#daemon_maintenance_phase).
+
+### Pooled repairs
+
+The mergeable sweep does not run conflict autoresolve or CI repair inline. It queues one repair per
+PR, and repairs take free pool slots ahead of new features: priority band first, then the oldest PR.
+Each repair holds a `repair:<prUrl>` work claim and runs behind the same pause, episode,
+build-auth, and `gh` version guards as feature dispatch. A repair whose feature is in flight stays
+queued until that feature's claim is released. A blocked dispatch records each queued repair as a
+`repair` phase event with outcome `deferred`. At claim time a repair re-reads the PR and is dropped
+(`[daemon] dropping repair <url>: <reason>`) when the PR is closed, merged, draft, unreadable, or no
+longer conflicting or failing. Attempts are counted at claim time, not at sweep time.
+
 ## Finish-time mergeability
 
 After publication, watched PRs have a separate recovery loop controlled by
@@ -901,6 +988,28 @@ After publication, watched PRs have a separate recovery loop controlled by
 over CI repair. The harness repository explicitly enables both; see
 [self-host open-PR recovery](self-hosting.md#open-pr-recovery) for its suite command
 and activation requirements. This does not enable automatic merging.
+
+### Shipped-PR readiness
+
+Every sweep tick classifies each open watched PR with one verdict, checked in this order:
+
+| Verdict | Condition | Sweep action |
+|---|---|---|
+| `draft` | The PR is a draft | Adds `needs-remediation` |
+| `indeterminate` | Mergeability is still `UNKNOWN` after one immediate re-read, the re-read failed, or `mergeStateStatus` is undocumented | None — no label changes or repairs; re-checked next tick |
+| `conflicting` | `CONFLICTING` or `DIRTY` | Conflict autoresolve, when enabled |
+| `ci-failing` | A check failed | CI repair, when enabled |
+| `ci-pending` | Checks are running, or no checks exist yet on a non-`main` base or within the grace period | None |
+| `no-checks` | No checks on a `main`-based PR 30 minutes after its current head was first seen | Adds `needs-remediation` |
+| `ready` | Anything else | None |
+
+A new head commit restarts the 30-minute grace period. Each verdict change for a head emits one
+`shipped_pr_readiness` event to `.daemon/events.jsonl`; `ai-conductor daemon status` lists every
+non-`ready` watched PR under [`SHIPPED PRS:`](../reference/cli.md#daemon-status).
+
+The sweep removes `needs-remediation` only when it applied the label itself and the PR later reads
+`ready`, `conflicting`, or `ci-failing` without a halt marker. Labels from a human, a halt, CI-repair
+exhaustion, or conflict resolution stay in place.
 
 An autoresolve attempt whose rebase completes without conflicts still runs the preservation
 checks and configured suite before pushing with a lease. `refreshed` is reported only after that
@@ -916,7 +1025,7 @@ skippable only when both of these also hold:
   active story, PRD, plan, or coherence carrier differs between the branch's merge-base and the base
   ref. If the base gained code after `build_review` graded the diff, `test_suite` proved a tree, or
   `manual_test` exercised behavior, those verdicts predate it. A changed active review input can
-  also change the PRD-audit or coverage-binding result. In either case the engine rebases and lets
+  also change the PRD-audit result or the plan's recorded slice topology. In either case the engine rebases and lets
   delta-aware invalidation decide what to re-verify. Unrelated documentation still permits a skip.
 - **The base is not a degraded fallback.** When an `origin` remote exists but its default-branch
   discovery or `git fetch` failed, the engine compares against the LOCAL base branch, which in a
@@ -966,6 +1075,11 @@ The engine refuses, without mutating the branch, when:
 
 Both refusals block `finish` and issue no push. For recovery, see
 [a flattened rebase was refused](../runbooks/stalled-or-stuck-feature.md#a-flattened-rebase-was-refused).
+
+A stacked feature does not use this path: the re-kick and finish-time rebases run a whole-stack
+[restack](../reference/configuration.md#restack), and autoresolve escalates with `published-stack`.
+Once the stack is [published](../reference/configuration.md#stacked-publication), the re-kick
+leaves it on its current base and emits `restack_refused` with reason `published-stack`.
 
 ## How a halted feature resumes
 
@@ -1048,7 +1162,7 @@ resumes, even when it is cleanly mergeable. This play-forward path is intentiona
 normal finish: the pending gate must observe the advanced base in its worktree.
 When that rebase changes code, test paths, or an active review input, the downstream judged gates —
 `test_suite`, `build_review`, and (when they ran) `manual_test`, `prd_audit`,
-`coverage_binding`, `architecture_review_as_built` — are candidates for re-opening. Which ones
+`architecture_review_as_built` — are candidates for re-opening. Which ones
 actually re-open depends on the delta: each judged gate declares the surface its verdict depends on,
 and only a delta that lands inside that surface invalidates it.
 
@@ -1058,7 +1172,6 @@ and only a delta that lands inside that surface invalidates it.
 | `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit` | the feature's own runtime source, active stories, and PRD | the feature's own source, active story, or active PRD |
-| `coverage_binding` | the feature's own runtime source, active stories, PRD, plan, coherence carrier, and ADRs the feature's documents cite | the feature's own source or one of those active review inputs |
 | `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
 `build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`
@@ -1099,8 +1212,10 @@ ordinary repair-resolution path then continues to refuse that stale boundary rat
 ### Halt-PR presentation is cleared when the halt resolves
 
 Escalating a halt marks the feature's PR: draft status, the `needs-remediation` label, a body
-marker, and a halt comment. Every poll, the halt-PR reconciliation sweep re-reads the open PRs and
-re-applies any of those facets that drifted off.
+marker, and a halt comment. On every maintenance run, the halt-PR reconciliation sweep re-reads the
+open PRs and re-applies any of those facets that drifted off. It skips a PR whose feature is in
+flight, which owns its own halt state, and logs `skipped: feature <slug> is in flight` once per
+transition.
 
 The sweep also removes them. A marked PR whose head branch already carries the feature's shipped
 record (`.docs/shipped/<slug>.md`, committed by `/finish`) has shipped, so the sweep undrafts it,

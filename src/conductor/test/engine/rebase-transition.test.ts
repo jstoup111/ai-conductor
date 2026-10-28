@@ -1,4 +1,4 @@
-// Covers: task:4, task:6, task:7
+// Covers: task:4, task:6, task:7, task:21
 import { describe, expect, it, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readVerdict, validRebaseOperationRecord, writeVerdict, type RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
-import { applyRebaseTransition, clampRebaseContinuation, completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
+import { applyRebaseTransition, completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { classifyRebaseOperation, rebaseOperationPublicationBlocker } from '../../src/engine/gate-code-validity.js';
 import { earliestUnsatisfiedGateIndex } from '../../src/engine/selector.js';
@@ -182,6 +182,29 @@ describe('applyRebaseTransition', () => {
     const ledger = await readKickbackLedger(dir);
     expect(ledger.gates.build_review?.cumulative).toBe(0);
     expect(ledger.convergenceCreditReceipts).toEqual({ 'credited-operation': { gate: 'build_review' } });
+  });
+
+  it('records a feature-repair cause without crediting convergence laps', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1, gates: { build_review: { count: 1, cumulative: 2, laps: 3, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+    }));
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
+      operationId: 'repair-operation',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'], preserved: [], preservedCandidates: [], cause: 'feature-repair',
+    });
+
+    expect(result.convergenceCredit).toBeUndefined();
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toMatchObject({ cause: 'feature-repair' });
+    expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(2);
   });
 
   it('refuses to apply an operation that names a preserved gate without its bound candidate', async () => {
@@ -630,20 +653,5 @@ describe('completeInterruptedRebaseOperation', () => {
       verdicts,
       regionStart: 'build_review',
     })).toBe(0);
-  });
-});
-
-describe('clampRebaseContinuation', () => {
-  const steps = [{ name: 'coverage_binding' }, { name: 'acceptance_specs' }, { name: 'build' }, { name: 'test_suite' }, { name: 'manual_test' }] as const;
-
-  it('moves a completed pre-suite selection to test_suite after a post-rebase coverage refresh', () => {
-    expect(clampRebaseContinuation(steps, { acceptance_specs: 'skipped', build: 'done' }, 2, true)).toBe(3);
-    expect(clampRebaseContinuation(steps, { acceptance_specs: 'skipped', build: 'done' }, 1, true)).toBe(3);
-  });
-
-  it('leaves a genuinely open BUILD, a later gate, and ordinary lifecycle selection alone', () => {
-    expect(clampRebaseContinuation(steps, { build: 'pending' }, 2, true)).toBe(2);
-    expect(clampRebaseContinuation(steps, { build: 'done' }, 4, true)).toBe(4);
-    expect(clampRebaseContinuation(steps, { build: 'done' }, 2, false)).toBe(2);
   });
 });

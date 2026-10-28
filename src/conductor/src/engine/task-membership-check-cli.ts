@@ -6,13 +6,15 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { extractBodyTaskIds, canonicalTaskId } from './autoheal.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { parseChildId } from './child-context.js';
+import { loadConfig } from './config.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import { loadSliceTopology } from './slice-topology.js';
+import { resolveRemediationTaskChild } from './routing/owner-derivation.js';
+import { readRepairMarker, readRouteRecord } from './routing/route-record-store.js';
+import { routedTaskIdsForHost } from './routing/round-router.js';
+import { routingSettingOn } from './routing/route-types.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 export interface TaskMembershipCheckCommand {
   commitMessagePath: string;
@@ -32,13 +34,6 @@ export interface TaskMembershipCheckDependencies {
   print?: (message: string) => void;
 }
 
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: async () => undefined,
-  writeFile: async () => undefined,
-  rename: async () => undefined,
-};
-
 async function currentBranch(projectRoot: string): Promise<string | undefined> {
   try {
     const result = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
@@ -54,6 +49,29 @@ async function currentBranch(projectRoot: string): Promise<string | undefined> {
 function unreadable(taskId: string, child: number, detail: string, print: (message: string) => void): number {
   print(`task-membership-check: unreadable membership for Task ${taskId} on checked-out child ${child}: ${detail}`);
   return 1;
+}
+
+type RoutedProjection =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'ids'; readonly ids: readonly string[] }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** Read routing refs only for a routing-enabled child checkout. */
+async function routedProjectionForCheckedOutChild(
+  projectRoot: string,
+  identity: Extract<ReturnType<typeof parseFeatureBranch>, { kind: 'child' }>,
+): Promise<RoutedProjection> {
+  const config = await loadConfig(projectRoot);
+  if (!config.ok || !routingSettingOn(config.config)) return { kind: 'none' };
+
+  const marker = await readRepairMarker(projectRoot, identity.slug);
+  if (marker.kind === 'absent') return { kind: 'none' };
+  if (marker.kind !== 'marker') return { kind: 'unreadable', detail: 'routed repair marker is unreadable' };
+  if (marker.marker.host !== identity.child) return { kind: 'none' };
+
+  const route = await readRouteRecord(projectRoot, identity.slug, marker.marker.roundId);
+  if (route.kind !== 'record') return { kind: 'unreadable', detail: 'routed task allocation is unavailable' };
+  return { kind: 'ids', ids: routedTaskIdsForHost(route.record, identity.child) };
 }
 
 /**
@@ -84,38 +102,32 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
   }
   if (taskIds.length === 0) return 0;
 
-  const envelope = await readCoverageBindingEnvelope(deps.projectRoot, coverageBindingFilesystem);
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    return unreadable(taskIds[0]!, identity.child, 'coverage-binding envelope is missing or invalid', print);
+  const topology = await loadSliceTopology(deps.projectRoot, identity.slug);
+  if (topology.kind === 'unavailable') {
+    return unreadable(taskIds[0]!, identity.child, `slice topology is unavailable (${topology.cause})`, print);
   }
-  if (envelope.slug !== identity.slug) {
-    return unreadable(taskIds[0]!, identity.child, 'coverage-binding envelope belongs to another feature', print);
+  if (topology.kind === 'unsliced') {
+    return unreadable(taskIds[0]!, identity.child, 'slice topology has no child task membership', print);
   }
 
   let engineState: unknown = {};
   try {
     engineState = JSON.parse(await read(join(deps.projectRoot, '.pipeline', 'engine-state.json')));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return unreadable(taskIds[0]!, identity.child, 'remediation membership cannot be read', print);
-    }
+  } catch {
+    // The cache is optional: committed Child lines survive a recreated
+    // worktree even when its engine-state file is absent or unreadable.
   }
   if (typeof engineState !== 'object' || engineState === null || Array.isArray(engineState)) {
-    return unreadable(taskIds[0]!, identity.child, 'remediation membership is malformed', print);
+    engineState = {};
   }
 
   const state = engineState as Record<string, unknown>;
-  const appended = state.appendedRemediationTaskIds;
   const children = state.appendedRemediationTaskChildren;
-  if (appended !== undefined && (!Array.isArray(appended) || !appended.every((id) => typeof id === 'string'))) {
-    return unreadable(taskIds[0]!, identity.child, 'remediation task list is malformed', print);
-  }
-  if (children !== undefined && (typeof children !== 'object' || children === null || Array.isArray(children))) {
-    return unreadable(taskIds[0]!, identity.child, 'remediation child map is malformed', print);
-  }
+  // `appendedRemediationTaskIds` and its child map are compatibility cache
+  // fields. Their shape must never overrule a valid committed Child line.
 
   const owners = new Map<string, number>();
-  for (const [id, child] of Object.entries(envelope.sliceMembership.taskSlices)) {
+  for (const [id, child] of Object.entries(topology.sliceMembership.taskSlices)) {
     const canonical = canonicalTaskId(id);
     if (owners.has(canonical) || parseChildId(child) === undefined) {
       return unreadable(taskIds[0]!, identity.child, 'coverage-binding task membership is malformed', print);
@@ -123,22 +135,47 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
     owners.set(canonical, child);
   }
 
-  const appendedIds = appended ?? [];
-  const remediationChildren = (children ?? {}) as Record<string, unknown>;
-  for (const id of appendedIds) {
-    const recordedChild = remediationChildren[id];
-    const child = typeof recordedChild === 'string' || typeof recordedChild === 'number'
-      ? parseChildId(recordedChild)
-      : undefined;
-    const canonical = canonicalTaskId(id);
-    if (child === undefined || owners.has(canonical)) {
-      return unreadable(taskIds[0]!, identity.child, 'remediation task membership is missing or malformed', print);
+  const allowed = new Set(
+    [...owners.entries()].filter(([, child]) => child === identity.child).map(([id]) => id),
+  );
+  let routed: RoutedProjection | undefined;
+  const addRoutedMembershipIfNeeded = async (): Promise<number | undefined> => {
+    if (routed === undefined) routed = await routedProjectionForCheckedOutChild(deps.projectRoot, identity);
+    if (routed.kind === 'unreadable') {
+      return unreadable(taskIds[0]!, identity.child, routed.detail, print);
     }
-    owners.set(canonical, child);
-  }
+    if (routed.kind === 'ids') {
+      for (const id of routed.ids) allowed.add(canonicalTaskId(id));
+    }
+    return undefined;
+  };
 
+  const remediationChildren = typeof children === 'object' && children !== null && !Array.isArray(children)
+    ? children as Record<string, unknown>
+    : {};
   for (const taskId of taskIds) {
-    const owner = owners.get(canonicalTaskId(taskId));
+    const canonical = canonicalTaskId(taskId);
+    if (isEngineAppendedRemediationTaskId(taskId)) {
+      const resolved = await resolveRemediationTaskChild(
+        deps.projectRoot,
+        taskId,
+        remediationChildren[taskId],
+        identity.slug,
+      );
+      if (resolved.kind === 'unreadable') {
+        return unreadable(taskId, identity.child, 'remediation task membership is missing or malformed', print);
+      }
+      owners.set(canonical, resolved.child);
+    }
+
+    // An envelope or committed Child line is independently sufficient for a
+    // normal task. Do not turn an unrelated, unavailable route allocation
+    // into a refusal of that already-provable local commit.
+    if (allowed.has(canonical)) continue;
+    const routedRefusal = await addRoutedMembershipIfNeeded();
+    if (routedRefusal !== undefined) return routedRefusal;
+    if (allowed.has(canonical)) continue;
+    const owner = owners.get(canonical);
     if (owner === undefined) {
       return unreadable(taskId, identity.child, 'Task has no recorded owning child', print);
     }

@@ -22,13 +22,14 @@
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { execa } from 'execa';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';
-import { classifyLandGateRejection, landSpec } from './engineer/land-spec.js';
+import { classifyLandGateRejection, LandGateError, landSpec, type LandSpecResult } from './engineer/land-spec.js';
 import { loadConfig, loadMergedConfig, validateConfig, type ConfigResult } from './config.js';
 import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
@@ -70,15 +71,19 @@ import {
 } from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
-import { ghIssueLabelReader } from './backlog-priority.js';
+import { createOrderingSource } from './ordering-source.js';
 import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/delivery-guard.js';
 import { INTAKE_CLAIM_LEASE_WAIT_MS, withIntakeClaimLease } from './engineer/intake/claim-lease.js';
 import { reconcileStrandedClaims } from './engineer/intake/reconcile-strands.js';
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
-import { runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
+import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
+import {
+  sweepDependencyDrift,
+  type DependencyDriftResult,
+} from './engineer/dependency-reconciler.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -94,6 +99,14 @@ import {
   resolveProviderExecutable,
 } from '../execution/provider-catalog.js';
 import { resolveComposeLaunchHost } from './compose-launch-host.js';
+import { resolveHarnessRoot } from './install-freshness.js';
+import { resolveSkillName } from './skill-names.js';
+import { PluginRegistry } from './plugin-registry.js';
+import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
+import { createProviderRuntimeSet } from './provider-runtime.js';
+import { ProviderSessionStore } from './provider-session.js';
+import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
+import { labelComposerPane, type PaneLabelRunner } from './engineer/pane-label.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -102,9 +115,15 @@ type EngineerDispatchDescriptor =
   | { kind: 'launch-usage'; flag: '--provider' }
   | { kind: 'guide' }
   | { kind: 'projects' }
+  | { kind: 'dep-audit'; project: string }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
-  | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
+  | { kind: 'phase'; worktree: string; phase: string }
+  | {
+    kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
+    dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
+  }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
+  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
@@ -125,9 +144,40 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
+
+/** Resolve the authored feature identity from the engineer worktree's spec branch. */
+async function resolvePlanReviewFeatureSlug(worktree: string): Promise<string | undefined> {
+  const result = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+    cwd: worktree,
+    reject: false,
+  });
+  if (result.exitCode !== 0) return undefined;
+  const branch = result.stdout.trim();
+  if (!branch.startsWith('spec/')) return undefined;
+  const slug = branch.slice('spec/'.length);
+  return isSpecSlug(slug) ? slug : undefined;
+}
+
+async function labelPrimitivePane(
+  worktree: string,
+  phase: string,
+  opts: DispatchEngineerOpts,
+  warn: (line: string) => void,
+): Promise<void> {
+  if (!opts.paneLabelRunner) return;
+  const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(worktree);
+  if (!slug) return;
+  await labelComposerPane({
+    slug,
+    phase,
+    env: opts.env ?? process.env,
+    run: opts.paneLabelRunner,
+    warn,
+  });
+}
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -151,6 +201,9 @@ function findUnknownFlag(argv: string[], allowed: string[]): string | null {
   }
   return null;
 }
+
+/** Flags accepted by `compose worktree`; shared with its help contract. */
+export const WORKTREE_ACCEPTED_FLAGS = ['--project', '--idea', '--source-ref', '--body'] as const;
 
 function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null {
   // argv is process.argv: [node, entry, sub, ...]
@@ -178,6 +231,14 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     return { kind: 'projects' };
   }
 
+  if (subCmd === 'dep-audit') {
+    const project = parseFlag(argv, '--project');
+    if (!project) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--project']);
+    if (unk) return { kind: 'reject', sub: 'dep-audit', flag: unk };
+    return { kind: 'dep-audit', project };
+  }
+
   if (subCmd === 'worktree') {
     // `ai-conductor engineer worktree --project <n> --idea "<i>"` — create the per-idea
     // worktree for authoring; prints `{ slug, branch, worktreePath, reconcile }`.
@@ -192,9 +253,18 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     // Absent for human-typed ideas (no staging, no error — Story 1 negative path).
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
     const body = parseFlag(argv, '--body') ?? undefined;
-    const unk = findUnknownFlag(argv, ['--project', '--idea', '--source-ref', '--body']);
+    const unk = findUnknownFlag(argv, [...WORKTREE_ACCEPTED_FLAGS]);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
     return { kind: 'worktree', project, idea, sourceRef, body };
+  }
+
+  if (subCmd === 'phase') {
+    const worktree = parseFlag(argv, '--worktree');
+    const phase = parseOptionalFlagPreservingEmpty(argv, '--phase');
+    if (!worktree || phase === undefined) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--worktree', '--phase']);
+    if (unk) return { kind: 'reject', sub: 'phase', flag: unk };
+    return { kind: 'phase', worktree, phase };
   }
 
   if (subCmd === 'land') {
@@ -209,9 +279,22 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     // Optional intake write-back anchor — present when the idea came from an
     // intake envelope (github-issues). Absent for human-typed ideas.
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
-    const unk = findUnknownFlag(argv, ['--project', '--idea', '--worktree', '--source-ref']);
+    const dependsOn = parseRepeatableFlag(argv, '--depends-on');
+    const declinedDependencies = parseRepeatableFlag(argv, '--decline-dependency');
+    const skipDependencyCheck = parseOptionalFlagPreservingEmpty(argv, '--skip-dependency-check');
+    const unk = findUnknownFlag(argv, [
+      '--project', '--idea', '--worktree', '--source-ref', '--depends-on',
+      '--decline-dependency', '--skip-dependency-check',
+    ]);
     if (unk) return { kind: 'reject', sub: 'land', flag: unk };
-    return { kind: 'land', project, idea, worktree, sourceRef };
+    return {
+      kind: 'land', project, idea, worktree, sourceRef,
+      // Keep the established descriptor shape for callers that do not use
+      // dependency decisions; the fields are additive only when supplied.
+      ...(dependsOn.length === 0 ? {} : { dependsOn }),
+      ...(declinedDependencies.length === 0 ? {} : { declinedDependencies }),
+      ...(skipDependencyCheck === undefined ? {} : { skipDependencyCheck }),
+    };
   }
 
   if (subCmd === 'handoff') {
@@ -225,6 +308,24 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, ['--project', '--branch', '--worktree', '--source-ref']);
     if (unk) return { kind: 'reject', sub: 'handoff', flag: unk };
     return { kind: 'handoff', project, branch, worktree, sourceRef };
+  }
+
+  if (subCmd === 'plan-review') {
+    const project = parseFlag(argv, '--project');
+    const worktree = parseFlag(argv, '--worktree');
+    if (!project || !worktree) return { kind: 'guide' };
+    const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    const accept = parseFlag(argv, '--accept') ?? undefined;
+    const acknowledge = argv.includes('--acknowledge') || undefined;
+    const reason = parseFlag(argv, '--reason') ?? undefined;
+    const maxPromptCharsRaw = parseFlag(argv, '--max-prompt-chars');
+    const maxPromptChars = maxPromptCharsRaw === null ? undefined : Number(maxPromptCharsRaw);
+    const invalidMaxPromptChars = maxPromptCharsRaw !== null &&
+      (maxPromptChars === undefined || !Number.isInteger(maxPromptChars) || maxPromptChars <= 0);
+    if (accept && acknowledge) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason', '--max-prompt-chars']);
+    if (unk) return { kind: 'reject', sub: 'plan-review', flag: unk };
+    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}), ...(invalidMaxPromptChars ? { invalidMaxPromptChars: true } : maxPromptChars === undefined ? {} : { maxPromptChars }) };
   }
 
   if (subCmd === 'poll') {
@@ -474,6 +575,25 @@ function parseFlag(argv: string[], flag: string): string | null {
   return val;
 }
 
+/** Values may repeat for decision flags. Unlike parseFlag this deliberately
+ * preserves an empty value: landSpec owns the closed-gate validation and event. */
+function parseRepeatableFlag(argv: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 4; index < argv.length; index++) {
+    if (argv[index] !== flag) continue;
+    const value = argv[index + 1];
+    if (value !== undefined && !value.startsWith('--')) values.push(value);
+  }
+  return values;
+}
+
+function parseOptionalFlagPreservingEmpty(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  if (index === -1 || index >= argv.length - 1) return undefined;
+  const value = argv[index + 1];
+  return value.startsWith('--') ? undefined : value;
+}
+
 // ── Optional IO/deps injection (for tests) ────────────────────────────────────
 
 /**
@@ -482,6 +602,8 @@ function parseFlag(argv: string[], flag: string): string | null {
  * Tests inject print/printErr/gh/ensureRunningLaunch to avoid real I/O.
  */
 export interface DispatchEngineerOpts {
+  /** Skill tree used to resolve the host-visible composer name. */
+  skillNameRoot?: string | null;
   /** Override the registry path (for tests). */
   registryPath?: string;
   /** Override the engineer dir (for tests). */
@@ -494,8 +616,14 @@ export interface DispatchEngineerOpts {
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
   printErr?: (s: string) => void;
+  /** Optional pane-label process seam; only production injects the real runner. */
+  paneLabelRunner?: PaneLabelRunner;
+  /** Test seam for the checked-out spec branch lookup used by `compose phase`. */
+  resolvePlanReviewFeatureSlug?: (worktree: string) => Promise<string | undefined>;
   /** Injected gh runner (for tests). */
   gh?: GhRunner;
+  /** Injectable canonical tracker seam for `compose dep-audit`. */
+  createDependencyTracker?: () => Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'>;
   /** Test seam for fresh machine identity used by independently authorized intake writes. */
   intakeResolveActor?: () => Promise<OwnerResolution>;
   /** Existing event spine for intake mutation fallback telemetry. */
@@ -519,13 +647,17 @@ export interface DispatchEngineerOpts {
   /** Load the merged configuration for the directory from which launch was requested. */
   loadLaunchConfig?: (launchingDirectory: string) => Promise<ConfigResult>;
   /** Spawn the selected interactive host; injectable so tests never launch a real host. */
-  spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
+  spawnHost?: (executable: string, argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
   /** Whether stdin and stdout are attached to an operator terminal. */
   isAttachedTerminal?: () => boolean;
   /** Interactive approval boundary for guarded intake writes. */
   githubOperationConfirmation?: InteractiveGithubOperationConfirmation;
   /** Environment used to form host-owned interactive argv. */
   env?: NodeJS.ProcessEnv;
+  /** Injectable reviewer executor for the deterministic plan-review boundary. */
+  providerExecutor?: RunPlanReviewInput['providerExecutor'];
+  /** Injectable plan-review runner so command wiring can be asserted without a provider call. */
+  runPlanReview?: typeof runPlanReview;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -556,6 +688,33 @@ export interface DispatchEngineerOpts {
   confirmAnother?: () => boolean | Promise<boolean>;
 }
 
+/** Render computed dependency evidence for the operator before the final JSON handoff. */
+function renderLandDependencyDecision(
+  dependency: NonNullable<LandSpecResult['dependency']>,
+  print: (line: string) => void,
+): void {
+  if (dependency.proposals.kind !== 'computed') return;
+
+  for (const proposal of dependency.proposals.proposals) {
+    print(`engineer land: dependency proposal ${proposal.target} (${proposal.source})`);
+  }
+  for (const target of dependency.proposals.satisfied) {
+    print(`engineer land: dependency satisfied ${target}`);
+  }
+  for (const advisory of dependency.proposals.advisory) {
+    if (advisory.reason === 'markerless-branch' && advisory.branch) {
+      print(`engineer land: dependency advisory markerless branch ${advisory.branch}`);
+      continue;
+    }
+    if (advisory.reason === 'local-git' && advisory.message) {
+      print(`engineer land: dependency advisory local-git ${advisory.message}`);
+      continue;
+    }
+    const subject = advisory.target ?? advisory.branch;
+    print(`engineer land: dependency advisory ${advisory.reason}${subject ? ` ${subject}` : ''}`);
+  }
+}
+
 function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean): string {
   if (!(error instanceof GithubTrackerOperationRefusalError)
     || error.reason !== 'explicit-authorization-required') return '';
@@ -568,12 +727,39 @@ function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean
 /**
  * Spawn an interactive host with the operator's terminal attached.
  */
-function spawnInteractiveHost(executable: string, argv: string[], cwd: string): Promise<number> {
+function spawnInteractiveHost(
+  executable: string,
+  argv: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, argv, { stdio: 'inherit', cwd });
+    const child = spawn(executable, argv, { stdio: 'inherit', cwd, env });
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
+}
+
+function dependencyRepository(project: { name: string; remote?: string }): string {
+  const match = project.remote?.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return match?.[1] ?? project.name;
+}
+
+function formatDependencyDrift(result: DependencyDriftResult): string {
+  if (result.kind === 'repository-indeterminate') {
+    return `Dependency drift audit: indeterminate (${result.cause})`;
+  }
+  const findings = <T>(name: string, values: readonly T[], render: (value: T) => string): string =>
+    values.length === 0 ? `${name}: 0 findings` : `${name}: ${values.length} finding(s)\n${values.map((value) => `  ${render(value)}`).join('\n')}`;
+  return [
+    findings('unlinked', result.unlinked, (finding) => `${finding.source} → ${finding.target}`),
+    findings('stale', result.stale, (finding) => `${finding.source} → ${finding.target}`),
+    findings('cycles', result.cycles, (finding) => `{${finding.members.join(', ')}}`),
+    findings('contradictions', result.contradictions, (finding) => `${finding.source} → ${finding.target}`),
+    result.indeterminate.length === 0
+      ? 'indeterminate: 0 findings'
+      : `indeterminate: ${result.indeterminate.length} finding(s)\n${result.indeterminate.map((ref) => `  ${ref}`).join('\n')}`,
+  ].join('\n');
 }
 
 async function loadLaunchConfig(launchingDirectory: string): Promise<ConfigResult> {
@@ -712,21 +898,36 @@ export const SUBCOMMAND_HELP = {
     'Flags: none.\n' +
     'Mutates: nothing (read-only).\n' +
     'Loop fit: informational only — inspect which projects the engineer can route ideas to; not a step in the claim → worktree → land → handoff → resolve/forget loop.',
+  'dep-audit':
+    'compose dep-audit --project <name> — report unlinked, stale, cyclic, and contradictory issue dependencies.\n' +
+    'Flags: --project <name> (required; must name a registered project).\n' +
+    'Mutates: nothing (read-only tracker audit).\n' +
+    'Loop fit: out-of-band maintenance report; it never creates, removes, or changes dependency links.',
   worktree:
-    'compose worktree --project <name> --idea "<idea>" [--source-ref <ref>] — create the per-idea worktree used to author a spec.\n' +
-    'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas).\n' +
+    'compose worktree --project <name> --idea "<idea>" [--source-ref <ref>] [--body <text>] — create the per-idea worktree used to author a spec.\n' +
+    'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas), --body <text> (optional — stages the intake body).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
+  phase:
+    'compose phase --worktree <path> --phase <phase> — label the current composer pane for an active DECIDE phase.\n' +
+    'Flags: --worktree <path> (required), --phase <phase> (required).\n' +
+    'Mutates: updates only the current herdr or tmux pane label when one is identified by the environment.\n' +
+    'Loop fit: informational phase marker during DECIDE; it does not change authored artifacts or workflow state.',
   land:
-    'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — land the authored spec from the worktree onto the spec/<slug> branch and open the spec PR.\n' +
+    'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — commit the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
-    'Mutates: commits to the worktree, pushes the spec/<slug> branch, opens a PR.\n' +
+    'Mutates: commits the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Loop fit: third step — claim → worktree → land → handoff → resolve/forget.',
   handoff:
-    'compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — hand the landed spec off to the daemon/build phase.\n' +
+    'compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — push the spec branch, open the spec PR, and hand the landed spec off to the daemon/build phase.\n' +
     'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
-    'Mutates: notifies/nudges the daemon for the target project; updates ledger write-back state when --source-ref is present.\n' +
+    'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
+  'plan-review':
+    'compose plan-review --project <name> --worktree <path> [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
+    'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
+    'Mutates: writes only .docs/plan-review/<plan-stem>.md and composer events.\n' +
+    'Loop fit: DECIDE gate after coherence-check and before land.',
   poll:
     'compose poll — poll configured intake sources (e.g. github-issues) and enqueue new ideas into the durable inbox.\n' +
     'Flags: none.\n' +
@@ -779,8 +980,10 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
       '  ai-conductor compose [--provider <id>] [--idea "<text>"] — launch with an optional provider and/or specific idea\n' +
       '  ai-conductor compose projects                            — list registered projects\n' +
+      '  ai-conductor compose dep-audit --project <name>         — read-only dependency drift report\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
+      '  ai-conductor compose plan-review --project <n> --worktree <p> [--max-prompt-chars <positive-integer>] [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
@@ -958,6 +1161,10 @@ export async function dispatchEngineer(
       const launchingDirectory = process.cwd();
       const confirmAnother = opts.confirmAnother ?? promptAnother;
       const launchEnv = opts.env ?? process.env;
+      const skillNameRoot = opts.skillNameRoot === undefined
+        ? await resolveHarnessRoot()
+        : opts.skillNameRoot;
+      const composerName = await resolveSkillName(skillNameRoot, 'composer');
 
       // Real-spawn path only: don't nest any interactive host session. When a launcher
       // is injected (tests), there is no real nesting, so skip this guard.
@@ -971,7 +1178,7 @@ export async function dispatchEngineer(
         );
         if (nestedHost && 'interactiveLaunch' in nestedHost) {
           print(
-            `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}composer directly to start ` +
+            `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}${composerName} directly to start ` +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
@@ -1004,7 +1211,7 @@ export async function dispatchEngineer(
       }
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
-        const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+        const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
           executable!,
           host!.interactiveLaunch.argv({
@@ -1014,6 +1221,7 @@ export async function dispatchEngineer(
               : launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
           }),
           launchingDirectory,
+          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id },
         );
       });
 
@@ -1075,7 +1283,7 @@ export async function dispatchEngineer(
             printErr(
               `engineer: could not launch ${host.id} executable ${executable ?? host.defaultExecutable} (${msg}). ` +
                 `Install it or set ${host.executableOverrideEnv}; if already in a session, run ` +
-                `${host.invocationPrefix}composer directly.`,
+                `${host.invocationPrefix}${composerName} directly.`,
             );
           } else {
             const displayName = host?.displayName ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch').displayName;
@@ -1113,11 +1321,51 @@ export async function dispatchEngineer(
       return 0;
     }
 
+    // ── phase ─────────────────────────────────────────────────────────────────
+    case 'phase': {
+      if (!/^[a-z0-9-]+$/.test(dispatch.phase)) {
+        printErr(`compose phase: invalid phase '${dispatch.phase}'.`);
+        return 1;
+      }
+      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
+      if (!slug) {
+        printErr(`compose phase: worktree '${dispatch.worktree}' must be on a canonical spec/<slug> branch.`);
+        return 1;
+      }
+      if (!opts.paneLabelRunner) return 0;
+      await labelComposerPane({
+        slug,
+        phase: dispatch.phase,
+        env: opts.env ?? process.env,
+        run: opts.paneLabelRunner,
+        warn: printErr,
+      });
+      return 0;
+    }
+
     // ── projects ──────────────────────────────────────────────────────────────
     case 'projects': {
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const projects = await reader.listProjects();
       print(JSON.stringify(projects));
+      return 0;
+    }
+
+    // ── dep-audit ──────────────────────────────────────────────────────────────
+    // Resolve the local registry before constructing the tracker so an unknown
+    // project is a local refusal with no network/read-side effect.
+    case 'dep-audit': {
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const projects = await reader.listProjects();
+      const record = projects.find((project) => project.name === dispatch.project);
+      if (!record) {
+        printErr(`compose dep-audit: project "${dispatch.project}" not found in registry.`);
+        return 1;
+      }
+      const repository = dependencyRepository(record);
+      const tracker = opts.createDependencyTracker ?? (() => createGithubTrackerClient(gh));
+      const result = await sweepDependencyDrift({ repository, tracker: tracker(), cwd: record.path });
+      print(formatDependencyDrift(result));
       return 0;
     }
 
@@ -1185,6 +1433,15 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
+        if (opts.paneLabelRunner) {
+          await labelComposerPane({
+            slug: wt.slug,
+            phase: 'worktree',
+            env: opts.env ?? process.env,
+            run: opts.paneLabelRunner,
+            warn: printErr,
+          });
+        }
         // The occurrence rides the one telemetry spine. This CLI process owns no
         // long-lived bus, so it builds the spine for the duration of the emit —
         // a ConductorEventEmitter with EventPersister attached to the canonical
@@ -1220,9 +1477,57 @@ export async function dispatchEngineer(
       }
     }
 
+    case 'plan-review': {
+      const { project: projectName, worktree, accept, acknowledge, reason, maxPromptChars, invalidMaxPromptChars } = dispatch;
+      if (invalidMaxPromptChars) { printErr('engineer plan-review: --max-prompt-chars must be a positive integer'); return 1; }
+      if (maxPromptChars !== undefined && (accept || acknowledge)) { printErr('engineer plan-review: --max-prompt-chars applies only to a review run'); return 1; }
+      await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const record = (await reader.listProjects()).find((project) => project.name === projectName);
+      if (!record) { printErr(`engineer plan-review: project "${projectName}" not found in registry.`); return 1; }
+      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+      try { target = await resolveTargetRepo(record.path, reader); }
+      catch (error) { printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`); return 1; }
+      const configResult = await loadMergedConfig(worktree);
+      if (!configResult.ok) { printErr(`engineer plan-review: ${configResult.error.message}`); return 1; }
+      const planStem = await resolvePlanReviewFeatureSlug(worktree);
+      if (!planStem) {
+        printErr(`engineer plan-review: worktree must be on a canonical spec/<slug> branch to resolve its active feature plan.`);
+        return 1;
+      }
+      try { await access(join(worktree, '.docs', 'plans', `${planStem}.md`)); }
+      catch { printErr(`engineer plan-review: active feature plan .docs/plans/${planStem}.md is required in the worktree.`); return 1; }
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+      persister.start();
+      try {
+        if (accept) await acceptPlanReviewFinding({ worktreePath: worktree, planStem, findingId: accept, reason: reason ?? '', emit: async (event) => events.emitOrThrow(event) });
+        else if (acknowledge) await acknowledgePlanReviewChanges({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, reason: reason ?? '' });
+        else {
+          const registry = new PluginRegistry();
+          registerBuiltInLlmProviders(registry, { codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000 });
+          registry.markInitialized();
+          const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
+          let ledgerError: string | undefined;
+          const safeEmit = async (event: any) => { try { await events.emitOrThrow(event); } catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error); } };
+          const artifact = await (opts.runPlanReview ?? runPlanReview)({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr, maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars });
+          if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
+          if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
+        }
+        return 0;
+      } catch (error) {
+        printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      } finally { persister.stop(); }
+    }
+
     // ── land ──────────────────────────────────────────────────────────────────
     case 'land': {
-      const { project: projectName, idea, worktree, sourceRef } = dispatch;
+      const {
+        project: projectName, idea, worktree, sourceRef,
+        dependsOn = [], declinedDependencies = [], skipDependencyCheck,
+      } = dispatch;
+      await labelPrimitivePane(worktree, 'land', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -1270,10 +1575,31 @@ export async function dispatchEngineer(
           idea,
           worktree,
           sourceRef,
-          { ownerConfig, gh },
+          {
+            ownerConfig,
+            gh,
+            dependencyGit: async (args) => {
+              try {
+                const result = await git(args, { cwd: target.canonicalPath });
+                return { exitCode: 0, stdout: result.stdout, stderr: '' };
+              } catch (error) {
+                return {
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: error instanceof Error ? error.message : String(error),
+                };
+              }
+            },
+            acceptedDependencies: dependsOn,
+            declinedDependencies,
+            skipDependencyCheck,
+          },
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (err instanceof LandGateError && err.dependency) {
+          renderLandDependencyDecision(err.dependency, print);
+        }
         // Keep-on-failure (FR-6): the per-idea worktree is retained for inspection —
         // report WHERE it is so retention is actionable, not silent clutter.
         printErr(`engineer land: ${msg}`);
@@ -1322,6 +1648,80 @@ export async function dispatchEngineer(
         );
       }
 
+      if (result.dependency) {
+        renderLandDependencyDecision(result.dependency, print);
+      }
+
+      // The dependency decision is deliberately post-commit.  A failed or
+      // refused GitHub write must leave the landed spec intact, be reported in
+      // the decision event, and never be mistaken for a pre-commit land gate.
+      if (sourceRef && result.dependency) {
+        const { proposals, decision } = result.dependency;
+        const writes: Array<{ target: string; status: string; reason?: string }> = [];
+        try {
+          if (decision.kind === 'proceed') {
+            const operations = createGuardedGithubOperationRunner(gh, {
+              cwd: target.canonicalPath,
+              intake: createGithubIntakeAuthorization({
+                gh,
+                cwd: target.canonicalPath,
+                resolveActor: async () => identity,
+              }),
+            });
+            for (const dependency of decision.accepted) {
+              try {
+                const [write] = await createDependencyLinks([{
+                  source: sourceRef,
+                  target: dependency,
+                  kind: 'depends-on',
+                  blocked_by: true,
+                }], {
+                  gh,
+                  operations,
+                  actor: identity.id,
+                  cwd: target.canonicalPath,
+                });
+                if (write) writes.push({ target: dependency, status: write.status });
+                else writes.push({ target: dependency, status: 'failed', reason: 'dependency link produced no result' });
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                writes.push({ target: dependency, status: 'failed', reason });
+                printErr(`engineer land: dependency write failed for ${dependency}: ${reason}`);
+              }
+            }
+          }
+        } catch (error) {
+          // Keep a durable decision record even if construction of the guarded
+          // write seam itself fails unexpectedly.
+          const reason = error instanceof Error ? error.message : String(error);
+          printErr(`engineer land: dependency write setup failed: ${reason}`);
+          for (const dependency of decision.kind === 'proceed' ? decision.accepted : []) {
+            writes.push({ target: dependency, status: 'failed', reason });
+          }
+        }
+
+        try {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+          persister.start();
+          try {
+            await events.emitOrThrow({
+              type: 'land_dependency_decided',
+              repository: sourceRef.split('#', 1)[0],
+              sourceRef,
+              proposals: proposals.kind === 'computed' ? proposals.proposals.map((proposal) => proposal.target) : [],
+              accepted: decision.kind === 'proceed' ? decision.accepted : [],
+              declined: decision.kind === 'proceed' ? decision.declined : [],
+              skipped: decision.kind === 'proceed' ? decision.skipped : null,
+              writes,
+            });
+          } finally {
+            persister.stop();
+          }
+        } catch (error) {
+          printErr(`engineer land: could not record dependency decision event: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       print(JSON.stringify(result));
       return 0;
     }
@@ -1329,6 +1729,7 @@ export async function dispatchEngineer(
     // ── handoff ───────────────────────────────────────────────────────────────
     case 'handoff': {
       const { project: projectName, branch, worktree, sourceRef } = dispatch;
+      await labelPrimitivePane(worktree, 'handoff', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -1566,16 +1967,20 @@ export async function dispatchEngineer(
         // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
         // to a single walk, so reusing one across calls would leak stale verdicts
         // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
-        const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+        const source = createOrderingSource({
+          run: (args) => gh(args, { cwd: process.cwd() }),
+          cwd: process.cwd(),
+          events: opts.events,
+        });
+        const resolver = createBlockerResolver({ source });
         // Claim-time label read — no cache: a relabel between claims must be
         // honored on the very next claim (TR-1 happy 3). A throwing reader is
         // handled inside claimUnblocked (falls back to drain order, warns once
         // via `log`) — never caught here.
-        const labelReader = ghIssueLabelReader((args) => gh(args, { cwd: process.cwd() }));
         const outcome = await claimUnblocked({
           queue: guardedQueue as unknown as DependencyClaimQueue,
           resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
-          resolveBands: (refs) => resolveClaimBands(labelReader, refs),
+          resolveBands: (refs) => resolveClaimBands(source, refs),
           log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
         });
 

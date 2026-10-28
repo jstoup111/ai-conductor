@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import {
-  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
+  BUILD_REVIEW_JUDGED_V4_SCHEMAS,
   parseBuildReviewJudgedResult,
 } from './build-review-domain.js';
 import {
@@ -29,9 +31,25 @@ export interface BuildReviewRubricDescriptor {
   >;
 }
 
-export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security'] as const;
+export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security', 'implementationQuality'] as const;
 
 type RegisteredBuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
+
+/**
+ * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always
+ * wins, both when config is loaded and when it is resolved. Test quality is
+ * opt-in: its scoped-run preflight classifies test output with
+ * framework-specific patterns, and on frameworks it does not recognize
+ * (e.g. RSpec, #1682) every run — pass or fail — becomes an unretriable
+ * infrastructure failure, so the rubric can never return a verdict and the
+ * gate deadlocks. Projects whose framework the preflight understands enable
+ * it explicitly (this repository does, in `.ai-conductor/config.yml`).
+ */
+export const BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED: Readonly<Record<RegisteredBuildReviewRubricId, boolean>> = Object.freeze({
+  testQuality: false,
+  security: true,
+  implementationQuality: true,
+});
 
 type BuildReviewRubricRegistryCatalogMember = {
   readonly id: RegisteredBuildReviewRubricId;
@@ -70,12 +88,12 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     prerequisite: 'none',
     contract: Object.freeze({
       projection: Object.freeze({
-        version: 'v3',
+        version: 'v4',
         build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).testQuality,
       }),
       output: Object.freeze({
-        version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.testQuality,
+        version: 'v4',
+        jsonSchema: BUILD_REVIEW_JUDGED_V4_SCHEMAS.testQuality,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
@@ -90,12 +108,32 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     prerequisite: 'none',
     contract: Object.freeze({
       projection: Object.freeze({
-        version: 'v3',
+        version: 'v4',
         build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).security,
       }),
       output: Object.freeze({
-        version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.security,
+        version: 'v4',
+        jsonSchema: BUILD_REVIEW_JUDGED_V4_SCHEMAS.security,
+        parse: parseBuildReviewJudgedResult,
+      }),
+      identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
+    }),
+    }),
+  },
+  {
+    id: 'implementationQuality',
+    descriptor: Object.freeze({
+    skillName: 'build-review-implementation-quality',
+    cachePolicy: 'content-addressed',
+    prerequisite: 'none',
+    contract: Object.freeze({
+      projection: Object.freeze({
+        version: 'v4',
+        build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).implementationQuality,
+      }),
+      output: Object.freeze({
+        version: 'v4',
+        jsonSchema: BUILD_REVIEW_JUDGED_V4_SCHEMAS.implementationQuality,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
@@ -116,6 +154,15 @@ export function getBuildReviewRubricDescriptor(
   rubric: RegisteredBuildReviewRubricId,
 ): BuildReviewRubricDescriptor {
   return BUILD_REVIEW_RUBRIC_REGISTRY[rubric];
+}
+
+/** Read a shipped rubric from its installation directory, not its semantic name. */
+export async function readBuildReviewRubricSkill(
+  harnessRoot: string,
+  rubric: RegisteredBuildReviewRubricId,
+): Promise<string> {
+  const { skillName } = getBuildReviewRubricDescriptor(rubric);
+  return readFile(join(harnessRoot, 'skills', skillName, 'SKILL.md'), 'utf8');
 }
 
 /**

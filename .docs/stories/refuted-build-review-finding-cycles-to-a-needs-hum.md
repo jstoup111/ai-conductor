@@ -46,7 +46,7 @@ cannot be used to wave findings through.
 - Given a `refute` row with no existing-case binding, when the judgement is validated, then it is rejected with a reason naming the missing binding and nothing is persisted
 - Given a `refute` row bound to an open `act` case that BUILD never attempted, when the judgement is reconciled, then it is rejected as an illegal disposition transition and the case remains open with disposition `act`
 - Given a `refute` row bound to an attempted case whose action effect is still reserved or failed, when the judgement is reconciled, then it is rejected as an illegal disposition transition
-- Given a `refute` row bound to a case with disposition `defer` or `reject`, when the judgement is reconciled, then it is rejected as an illegal disposition transition
+- Given a `refute` row bound to a case with disposition `defer` or `reject` that is not carry-eligible (adr-2026-10-20-operator-acceptance-is-durable-case-state D3), when the judgement is reconciled, then it is rejected as an illegal disposition transition
 - Given a `refute` row whose evidence reference names a path that does not exist at the current tree, when the judgement is validated, then the whole judgement is rejected fail-closed and no waiver path accepts it
 - Given a `refute` row whose evidence reference names an existing path but an excerpt that does not occur in that file after whitespace normalization, when the judgement is validated, then the whole judgement is rejected fail-closed
 - Given a `refute` row whose evidence reference carries a line number, hunk offset, or commit SHA field, when the judgement is parsed, then it is rejected as malformed
@@ -84,16 +84,16 @@ same refuted claim is neither re-judged nor halted as a regression.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a case resolved by refutation with effect `none`, when a later lap re-raises the exact same source id, then that source is removed from the live source set, the judge is not dispatched for it, and the lap routes PASS when no other source is live
+- Given a case resolved by refutation with effect `none` holds a source's authoritative link, when a later lap re-raises the exact same source id, then that source is removed from the live source set, the judge is not dispatched for it, and the lap routes PASS when no other source is live
 - Given a case resolved by refutation whose residual deferral is applied, when a later lap re-raises the same source id, then the source is settled the same way
 
 #### Negative Paths
 - Given a case resolved by refutation whose residual deferral effect is reserved or failed, when a later lap re-raises the same source id, then the source is not settled, the lap does not route PASS, and the unfinished effect is reported as the blocker
-- Given a case resolved by refutation, when a later lap raises a finding whose id has drifted from the refuted source id, then the drifted finding is a live source and is adjudicated normally
+- Given a case resolved by refutation, when a later lap raises a finding whose id has drifted from the refuted source id, then, in a full lap or when the drifted finding maps to a delta hunk or names a delta cause hunk, the drifted finding is a live source and is adjudicated normally
 - Given a case resolved by refutation, when a later lap re-raises the same source id, then no regression halt is written for that case
 
 ### Done When
-- [ ] A two-lap coordinator test proves the refuted source is excluded by exact id and that a drifted id is not
+- [ ] A two-lap coordinator test proves the refuted source is excluded by exact id and that a drifted id, in a full lap or on a delta hunk, is not
 - [ ] A test proves an unfinished residual effect blocks settlement exactly as any other reserved or failed effect
 
 ## Story 5: The narrow true remainder files an intake issue

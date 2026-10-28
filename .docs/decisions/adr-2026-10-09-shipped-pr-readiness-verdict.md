@@ -90,6 +90,8 @@ Option B, operator-confirmed.
      flagged `no-checks` whose CI later passes would be barred from `mergeable` forever
      (adr-015 FR-12) and from ci-fix dispatch (ship-ci sticky suppressor).
    Drafts remain excluded from autoresolve and ci-fix dispatch.
+   > **Amended 2026-10-17 by #2945:** `ci-failing` on the leaf of a feature with published stack members takes no ship-ci dispatch, because ci-fix is ineligible there (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
+
 4. **Surface only — no new GitHub write operation.** No operation is added to
    `GITHUB_OPERATION_REGISTRY`. The daemon never starts CI, pushes, closes, reopens, or
    un-drafts a PR because of this verdict.

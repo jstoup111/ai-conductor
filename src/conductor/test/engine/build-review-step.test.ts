@@ -1,5 +1,6 @@
 // Covers: task:2, task:3, task:4
 // Covers: task:9, task:10
+// Covers: task:11
 // Covers: task:5
 // Covers: task:rem-as-built-rem-ab14-1
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +8,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 
 import { DefaultStepRunner, cachedRubricInvocation, dispatchRubricContract, type StepRunnerOptions } from '../../src/engine/step-runners.js';
@@ -33,6 +35,8 @@ import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/res
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ChildId } from '../../src/engine/child-context.js';
+import type { ConductorEvent } from '../../src/types/events.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
 const buildReviewRegistryOverride = vi.hoisted(() => ({ descriptor: undefined as unknown }));
@@ -264,7 +268,8 @@ describe('build_review oversized projection step', () => {
     expect(aggregate.results.security.findings).toEqual([
       expect.objectContaining({ summary: 'Credential committed to source.' }),
     ]);
-    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
+    // Publishing the sibling does not exempt the rejected branch from the allowance.
+    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(1);
   });
 
   it('routes an oversized refusal before a second build-review dispatch', async () => {
@@ -999,7 +1004,7 @@ describe('build_review structured rubric dispatch', () => {
   });
 
   it('carries custom-v1 through the same dispatcher with its policy bundle before skill invocation', async () => {
-    const customInvoke = vi.fn(async (_options: Partial<InvokeOptions>) => ({ success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] } }));
+    const customInvoke = vi.fn(async (_options: Partial<InvokeOptions>) => ({ success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } }));
     const custom = await dispatchRubricContract({
       descriptor: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
       invoke: customInvoke,
@@ -1009,6 +1014,89 @@ describe('build_review structured rubric dispatch', () => {
     expect(custom).toMatchObject({ kind: 'structured', parsed: { kind: 'custom-findings', findings: [] } });
     expect(customInvoke.mock.calls[0]?.[0]?.prompt).toMatch(/^bundle text\n\n\$portable-policy/);
     expect(customInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+  });
+
+  // Covers: task:11
+  it('settles an empty custom delta after resolving its candidate policy identity without reviewer dispatch', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-scope-empty-'));
+    const invoke = vi.fn();
+    const catalog = vi.fn(async () => [{
+      semanticName: 'custom-policy', source: 'project' as const, installationOrigin: '/fixture/policy',
+      canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available' as const,
+    }]);
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke }, 'custom-scope-empty', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: catalog,
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+      events,
+    });
+
+    try {
+      const outcome = await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+          pipelineDir?: string,
+          executionContext?: unknown,
+          reviewScope?: unknown,
+          child?: unknown,
+          onResolvedReviewScope?: unknown,
+          resolveReviewScope?: (policyIdentity: string) => Promise<unknown>,
+        ) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }), join(projectDir, '.pipeline'), undefined, undefined, undefined, undefined, async (policyIdentity) => ({
+        mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity,
+        predecessorLapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b', reviewedHunks: [], deltaHunks: [], outOfDeltaSourceIds: [],
+      }));
+
+      expect(outcome).toMatchObject({
+        id: 'custom-policy', success: true,
+        member: { declaration: { rubricId: 'custom-policy' }, result: { kind: 'scope-empty', rubric: 'custom-policy' } },
+      });
+      expect(catalog).toHaveBeenCalledOnce();
+      expect(invoke).not.toHaveBeenCalled();
+      expect(skips).toContainEqual(expect.objectContaining({
+        type: 'build_review_rubric_skipped', rubric: 'custom-policy', reason: 'scope-empty',
+      }));
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'build-review', 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', 'custom-policy.json'), 'utf8'))).toMatchObject({
+        result: { kind: 'scope-empty', rubric: 'custom-policy' },
+        reviewScope: { mode: 'delta', deltaHunks: [] },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it.each(['missing', 'malformed'] as const)('routes an adapter %s structured-result marker to the root rejection', async (structuredResultFailure) => {
@@ -1037,7 +1125,7 @@ describe('build_review structured rubric dispatch', () => {
     });
   });
 
-  it('uses only final structured custom-v1 results for engine stamps, refusals, and field-named rejection', async () => {
+  it('uses only final structured custom-v2 results for engine stamps, refusals, and field-named rejection', async () => {
     const source = {
       path: 'src/widget.ts', startLine: 8, endLine: 12,
       contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary',
@@ -1051,10 +1139,10 @@ describe('build_review structured rubric dispatch', () => {
     };
     const finding = {
       concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
-      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: [source],
+      confidence: 72, severity: 'minor', evidenceLocations: ['src/widget.ts:8'], sourceRegions: [source],
     };
     const structuredFinding = {
-      kind: 'custom-findings', version: 'v1', findings: [finding],
+      kind: 'custom-findings', version: 'v2', findings: [finding],
       rubric: 'provider-rubric', lapId: 'provider-lap',
     };
     const invoke = vi.fn(async (_options: Pick<InvokeOptions, 'nativeSchema'>) => ({
@@ -1068,7 +1156,7 @@ describe('build_review structured rubric dispatch', () => {
       options: { prompt: 'review', cwd: '/fixture', interactive: false },
     });
     const golden = stampBuildReviewCustomJudgedResult(
-      { kind: 'custom-findings', version: 'v1', findings: [finding] }, engineStamp, { sourceRegions: [source] },
+      { kind: 'custom-findings', version: 'v2', findings: [finding] }, engineStamp, { sourceRegions: [source] },
     );
     const stamped = dispatched.kind === 'structured'
       ? stampBuildReviewCustomJudgedResult(dispatched.parsed, engineStamp, { sourceRegions: [source] })
@@ -1105,7 +1193,7 @@ describe('build_review structured rubric dispatch', () => {
       success: true,
       output: '{"kind":"unsupported-policy","requirement":"prose B"}',
       exitCode: 0,
-      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
     }));
     const runtimeProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1178,6 +1266,75 @@ describe('build_review structured rubric dispatch', () => {
     }
   });
 
+  it('settles a failed installed custom-policy capture under the caller execution owner', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-failed-owner-'));
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({ success: false, output: 'provider failed', exitCode: 1 }));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const failed = vi.fn();
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: { ...branch.policy, llm_provider: ['claude'] }, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+      nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+      policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const sessions = new ProviderSessionStore();
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-failed-owner', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: runtimes,
+      sessionStore: sessions,
+      configuredProviders: ['claude'],
+      providerExecution: { configuredProviders: ['claude'], runtimes, sessions, onAuxiliaryAttemptFailed: failed },
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const owner = {
+      executionId: 'execution-owner',
+      subject: { kind: 'configured-member' as const, parentGroup: 'prd_audit', member: 'build_review' },
+    };
+    try {
+      await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+          pipelineDir?: string,
+          executionContext?: unknown,
+        ) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }), join(projectDir, '.pipeline'), owner);
+
+      expect(invoke).toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledWith(
+        expect.objectContaining({ step: 'build_review', auxiliaryMember: 'custom-policy' }),
+        owner,
+      );
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('skips a registered external candidate without a built-in descriptor and invokes the next custom-policy candidate', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-external-custom-candidate-'));
     const externalInvoke = vi.fn();
@@ -1185,7 +1342,7 @@ describe('build_review structured rubric dispatch', () => {
       success: true,
       output: '{"kind":"custom-findings","version":"v1","findings":[]}',
       exitCode: 0,
-      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
     }));
     const externalProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1310,4 +1467,295 @@ describe('build_review structured rubric dispatch', () => {
       await rm(projectDir, { recursive: true, force: true });
     }
   });
+
+  // Covers: task:6
+  it('retains a custom rejected response, its exact prompt, and every cited-region comparison across replay attempts', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-rejection-retention-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const matchingHash = `sha256:${createHash('sha256').update('alpha\nbeta\n').digest('hex')}`;
+    const malformedResponse = {
+      kind: 'custom-findings', version: 'v2', findings: [{
+        sourceRegions: [
+          { path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: matchingHash },
+          { path: 'src/a.ts', startLine: 3, endLine: 3, contentHash: `sha256:${'0'.repeat(64)}` },
+        ],
+      }],
+    };
+    const secondMalformedResponse = { kind: 'custom-findings', version: 'v2', findings: 'not-an-array' };
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: 'first rejected output', exitCode: 0, finalStructuredResult: malformedResponse })
+      .mockResolvedValueOnce({ success: true, output: 'second rejected output', exitCode: 0, finalStructuredResult: secondMalformedResponse });
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const events = new ConductorEventEmitter();
+    const failures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => {
+      if (event.type === 'build_review_rubric_infrastructure_failure') failures.push(event);
+    });
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-retention', projectDir, {
+      events,
+      gitRunner: async (args) => args[0] === 'show' && args[1] === 'head:src/a.ts'
+        ? { exitCode: 0, stdout: 'alpha\nbeta\ngamma\n', stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const inputs = {
+      sourceSnapshot: {
+        contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot',
+        sourceChanges: [{ kind: 'M' as const, path: 'src/a.ts' }],
+      },
+    };
+    const dispatch = (runner as unknown as {
+      dispatchInstalledBuildReviewPolicy: (
+        entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string, tier?: unknown, lapGate?: unknown,
+        readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>, pipelineDir?: string,
+      ) => Promise<unknown>;
+    }).dispatchInstalledBuildReviewPolicy;
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    try {
+      await dispatch.call(runner, entry, inputs, lapId, undefined, undefined, async (provider) => ({ provider, platform: process.platform, status: 'available' as const }), pipelineDir);
+      await dispatch.call(runner, entry, inputs, lapId, undefined, undefined, async (provider) => ({ provider, platform: process.platform, status: 'available' as const }), pipelineDir);
+
+      const invokedPrompt = invoke.mock.calls[0]?.[0]?.prompt;
+      expect(await readFile(join(pipelineDir, 'build-review', lapId, 'custom-policy.prompt.txt'), 'utf8')).toBe(invokedPrompt);
+      expect(invoke.mock.calls[1]?.[0]?.prompt).toBe(invokedPrompt);
+      const firstPath = join(pipelineDir, 'build-review-rejections', lapId, 'custom-policy.1.json');
+      const secondPath = join(pipelineDir, 'build-review-rejections', lapId, 'custom-policy.2.json');
+      const first = JSON.parse(await readFile(firstPath, 'utf8'));
+      const second = JSON.parse(await readFile(secondPath, 'utf8'));
+      const promptPath = `.custom-pipeline/build-review/${lapId}/custom-policy.prompt.txt`;
+      expect(first).toMatchObject({
+        rubricKind: 'custom', attempt: 1, detail: expect.any(String), provider: 'claude', model: branch.policy.model,
+        output: 'first rejected output', structuredResult: malformedResponse, promptPath,
+        promptSha256: `sha256:${createHash('sha256').update(invokedPrompt, 'utf8').digest('hex')}`,
+      });
+      expect(first.regionComparison.map((comparison: { status: string }) => comparison.status)).toEqual(['match', 'content-hash-mismatch']);
+      expect(second).toMatchObject({
+        rubricKind: 'custom', attempt: 2, detail: expect.any(String),
+        output: 'second rejected output', structuredResult: secondMalformedResponse, promptPath,
+      });
+      expect(failures.map((failure) => failure.retainedResponsePath)).toEqual([
+        `.custom-pipeline/build-review-rejections/${lapId}/custom-policy.1.json`,
+        `.custom-pipeline/build-review-rejections/${lapId}/custom-policy.2.json`,
+      ]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:7
+  it('keeps a rejected custom result when its prompt path is occupied', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-prompt-write-failure-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    const payload = customFindingsWithMismatchedRegion();
+    await mkdir(join(pipelineDir, 'build-review'), { recursive: true });
+    await writeFile(join(pipelineDir, 'build-review', lapId), 'occupied prompt directory', 'utf8');
+    const fixture = customRetentionFixture(projectDir, payload);
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, lapId);
+      const record = JSON.parse(await readFile(join(pipelineDir, 'build-review-rejections', lapId, 'custom-policy.1.json'), 'utf8'));
+
+      expect(fixture.invoke).toHaveBeenCalledOnce();
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'infrastructure-failure', reason: 'invalid-structured-result', detail: record.detail } },
+      });
+      expect(record).not.toHaveProperty('promptPath');
+      expect(record).not.toHaveProperty('promptSha256');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still judges an all-matching custom result when its prompt path is occupied', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-prompt-write-judged-'));
+    const baselineProjectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-prompt-write-baseline-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const baselinePipelineDir = join(baselineProjectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    await mkdir(join(pipelineDir, 'build-review'), { recursive: true });
+    await writeFile(join(pipelineDir, 'build-review', lapId), 'occupied prompt directory', 'utf8');
+    const fixture = customRetentionFixture(projectDir, customFindingsWithMatchingRegion());
+    const baseline = customRetentionFixture(baselineProjectDir, customFindingsWithMatchingRegion());
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, lapId);
+      const baselineOutcome = await baseline.dispatch(baselinePipelineDir, lapId);
+      const verdict = (outcome as { member?: { result?: { verdict?: unknown } } }).member?.result?.verdict;
+
+      expect(fixture.invoke).toHaveBeenCalledOnce();
+      expect(outcome).toMatchObject({ success: true, member: { result: { kind: 'judged', verdict } } });
+      expect(baselineOutcome).toMatchObject({ success: true, member: { result: { kind: 'judged' } } });
+      expect(verdict).toBe((baselineOutcome as { member?: { result?: { verdict?: unknown } } }).member?.result?.verdict);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+      await rm(baselineProjectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a rejected custom result and event when its retention directory is occupied', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-retention-write-failure-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(join(pipelineDir, 'build-review-rejections'), 'occupied retention directory', 'utf8');
+    const fixture = customRetentionFixture(projectDir, customFindingsWithMismatchedRegion());
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, lapId);
+
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'infrastructure-failure', reason: 'invalid-structured-result', detail: fixture.failures[0]?.excerpt } },
+      });
+      expect(fixture.failures).toHaveLength(1);
+      expect(fixture.failures[0]).not.toHaveProperty('retainedResponsePath');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the whole root-contract-violating custom payload with no region comparisons', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-root-rejection-retention-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    const payload = { kind: 'custom-findings', version: 'v2', findings: 'not-an-array' };
+    const fixture = customRetentionFixture(projectDir, payload);
+    try {
+      await fixture.dispatch(pipelineDir, lapId);
+      const record = JSON.parse(await readFile(join(pipelineDir, 'build-review-rejections', lapId, 'custom-policy.1.json'), 'utf8'));
+
+      expect(record.structuredResult).toEqual(payload);
+      expect(record.regionComparison).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('judges custom findings when an adapter omits the optional empty findings field', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-omitted-findings-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const fixture = customRetentionFixture(projectDir, { kind: 'custom-findings', version: 'v2' });
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+
+      expect(outcome).toMatchObject({ success: true, member: { result: { kind: 'judged', findings: [] } } });
+      expect(fixture.failures).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a well-formed unsupported-policy response as a judged result', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-unsupported-policy-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const fixture = customRetentionFixture(projectDir, { kind: 'unsupported-policy', requirement: 'requires deployment credentials' });
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'unsupported-policy', rubric: 'custom-policy', requirement: 'requires deployment credentials' } },
+      });
+      expect(fixture.failures).toEqual([]);
+      await expect(access(join(pipelineDir, 'build-review-rejections'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  function customFindingsWithMismatchedRegion() {
+    return {
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', severity: 'minor', evidenceLocations: ['src/a.ts:1'],
+        sourceRegions: [{ path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'0'.repeat(64)}`, display: 'alpha\nbeta' }],
+      }],
+    };
+  }
+
+  function customFindingsWithMatchingRegion() {
+    return {
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', severity: 'minor', evidenceLocations: ['src/a.ts:1'],
+        sourceRegions: [{
+          path: 'src/a.ts', startLine: 1, endLine: 2,
+          contentHash: `sha256:${createHash('sha256').update('alpha\nbeta\n').digest('hex')}`, display: 'alpha\nbeta',
+        }],
+      }],
+    };
+  }
+
+  function customRetentionFixture(projectDir: string, payload: unknown) {
+    const invoke = vi.fn(async () => ({ success: true, output: 'rejected custom output', exitCode: 0, finalStructuredResult: payload }));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke,
+    };
+    const events = new ConductorEventEmitter();
+    const failures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => {
+      if (event.type === 'build_review_rubric_infrastructure_failure') failures.push(event);
+    });
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-retention-write-failure', projectDir, {
+      events,
+      gitRunner: async (args) => args[0] === 'show' && args[1] === 'head:src/a.ts'
+        ? { exitCode: 0, stdout: 'alpha\nbeta\ngamma\n', stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const dispatch = async (pipelineDir: string, lapId: string) => (runner as unknown as {
+      dispatchInstalledBuildReviewPolicy: (
+        entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string, tier?: unknown, lapGate?: unknown,
+        readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>, pipelineDir?: string,
+      ) => Promise<unknown>;
+    }).dispatchInstalledBuildReviewPolicy(entry, {
+      sourceSnapshot: {
+        contentDigest: `sha256:${'a'.repeat(64)}`, mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot',
+        sourceChanges: [{ kind: 'M' as const, path: 'src/a.ts' }],
+      },
+    }, lapId, undefined, undefined, async (provider) => ({ provider, platform: process.platform, status: 'available' as const }), pipelineDir);
+    return { dispatch, failures, invoke };
+  }
 });

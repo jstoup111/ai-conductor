@@ -58,6 +58,7 @@ describe('engine/build-review verdict wiring contract', () => {
       rubric: {
         testQuality: false,
         security: false,
+        implementationQuality: false,
       },
     });
   });
@@ -75,6 +76,7 @@ describe('engine/build-review verdict wiring contract', () => {
       rubric: {
         testQuality: true,
         security: false,
+        implementationQuality: false,
       },
     });
   });
@@ -142,7 +144,7 @@ describe('engine/build-review verdict wiring contract', () => {
     const dir = await writeVerdict(verdict);
 
     const validated = validateBuildReviewVerdict(verdict);
-    expect(validated).toEqual({ ok: true, ...verdict, rubric: { testQuality: false, security: false } });
+    expect(validated).toEqual({ ok: true, ...verdict, rubric: { testQuality: false, security: false, implementationQuality: false } });
     expect(validated).toMatchObject({
       rubric: { testQuality: false },
       findings: {},
@@ -258,7 +260,10 @@ describe('engine/build-review verdict wiring contract', () => {
       buildReviewEffectiveResolver: resolver,
     })).resolves.toMatchObject({ done: true });
     expect(resolver).toHaveBeenCalledWith(dir, aggregate, {
-      minConfidence: { testQuality: 0, security: 0 },
+      child: undefined,
+      adjudicationEnabled: true,
+      minConfidence: { testQuality: 0, security: 0, implementationQuality: 0 },
+      minSeverity: {},
     });
   });
 
@@ -372,7 +377,7 @@ describe('engine/build-review verdict wiring contract', () => {
     };
     const dir = await writeVerdict(verdict);
 
-    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict, rubric: { testQuality: true, security: false } });
+    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict, rubric: { testQuality: true, security: false, implementationQuality: false } });
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({
       done: false,
       reason: expect.stringContaining('[testQuality] The changed test does not observe the behavior it claims to cover.'),
@@ -407,7 +412,7 @@ describe('engine/build-review verdict wiring contract', () => {
       }),
     });
     const inputs = {
-      sourceSnapshot: { headSha: 'mechanical-lap', digest: 'sha256:mechanical-lap', mergeBase: 'base' },
+      sourceSnapshot: { headSha: 'mechanical-lap', digest: 'sha256:mechanical-lap', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs;
 
     const result = await (runner as unknown as {
@@ -452,7 +457,7 @@ describe('engine/build-review verdict wiring contract', () => {
     });
     const outcome = await (runner as unknown as {
       runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; currentLapMechanicalFault?: boolean; output: string }>;
-    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'scope-incomplete', digest: snapshotDigest, mergeBase: 'base' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'scope-incomplete', digest: snapshotDigest, mergeBase: 'base', diff: '' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
 
     expect(outcome).toMatchObject({ success: false, currentLapMechanicalFault: true, output: expect.stringContaining('(scope-incomplete)') });
     expect((await readKickbackLedger(dir)).gates.build_review.lastMechanicalFault).toMatchObject({ reason: 'scope-incomplete', lapId: 'lap-scope-incomplete' });
@@ -505,7 +510,7 @@ describe('engine/build-review verdict wiring contract', () => {
       }),
     });
     const inputs = {
-      sourceSnapshot: { headSha: 'mixed-lap', digest: 'sha256:mixed-lap', mergeBase: 'base' },
+      sourceSnapshot: { headSha: 'mixed-lap', digest: 'sha256:mixed-lap', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs;
 
     const result = await (runner as unknown as {
@@ -516,6 +521,59 @@ describe('engine/build-review verdict wiring contract', () => {
     expect(result.currentLapMechanicalFault).toBeUndefined();
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(0);
     await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toContain('The changed test remains insensitive.');
+  });
+
+  it.each([
+    { prior: 0, faults: 1, halts: false },
+    { prior: 2, faults: 3, halts: true },
+  ])('charges a peer infrastructure failure beside a judged finding (prior $prior faults)', async ({ prior, faults, halts }) => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-mixed-infra-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, { version: 1, gates: { build_review: {
+      count: 0, cumulative: 0, mechanicalFaults: prior, treeHash: null,
+      lastReason: '', priorVerdict: true, resolvedBefore: 0,
+    } } });
+    const lapId = parseBuildReviewLapId('lap-mixed-infra')!;
+    const snapshotDigest = 'sha256:mixed-infra';
+    const judged = {
+      kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest, contractVersion: 'v3' as const,
+      findings: [{
+        concernKind: 'test-insensitive' as const, summary: 'The changed test remains insensitive.', evidenceLocations: ['test/engine.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/engine.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+      }], verdict: 'FAIL' as const,
+    };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'dispatched', rubric: 'testQuality', result: judged },
+        { kind: 'infrastructure-failure', rubric: 'implementationQuality', reason: 'invalid-structured-result', detail: 'anchor names no projected region' },
+      ],
+    });
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'mixed-infra', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: dir, feature: 'mixed-infra' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: ['sha256:unresolved'], suppressedFindingIds: [],
+          skippedRubrics: [], infrastructureFailureRubrics: ['implementationQuality'], uncoveredInfrastructureFailureRubrics: ['implementationQuality'],
+        },
+      }),
+      buildReviewArtifactReader: async (_root, rubric, readLapId, readSnapshotDigest) => ({
+        version: 1, rubric, lapId: readLapId, snapshotDigest: readSnapshotDigest,
+        result: rubric === 'testQuality' ? judged : { kind: 'judged' as const, rubric, lapId: readLapId, snapshotDigest: readSnapshotDigest, contractVersion: 'v3' as const, findings: [], verdict: 'PASS' as const },
+        provenance: { kind: 'fresh' as const },
+      }),
+    });
+
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; refusal?: { kind: string } }>;
+    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'mixed-infra', digest: snapshotDigest, mergeBase: 'base', diff: '' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(faults);
+    if (halts) expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+    else expect(result.refusal).toBeUndefined();
   });
 
   it('clears a prior-lap aggregate instead of using it as a mechanical lap rework hint', async () => {
@@ -556,7 +614,7 @@ describe('engine/build-review verdict wiring contract', () => {
       }),
     });
     const inputs = {
-      sourceSnapshot: { headSha: 'mechanical-stale-aggregate', digest: 'sha256:mechanical-stale-aggregate', mergeBase: 'base' },
+      sourceSnapshot: { headSha: 'mechanical-stale-aggregate', digest: 'sha256:mechanical-stale-aggregate', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs;
 
     const result = await (runner as unknown as {
@@ -601,7 +659,7 @@ describe('engine/build-review verdict wiring contract', () => {
         pipelineDir: join(dir, '.pipeline'),
       });
       const inputs = {
-        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base', diff: '' },
       } as BuildReviewFrozenInputs;
 
       const result = await (runner as unknown as {
@@ -648,7 +706,7 @@ describe('engine/build-review verdict wiring contract', () => {
         }),
       });
       const inputs = {
-        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base', diff: '' },
       } as BuildReviewFrozenInputs;
 
       await (runner as unknown as {

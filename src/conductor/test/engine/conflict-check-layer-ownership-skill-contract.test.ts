@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:19
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -23,12 +23,12 @@ function layerOwnershipStatement(skill: string): string {
 
 function expectLayerOwnership(statement: string): void {
   expect(statement).toMatch(/story↔story pairs belong to `\/conflict-check`/i);
-  expect(statement).toMatch(/cross-layer pairs[\s\S]*belong to `\/coherence-check`/i);
-  expect(statement).toMatch(/task↔task pairs belong to `\/coherence-check`/i);
+  expect(statement).toMatch(/cross-layer and task versus task\s+pairs belong to plan review at Medium and Large tier/i);
+  expect(statement).toMatch(/plan's §7b at Small tier/i);
 }
 
 describe('conflict-check layer-ownership contract', () => {
-  it('assigns story pairs to conflict-check and later-visible pairs to coherence-check', async () => {
+  it('assigns story pairs to conflict-check and later-visible pairs to plan review', async () => {
     const conflictCheckSkill = await readFile(conflictCheckSkillPath, 'utf8');
     const ownership = layerOwnershipStatement(conflictCheckSkill);
 

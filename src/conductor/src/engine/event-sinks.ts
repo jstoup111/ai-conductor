@@ -10,6 +10,7 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS = {
+  decide_artifacts_pruned: { render: false, persist: true, audit: true, otel: false },
   // ADR-014 D17: spool health must survive the process without becoming input
   // to the spool itself, a renderer stream, or aggregate usage accounting.
   otel_spool_drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
@@ -26,7 +27,10 @@ export const EVENT_SINKS = {
   daemon_memory_sample: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_heap_dump_written: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_exited: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+  daemon_maintenance_phase: { render: false, persist: true, audit: false, otel: false },
   feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  executor_started: { render: true, persist: true, audit: false, otel: false, otelTrace: false },
+  executor_protocol_mismatch: { render: true, persist: true, audit: false, otel: false, otelTrace: false },
   feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   // Foreground monitor transitions are durable telemetry. The monitor has no
@@ -42,26 +46,37 @@ export const EVENT_SINKS = {
   intake_inbound_sanitized: { render: false, persist: true, audit: false, otel: false },
   intake_overlap_checked: { render: false, persist: true, audit: false, otel: false },
   land_gate_rejected: { render: false, persist: true, audit: false, otel: false },
+  land_dependency_decided: { render: false, persist: true, audit: false, otel: false },
+  dependency_drift_swept: { render: false, persist: true, audit: false, otel: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
   memory_setup: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   plan_growth: { render: true, persist: true, audit: false, otel: false },
-  coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   rebase_regrade_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_amendment_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_conflict_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_invalidated: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_task_reopened: { render: false, persist: true, audit: false, otel: false },
-  plan_slices_changed: { render: false, persist: true, audit: false, otel: false },
+  // Plan-review lifecycle observations stay durable on the shared spine; a
+  // later task owns any renderer, audit, or OTel projection.
+  plan_review_dispatched: { render: false, persist: true, audit: false, otel: false },
+  plan_review_completed: { render: false, persist: true, audit: false, otel: false },
+  plan_review_finding_accepted: { render: false, persist: true, audit: false, otel: false },
   // Per-child transitions are durable spine occurrences. They intentionally do
   // not widen the renderer, audit, or OTel surfaces until a later task owns one.
   child_started: { render: false, persist: true, audit: false, otel: false },
   child_closed: { render: false, persist: true, audit: false, otel: false },
   child_switched: { render: false, persist: true, audit: false, otel: false },
   rebase_skipped_for_stack: { render: false, persist: true, audit: false, otel: false },
-  story_reowned: { render: false, persist: true, audit: false, otel: false },
+  // Restack and expected-lease outcomes remain durable on the existing event
+  // spine; later tasks own any renderer, audit, or metric projections.
+  restack_planned: { render: false, persist: true, audit: false, otel: false },
+  restack_applied: { render: false, persist: true, audit: false, otel: false },
+  restack_conflict: { render: false, persist: true, audit: false, otel: false },
+  restack_refused: { render: false, persist: true, audit: false, otel: false },
+  restack_recovered: { render: false, persist: true, audit: false, otel: false },
+  push_lease_refused: { render: false, persist: true, audit: false, otel: false },
+  remediation_routed: { render: false, persist: true, audit: false, otel: false },
+  remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
+  routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+  child_revalidated: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
@@ -76,6 +91,7 @@ export const EVENT_SINKS = {
   build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },
   build_review_cache_hit: { render: true, persist: true, audit: true, otel: false },
   build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
+  build_review_review_scope: { render: false, persist: true, audit: false, otel: false },
   // adr-2026-08-21 D5: discards are attributable in the daemon log, the
   // ledger, and the audit trail by rubric and cause.
   build_review_cache_discarded: { render: true, persist: true, audit: true, otel: false },
@@ -96,6 +112,8 @@ export const EVENT_SINKS = {
   remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
   remediation_adjudication_completed: { render: true, persist: true, audit: false, otel: false },
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
+  build_review_acceptance_carried: { render: false, persist: true, audit: false, otel: false },
+  remediation_case_operator_resolved: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
   prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },
@@ -114,10 +132,12 @@ export const EVENT_SINKS = {
   // Ownership denials remain visible and durable through the one event spine;
   // the event excludes payloads and request bodies by construction.
   github_operation_refused: { render: true, persist: true, audit: false, otel: false },
+  github_operation_failed: { render: true, persist: true, audit: false, otel: false },
   github_write_credential_fallback: { render: true, persist: true, audit: false, otel: false },
   bot_co_author_skipped: { render: true, persist: true, audit: false, otel: false },
   provider_discovery: { render: false, persist: true, audit: false, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
+  provider_attempt_started: { render: true, persist: true, audit: false, otel: false },
   // Daemon-origin only: this is the durable restart projection, not a second
   // rendering of a feature's rate-limit event.
   provider_suppressed: { render: false, persist: true, audit: false, otel: false },
@@ -126,6 +146,14 @@ export const EVENT_SINKS = {
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_retained: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false, otel: false },
+  // Transcript lifecycle occurrences stay on the shared spine. Later tasks own
+  // harvesting, retention, and reader projections; this task only persists them.
+  provider_transcripts_captured: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_harvest_failed: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_retained: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_pruned: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_evicted: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_retention_failed: { render: false, persist: true, audit: false, otel: false },
   feature_usage_total: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
   provider_fallback: { render: true, persist: true, audit: false, otel: false },
@@ -146,6 +174,14 @@ export const EVENT_SINKS = {
   finish_publication_transition: { render: true, persist: true, audit: false, otel: false },
   finish_publication_blocked: { render: true, persist: true, audit: false, otel: false },
   finish_publication_disposition: { render: true, persist: true, audit: false, otel: false },
+  // Stack publication is durable feature telemetry. The canonical event ledger
+  // is its sole reader path; later tasks own any renderer or audit projection.
+  stack_member_published: { render: false, persist: true, audit: false, otel: false },
+  stack_member_redrafted: { render: false, persist: true, audit: false, otel: false },
+  stack_assembled: { render: false, persist: true, audit: false, otel: false },
+  stack_member_lifecycle: { render: false, persist: true, audit: false, otel: false },
+  stack_members_unreachable: { render: false, persist: true, audit: false, otel: false },
+  stack_tip_diverged: { render: false, persist: true, audit: false, otel: false },
   feature_complete: { render: false, persist: true, audit: false, otel: true },
   dashboard_refresh: { render: false, persist: true, audit: false, otel: false },
   protected_artifact_rebaseline: { render: true, persist: true, audit: false, otel: false },
@@ -161,12 +197,14 @@ export const EVENT_SINKS = {
   build_review_repair_context: { render: false, persist: true, audit: false, otel: false },
   mode_skip: { render: false, persist: true, audit: false, otel: false },
   build_done_when_unverified: { render: false, persist: true, audit: false, otel: false },
+  done_when_citation_judged: { render: false, persist: true, audit: false, otel: false },
+  remediation_closure_judged: { render: false, persist: true, audit: false, otel: false },
+  done_when_citation_accepted: { render: false, persist: true, audit: false, otel: false },
   build_stall: { render: true, persist: true, audit: false, otel: true },
   build_progress: { render: true, persist: true, audit: false, otel: true },
   step_in_flight: { render: true, persist: true, audit: false, otel: false },
   build_no_progress: { render: true, persist: true, audit: false, otel: true },
   build_active_stall: { render: true, persist: true, audit: false, otel: true },
-  pipeline_closeout: { render: true, persist: false, audit: false, otel: true },
   pipeline_tail_diagnostic: { render: true, persist: true, audit: false, otel: false },
   renderer_error: { render: true, persist: true, audit: false, otel: false },
   when_skip: { render: true, persist: true, audit: false, otel: false },
@@ -217,7 +255,8 @@ export const EVENT_SINKS = {
   halt_cleared: { render: false, persist: false, audit: true, otel: false },
   halt_clear_authorized: { render: false, persist: true, audit: true, otel: false },
   kickback_budget_adjustment_authorized: { render: false, persist: true, audit: true, otel: false },
-  ci_failed: { render: true, persist: false, audit: false, otel: false },
+  ci_failed: { render: true, persist: true, audit: false, otel: false },
+  shipped_pr_readiness: { render: false, persist: true, audit: false, otel: false },
   ci_repair_diagnostic: { render: true, persist: true, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },

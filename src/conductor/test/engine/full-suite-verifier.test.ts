@@ -896,6 +896,71 @@ describe('FullSuiteVerifier', () => {
     }).toEqual({ pass: true, fail: false });
   });
 
+  it('points a truncated FAIL message at the complete, redacted suite output log', async () => {
+    const projectRoot = await makeFingerprintProject();
+    const secret = 'suite-mode-secret-3219';
+    const failures = Array.from({ length: 40 }, (_, index) =>
+      `FAIL test/case-${index}.test.ts > case ${index}\n${'x'.repeat(1_000)}\n`).join('');
+    const failed = await new FullSuiteVerifier({
+      projectRoot,
+      environment: { SUITE_MODE: secret },
+      execute: async () => ({
+        ok: false,
+        reason: 'nonzero_exit',
+        command: 'node suite.mjs --all',
+        cwd: projectRoot,
+        startedAt: '2026-10-13T12:00:00.000Z',
+        endedAt: '2026-10-13T12:00:01.000Z',
+        durationMs: 1_000,
+        exitCode: 1,
+        signal: null,
+        stdout: 'Test Files  40 failed\n',
+        stderr: `${secret}\n${failures}`,
+      }),
+    }).ensure();
+    const log = await readFile(join(projectRoot, '.pipeline/test-suite-output.log'), 'utf8');
+    const message = failed.status === 'FAILED' ? failed.message : '';
+
+    expect({
+      leadsWithLog: message.startsWith('Excerpt only. The complete suite output ('),
+      namesLog: message.split('\n')[0]!.includes(' is in .pipeline/test-suite-output.log;'),
+      excerptCutMiddle: message.includes('case-20.test.ts'),
+      logHasEveryFailure: Array.from({ length: 40 }, (_, index) => log.includes(`case-${index}.test.ts`))
+        .every(Boolean),
+      logHasStdout: log.includes('Test Files  40 failed'),
+      logLeaks: log.includes(secret),
+    }).toEqual({
+      leadsWithLog: true,
+      namesLog: true,
+      excerptCutMiddle: false,
+      logHasEveryFailure: true,
+      logHasStdout: true,
+      logLeaks: false,
+    });
+  });
+
+  it('keeps a complete single-stream FAIL message unchanged', async () => {
+    const projectRoot = await makeFingerprintProject();
+    const failed = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => ({
+        ok: false,
+        reason: 'nonzero_exit',
+        command: 'node suite.mjs --all',
+        cwd: projectRoot,
+        startedAt: '2026-10-13T12:00:00.000Z',
+        endedAt: '2026-10-13T12:00:01.000Z',
+        durationMs: 1_000,
+        exitCode: 1,
+        signal: null,
+        stdout: '',
+        stderr: 'FAIL test/one.test.ts\n',
+      }),
+    }).ensure();
+
+    expect(failed.status === 'FAILED' ? failed.message : undefined).toBe('FAIL test/one.test.ts\n');
+  });
+
   it('omits worktreeClean when the fingerprint-time worktree probe is undeterminable', async () => {
     const projectRoot = await makeConfiguredProject('full-suite-verifier-no-git-');
     const result = await new FullSuiteVerifier({
@@ -3344,7 +3409,11 @@ describe('FullSuiteVerifier', () => {
       first: {
         status: 'FAILED',
         reason: failure.reason,
-        message: 'failed \n',
+        // The excerpt shows stderr only, so the dropped stdout sends the
+        // reader to the complete log first.
+        message: 'Excerpt only. The complete suite output (33 bytes, every failure) is in '
+          + '.pipeline/test-suite-output.log; read it and fix every failure it lists before rerunning.\n'
+          + 'failed \n',
         freshness: { status: 'STALE', reason: 'missing' },
         evidence: expect.objectContaining({
           outcome: 'FAIL',
@@ -3565,10 +3634,12 @@ describe('FullSuiteVerifier', () => {
     }).ensure();
 
     expect({ racingResult, canonicalOwner, blockedResult, executions }).toEqual({
+      // Losing the recovery race waits on the replacement owner (here with a
+      // zero wait budget) instead of failing as an internal error.
       racingResult: {
         status: 'FAILED',
         reason: 'internal_error',
-        message: 'Full-suite lock ownership changed during stale recovery',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
       },
       canonicalOwner: replacementOwner,
       blockedResult: {
@@ -4039,7 +4110,6 @@ describe('FullSuiteVerifier', () => {
         CONCURRENT_ENSURE_FIXTURE,
         projectRoot,
         resultPath,
-        '--with-inspection',
       ],
       { cwd: CONDUCTOR_ROOT },
     );

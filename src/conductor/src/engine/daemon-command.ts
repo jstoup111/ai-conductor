@@ -7,6 +7,8 @@
 // without eagerly loading the daemon runtime (execa, the provider layer, …).
 // The actual `runDaemonMode` is imported lazily by index.ts only on a match.
 
+import { DEFAULT_IDLE_POLL_SECONDS } from '../cli-defaults.js';
+
 /**
  * Options carried from `conduct daemon …` into `runDaemonMode`. A subset of
  * DaemonModeOptions (projectRoot/baseBranch are supplied by the dispatcher).
@@ -35,6 +37,28 @@ export interface DaemonCommandOptions {
   /** Daemon run flags forwarded to a replacement engine process. */
   operatorFlagArgs?: string[];
 }
+
+/** Every daemon run flag accepted by detectDaemonCommand. */
+export const DAEMON_RUN_FLAGS = [
+  '--concurrency',
+  '--max-items',
+  '--max-cost',
+  '--max-runtime',
+  '--idle-poll',
+  '--max-idle-polls',
+  '--no-watch',
+  '--completed',
+  '--all',
+] as const;
+
+const DAEMON_RUN_VALUE_FLAGS = new Set<string>([
+  '--concurrency',
+  '--max-items',
+  '--max-cost',
+  '--max-runtime',
+  '--idle-poll',
+  '--max-idle-polls',
+]);
 
 /** Parse the value of a named flag (e.g. `--max-items 5`) from an argv array. */
 function flagValue(argv: string[], flag: string): string | null {
@@ -237,14 +261,13 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
   if (MANAGEMENT_VERBS.has(argv[3])) return null;
 
   const operatorFlagArgs: string[] = [];
-  for (const flag of ['--concurrency', '--max-items', '--max-cost', '--max-runtime', '--idle-poll', '--max-idle-polls']) {
+  for (const flag of DAEMON_RUN_FLAGS) {
     if (!argv.includes(flag)) continue;
     operatorFlagArgs.push(flag);
-    const value = flagValue(argv, flag);
-    if (value !== null) operatorFlagArgs.push(value);
-  }
-  for (const flag of ['--no-watch', '--completed', '--all']) {
-    if (argv.includes(flag)) operatorFlagArgs.push(flag);
+    if (DAEMON_RUN_VALUE_FLAGS.has(flag)) {
+      const value = flagValue(argv, flag);
+      if (value !== null) operatorFlagArgs.push(value);
+    }
   }
 
   return {
@@ -255,7 +278,7 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
     continuous: argv.includes('--continuous'),
     maxCostTokens: intFlag(argv, '--max-cost'),
     maxRuntimeSeconds: intFlag(argv, '--max-runtime'),
-    idlePollSeconds: intFlag(argv, '--idle-poll', 60),
+    idlePollSeconds: intFlag(argv, '--idle-poll', DEFAULT_IDLE_POLL_SECONDS),
     maxIdlePolls: intFlag(argv, '--max-idle-polls'),
     showCompleted: argv.includes('--completed') || argv.includes('--all'),
     operatorFlagArgs,

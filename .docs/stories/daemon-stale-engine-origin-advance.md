@@ -36,8 +36,10 @@ exercised without me running pull + rebuild + restart.
 
 #### Negative Paths
 - Given a build is in flight (`inFlight` non-empty), when a boundary check is evaluated,
-  then no engine rebuild or restart occurs — rebuild/restart fire only at a drained
-  boundary (no build running). A fetch/root fast-forward may run while builds are in
+  then no restart occurs before the restart policy of
+  adr-2026-10-15-per-dispatch-engine-pinned-executor D7 allows it, and an engine rebuild runs
+  only as that ADR's D8 cadence maintenance job, which leaves every in-flight build on its
+  pinned engine. A fetch/root fast-forward may run while builds are in
   flight only under the pinned-base dispatch contract of
   adr-2026-08-27-daemon-dispatcher-executor-seam (in-flight builds are never re-based by
   it); absent that contract, no fetch runs mid-build either.
@@ -55,9 +57,10 @@ exercised without me running pull + rebuild + restart.
   loop — unchanged by this feature.
 
 ### Done When
-- [ ] `rebuildAndMaybeRestartForStaleEngine` invokes a new injected `refreshEngineSource`
-      dep before `rebuildEngine`, only when `staleGatesArmed` and `inFlight.size === 0`;
-      unit tests cover order, quiescence guard, and non-fatal failure.
+- [ ] The cadence maintenance job of adr-2026-10-15-per-dispatch-engine-pinned-executor D8
+      invokes the injected `refreshEngineSource` dep before `rebuildEngine`, only when
+      `staleGatesArmed`, and never requests a restart itself; unit tests cover order,
+      gating, and non-fatal failure.
 - [ ] `refreshEngineSource` is wired self-host-only in `src/daemon-cli.ts` (alongside
       `rebuildEngine`) and delegates to the existing `fastForwardRoot` (not a fork).
 - [ ] An integration-style test proves: behind-origin engine change → quiescent boundary →

@@ -12,29 +12,34 @@
 // re-encode the pidfile path or write anything.
 
 import { open, readFile, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
 import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
 import { hasSession, isPaneDead, sessionNameForRepo } from './daemon-tmux.js';
 import { isPaused, readPauseMetadata } from './pause-marker.js';
 import { readRestartPending, type RestartIntent } from './restart-marker.js';
-import { isEngineVersionId } from './engine-store.js';
+import { currentTarget, isEngineVersionId } from './engine-store.js';
+import { listExecutorRecords } from './executor-records.js';
 import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { prdAuditAppendCap } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance } from './remediation-caps.js';
+import { readState } from './state.js';
 import { loadConfig } from './config.js';
-import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
-import { renderKickbackBudgetView } from './kickback-budget-view.js';
-import { resolveActiveChild } from './child-cursor.js';
-import { parseChildId, type ChildId } from './child-context.js';
 import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
+  isUnreadableKickbackGate,
+  isUnreadableKickbackLedger,
+  readKickbackLedger,
+} from './kickback-ledger.js';
+import { renderKickbackBudgetView, withPendingGrowth } from './kickback-budget-view.js';
+import { readWatch } from './mergeable-sweep.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
+import { type ChildId } from './child-context.js';
+import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
 import {
   readDaemonTimeline,
   type DaemonExitRecord,
@@ -45,18 +50,16 @@ import type { HarnessConfig } from '../types/config.js';
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
 const VERSION_UNKNOWN = 'version-unknown';
+const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+
+function installedConductorRoot(): string {
+  return basename(dirname(dirname(OWN_ENGINE_DIR))) === 'dist-versions'
+    ? dirname(dirname(dirname(OWN_ENGINE_DIR)))
+    : dirname(dirname(OWN_ENGINE_DIR));
+}
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
-
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  // `daemon status` is an observation boundary. The envelope reader only uses
-  // readFile, and these fail loudly if that promise is ever broken.
-  mkdir: async () => { throw new Error('daemon status is read-only'); },
-  writeFile: async () => { throw new Error('daemon status is read-only'); },
-  rename: async () => { throw new Error('daemon status is read-only'); },
-};
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -491,13 +494,13 @@ function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | un
 /** Visit `.daemon/events.jsonl` newest-first until `visit` returns true.
  * Chunks may start mid-record, so only complete lines are parsed; a missing,
  * unreadable, or malformed ledger never makes status fail. */
-async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) => boolean): Promise<void> {
+async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) => boolean): Promise<boolean> {
   const path = join(repoPath, '.daemon', 'events.jsonl');
   let size: number;
   try {
     size = (await stat(path)).size;
   } catch {
-    return;
+    return false;
   }
 
   let end = size;
@@ -521,7 +524,7 @@ async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) =
             // A concurrent append or malformed unrelated event does not make status fail.
             continue;
           }
-          if (visit(event)) return;
+          if (visit(event)) return true;
         }
         end = start;
       }
@@ -529,8 +532,9 @@ async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) =
       await handle.close();
     }
   } catch {
-    return;
+    return false;
   }
+  return true;
 }
 
 /** Latest capability record per provider, scanning the whole ledger. */
@@ -579,6 +583,67 @@ async function renderReadOnlyReviewCapabilitySection(repoPath: string, out: (lin
   }
 }
 
+type ShippedPrReadiness = {
+  prUrl: string;
+  slug: string;
+  verdict: 'ready' | 'conflicting' | 'ci-failing' | 'ci-pending' | 'no-checks' | 'draft' | 'indeterminate';
+};
+
+const SHIPPED_READINESS_VERDICTS = new Set<ShippedPrReadiness['verdict']>([
+  'ready', 'conflicting', 'ci-failing', 'ci-pending', 'no-checks', 'draft', 'indeterminate',
+]);
+
+function shippedPrReadiness(event: unknown): ShippedPrReadiness | undefined {
+  if (typeof event !== 'object' || event === null) return undefined;
+  const record = event as Record<string, unknown>;
+  if (
+    record.type !== 'shipped_pr_readiness' ||
+    typeof record.prUrl !== 'string' ||
+    typeof record.slug !== 'string' ||
+    typeof record.verdict !== 'string' ||
+    !SHIPPED_READINESS_VERDICTS.has(record.verdict as ShippedPrReadiness['verdict'])
+  ) return undefined;
+  return {
+    prUrl: record.prUrl,
+    slug: record.slug,
+    verdict: record.verdict as ShippedPrReadiness['verdict'],
+  };
+}
+
+/**
+ * Read newest readiness evidence only from the local daemon ledger. Entries
+ * are claimed on first sight during its backwards chunk scan, yielding the
+ * latest record per PR without invoking GitHub or any other external boundary.
+ */
+export async function readLatestShippedPrReadiness(
+  repoPath: string,
+): Promise<readonly ShippedPrReadiness[] | undefined> {
+  const latestByPrUrl = new Map<string, ShippedPrReadiness>();
+  const readable = await scanEventsNewestFirst(repoPath, (raw) => {
+    const event = shippedPrReadiness(raw);
+    if (event && !latestByPrUrl.has(event.prUrl)) latestByPrUrl.set(event.prUrl, event);
+    return false;
+  });
+  return readable ? [...latestByPrUrl.values()] : undefined;
+}
+
+/** Render local latest readiness only for PRs that remain actively watched. */
+async function renderShippedPrsSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  const latest = await readLatestShippedPrReadiness(repoPath);
+  if (latest === undefined) {
+    out('  SHIPPED PRS: shipped-PR readiness unknown');
+    return;
+  }
+  const activePrUrls = new Set((await readWatch(repoPath)).map((entry) => entry.prUrl));
+  const needsAttention = latest.filter((event) => activePrUrls.has(event.prUrl) && event.verdict !== 'ready');
+  if (needsAttention.length === 0) {
+    out('  SHIPPED PRS: no shipped PRs need attention');
+    return;
+  }
+  out('  SHIPPED PRS:');
+  for (const event of needsAttention) out(`    • ${event.prUrl} — ${event.verdict} (${event.slug})`);
+}
+
 /**
  * Render the per-repo GATED section (Task 15, S5 HP-1/HP-2/NP-4/NP-5) by
  * reading `.daemon/gated.json` via `readGatedSnapshot` — read-only, no git/gh
@@ -624,31 +689,45 @@ async function renderAgreementLine(repoPath: string, out: (line: string) => void
   out(`  attribution agreement: ${pct}% (n=${summary.sampleCount})`);
 }
 
-type ActiveChildStatusLabel = { child: ChildId; total: number };
+type ActiveChildStatusLabel = {
+  child: ChildId;
+  total: number;
+  taskIds: readonly string[];
+};
+
+type StackTopologyStatus = { cause: SliceTopologyUnavailableCause };
 
 /**
  * Resolve the one child whose ledger/status is visible. The cursor remains the
- * authority: envelope data supplies only the human-facing denominator.
+ * authority; sealed plan topology supplies the presentation scope.
  */
 async function activeChildStatusLabel(
   featureRoot: string,
   slug: string,
-): Promise<ActiveChildStatusLabel | undefined> {
+): Promise<ActiveChildStatusLabel | StackTopologyStatus | undefined> {
+  const topology = await loadSliceTopology(featureRoot, slug);
+  if (topology.kind === 'unavailable') {
+    return await hasDurableChildState(featureRoot, slug) === true ? { cause: topology.cause } : undefined;
+  }
+  if (topology.kind !== 'sliced' || topology.positions.length < 2) return undefined;
   const cursor = await resolveActiveChild(featureRoot, slug);
-  if (cursor.kind !== 'active') return undefined;
-  const envelope = await readCoverageBindingEnvelope(featureRoot, coverageBindingFilesystem);
-  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
-    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-      .map((position) => parseChildId(position))
-      .filter((position): position is ChildId => position !== undefined)
-    : [];
-  return positions.length >= 2 ? { child: cursor.child, total: positions.length } : undefined;
+  if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return undefined;
+  const execution = resolveExecutionChild(cursor, slug);
+  if (!('target' in execution)) return undefined;
+  const executionChild = execution.target.child;
+  return {
+    child: executionChild,
+    total: topology.positions.length,
+    taskIds: Object.entries(topology.sliceMembership.taskSlices)
+      .filter(([, position]) => position === executionChild)
+      .map(([taskId]) => taskId),
+  };
 }
 
 /**
  * Render cap accounting for every feature the durable dashboard model classifies
- * as in progress. The counts themselves stay owned by the kickback ledger;
- * `readGrowth` also retains its legacy-ledger recomputation contract here.
+ * as in progress. The shared budget owns both cap calculation and growth
+ * accounting, while the status view remains a non-persisting observation.
  */
 async function renderPlanGrowthSection(repoPath: string, out: (line: string) => void): Promise<void> {
   const state = await scanInheritedState({
@@ -663,37 +742,76 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
   for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
-    const activeChild = await activeChildStatusLabel(featureRoot, feature.slug);
+    const stackStatus = await activeChildStatusLabel(featureRoot, feature.slug);
+    const activeChild = stackStatus && 'child' in stackStatus ? stackStatus : undefined;
     const child = activeChild?.child;
-    const childStatus = activeChild ? ` child ${activeChild.child}/${activeChild.total}` : '';
-    const initial = await readGrowth(featureRoot, 0);
+    const childStatus = activeChild
+      ? ` child ${activeChild.child}/${activeChild.total}${activeChild.taskIds.length ? `; tasks ${activeChild.taskIds.join(', ')}` : ''}`
+      : stackStatus && 'cause' in stackStatus ? ` stack unavailable: ${stackStatus.cause}` : '';
     const config = await loadConfig(featureRoot);
-    const configCap = prdAuditAppendCap(
-      config.ok ? config.config : ({} as HarnessConfig),
-      initial.authored,
-    );
     const ledger = await readKickbackLedger(featureRoot, child);
-    const flatLedger = child === undefined ? ledger : await readKickbackLedger(featureRoot);
-    const cap = flatLedger.effectiveGrowthCap ?? configCap;
-    const growth = await readGrowth(featureRoot, cap);
-    const byGate = Object.entries(growth.byGate)
-      .map(([gate, count]) => `${gate}: ${count}`)
-      .join(', ');
-    out(
-      `  PLAN GROWTH [${feature.slug}${childStatus}]: authored ${growth.authored}; ` +
-      `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
-      `remaining ${growth.remaining}/${cap}`,
-    );
-    for (const [gate, entry] of Object.entries(ledger.gates)) {
-      if (!entry.capEvidence && (entry.adjustments?.length ?? 0) === 0) continue;
-      const limit = gate === 'build_review'
-        ? 5
-        : gate === 'prd_audit'
-          ? (config.ok ? (config.config as HarnessConfig & { prd_audit?: { max_remediation_laps?: number } }).prd_audit?.max_remediation_laps ?? 1 : 1)
-          : (config.ok ? (config.config as HarnessConfig & { architecture_review_as_built?: { max_remediation_laps?: number } }).architecture_review_as_built?.max_remediation_laps ?? 1 : 1);
-      const view = renderKickbackBudgetView(entry, gate, limit, undefined, undefined, child).replace(/\n/g, ' | ');
-      const allowance = entry.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
+    try {
+      const { growth, cap, capSource, authoredSource } = await readPlanGrowthBudget(
+        featureRoot,
+        config.ok ? config.config : ({} as HarnessConfig),
+        { persist: false },
+      );
+      const byGate = Object.entries(growth.byGate)
+        .map(([gate, count]) => `${gate}: ${count}`)
+        .join(', ');
+      const added = `added ${growth.added}${byGate ? ` (${byGate})` : ''}`;
+      // The shared view is the sole pending-growth projection: status only
+      // decides its compact presentation. An unresolved plan has no reliable
+      // cap, so intentionally withhold its projection rather than inventing
+      // one from an otherwise-raised ledger cap.
+      const view = withPendingGrowth(
+        { ...growth, cap: authoredSource === 'unresolved' ? null : cap, capSource, authoredSource },
+        ledger.pendingRepair,
+      );
+      const pending = view.pendingGrowth;
+      const pendingSummary = pending === undefined
+        ? ''
+        : `; pending ${pending.total} (${Object.entries(pending.byGate).map(([gate, amount]) => `${gate} ${amount}`).join(', ')})` +
+          (pending.minimumRaise === undefined ? '' : `, minimum raise ${pending.minimumRaise}`);
+      const summary = authoredSource === 'unresolved'
+        ? `plan unresolved; ${added}${pendingSummary || (capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : '')}`
+        : `authored ${growth.authored}; ${added}; remaining ${view.remaining}/${cap}${pendingSummary}`;
+      out(`  PLAN GROWTH [${feature.slug}${childStatus}]: ${summary}`);
+    } catch (error) {
+      out(
+        `  PLAN GROWTH [${feature.slug}${childStatus}]: unavailable (` +
+        `${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+    const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
+    const state = await readState(join(featureRoot, '.pipeline', 'conduct-state.json'));
+    const tier = state.ok ? state.value.complexity_tier : undefined;
+    const renderBudget = (gate: 'build_review' | 'prd_audit' | 'architecture_review_as_built') => {
+      const entry = ledger.gates[gate];
+      const pendingLaps = gate === 'build_review' ? 0 : ledger.pendingRepair?.charges[gate]?.laps ?? 0;
+      const view = renderKickbackBudgetView(
+        entry,
+        gate,
+        kickbackBudgetFallbackLimit(gate, budgetConfig, tier),
+        undefined,
+        undefined,
+        child,
+        pendingLaps,
+        gate === 'build_review' ? undefined : resolveRemediationLapAllowance(gate, budgetConfig, tier),
+      ).replace(/\n/g, ' | ');
+      const allowance = entry?.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);
+    };
+    for (const gate of ['prd_audit', 'architecture_review_as_built'] as const) {
+      if (isUnreadableKickbackLedger(ledger) || isUnreadableKickbackGate(ledger, gate)) {
+        out(`  KICKBACK BUDGET [${feature.slug}]: ${gate}: budget unavailable (durable entry failed validation)`);
+      } else {
+        renderBudget(gate);
+      }
+    }
+    const buildReview = ledger.gates.build_review;
+    if (buildReview && (buildReview.capEvidence || (buildReview.adjustments?.length ?? 0) > 0)) {
+      renderBudget('build_review');
     }
   }
 }
@@ -730,6 +848,43 @@ export async function renderInFlightSection(
       out(`  IN FLIGHT [${feature.slug}]: ${step.step} running ${formatHeartbeatAge(Math.max(0, now - step.startedAtMs))}`);
     }
   }
+}
+
+/** Render child executor pins from their durable supervisor-owned records. */
+export async function renderExecutorVersionsSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  // Status observes the installed engine which is actually running, not a
+  // source tree which consumer repositories do not possess.
+  const current = await currentTarget(installedConductorRoot()).catch(() => undefined);
+  const supervisor = await readPidRecord(repoPath).catch(() => null);
+  const entries = await listExecutorRecords(repoPath).catch(() => []);
+  const dispatches = await readFile(join(repoPath, '.daemon', 'events.jsonl'), 'utf8')
+    .then((content) => content.split('\n').flatMap((line) => {
+      try {
+        const event = JSON.parse(line) as { type?: unknown; slug?: unknown; engineVersionId?: unknown };
+        return event.type === 'feature_dispatch_started' && typeof event.slug === 'string'
+          ? [{ slug: event.slug, version: typeof event.engineVersionId === 'string' ? event.engineVersionId : 'unknown' }]
+          : [];
+      } catch { return []; }
+    }))
+    .catch(() => [] as Array<{ slug: string; version: string }>);
+  if (entries.length === 0 && !supervisor && dispatches.length === 0) return;
+  out(`  EXECUTOR ENGINE CURRENT: ${current ?? 'unknown'}`);
+  if (supervisor) {
+    const version = versionIdFromEngineDir(supervisor.engineDir);
+    const older = current !== undefined && version !== VERSION_UNKNOWN && version !== current ? ' (older than current)' : '';
+    out(`  SUPERVISOR ENGINE: ${version}${older}`);
+  }
+  for (const entry of entries) {
+    if (entry.kind === 'unreadable') {
+      out(`  EXECUTOR [${entry.slug}]: version unknown — record unreadable`);
+      continue;
+    }
+    const older = current !== undefined && entry.record.engineVersionId !== current ? ' (older than current)' : '';
+    out(`  EXECUTOR [${entry.slug}]: ${entry.record.engineVersionId}${older}`);
+  }
+  // Legacy dispatch records predate engineVersionId. Render their absence as
+  // an explicit unknown instead of silently pretending they were current.
+  for (const dispatch of dispatches) out(`  DISPATCH [${dispatch.slug}]: engine ${dispatch.version}`);
 }
 
 /**
@@ -778,11 +933,13 @@ export async function runDaemonStatus(
       await renderReadOnlyReviewCapabilitySection(record.path, out);
       await renderGatedSection(record.path, out, clock);
       await renderBlockedSection(record.path, out, clock);
+      await renderShippedPrsSection(record.path, out);
       await renderAgreementLine(record.path, out);
       await renderInapplicableSection(record.path, out);
       if (row.liveness === 'running') {
         await renderRootRefreshSection(record.path, out);
         await renderInFlightSection(record.path, out, clock);
+        await renderExecutorVersionsSection(record.path, out);
       }
       await renderPlanGrowthSection(record.path, out);
     }

@@ -34,7 +34,7 @@ ai-conductor compose
 This spawns an interactive `claude` session with `/composer` as the opening prompt, inheriting your
 terminal. Drive the loop from there: it walks the DECIDE phase — explore, complexity, PRD (product
 track only), architecture, stories, conflict-check, plan, and (for Medium and Large tiers)
-coherence-check — inside a dedicated per-idea git worktree,
+coherence-check and plan review — inside a dedicated per-idea git worktree,
 then lands the artifacts on a `spec/<slug>` branch and opens the spec PR.
 
 To skip the chat prompt and hand it the idea directly:
@@ -49,7 +49,7 @@ directly.
 
 **Observable outcome:** a PR against `main` whose diff is entirely `.docs/` artifacts — an intake
 marker, stories, a plan, a complexity marker, ADRs, and (for Medium and Large tiers) a coherence
-record. Confirm it:
+record and a plan review. Confirm it:
 
 ```bash
 gh pr list --state open
@@ -82,7 +82,7 @@ Four content gates decide whether the merged spec is buildable at all, so check 
 | Stories approved | the stories artifact | must contain `Status: Accepted` and must **not** contain a `Status: DRAFT` |
 | Plan declares task dependencies | `.docs/plans/<slug>.md` | a `## Task Dependency Graph` section, or per-task `**Dependencies:**` lines |
 | Plan task completion checks | `.docs/plans/<slug>.md` | every `### Task …` has a `**Done when:**` block with 2–5 nonblank list checks; fenced-code examples do not count |
-| Plan task count | `.docs/plans/<slug>.md` | 1–20 tasks proceed normally; 21–40 require a planning warning; 41 or more are refused at land unless the plan contains exactly one `**Scope-exception:** <non-empty rationale>` declaration |
+| Plan task count | `.docs/plans/<slug>.md` | 1–20 tasks proceed normally; 21–29 require a planning warning; 30 or more are refused at land unless the plan contains exactly one `**Scope-exception:** <non-empty rationale>` declaration |
 
 Merge it:
 

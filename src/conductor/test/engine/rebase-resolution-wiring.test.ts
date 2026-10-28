@@ -493,3 +493,61 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     expect(attemptEvents[0]).toEqual({ index: 1, cap: 3 });
   });
 });
+
+describe('runRebaseStep — completed BUILD with an unverified Done-when nudge (real git)', () => {
+  let repo: string;
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('does not halt for missing BUILD evidence when only the unspent Done-when nudge is outstanding', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-done-when-nudge-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: repo });
+    await initTestRepo(repo);
+    await mkdir(join(repo, '.docs/plans'), { recursive: true });
+    await writeFile(join(repo, '.docs/plans/foo.md'), '# Implementation Plan: foo\n\n## Tasks\n\n### Task 1 — Do thing 1\n\nBody.\n');
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'task-1.ts'), 'export const t1 = 1;\n');
+    await g(['add', 'task-1.ts']);
+    await g(['commit', '-q', '-m', 'feat: task 1\n\nTask: 1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'sibling.ts'), 'export const sibling = 3;\n');
+    await g(['add', 'sibling.ts']);
+    await g(['commit', '-q', '-m', 'sibling merged']);
+    await g(['checkout', '-q', 'feat']);
+
+    const statePath = join(repo, 'conduct-state.json');
+    await seedPreRebaseState(statePath);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    await writeFile(statePath, JSON.stringify({ ...state, feature_desc: 'foo' }, null, 2));
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, '.pipeline/task-status.json'), JSON.stringify({
+      plan_ref: '.docs/plans/foo.md',
+      tasks: [{
+        id: '1', name: 'Do thing 1', status: 'done',
+        doneWhen: [{ source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' }],
+      }],
+    }, null, 2));
+    const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.toString().trim();
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult) },
+      events: new ConductorEventEmitter(),
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'rebase',
+    });
+    await conductor.run();
+
+    const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8').catch(() => '');
+    expect(halt).not.toContain('completed BUILD evidence is unavailable after rebase');
+    expect((await g(['log', '--format=%s', '-1', 'HEAD~1'])).stdout.toString().trim()).toBe('sibling merged');
+  }, 30000);
+});

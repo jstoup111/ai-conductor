@@ -1,6 +1,8 @@
+// Covers: task:7
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   STEP_SKILL_INVOCATIONS,
@@ -10,6 +12,8 @@ import {
   dispatchableStepCommands,
 } from './step-command-preflight.js';
 
+const SOURCE_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+
 /**
  * Task 12's test-only view of the preflight seam.  The production fixture
  * will accept this optional capability in GREEN; casting here keeps RED from
@@ -17,6 +21,7 @@ import {
  */
 type PreflightWithFilesystemAccess = (
   homeDir: string,
+  sourceRoot: string,
   providerKey?: string,
   dependencies?: {
     readonly access: (path: string) => Promise<void>;
@@ -25,7 +30,41 @@ type PreflightWithFilesystemAccess = (
 
 const assertWithInjectedFilesystemAccess = dispatchableStepCommands.assertResolves as PreflightWithFilesystemAccess;
 
+async function writeRenamedSourceTree(root: string): Promise<void> {
+  for (const { skillName } of dispatchableStepCommands('claude')) {
+    const skillDir = join(root, 'skills', skillName);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ac-${skillName}\n---\n`, 'utf8');
+  }
+}
+
+async function writeFrontmatterNamedHome(homeDir: string): Promise<void> {
+  for (const { skillName } of dispatchableStepCommands('claude')) {
+    const skillDir = join(homeDir, 'skills', `ac-${skillName}`);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
+  }
+}
+
 describe('dispatchableStepCommands', () => {
+  it('resolves frontmatter-named home entries from the source tree and fails before dispatch for a missing entry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'step-command-preflight-renamed-'));
+    const sourceRoot = join(root, 'source');
+    const homeDir = join(root, 'home');
+    await writeRenamedSourceTree(sourceRoot);
+    await writeFrontmatterNamedHome(homeDir);
+
+    try {
+      await expect(dispatchableStepCommands.assertResolves(homeDir, sourceRoot, 'codex')).resolves.toBeUndefined();
+      await rm(join(homeDir, 'skills', 'ac-pipeline'), { recursive: true, force: true });
+      await expect(dispatchableStepCommands.assertResolves(homeDir, sourceRoot, 'codex')).rejects.toThrow(
+        /ac-pipeline.*\$ac-pipeline/s,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('derives every skill command from the registry and excludes engine-native steps', () => {
     const commands = dispatchableStepCommands('claude');
     const expected = Object.entries(STEP_SKILL_INVOCATIONS)
@@ -54,7 +93,7 @@ describe('dispatchableStepCommands', () => {
         await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
       }));
 
-      await expect(dispatchableStepCommands.assertResolves(homeDir, 'claude')).resolves.toBeUndefined();
+      await expect(dispatchableStepCommands.assertResolves(homeDir, SOURCE_ROOT, 'claude')).resolves.toBeUndefined();
     } finally {
       await rm(homeDir, { recursive: true, force: true });
     }
@@ -75,7 +114,7 @@ describe('dispatchableStepCommands', () => {
           await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
         }));
 
-      await expect(dispatchableStepCommands.assertResolves(homeDir, 'claude')).rejects.toThrow(
+      await expect(dispatchableStepCommands.assertResolves(homeDir, SOURCE_ROOT, 'claude')).rejects.toThrow(
         new RegExp(`pipeline.*${pipelineCommand?.rendered}.*${homeDir}`, 's'),
       );
     } finally {
@@ -102,7 +141,7 @@ describe('dispatchableStepCommands', () => {
 
       const diagnostics = await Promise.all(providers.map(async (provider, index) => {
         try {
-          await dispatchableStepCommands.assertResolves(homes[index], provider);
+          await dispatchableStepCommands.assertResolves(homes[index], SOURCE_ROOT, provider);
           return '';
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
@@ -142,7 +181,7 @@ describe('dispatchableStepCommands', () => {
 
       const failures = await Promise.all(cases.map(async ({ homeDir }) => {
         try {
-          await dispatchableStepCommands.assertResolves(homeDir, 'claude');
+          await dispatchableStepCommands.assertResolves(homeDir, SOURCE_ROOT, 'claude');
           return '';
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
@@ -165,7 +204,7 @@ describe('dispatchableStepCommands', () => {
     };
     const syntheticHome = join(tmpdir(), 'step-command-preflight-no-external-calls');
 
-    await expect(assertWithInjectedFilesystemAccess(syntheticHome, 'claude', {
+    await expect(assertWithInjectedFilesystemAccess(syntheticHome, SOURCE_ROOT, 'claude', {
       access: filesystemOnlyAccess,
     })).resolves.toBeUndefined();
 

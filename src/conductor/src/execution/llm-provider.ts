@@ -77,7 +77,7 @@ export type CodexProbeParserRejection =
  * paths, credential material, hashes, and arbitrary error messages.
  */
 export interface ProviderExitFacts {
-  processErrorCode?: 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
+  processErrorCode?: 'E2BIG' | 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
   exitCode?: number;
   signal?: 'SIGABRT' | 'SIGALRM' | 'SIGHUP' | 'SIGINT' | 'SIGKILL' | 'SIGPIPE' | 'SIGQUIT' | 'SIGTERM' | 'UNKNOWN';
   stdoutBytes?: number;
@@ -167,6 +167,12 @@ export interface SelfHostInvocation {
   env: NodeJS.ProcessEnv;
   args: readonly string[];
   /**
+   * Leading `args` that belong to a containment launcher wrapping the
+   * provider (e.g. bwrap binds, `--`, the provider binary), not to the
+   * provider itself. Absent when the invocation is not wrapped.
+   */
+  launcherArgCount?: number;
+  /**
    * The provider home this preparation replaced in `env`. Installed-policy
    * discovery reads the operator's global/plugin catalogs from this explicit
    * mapping only; it is never written to and never inferred after preparation.
@@ -211,6 +217,11 @@ export interface ProviderNativeSchemaCapability {
   nativeOutputSchema: true;
 }
 
+/** Declares that an adapter delivers the engine-owned system prompt to the model. */
+export interface ProviderSystemPromptCapability {
+  deliversSystemPrompt: true;
+}
+
 /** The synchronous authority decision made immediately before process creation. */
 export type SpawnPermitDecision =
   | { permitted: true }
@@ -242,6 +253,8 @@ export interface InvokeResult {
   structuredResultFailure?: 'missing' | 'malformed';
   /** A requested native schema could not be enforced by the selected adapter. */
   nativeSchemaUnsupported?: true;
+  /** A provider cannot deliver the engine-owned system prompt to the model. */
+  systemPromptUndeliverable?: true;
   /** Candidate setup established that its provider cannot enforce read-only review. */
   readOnlyReviewUnavailable?: true;
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
@@ -430,6 +443,8 @@ export interface LLMProvider {
   lifecycleCapability?: ProviderLifecycleCapability;
   /** Declares native output-schema support; absence is an explicit unsupported capability. */
   nativeSchemaCapability?: ProviderNativeSchemaCapability;
+  /** Declares engine-owned system-prompt delivery; absence is an explicit unsupported capability. */
+  systemPromptCapability?: ProviderSystemPromptCapability;
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;

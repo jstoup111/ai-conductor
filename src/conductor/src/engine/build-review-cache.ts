@@ -38,7 +38,7 @@ export interface BuildReviewCacheSemanticIdentity {
   declarationFingerprint: string;
   effectiveBundleDigest: string;
   contractVersion: BuildReviewRubricContractVersion;
-  projectionVersion: "v1" | "v2" | "v3";
+  projectionVersion: "v1" | "v2" | "v3" | "v4";
   semanticInputDigest: string;
   executionPolicyFingerprint: string;
   engineStamp: string;
@@ -54,9 +54,9 @@ export interface BuildReviewCacheSemanticIdentity {
 export interface BuildReviewCacheEntry {
   version: typeof LEGACY_CACHE_VERSION | typeof CACHE_VERSION;
   rubric: BuildReviewRubricId | string;
-  /** The member descriptor owns these versions (built-ins v3/v3, custom-v1 v1/v1). */
+  /** The member descriptor owns these versions (built-ins v4/v4, custom v2/v1). */
   contractVersion: BuildReviewRubricContractVersion;
-  projectionVersion: "v1" | "v2" | "v3";
+  projectionVersion: "v1" | "v2" | "v3" | "v4";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
@@ -93,7 +93,7 @@ export async function tryWriteBuildReviewCacheEntry(
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId | string;
   contractVersion: BuildReviewRubricContractVersion;
-  projectionVersion: "v1" | "v2" | "v3";
+  projectionVersion: "v1" | "v2" | "v3" | "v4";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
@@ -106,7 +106,7 @@ export interface BuildReviewCacheLookup {
 /** Safely parsed persisted state, including legacy entries that must miss closed. */
 export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion" | "engineIdentity"> {
   contractVersion: BuildReviewRubricContractVersion;
-  projectionVersion: "v1" | "v2" | "v3";
+  projectionVersion: "v1" | "v2" | "v3" | "v4";
   /**
    * Staged legacy parse (adr-2026-08-21 D4): pre-engine-identity entries carry
    * no field and classify as `engine-version-mismatch`, never `invalid-entry`.
@@ -193,7 +193,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === "testQuality" || value === "security";
+  return value === "testQuality" || value === "security" || value === "implementationQuality";
 }
 
 function isCacheRubric(value: unknown): value is string {
@@ -220,7 +220,7 @@ function parseBuildReviewCacheSemanticIdentity(value: unknown): BuildReviewCache
     return undefined;
   }
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
-  if (!contractVersion || (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3")) {
+  if (!contractVersion || (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3" && candidate.projectionVersion !== "v4")) {
     return undefined;
   }
   if (!keys.filter((key) => key !== "contractVersion" && key !== "projectionVersion")
@@ -261,7 +261,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
   if (candidate.semanticIdentity !== undefined && !semanticIdentity) return undefined;
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
   if ((candidate.version !== LEGACY_CACHE_VERSION && candidate.version !== CACHE_VERSION) || !isCacheRubric(candidate.rubric) || !contractVersion ||
-    (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3") ||
+    (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3" && candidate.projectionVersion !== "v4") ||
     !isNonEmptyString(candidate.projectionDigest) || !isNonEmptyString(candidate.policyFingerprint)) {
     return undefined;
   }
@@ -289,11 +289,11 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
   // Current persistence accepts exactly the descriptor pairs in use.  This
-  // keeps a future v4 closed while allowing custom-v1 to retain its own
-  // descriptor identity instead of pretending to be a built-in v3 entry.
+  // keeps a future v5 closed while allowing custom-v1 to retain its own
+  // descriptor identity instead of pretending to be a built-in v4 entry.
   const currentDescriptorPair = entry !== undefined && (
-    (entry.contractVersion === "v3" && entry.projectionVersion === "v3") ||
-    (entry.contractVersion === "v1" && entry.projectionVersion === "v1")
+    (entry.contractVersion === "v4" && entry.projectionVersion === "v4") ||
+    (entry.contractVersion === "v2" && entry.projectionVersion === "v1")
   );
   return entry?.version === CACHE_VERSION && currentDescriptorPair &&
     entry.engineIdentity !== undefined && entry.semanticIdentity !== undefined

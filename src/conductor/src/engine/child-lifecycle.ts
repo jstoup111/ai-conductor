@@ -1,15 +1,16 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { parseChildId, type ChildId } from './child-context.js';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, rm } from 'node:fs/promises';
+import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { resolveMainRepoRoot } from './park-marker.js';
+import { redRefFor } from './routing/routing-refs.js';
+import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, serializeRoutedRedRecord } from './routing/red-record.js';
+import { routingSettingOn } from './routing/route-types.js';
+import { loadSliceTopology } from './slice-topology.js';
 
 export type StartChildGitRunner = GitRunner;
 
@@ -37,25 +38,6 @@ export interface ActiveChildLifecycleTarget extends ChildLifecycleTarget {
 export type ChildLifecycleResult =
   | StartChildResult
   | { readonly kind: 'completed' };
-
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
-
-function sealedPositions(
-  envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>,
-): ChildId[] {
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    return [];
-  }
-  return [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-    .map((position) => parseChildId(position))
-    .filter((position): position is ChildId => position !== undefined)
-    .sort((left, right) => left - right);
-}
 
 function refused(reason: string): StartChildResult {
   return { kind: 'refused', reason };
@@ -87,18 +69,20 @@ export async function startChild(
   _emitter: ConductorEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<StartChildResult> {
-  const envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-  const positions = sealedPositions(envelope);
-  const positionIndex = positions.indexOf(child);
-  if (positionIndex === -1 || positions.length < 2) {
-    return refused(`child ${child} is not a declared stacked position`);
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  // New child creation is controlled by the repository-root configuration,
+  // rather than a feature worktree's potentially uncommitted config edit.
+  const projectRoot = await resolveMainRepoRoot(worktree);
+  const topology = await loadSliceTopology(worktree, slug, { git, projectRoot });
+  if (topology.kind === 'unavailable') {
+    return refused(`child ${child} cannot start: sealed-plan topology is unavailable (${topology.cause})`);
   }
-
-  const loaded = await loadConfig(worktree);
-  if (!loaded.ok) return refused(`cannot load project config: ${loaded.error.message}`);
-  const maxSlices = loaded.config.stacked_prs?.max_slices ?? 1;
-  if (positions.length > maxSlices) {
-    return refused(`sealed position count ${positions.length} exceeds stacked_prs.max_slices ${maxSlices}`);
+  const positions = topology.kind === 'sliced'
+    ? topology.positions.map((position) => parseChildId(position)).filter((position): position is ChildId => position !== undefined)
+    : [];
+  const positionIndex = positions.indexOf(child);
+  if (topology.kind !== 'sliced' || topology.stackEligibility.kind !== 'eligible' || positionIndex === -1 || positions.length < 2) {
+    return refused(`child ${child} is not a declared stacked position`);
   }
 
   const leaf = positions.at(-1)!;
@@ -109,7 +93,6 @@ export async function startChild(
 
   const branch = childBranchFor(slug, child);
   if (!branch.ok) return refused(branch.reason);
-  const git = dependencies.git ?? makeGitRunner(worktree);
   const namespaceRef = `refs/heads/feat/c${child}`;
   const namespace = await runGit(git, ['show-ref', '--verify', '--quiet', namespaceRef]);
   if (namespace === undefined || (namespace.exitCode !== 0 && namespace.exitCode !== 1)) {
@@ -190,8 +173,10 @@ export async function enterChildRegion(
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   if (target.isLeaf && target.leafMovePending) {
-    const envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-    const positions = sealedPositions(envelope);
+    const topology = await loadSliceTopology(worktree, slug, { git });
+    const positions = topology.kind === 'sliced'
+      ? topology.positions.map((position) => parseChildId(position)).filter((position): position is ChildId => position !== undefined)
+      : [];
     const positionIndex = positions.indexOf(target.position);
     const parent = positionIndex > 0 ? positions[positionIndex - 1] : undefined;
     if (parent === undefined) return refused(`cannot resolve declared parent for pending leaf ${target.branch}`);
@@ -234,6 +219,52 @@ export async function closeChild(
   const resolved = await runGit(git, ['rev-parse', '--verify', `refs/heads/${child.branch}`]);
   const tip = resolved?.stdout.trim();
   if (!resolved || resolved.exitCode !== 0 || !tip) return refused(`cannot resolve child branch ${child.branch}`);
+
+  const config = await loadConfig(worktree);
+  if (config.ok && routingSettingOn(config.config)) {
+    const markerPath = pipelinePathFor(worktree, 'acceptance-specs-red.json', child.child);
+    let marker: string | undefined;
+    try {
+      marker = await readFile(markerPath, 'utf8');
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return refused(`cannot read child ${child.child} RED marker`);
+      }
+    }
+    if (marker !== undefined) {
+      const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
+      let contract;
+      try {
+        contract = parseRoutedAcceptanceRunContract(JSON.parse(await readFile(
+          pipelinePathFor(worktree, 'acceptance-specs-run.json', child.child),
+          'utf8',
+        )));
+      } catch {
+        // Earlier child closures had no durable run contract.  Keep their
+        // digest-only red refs valid rather than making a close retry fail.
+      }
+      const blob = await runGit(git, ['hash-object', '-w', '--stdin'], serializeRoutedRedRecord(digest, contract));
+      const blobSha = blob?.stdout.trim();
+      if (!blob || blob.exitCode !== 0 || !blobSha) {
+        return refused(`cannot write child ${child.child} RED digest`);
+      }
+      const redRef = redRefFor(slug, child.child);
+      const recorded = await runGit(git, ['update-ref', redRef, blobSha, '']);
+      if (!recorded || recorded.exitCode !== 0) {
+        const existing = await runGit(git, ['rev-parse', '--verify', redRef]);
+        const existingBlob = existing && existing.exitCode === 0
+          ? await runGit(git, ['cat-file', '-p', existing.stdout.trim()])
+          : undefined;
+        const existingRecord = existingBlob && existingBlob.exitCode === 0
+          ? parseRoutedRedRecord(existingBlob.stdout)
+          : undefined;
+        if (existingRecord?.digest !== digest) {
+          return refused(`cannot record child ${child.child} RED digest at ${redRef}`);
+        }
+      }
+    }
+  }
+
   const ref = `refs/conductor/${slug}/closed/c${child.child}`;
   const written = await runGit(git, ['update-ref', ref, tip, '']);
   if (!written || written.exitCode !== 0) return refused(`cannot close child ${child.child} at ${ref}`);

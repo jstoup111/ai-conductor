@@ -44,6 +44,7 @@ import type { ComplexityTier, StepName } from '../src/types/steps.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED/GREEN specs for the pure marker-region splicer (.docs/stories/
+// Covers: task:12
 // generated-model-table.md, TS-2 happy path 1; Task 6 of the implementation
 // plan). spliceGeneratedRegion must be a pure function: no I/O, deterministic,
 // replacing only the BEGIN/END marker region and leaving every other byte
@@ -511,11 +512,11 @@ describe('engine-managed auxiliary rows', () => {
   const auxiliarySkills = [
     'build-review-test-quality',
     'build-review-security',
-    'coverage-binding',
+    'build-review-implementation-quality',
     'rebase-regrade',
   ];
 
-  it('renders rubric and coverage-binding helpers with their resolved policies', () => {
+  it('renders rubric and judge helpers with their resolved policies', () => {
     expect(buildAuxiliaryRows()).toEqual(
       [
         expect.objectContaining({
@@ -537,12 +538,12 @@ describe('engine-managed auxiliary rows', () => {
           },
         }),
         expect.objectContaining({
-          name: 'coverage-binding',
-          executionPath: 'engine-managed auxiliary judge',
+          name: 'build-review-implementation-quality',
+          executionPath: 'engine-managed auxiliary rubric',
           providerCells: {
-            claude: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
-            codex: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
-            pi: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
+            claude: { model: 'opus', effort: 'medium' },
+            codex: { model: 'gpt-5.6-sol', effort: 'medium' },
+            pi: { model: 'n/a', effort: 'n/a' },
           },
         }),
         expect.objectContaining({
@@ -565,7 +566,7 @@ describe('engine-managed auxiliary rows', () => {
     const rendered = renderModelTable();
     expect(rendered).toContain('| build-review-test-quality | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| build-review-security | engine-managed auxiliary rubric |');
-    expect(rendered).toContain('| coverage-binding | engine-managed auxiliary judge |');
+    expect(rendered).toContain('| build-review-implementation-quality | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| rebase-regrade | engine-managed auxiliary judge |');
   });
 });

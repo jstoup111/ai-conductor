@@ -37,12 +37,15 @@
 //   - childEnv() returns a COPY — the daemon's own env is never mutated (no bleed).
 
 import * as fsp from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
 import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/provider-catalog.js';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
+import { resolveSkillName } from '../skill-names.js';
+import { emitTranscriptHarvest, retireProviderHome, transcriptCapture, transcriptCaptureLeaseStep, type ProviderHomeTranscriptRetirement, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 export {
   provisionProviderHome,
   type ProviderHome,
@@ -61,6 +64,8 @@ export interface SandboxFs {
   pathExists(path: string): Promise<boolean>;
   /** Read a file's text, or null when it does not exist. */
   readFile(path: string): Promise<string | null>;
+  /** List immediate directory entries. */
+  readdir(path: string): Promise<string[]>;
   writeFile(path: string, data: string): Promise<void>;
   /** Set file mode (permissions) — used to make scripts executable. */
   chmod(path: string, mode: number): Promise<void>;
@@ -74,6 +79,7 @@ export const realSandboxFs: SandboxFs = {
   realpath: (path) => fsp.realpath(path),
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
   readFile: (path) => fsp.readFile(path, 'utf-8').then((t) => t, () => null),
+  readdir: (path) => fsp.readdir(path),
   writeFile: (path, data) => fsp.writeFile(path, data, 'utf-8'),
   chmod: (path, mode) => fsp.chmod(path, mode),
 };
@@ -122,25 +128,31 @@ interface ProvisionOptionsBase {
    * config dir, Claude Code keeps state BESIDE the dir, not in it).
    */
   globalStateFile?: string;
+  /** Event-spine emitter for best-effort transcript lifecycle reporting. */
+  events?: ConductorEventEmitter;
+  /** Credential injected into the child; retained only until transcript capture. */
+  injectedToken?: string;
 }
+
+export type SandboxCaptureIdentity = TranscriptCaptureSource;
 
 type SandboxScratchLeaseIdentity = {
   readonly repository: string;
   readonly featureSlug: string;
-  readonly runId: string;
-  readonly attempt: number;
-  /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
-  readonly member?: string;
+  readonly captureIdentity: SandboxCaptureIdentity;
 };
 
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionOptions = ProvisionOptionsBase & (
   | (SandboxScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly captureIdentity?: SandboxCaptureIdentity }
 );
 
-/** Only edited harness skills are exposed from the worktree. */
-const LINKED_DIRS = ['skills'] as const;
+type TranscriptCapture = SandboxCaptureIdentity & {
+  readonly worktreeRoot: string;
+  readonly events?: ConductorEventEmitter;
+};
+
 const SETTINGS_FILE = 'settings.json';
 /** Claude Code state file — holds per-project workspace-trust grants. */
 const STATE_FILE = '.claude.json';
@@ -160,6 +172,8 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     private readonly parentEnv: NodeJS.ProcessEnv,
     private readonly fs: SandboxFs,
     private readonly releaseScratch?: () => Promise<void>,
+    private readonly transcriptCapture?: TranscriptCapture,
+    private injectedToken?: string,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -169,8 +183,10 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     // during retries/parks, so we capture the current value at call time.
     const env: Record<string, string | undefined> = { ...this.parentEnv };
     env[sandboxProvider().homeVariable] = this.configDir;
-    if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const token = this.injectedToken ?? process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (token !== undefined) {
+      this.injectedToken = token;
+      env.CLAUDE_CODE_OAUTH_TOKEN = token;
     }
     return scrubTmuxEnvironment(env as NodeJS.ProcessEnv);
   }
@@ -178,9 +194,37 @@ class ThrowawaySandbox implements SandboxBuildEnv {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
-    // force: true → ENOENT is not an error, so double teardown is a no-op.
-    await this.fs.rm(this.configDir, { recursive: true, force: true });
-    if (this.releaseScratch) await this.releaseScratch();
+    const capture = this.transcriptCapture;
+    await retireProviderHome({
+      home: this.configDir,
+      transcript: capture === undefined ? undefined : this.transcriptRetirement(capture),
+      // force: true → ENOENT is not an error, so double teardown is a no-op.
+      remove: () => this.fs.rm(this.configDir, { recursive: true, force: true }),
+      ...(this.releaseScratch === undefined ? {} : { releaseScratch: this.releaseScratch }),
+    });
+  }
+
+  private transcriptRetirement(capture: TranscriptCapture): ProviderHomeTranscriptRetirement {
+    const provider = sandboxProvider();
+    const transcript = transcriptCapture({ ...capture, provider: provider.id });
+    return {
+      selectedAuthPath: provider.selfHostShape.selectedAuthPath,
+      globs: provider.selfHostShape.transcripts.globs,
+      destination: transcript.destination,
+      extraSecrets: this.injectedToken === undefined ? [] : [this.injectedToken],
+      report: (result) => this.reportTranscriptHarvest(capture, transcript.path, result),
+    };
+  }
+
+  private async reportTranscriptHarvest(
+    capture: TranscriptCapture,
+    path: string,
+    result: TranscriptHarvestResult,
+  ): Promise<void> {
+    await emitTranscriptHarvest(capture.events, {
+      ...capture,
+      provider: sandboxProvider().id, path, interrupted: false,
+    }, result);
   }
 }
 
@@ -200,9 +244,10 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     worktreeRoot: opts.worktreeRoot,
     repository: opts.repository,
     featureSlug: opts.featureSlug,
-    runId: opts.runId,
-    attempt: opts.attempt,
-    member: opts.member,
+    runId: opts.captureIdentity!.runId,
+    attempt: opts.captureIdentity!.attempt,
+    step: transcriptCaptureLeaseStep(opts.captureIdentity!),
+    member: opts.captureIdentity!.auxiliaryMember,
     provider: provider.id,
   });
   const parentEnv = opts.parentEnv ?? process.env;
@@ -212,16 +257,39 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     await fs.mkdir(base);
     configDir = await fs.mkdtemp(join(base, 'harness-selfbuild-'));
 
-    for (const name of LINKED_DIRS) {
-      const target = join(opts.worktreeRoot, name);
-      // Fail closed on a missing target — never provision a dangling link (TR-5).
-      if (!(await fs.pathExists(target))) {
+    const skillsRoot = join(opts.worktreeRoot, 'skills');
+    // Fail closed on a missing target — never provision a dangling link (TR-5).
+    if (!(await fs.pathExists(skillsRoot))) {
+      throw new SandboxProvisionError(
+        `Harness self-build worktree is missing 'skills/' (expected ${skillsRoot}). ` +
+          'Refusing to provision a sandbox with a dangling link; the build was NOT launched.',
+      );
+    }
+    await fs.mkdir(join(configDir, 'skills'));
+    for (const directory of await fs.readdir(skillsRoot)) {
+      await fs.symlink(
+        join(skillsRoot, directory),
+        join(configDir, 'skills', await resolveSkillName(opts.worktreeRoot, directory)),
+      );
+    }
+    const resolvedSkillsRoot = await fs.realpath(skillsRoot);
+    const linkedTargets = await sandboxLinkTargets({
+      configDir,
+      childEnv: () => ({}),
+      teardown: async () => {},
+    });
+    for (const [name, target] of Object.entries(linkedTargets)) {
+      const pathFromSkillsRoot = relative(resolvedSkillsRoot, target);
+      if (
+        pathFromSkillsRoot === ''
+        || pathFromSkillsRoot === '..'
+        || pathFromSkillsRoot.startsWith(`..${sep}`)
+        || isAbsolute(pathFromSkillsRoot)
+      ) {
         throw new SandboxProvisionError(
-          `Harness self-build worktree is missing '${name}/' (expected ${target}). ` +
-            'Refusing to provision a sandbox with a dangling link; the build was NOT launched.',
+          `Harness self-build sandbox skill link ${name} resolves outside worktree skills directory ${resolvedSkillsRoot}: ${target}.`,
         );
       }
-      await fs.symlink(target, join(configDir, name));
     }
 
     // Start from engine-owned empty settings. Operator preferences/hooks never
@@ -252,9 +320,9 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     if (usesScratch) {
         await releaseScratchHome({
           worktreeRoot: opts.worktreeRoot,
-          runId: opts.runId!,
-          attempt: opts.attempt!,
-          member: opts.member,
+          runId: opts.captureIdentity!.runId,
+          attempt: opts.captureIdentity!.attempt,
+          member: opts.captureIdentity!.auxiliaryMember,
           provider: provider.id,
         });
     } else if (configDir) {
@@ -275,12 +343,16 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     usesScratch
       ? () => releaseScratchHome({
         worktreeRoot: opts.worktreeRoot,
-        runId: opts.runId!,
-        attempt: opts.attempt!,
-        member: opts.member,
+        runId: opts.captureIdentity!.runId,
+        attempt: opts.captureIdentity!.attempt,
+        member: opts.captureIdentity!.auxiliaryMember,
         provider: provider.id,
       }).then(() => {})
       : undefined,
+    opts.captureIdentity === undefined
+      ? undefined
+      : { worktreeRoot: opts.worktreeRoot, ...opts.captureIdentity, events: opts.events },
+    opts.injectedToken,
   );
 }
 
@@ -402,13 +474,16 @@ export async function withSandboxBuildEnv<T>(
 }
 
 /**
- * Resolve the sandbox's sole worktree-owned link. Engine-owned hooks are files
- * in the sandbox, never links to an operator or worktree hooks directory.
+ * Resolve every worktree-owned skill link. Engine-owned hooks are files in the
+ * sandbox, never links to an operator or worktree hooks directory.
  */
 export async function sandboxLinkTargets(
   sandbox: SandboxBuildEnv,
-): Promise<Record<(typeof LINKED_DIRS)[number], string>> {
-  return {
-    skills: join(sandbox.configDir, 'skills'),
-  };
+): Promise<Record<string, string>> {
+  const skillsDir = join(sandbox.configDir, 'skills');
+  const targets: Record<string, string> = {};
+  for (const name of await fsp.readdir(skillsDir)) {
+    targets[name] = await fsp.realpath(join(skillsDir, name));
+  }
+  return targets;
 }

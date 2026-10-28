@@ -375,7 +375,7 @@ predicate's three failure shapes, and that the self-heal writes the marker whole
 
 ### Done When
 - [ ] The guard at `src/conductor/src/engine/conductor.ts:5326-5333` no longer decides reachability
-      by substring-matching the reason text; it fires on missing marker, unparseable JSON, and
+      by substring-matching the reason text; outside a routed repair or re-validation pass on a closed stacked child (which runs verify-green), it fires on missing marker, unparseable JSON, and
       shape-class validator refusals, and does not fire on outcome-class refusals.
 - [ ] `validateAcceptanceRedEvidence` distinguishes shape-class from outcome-class refusals in a way
       the guard can consume without re-parsing prose, verified by a test over every refusal branch.

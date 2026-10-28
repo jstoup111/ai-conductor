@@ -1,11 +1,14 @@
 import type { HarnessConfig } from '../types/config.js';
 import {
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   isUnreadableKickbackGate,
   isUnreadableKickbackGrowth,
   isUnreadableKickbackLedger,
-  readGrowth,
+  readGrowthAccounting,
   readKickbackLedger,
   type KickbackGateEntry,
+  type KickbackLedger,
+  type PendingRepairSettlementBudget,
   type PlanGrowth,
 } from './kickback-ledger.js';
 
@@ -13,23 +16,72 @@ import {
 // times per feature before the loop HALTs for a human.
 export const MAX_KICKBACKS_PER_GATE = 2;
 
+export type RemediationLapTier = 'S' | 'M' | 'L';
+export type RemediationLapGate = 'prd_audit' | 'architecture_review_as_built';
+
+/** Default remediation laps by feature complexity when configuration omits a cap. */
+export const REMEDIATION_LAP_TIER_DEFAULTS: Readonly<Record<RemediationLapTier, number>> = {
+  S: 2,
+  M: 3,
+  L: 4,
+};
+
+export interface RemediationLapAllowance {
+  limit: number;
+  /** Undefined stays visible to renderers as an unrecorded tier treated as M. */
+  tier: RemediationLapTier | undefined;
+  source: 'configured' | 'default';
+}
+
+type RemediationLapConfig = number | Partial<Record<RemediationLapTier, number>>;
+
+function configuredRemediationLapCap(
+  gate: RemediationLapGate,
+  config: HarnessConfig,
+): RemediationLapConfig | undefined {
+  const remediationConfig = config as HarnessConfig & {
+    prd_audit?: { max_remediation_laps?: RemediationLapConfig };
+    architecture_review_as_built?: { max_remediation_laps?: RemediationLapConfig };
+  };
+  return remediationConfig[gate]?.max_remediation_laps;
+}
+
+/** Resolve the configured or tier-default remediation lap allowance for one gate. */
+export function resolveRemediationLapAllowance(
+  gate: RemediationLapGate,
+  config: HarnessConfig,
+  tier: RemediationLapTier | undefined,
+): RemediationLapAllowance {
+  const configured = configuredRemediationLapCap(gate, config);
+  if (typeof configured === 'number') return { limit: configured, tier, source: 'configured' };
+  const effectiveTier = tier ?? 'M';
+  const configuredLimit = configured?.[effectiveTier];
+  if (configuredLimit !== undefined) return { limit: configuredLimit, tier, source: 'configured' };
+  return { limit: REMEDIATION_LAP_TIER_DEFAULTS[effectiveTier], tier, source: 'default' };
+}
+
 /** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
 export function remediationLapCapForGate(
   gate: string,
   config: HarnessConfig,
   genericCap = MAX_KICKBACKS_PER_GATE,
+  tier: RemediationLapTier | undefined = undefined,
 ): number {
-  const remediationConfig = config as HarnessConfig & {
-    prd_audit?: { max_remediation_laps?: number };
-    architecture_review_as_built?: { max_remediation_laps?: number };
-  };
-  if (gate === 'prd_audit') {
-    return remediationConfig.prd_audit?.max_remediation_laps ?? 1;
-  }
-  if (gate === 'architecture_review_as_built') {
-    return remediationConfig.architecture_review_as_built?.max_remediation_laps ?? 1;
+  if (gate === 'prd_audit' || gate === 'architecture_review_as_built') {
+    return resolveRemediationLapAllowance(gate, config, tier).limit;
   }
   return genericCap;
+}
+
+/** Resolve the fallback limit an operator sees when a gate has no durable cap evidence. */
+export function kickbackBudgetFallbackLimit(
+  gate: string,
+  config: HarnessConfig,
+  tier: RemediationLapTier | undefined = undefined,
+): number {
+  return gate === 'build_review'
+    ? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW
+    : remediationLapCapForGate(gate, config, MAX_KICKBACKS_PER_GATE, tier);
 }
 
 /**
@@ -43,11 +95,14 @@ export function remediationLapCapForGate(
 export async function validationJoinRemediationRoundCap(
   projectRoot: string,
   config: HarnessConfig,
+  tier: RemediationLapTier | undefined = undefined,
 ): Promise<number> {
   const ledger = await readKickbackLedger(projectRoot).catch(() => undefined);
   let cap = MAX_KICKBACKS_PER_GATE;
   for (const gate of ['prd_audit', 'architecture_review_as_built'] as const) {
-    const gateCap = ledger?.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config);
+    const gateCap = ledger?.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(
+      gate, config, MAX_KICKBACKS_PER_GATE, tier,
+    );
     cap = Math.max(cap, gateCap);
   }
   return cap;
@@ -61,6 +116,46 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   const maximum = prdAudit?.max_appended_tasks ?? 5;
   const ratio = prdAudit?.max_appended_ratio ?? 0.25;
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
+}
+
+export interface PlanGrowthBudget {
+  growth: PlanGrowth;
+  cap: number;
+  capSource: 'raised' | 'config-derived';
+  authoredSource: 'plan' | 'ledger' | 'unresolved';
+}
+
+/** Resolve the one plan-growth allowance shared by every remediation consumer. */
+export async function readPlanGrowthBudget(
+  projectRoot: string,
+  config: HarnessConfig,
+  options: { persist: boolean },
+): Promise<PlanGrowthBudget> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const unbounded = await readGrowthAccounting(projectRoot, Number.MAX_SAFE_INTEGER, options);
+  const capSource = ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised';
+  const cap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, unbounded.growth.authored);
+  const accounting = await readGrowthAccounting(projectRoot, cap, options);
+  return { growth: accounting.growth, cap, capSource, authoredSource: accounting.authoredSource };
+}
+
+/** Build the durable allowance snapshots required to settle a pending BUILD repair. */
+export async function pendingRepairSettlementBudgets(
+  projectRoot: string,
+  config: HarnessConfig,
+  ledger: KickbackLedger,
+  tier: RemediationLapTier | undefined = undefined,
+): Promise<PendingRepairSettlementBudget[]> {
+  const { cap: growthCap, growth, authoredSource } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
+  return (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
+    gate,
+    lapCap: ledger.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(
+      gate, config, MAX_KICKBACKS_PER_GATE, tier,
+    ),
+    growthCap,
+    growth,
+    authoredSource,
+  }));
 }
 
 export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
@@ -85,10 +180,8 @@ export async function readRemediationGateAppendBudget(
   lapCap: number,
   taskCount: number,
   growthTaskCount: number,
-  authoredTaskCount: number,
 ): Promise<RemediationGateAppendBudget> {
   const ledger = await readKickbackLedger(projectRoot);
-  const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
@@ -101,6 +194,7 @@ export async function readRemediationGateAppendBudget(
     // gates and growth accounting. Preserve its exhausted-budget projection;
     // only an unreadable ledger envelope blocks append before mutation.
     if (isUnreadableKickbackGrowth(ledger)) {
+      const growthCap = ledger.effectiveGrowthCap ?? 0;
       return {
         gate,
         priorLaps: lapCap,
@@ -113,7 +207,7 @@ export async function readRemediationGateAppendBudget(
     }
     throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
-  const growth = await readGrowth(projectRoot, growthCap);
+  const { cap: growthCap, growth } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;

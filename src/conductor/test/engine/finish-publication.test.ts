@@ -1,4 +1,4 @@
-// Covers: task:5, task:7
+// Covers: task:4, task:5, task:7, task:10, task:rem-prd-audit-R8
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,6 +22,7 @@ describe('FINISH human-required guidance', () => {
     'judgment_halt_prose',
     'ambiguous_pr_identity',
     'invalid_shipped_record',
+    'publication_operation_failed',
     'interactive_intent_deferred',
     'interactive_intent_declined',
     'interactive_intent_destructive_choice',
@@ -41,6 +42,7 @@ describe('FINISH human-required guidance', () => {
       'judgment_halt_prose',
       'ambiguous_pr_identity',
       'invalid_shipped_record',
+      'publication_operation_failed',
       'interactive_intent_deferred',
       'interactive_intent_declined',
       'interactive_intent_destructive_choice',
@@ -55,10 +57,35 @@ describe('FINISH human-required guidance', () => {
       return guidance.message;
     });
 
-    expect(messages).toHaveLength(10);
+    expect(messages).toHaveLength(11);
     expect(new Set(messages)).toHaveLength(messages.length);
   });
 });
+
+async function publicationOperationFailedError(operation: string, error: string): Promise<Error> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const PublicationOperationFailedError = mod.PublicationOperationFailedError;
+  if (typeof PublicationOperationFailedError !== 'function') {
+    throw new Error(
+      'expected export "PublicationOperationFailedError" to classify guarded publication failures (not yet implemented)',
+    );
+  }
+  return new (PublicationOperationFailedError as new (operation: string, error: string) => Error)(
+    operation,
+    error,
+  );
+}
+
+async function isPublicationOperationFailedError(error: unknown): Promise<boolean> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const isPublicationOperationFailedError = mod.isPublicationOperationFailedError;
+  if (typeof isPublicationOperationFailedError !== 'function') {
+    throw new Error(
+      'expected export "isPublicationOperationFailedError" to discriminate guarded publication failures (not yet implemented)',
+    );
+  }
+  return (isPublicationOperationFailedError as (value: unknown) => boolean)(error);
+}
 
 async function routeFinishPublicationDisposition(disposition: unknown) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
@@ -138,7 +165,7 @@ async function publicationTransitionDimension(transition: PublicationTransition)
 }
 
 type AdvancedPublicationTransition = (
-  emit: undefined,
+  emit: ((event: unknown) => void) | undefined,
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
@@ -151,6 +178,7 @@ async function advancedPublicationTransition(
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
+  emit?: (event: unknown) => void,
 ) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const advance = mod.advancedPublicationTransition;
@@ -159,7 +187,7 @@ async function advancedPublicationTransition(
       'expected export "advancedPublicationTransition" to compare pre- and post-effect publication observations (not yet implemented)',
     );
   }
-  return (advance as AdvancedPublicationTransition)(undefined, transition, before, after);
+  return (advance as AdvancedPublicationTransition)(emit, transition, before, after);
 }
 
 type PublicationCondition =
@@ -189,6 +217,8 @@ interface AdvanceFinishPublicationInput {
     createShippedRecord?: () => Promise<void>;
     repairPresentation?: () => Promise<void>;
     establishPr?: OpenShipDraftPrDeps;
+    establishChildPrs?: () => Promise<void>;
+    assembleStack?: () => Promise<void>;
   };
 }
 
@@ -332,6 +362,175 @@ function readyPublicationSnapshot(
     ...overrides,
     pr: overrides.pr ?? base.pr,
   } as PublicationSnapshot;
+}
+
+describe('author_pr_prose publish failure', () => {
+  const operation = 'pull-request.edit';
+  const error = 'GraphQL: Your token has not been granted the required scopes: read:org';
+
+  function placeholderSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'placeholder',
+        ready: false,
+      },
+    });
+  }
+
+  function authoredSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+    });
+  }
+
+  function indeterminateSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'indeterminate',
+        ready: false,
+      },
+    });
+  }
+
+  it('halts with the guarded publish failure after placeholder prose is re-observed', async () => {
+    const snapshot = placeholderSnapshot();
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: {
+        authorProse: async () => { throw failure; },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_operation_failed',
+      detail: `${operation} failed: ${error}`,
+    });
+  });
+
+  it.each([
+    ['placeholder prose', placeholderSnapshot],
+    ['indeterminate prose', indeterminateSnapshot],
+  ])('halts with the operation failure when re-observation has %s', async (_scenario, observeAfter) => {
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(placeholderSnapshot())
+        .mockResolvedValueOnce(observeAfter()),
+      effects: {
+        authorProse: async () => { throw failure; },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toMatchObject({
+      kind: 'human_required',
+      reason: 'publication_operation_failed',
+      detail: `${operation} failed: ${error}`,
+    });
+  });
+
+  it('keeps ambiguous PR identity authoritative after a typed publish failure', async () => {
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(placeholderSnapshot())
+        .mockResolvedValueOnce(readyPublicationSnapshot({
+          pr: {
+            identity: 'ambiguous',
+            urls: [
+              'https://github.com/acme/widget/pull/1172',
+              'https://github.com/acme/widget/pull/1173',
+            ],
+          },
+        })),
+      effects: {
+        authorProse: async () => { throw failure; },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({ kind: 'human_required', reason: 'ambiguous_pr_identity' });
+  });
+
+  it('exports a discriminator for guarded publication failures', async () => {
+    const failure = await publicationOperationFailedError(operation, error);
+
+    await expect(isPublicationOperationFailedError(failure)).resolves.toBe(true);
+    await expect(isPublicationOperationFailedError(new Error(error))).resolves.toBe(false);
+  });
+
+  it('renders publish-failure guidance and the operation error without the unmoved explanation', async () => {
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'publication_operation_failed',
+      detail: `${operation} failed: ${error}`,
+    });
+    if (route.kind !== 'halt') throw new Error('expected a human-required halt');
+
+    expect(route.reason).toContain(
+      'A FINISH pull-request publish failed, so the authored prose never reached the pull request.',
+    );
+    expect(route.reason).toContain('Resolve the failure named below, then retry FINISH.');
+    expect(route.reason).toContain(error);
+    expect(route.reason).not.toContain('left pr.prose unchanged at placeholder');
+  });
+
+  it.each([
+    ['a typed publish failure', async () => { throw await publicationOperationFailedError(operation, error); }],
+    ['a normally completing authoring effect', async () => undefined],
+  ])('advances when %s is followed by authored prose', async (_scenario, authorProse) => {
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(placeholderSnapshot())
+        .mockResolvedValueOnce(authoredSnapshot()),
+      effects: { authorProse, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+  });
+
+  it('keeps the unmoved disposition when normally completing authoring leaves placeholder prose', async () => {
+    await expect(advanceFinishPublication({
+      observe: async () => placeholderSnapshot(),
+      effects: { authorProse: async () => undefined, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The author_pr_prose transition left pr.prose unchanged at placeholder.',
+    });
+  });
+
+  it('keeps authoring dispatch failures retryable when placeholder prose is re-observed', async () => {
+    await expect(advanceFinishPublication({
+      observe: async () => placeholderSnapshot(),
+      effects: {
+        authorProse: async () => { throw new Error('provider transport failed'); },
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      },
+    })).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'authoring_dispatch_failed',
+    });
+  });
+});
+
+async function publicationProgressAllowance(snapshot: PublicationSnapshot): Promise<number> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const allowance = mod.publicationProgressAllowance;
+  if (typeof allowance !== 'function') {
+    throw new Error(
+      'expected export "publicationProgressAllowance" to calculate the per-feature FINISH allowance (not yet implemented)',
+    );
+  }
+  return (allowance as (input: PublicationSnapshot) => number)(snapshot);
 }
 
 function observerPorts(overrides: Partial<{
@@ -694,6 +893,107 @@ describe('finish-publication domain types', () => {
     ) => typeof expected;
 
     expect(nextFinishPublicationTransition(snapshot)).toBe(expected);
+  });
+
+  it('inserts stack publication transitions before readiness for a stacked snapshot', async () => {
+    const module = await import('../../src/engine/finish-publication.js');
+    const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
+      snapshot: PublicationSnapshot,
+    ) => PublicationTransition;
+    const acceptedDraft = {
+      identity: 'one' as const,
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'accepted' as const,
+      ready: false,
+    };
+
+    expect(nextFinishPublicationTransition({
+      ...readyPublicationSnapshot({ pr: acceptedDraft }),
+      stack: 'members-missing',
+    } as PublicationSnapshot)).toBe('establish_child_prs');
+    expect(nextFinishPublicationTransition({
+      ...readyPublicationSnapshot({ pr: acceptedDraft }),
+      stack: 'unassembled',
+    } as PublicationSnapshot)).toBe('assemble_stack');
+    expect(nextFinishPublicationTransition({
+      ...readyPublicationSnapshot({ pr: acceptedDraft }),
+      stack: 'valid',
+    } as PublicationSnapshot)).toBe('ready_pr');
+  });
+
+  it('halts an observed diverged stack without selecting or invoking assembly', async () => {
+    const assembleStack = vi.fn(async () => undefined);
+
+    await expect(advanceFinishPublication({
+      observe: async () => ({
+        ...readyPublicationSnapshot({
+          pr: {
+            identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false,
+          },
+        }),
+        stack: 'diverged',
+        stackDivergenceDetail: 'published stack tip diverged at positions: 3, 5',
+      } as PublicationSnapshot),
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), assembleStack },
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'stack_tip_diverged',
+      detail: 'published stack tip diverged at positions: 3, 5',
+    });
+
+    expect(assembleStack).not.toHaveBeenCalled();
+  });
+
+  it('preserves the N=1 seven-transition selection sequence and its allowance', async () => {
+    const module = await import('../../src/engine/finish-publication.js');
+    const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
+      snapshot: PublicationSnapshot,
+    ) => PublicationTransition;
+    const accepted = {
+      identity: 'one' as const,
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'accepted' as const,
+      ready: false,
+    };
+
+    const transitions = [
+      nextFinishPublicationTransition(readyPublicationSnapshot({ pr: { identity: 'none' } })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({ releaseReadiness: 'missing' })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        pr: { ...accepted, prose: 'placeholder' },
+      })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        pr: { ...accepted, prose: 'stale' },
+      })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        shippedRecord: 'missing',
+        pr: { ...accepted, ready: true },
+      })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({ pr: accepted })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        pr: { ...accepted, ready: true },
+      })),
+    ];
+
+    expect(transitions).toEqual([
+      'establish_pr',
+      'verify_release_readiness',
+      'author_pr_prose',
+      'judge_pr_prose',
+      'write_shipped_record',
+      'ready_pr',
+      'record_outcome',
+    ]);
+    expect(transitions).not.toContain('establish_child_prs');
+    expect(transitions).not.toContain('assemble_stack');
+    await expect(publicationProgressAllowance(readyPublicationSnapshot())).resolves.toBe(2 * 7);
+  });
+
+  it('doubles the nine stacked publication transitions for its allowance', async () => {
+    await expect(publicationProgressAllowance({
+      ...readyPublicationSnapshot(),
+      stack: 'members-missing',
+    } as PublicationSnapshot)).resolves.toBe(2 * 9);
   });
 
   it('routes revision-required prose to authoring without constructing a judgment request', async () => {
@@ -1244,6 +1544,26 @@ describe('observePublicationSnapshot', () => {
       observePublicationSnapshot(observationInput(observerPorts({ pr }))),
     ).resolves.toMatchObject({ pr: expected });
   });
+
+  it('carries observed divergent stack positions into the FINISH snapshot', async () => {
+    const ports = {
+      ...observerPorts(),
+      stack: {
+        observeStackDimension: async () => ({
+          dimension: 'diverged' as const,
+          members: [
+            { position: 3, branch: 'feat/c3/widget', pr: 103 },
+            { position: 5, branch: 'feat/widget', pr: 500 },
+          ],
+        }),
+      },
+    };
+
+    await expect(observePublicationSnapshot(observationInput(ports))).resolves.toMatchObject({
+      stack: 'diverged',
+      stackDivergenceDetail: 'published stack tip diverged at positions: 3, 5',
+    });
+  });
 });
 
 describe('resolveInteractivePublicationIntent', () => {
@@ -1345,6 +1665,17 @@ describe('advancedPublicationTransition', () => {
       }),
     ],
     [
+      'establish_child_prs',
+      {
+        ...readyPublicationSnapshot(),
+        stack: 'members-missing',
+      } as PublicationSnapshot,
+      {
+        ...readyPublicationSnapshot(),
+        stack: 'unassembled',
+      } as PublicationSnapshot,
+    ],
+    [
       'ready_pr',
       readyPublicationSnapshot({
         pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
@@ -1393,6 +1724,53 @@ describe('advancedPublicationTransition', () => {
         }),
       ),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+  });
+
+  it('emits only the seven N=1 publication transitions and no stack event', async () => {
+    const events: unknown[] = [];
+    const acceptedDraft = {
+      identity: 'one' as const,
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'accepted' as const,
+      ready: false,
+    };
+    const transitions = [
+      ['establish_pr',
+        readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }),
+        readyPublicationSnapshot({ pr: acceptedDraft, branchPushed: 'valid' })],
+      ['verify_release_readiness',
+        readyPublicationSnapshot({ releaseReadiness: 'missing' }),
+        readyPublicationSnapshot()],
+      ['author_pr_prose',
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, prose: 'placeholder' } }),
+        readyPublicationSnapshot({ pr: acceptedDraft })],
+      ['judge_pr_prose',
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, prose: 'stale' } }),
+        readyPublicationSnapshot({ pr: acceptedDraft })],
+      ['write_shipped_record',
+        readyPublicationSnapshot({ shippedRecord: 'missing' }),
+        readyPublicationSnapshot()],
+      ['ready_pr',
+        readyPublicationSnapshot({ pr: acceptedDraft }),
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, ready: true } })],
+      ['record_outcome',
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, ready: true } }),
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, ready: true }, outcomeRecord: 'valid' })],
+    ] as const satisfies readonly [PublicationTransition, PublicationSnapshot, PublicationSnapshot][];
+
+    for (const [transition, before, after] of transitions) {
+      await expect(advancedPublicationTransition(transition, before, after, (event) => {
+        events.push(event);
+      })).resolves.toEqual({ kind: 'advanced', transition });
+    }
+
+    expect(events).toEqual(transitions.map(([transition]) => ({
+      type: 'finish_publication_transition', phase: 'completed', transition,
+    })));
+    expect(events.filter((event) => (
+      typeof event === 'object' && event !== null &&
+      'type' in event && typeof event.type === 'string' && event.type.startsWith('stack_')
+    ))).toHaveLength(0);
   });
 
   it('exhausts the existing FINISH retry budget for repeated indeterminate post-effect observations', async () => {
@@ -1516,6 +1894,17 @@ describe('advancedPublicationTransition', () => {
 });
 
 describe('advanceFinishPublication unmoved transition dimensions', () => {
+  it('runs establish_child_prs once and verifies the re-observed stack dimension', async () => {
+    let stack: PublicationSnapshot['stack'] = 'members-missing';
+    const establishChildPrs = vi.fn(async () => { stack = 'unassembled'; });
+
+    await expect(advanceFinishPublication({
+      observe: async () => ({ ...readyPublicationSnapshot(), stack } as PublicationSnapshot),
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishChildPrs },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'establish_child_prs' });
+    expect(establishChildPrs).toHaveBeenCalledTimes(1);
+  });
+
   it('halts human-required when authoring leaves a judged revision byte-identical', async () => {
     const objection = 'The body omits the validation evidence readers need.';
     const revisionRequired = readyPublicationSnapshot({

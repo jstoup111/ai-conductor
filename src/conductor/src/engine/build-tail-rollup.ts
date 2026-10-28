@@ -17,13 +17,6 @@ export interface BuildTailWindowRollup {
     ts: number;
     classification: 'remediation' | 'closeout';
   }[];
-  closeout:
-    | { state: 'unrecorded' }
-    | {
-      state: 'recorded';
-      durationMs: number;
-      obligations: Readonly<Record<string, number>>;
-    };
 }
 
 export interface MeasuredBuildTailRollup {
@@ -33,7 +26,6 @@ export interface MeasuredBuildTailRollup {
 
 export interface PartialBuildTailRollup {
   state: 'partial';
-  closeout?: Extract<BuildTailWindowRollup['closeout'], { state: 'recorded' }>;
 }
 
 export type BuildTailRollup =
@@ -84,30 +76,6 @@ function buildProgressTicks(events: readonly BuildTailEvent[]): BuildProgressTic
   ));
 }
 
-function closeoutDurations(
-  events: readonly BuildTailEvent[],
-): BuildTailWindowRollup['closeout'] | undefined {
-  const obligations: Record<string, number> = {};
-  let durationMs = 0;
-  let recorded = false;
-  for (const event of events) {
-    if (event.type !== 'pipeline_closeout') continue;
-    if (
-      typeof event.obligation !== 'string'
-      || typeof event.startedAt !== 'number'
-      || typeof event.endedAt !== 'number'
-      || event.endedAt < event.startedAt
-    ) return undefined;
-    const duration = event.endedAt - event.startedAt;
-    durationMs += duration;
-    obligations[event.obligation] = (obligations[event.obligation] ?? 0) + duration;
-    recorded = true;
-  }
-  return recorded
-    ? { state: 'recorded', durationMs, obligations }
-    : { state: 'unrecorded' };
-}
-
 /**
  * Attribute each completed build window without inferring a first-pass task
  * segment from a re-entry that was already fully resolved at its first tick.
@@ -121,8 +89,6 @@ export function computeBuildTailRollup(
     if (window.endedAt < window.startedAt) return { state: 'partial' };
     const ticks = buildProgressTicks(window.events);
     if (ticks.length === 0) return { state: 'partial' };
-    const closeout = closeoutDurations(window.events);
-    if (closeout === undefined) return { state: 'partial' };
     const firstTick = ticks[0];
     const firstPass = firstTick.resolved < firstTick.total;
     const resolutionIndex = firstPass
@@ -149,7 +115,6 @@ export function computeBuildTailRollup(
           ts: tick.ts,
           classification: tick.headMoved ? 'remediation' as const : 'closeout' as const,
         })),
-      closeout,
     });
   }
   return {
@@ -240,9 +205,5 @@ export async function readBuildWindows(worktreeDir: string): Promise<BuildWindow
   if (current !== undefined) return { state: 'partial' };
   if (windows.length > 0) return { state: 'measured', windows };
 
-  const closeout = closeoutDurations(events);
-  if (closeout === undefined) return { state: 'partial' };
-  return closeout.state === 'recorded'
-    ? { state: 'partial', closeout }
-    : { state: 'unavailable' };
+  return { state: 'unavailable' };
 }

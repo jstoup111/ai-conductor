@@ -34,6 +34,8 @@ Extend the canonical tracker-client boundary with typed operations and canonical
 
 Authorization binds actor, repository, target, and operation. Resolve identity and evidence again for a retry or different target; a prior authorized call is not blanket permission for the rest of a workflow.
 
+> **Amended 2026-10-17 by #2945:** The registry gains `stack.read`, `stack.create`, `stack.add` (a new `stack` resource kind) and `pull-request.retarget`. `stack.create` is the second exact-target exemption beside initial PR creation. It is bound to the leaf's committed ownership. `stack.add` targets the `stack` kind and is authorized only for the stack number in the feature's publication record. Payloads are validated against that record by the publication module before the boundary is called, because authorization does not see payloads (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 13).
+
 ### D2 — Feature resources use committed ownership
 
 Existing feature PRs and remote feature branches require a single unambiguous committed intake owner matching the machine-resolved operator. Resolve the canonical repository and exact branch/PR identity, not a cwd guess or body marker alone.
@@ -48,6 +50,8 @@ A source issue is a separate mutation target: an owned feature does not authoriz
 > operation is refused `invalid-target`. Every other branch resolves exactly as before. Push targets
 > and PR binding remain the checked-out branch's own. Committed-owner checks are unchanged, so a child
 > branch never gains authority a leaf branch lacks.
+
+> **Amended 2026-10-17 by #2945:** For FINISH stack publication only, the engine pushes a named child ref from the leaf's worktree, so a push target need not be the checked-out branch. `conduct github-operation` still binds to the checked-out branch, and it refuses any push to, or PR bind of, a child branch whose member the publication record does not list (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 4, 13).
 
 ### D3 — Pre-spec intake and creation
 
@@ -209,6 +213,19 @@ Supersede adr-2026-07-03-gated-writeback-announcements. Operator approved this s
 > 7. *Token confinement is unchanged.* D9.3's confinement applies to the identity read. Only the
 >    derived login and id leave the resolver, and only the trailer text reaches the worktree or
 >    any provider or build child.
+>
+> **Amended 2026-10-24 by #3377:** D10.1's "cached for the daemon process" now means cached per
+> daemon process that dispatches features: the supervisor and each executor child (one per dispatch
+> under `executor_isolation: child`) resolve and cache the identity independently. The read still
+> happens during daemon worktree preparation and never inside a commit path. Every such process
+> installs the resolver through one shared daemon-process bootstrap, called by the daemon entry
+> point and the executor-child entry point and by no operator-run entry point, so D10.3's scope
+> holds under both isolation modes. D10.6 gains a closed reason for a resolver that is absent when
+> daemon dispatch prepares a worktree; it is emitted on that feature's event spine, the trailer is
+> omitted, and setup proceeds. Operator-run worktree preparation, which is not daemon dispatch,
+> still writes no co-author value and emits nothing. D10.2, D10.4, D10.5 and D10.7 are unchanged;
+> the executor child already reads the bot credential for its own GitHub writes, so confinement
+> gains no new holder.
 
 ## Consequences
 

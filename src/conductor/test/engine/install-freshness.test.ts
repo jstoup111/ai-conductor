@@ -8,6 +8,7 @@
  * (interactive) or fails hard (non-interactive) — never starts on a stale install.
  *
  * All collaborators are injected — no real `bin/install`, no real TTY.
+ * Covers: task:10
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -49,6 +50,20 @@ describe('ensureInstallFresh — staleness policy', () => {
       ensureInstallFresh({ harnessRoot: HARNESS, runner, interactive: true, log: () => {} }),
     ).resolves.toBeUndefined();
     expect(calls).toEqual([['--check']]);
+  });
+
+  it('frontmatter-named catalog links (--check → 0) are fresh; directory-named links are stale', async () => {
+    const fresh = makeRunner({ check: 0 });
+    await expect(
+      ensureInstallFresh({ harnessRoot: HARNESS, runner: fresh.runner, interactive: false, log: () => {} }),
+    ).resolves.toBeUndefined();
+    expect(fresh.calls).toEqual([['--check']]);
+
+    const stale = makeRunner({ check: 1 });
+    await expect(
+      ensureInstallFresh({ harnessRoot: HARNESS, runner: stale.runner, interactive: false, log: () => {} }),
+    ).rejects.toBeInstanceOf(InstallStaleError);
+    expect(stale.calls).toEqual([['--check']]);
   });
 
   it('drift + interactive + "yes": runs --update and resolves', async () => {

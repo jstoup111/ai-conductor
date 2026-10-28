@@ -55,6 +55,7 @@ function fakeGh(mergeCommit: string) {
           body: 'Implements `.docs/plans/feature.md`.',
           files: [{ path: 'src/feature.ts' }, { path: '.docs/shipped/feature.md' }],
           headRefOid: 'pr-head',
+          headRefName: 'feature/feature',
         }),
       };
     }

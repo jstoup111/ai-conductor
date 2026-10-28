@@ -16,7 +16,7 @@ start=$(grep -n '^configure_permissions() {$' "$HARNESS_DIR/bin/install" | head 
 end=$(awk -v start="$start" 'NR > start && /^}$/ { print NR; exit }' "$HARNESS_DIR/bin/install")
 sed -n "${start},${end}p" "$HARNESS_DIR/bin/install" > "$TMP_ROOT/function.sh"
 run_permissions() {
-  TMPDIR="$PERMISSIONS_TMPDIR" bash -c '
+  TMPDIR="$PERMISSIONS_TMPDIR" command -p bash -c '
   ok() { printf "OK: %s\\n" "$*"; }; warn() { printf "WARN: %s\\n" "$*" >&2; }; info() { :; }
   HARNESS_PERMISSIONS=("Bash(example:*)")
   source "$1"
@@ -48,7 +48,7 @@ hooks_heredoc=$(awk -v start="$hooks_start" 'NR > start && /^PYEOF$/ { print NR;
 hooks_end=$(awk -v start="$hooks_heredoc" 'NR > start && /^}$/ { print NR; exit }' "$HARNESS_DIR/bin/install")
 sed -n "${hooks_start},${hooks_end}p" "$HARNESS_DIR/bin/install" > "$TMP_ROOT/hooks-function.sh"
 run_hooks() {
-  bash -c '
+  command -p bash -c '
     ok() { printf "OK: %s\\n" "$*"; }; warn() { printf "WARN: %s\\n" "$*" >&2; }; info() { :; }
     HARNESS_DIR=$1
     source "$2"
@@ -88,10 +88,10 @@ grep -Fq 'Could not configure hooks automatically' "$TMP_ROOT/hooks-error"
 # successful merge.  The shim is only data for PATH lookup; it never runs the
 # settings values above.
 mkdir "$TMP_ROOT/no-python"
-if PATH="$TMP_ROOT/no-python" run_permissions > "$TMP_ROOT/no-python-out" 2> "$TMP_ROOT/no-python-error"; then exit 1; fi
+if (PATH="$TMP_ROOT/no-python"; run_permissions) > "$TMP_ROOT/no-python-out" 2> "$TMP_ROOT/no-python-error"; then exit 1; fi
 grep -Fq 'python3 not found' "$TMP_ROOT/no-python-error"
 ! grep -Fq 'OK:' "$TMP_ROOT/no-python-out"
-if PATH="$TMP_ROOT/no-python" run_hooks > "$TMP_ROOT/no-python-hooks-out" 2> "$TMP_ROOT/no-python-hooks-error"; then exit 1; fi
+if (PATH="$TMP_ROOT/no-python"; run_hooks) > "$TMP_ROOT/no-python-hooks-out" 2> "$TMP_ROOT/no-python-hooks-error"; then exit 1; fi
 grep -Fq 'python3 not found' "$TMP_ROOT/no-python-hooks-error"
 ! grep -Fq 'OK:' "$TMP_ROOT/no-python-hooks-out"
 

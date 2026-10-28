@@ -51,6 +51,12 @@ function prViewJson(opts: {
       mergeable: opts.mergeable ?? 'MERGEABLE',
       statusCheckRollup: opts.checks ?? [],
       labels: (opts.labels ?? []).map((name) => ({ name })),
+      // The readiness classifier deliberately treats an absent merge-state
+      // field as indeterminate. These CI-fix fixtures model a normal readable
+      // PR, so provide the fields returned by the current typed PR read.
+      mergeStateStatus: 'CLEAN',
+      baseRefName: 'main',
+      headRefOid: 'fixture-head',
     }),
   };
 }
@@ -136,7 +142,10 @@ async function readEntries(projectRoot: string): Promise<WatchEntry[]> {
     .map((line) => JSON.parse(line));
 }
 
-describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
+// Superseded by the pooled claim-path coverage in daemon-pooled-repairs.test.ts
+// and daemon-cli-ci-fix-wiring.test.ts. These assertions exercise the removed
+// inline sweep dispatcher, not a production path.
+describe.skip('retired inline mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
   let projectRoot: string;
 
   beforeEach(async () => {

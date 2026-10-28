@@ -24,6 +24,8 @@ import {
   type ProviderExecutionContext,
 } from './provider-execution.js';
 import { dispatchMemorySetup } from './memory-cli.js';
+import { resolveHarnessRoot } from './install-freshness.js';
+import { resolveSkillName } from './skill-names.js';
 import {
   renderSkillInvocation,
   STEP_SKILL_INVOCATIONS,
@@ -65,6 +67,8 @@ export interface PreludeSetupRequired {
 }
 
 export interface PreludeOptions {
+  /** Skill tree used to resolve host-visible bootstrap and assess names. */
+  skillNameRoot?: string | null;
   /** Current harness VERSION — used to detect migration-triggering bumps. */
   harnessVersion: string;
   /**
@@ -104,6 +108,9 @@ export async function runProjectPrelude(
   config: HarnessConfig,
   options: PreludeOptions,
 ): Promise<PreludeResult> {
+  const skillNameRoot = options.skillNameRoot === undefined
+    ? await resolveHarnessRoot()
+    : options.skillNameRoot;
   const result: PreludeResult = {
     bootstrapExecuted: false,
     assessExecuted: false,
@@ -146,6 +153,7 @@ export async function runProjectPrelude(
     result.bootstrapReason = bootstrapReason;
     const skillResult = await invokePreludeSkill('bootstrap', projectRoot,
       provider, sessionId, config, options, STEP_SKILL_INVOCATIONS.bootstrap!,
+      await resolveSkillName(skillNameRoot, 'bootstrap'),
       options.providerExecution
         ? 'Run the managed bootstrap refresh for this project. The engine has already ' +
           'validated its initialized configuration. Refresh artifacts and apply any harness ' +
@@ -168,6 +176,7 @@ export async function runProjectPrelude(
     result.assessReason = assessResult.reason;
     const skillResult = await invokePreludeSkill('assess', projectRoot,
       provider, sessionId, config, options, STEP_SKILL_INVOCATIONS.assess!,
+      await resolveSkillName(skillNameRoot, 'assess'),
       'Run the assess skill. Produce or refresh technical-assessment docs and ' +
       'architecture decision records based on current project state.');
     result.assessSuccess = skillResult.success;
@@ -188,11 +197,12 @@ async function invokePreludeSkill(
   config: HarnessConfig,
   options: PreludeOptions,
   invocation: SkillInvocationDescriptor,
+  resolvedName: string,
   systemPrompt: string,
 ): Promise<InvokeSkillResult> {
   const execution = options.providerExecution;
   if (!execution) {
-    return invokeSkill(provider, sessionId, renderSkillInvocation(invocation, '/'), systemPrompt);
+    return invokeSkill(provider, sessionId, renderSkillInvocation(invocation, '/', resolvedName), systemPrompt);
   }
 
   const result = await (
@@ -206,9 +216,10 @@ async function invokePreludeSkill(
     config,
     modelOverride: execution.modelOverride,
     onAttempt: execution.onAttempt,
+    onCandidateStart: execution.onCandidateStart,
     warn: execution.warn,
     options: {
-      prompt: renderSkillInvocation(invocation, '/'),
+      prompt: renderSkillInvocation(invocation, '/', resolvedName),
       cwd: projectRoot,
       dangerouslySkipPermissions: true,
       systemPrompt,
@@ -217,7 +228,7 @@ async function invokePreludeSkill(
         : {}),
     },
     optionsForCandidate: (candidateKey) => ({
-      prompt: renderSkillInvocation(invocation, candidateKey),
+      prompt: renderSkillInvocation(invocation, candidateKey, resolvedName),
     }),
   });
   return {

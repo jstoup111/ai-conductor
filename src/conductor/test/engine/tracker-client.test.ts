@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3, task:rem-as-built-rem-asb-10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 
@@ -39,6 +39,7 @@ import {
   makeProductionGh,
   type GhRunner,
 } from '../../src/engine/tracker-client.js';
+import { CI_FIX_LOG_MAX_BUFFER, CI_FIX_LOG_TIMEOUT_MS } from '../../src/engine/ci-fix.js';
 import { executeGithubOperation } from '../../src/engine/github-operations.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
 
@@ -195,9 +196,36 @@ describe('createGithubTrackerClient.readPullRequestMergeState', () => {
 
     expect(calls).toEqual([[
       'pr', 'view', 'https://github.com/acme/widget/pull/7',
-      '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body',
+      '--json', 'state,mergeable,createdAt,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid',
     ]]);
     expect(state).toMatchObject({ state: 'UNKNOWN', readFailure: { kind: 'runner' } });
+  });
+});
+
+describe('createGithubTrackerClient.listOpenIssues', () => {
+  it('keeps issues from every paginated page while excluding pull-request entries', async () => {
+    const { runner, calls } = fakeRunner(JSON.stringify([
+      [
+        { number: 10, body: 'Blocked by #9.' },
+        { number: 11, body: 'This is a pull request.', pull_request: { url: 'https://api.github.com/repos/acme/app/pulls/11' } },
+      ],
+      [
+        { number: 12, body: null },
+        { number: 13, body: 'Another pull request.', pull_request: { url: 'https://api.github.com/repos/acme/app/pulls/13' } },
+      ],
+    ]));
+
+    await expect(createGithubTrackerClient(runner).listOpenIssues('acme/app', '/worktree')).resolves.toEqual({
+      complete: true,
+      issues: [
+        { number: 10, body: 'Blocked by #9.' },
+        { number: 12, body: '' },
+      ],
+    });
+    expect(calls).toEqual([{
+      args: ['api', 'repos/acme/app/issues?state=open&per_page=100', '--paginate', '--slurp'],
+      opts: { cwd: '/worktree' },
+    }]);
   });
 });
 
@@ -219,6 +247,7 @@ describe('makeProductionGh bot write credential', () => {
       savedEnvironment.set(key, process.env[key]);
     }
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.CONDUCT_GH_REAL_EXECUTABLE;
   });
 
   afterEach(() => {
@@ -283,6 +312,23 @@ describe('makeProductionGh bot write credential', () => {
       maxBuffer: 32 * 1024 * 1024,
       timeout: undefined,
     });
+  });
+
+  it('forwards the CI-fix long-log limit and returns the complete stdout', async () => {
+    const longLog = 'x'.repeat(127_189);
+    productionGh.stdout = longLog;
+    const tracker = createGithubTrackerClient(makeMockedProductionGh());
+
+    await expect(tracker.viewWorkflowRunFailedLog('acme/repo', '41', '/worktree', {
+      timeout: CI_FIX_LOG_TIMEOUT_MS,
+      maxBuffer: CI_FIX_LOG_MAX_BUFFER,
+    })).resolves.toBe(longLog);
+    expect(execFileCb).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(execFileCb).mock.calls[0]?.slice(0, 3)).toEqual([
+      'gh',
+      ['run', 'view', '41', '--repo', 'acme/repo', '--log-failed'],
+      { cwd: '/worktree', maxBuffer: 8_388_608, timeout: 10_000 },
+    ]);
   });
 
   it('refuses an unavailable configured bot token before spawning', async () => {

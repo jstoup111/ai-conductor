@@ -1,0 +1,340 @@
+// Covers: task:4, task:7, task:9, task:11, task:29
+import { describe, expect, it, vi } from 'vitest';
+
+import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
+
+const done = (slug: string): FeatureOutcome => ({ slug, status: 'done' });
+
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((onResolve) => { resolve = onResolve; });
+  return { promise, resolve };
+}
+
+function depsFor(
+  calls: string[],
+  items: BacklogItem[],
+  overrides: Partial<DaemonDeps> = {},
+): DaemonDeps {
+  return {
+    discoverBacklog: async ({ refresh }) => refresh ? items : [],
+    runFeature: async (item) => {
+      calls.push(`dispatch:${item.slug}`);
+      return done(item.slug);
+    },
+    renderStartupDashboard: async () => { calls.push('dashboard'); },
+    readPersistedBaseSha: async () => 'previous-base',
+    resolveBaseSha: async () => 'base',
+    rekickSweep: async () => { calls.push('rekick'); },
+    consumeResumeAuthorizations: async () => { calls.push('resume'); },
+    reconcileHaltPrs: async () => { calls.push('halt-prs'); },
+    reconcileParkedFeatures: async () => { calls.push('parked'); },
+    sweepProviderScratch: async () => { calls.push('scratch'); },
+    sweepMergeableLabels: async () => { calls.push('mergeable'); },
+    ...overrides,
+  };
+}
+
+const maintenancePass = ['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable'];
+
+describe('daemon maintenance job wiring', () => {
+  it('shares an in-flight resume authorization consumer with the next width-2 fill pass', async () => {
+    const calls: string[] = [];
+    const firstFeature = deferred<FeatureOutcome>();
+    const consume = deferred<void>();
+    let halted = true;
+    let underlyingConsumeCalls = 0;
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'first' }, { slug: 'resumed' }], {
+      discoverBacklog: async () => [{ slug: 'first' }, { slug: 'resumed' }],
+      isHalted: async (slug) => slug === 'resumed' && halted,
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        return item.slug === 'first' ? firstFeature.promise : done(item.slug);
+      },
+      consumeResumeAuthorizations: async () => {
+        underlyingConsumeCalls++;
+        await consume.promise;
+        halted = false;
+      },
+    }), { concurrency: 2, once: true, maxItems: 2, idlePollMs: 0 });
+
+    await vi.waitFor(() => expect(underlyingConsumeCalls).toBe(1));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // The width-2 fill pass joins this still-pending call rather than claiming
+    // the resumed feature or starting another authorization consumer.
+    expect(underlyingConsumeCalls).toBe(1);
+    expect(calls).not.toContain('dispatch:resumed');
+
+    consume.resolve();
+    await vi.waitFor(() => expect(calls).toContain('dispatch:resumed'));
+    firstFeature.resolve(done('first'));
+    await daemon;
+  });
+
+  // Durable authorization maintenance is best-effort.
+  // Covers: task:rem-as-built-R8
+  it('does not reject the dispatcher when background resume authorization consumption fails', async () => {
+    const calls: string[] = [];
+    await expect(runDaemon(depsFor(calls, [{ slug: 'one' }], {
+      consumeResumeAuthorizations: async () => { throw new Error('cursor unavailable'); },
+      log: (message) => calls.push(message),
+    }), { concurrency: 1, once: true, maxItems: 1 })).resolves.toMatchObject({
+      processed: [{ slug: 'one', status: 'done' }],
+    });
+    expect(calls).toContain('[daemon] resume-authorizations error: cursor unavailable');
+  });
+
+  it('runs the dashboard only in the first ordered pass and starts a second pass on terminal collection', async () => {
+    const calls: string[] = [];
+
+    await runDaemon(depsFor(calls, [{ slug: 'one' }]), {
+      concurrency: 1,
+      once: true,
+      maxItems: 1,
+    });
+
+    await vi.waitFor(() => expect(calls).toEqual([
+      'dispatch:one',
+      ...maintenancePass,
+      // The second pass still invokes rekick, but its base has not advanced,
+      // so the observable rekick sweep is correctly a no-op.
+      'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
+    ]));
+  });
+
+  it('skips the dashboard at paused boot but still starts the other maintenance steps', async () => {
+    const calls: string[] = [];
+
+    await runDaemon(depsFor(calls, [{ slug: 'one' }], {
+      isPaused: async () => true,
+    }), { concurrency: 1, once: true });
+
+    await vi.waitFor(() => expect(calls).toEqual([
+      // `maybeRekick` remains pause-gated; the job invokes it, while its
+      // observable sweep remains a no-op under the paused gate.
+      'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
+    ]));
+  });
+
+  it('uses the startup pause gate for the deferred dashboard when the marker flips', async () => {
+    const calls: string[] = [];
+    let paused = true;
+
+    await runDaemon(depsFor(calls, [], {
+      isPaused: async () => {
+        const result = paused;
+        paused = false;
+        return result;
+      },
+    }), { concurrency: 1, once: true });
+
+    expect(calls).not.toContain('dashboard');
+  });
+
+  it('collects a worker and dispatches the next feature while a maintenance job is pending', async () => {
+    const calls: string[] = [];
+    const firstFeature = deferred<FeatureOutcome>();
+    const dashboard = deferred<void>();
+    const firstStarted = deferred<void>();
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one' }, { slug: 'two' }], {
+      discoverBacklog: async () => [{ slug: 'one' }, { slug: 'two' }],
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        if (item.slug === 'one') {
+          firstStarted.resolve();
+          return firstFeature.promise;
+        }
+        return done(item.slug);
+      },
+      renderStartupDashboard: async () => {
+        calls.push('dashboard');
+        return dashboard.promise;
+      },
+    }), { concurrency: 1, once: true, maxItems: 2, idlePollMs: 0 });
+
+    await firstStarted.promise;
+    await vi.waitFor(() => expect(calls).toEqual(['dispatch:one', 'dashboard']));
+    firstFeature.resolve(done('one'));
+    await vi.waitFor(() => expect(calls).toContain('dispatch:two'));
+    dashboard.resolve();
+    await daemon;
+  });
+
+  it('continues the remaining maintenance steps and dispatches after a failed step', async () => {
+    const calls: string[] = [];
+    let discoveries = 0;
+
+    await runDaemon(depsFor(calls, [], {
+      discoverBacklog: async () => {
+        discoveries++;
+        return discoveries === 1 ? [{ slug: 'one' }] : [{ slug: 'two' }];
+      },
+      renderStartupDashboard: async () => { throw new Error('dashboard failed'); },
+      log: (message) => calls.push(message),
+    }), { concurrency: 1, once: true, maxItems: 2, idlePollMs: 0 });
+
+    expect(calls).toContain('[daemon] startup-dashboard error: dashboard failed');
+    expect(calls).toEqual(expect.arrayContaining([
+      'dispatch:one', 'dispatch:two', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
+    ]));
+  });
+
+  // Covers: task:rem-as-built-R9.
+  it('closes a pending maintenance job before a stale-engine drain restart and suppresses later triggers', async () => {
+    const calls: string[] = [];
+    const feature = deferred<FeatureOutcome>();
+    const dashboard = deferred<void>();
+    const started = deferred<void>();
+    const restart = vi.fn(async () => { calls.push('restart'); return { fired: true }; });
+    let checks = 0;
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one' }], {
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        started.resolve();
+        return feature.promise;
+      },
+      renderStartupDashboard: async () => {
+        calls.push('dashboard');
+        return dashboard.promise;
+      },
+      staleEngineChecker: {
+        check: () => (++checks === 1 ? 'current' : 'stale'),
+        targetIdentity: () => 'target',
+        capturedIdentity: () => 'captured',
+      },
+      requestRestart: restart,
+    }), { concurrency: 2, once: false, isSelfHost: true, autoRestartOnStaleEngine: true, idlePollMs: 0 });
+
+    await started.promise;
+    await vi.waitFor(() => expect(calls).toEqual(expect.arrayContaining(['dispatch:one', 'dashboard'])));
+    feature.resolve(done('one'));
+    await vi.waitFor(() => expect(checks).toBeGreaterThan(1));
+    await Promise.resolve();
+    expect(restart).not.toHaveBeenCalled();
+    dashboard.resolve();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+    expect(calls.indexOf('restart')).toBeGreaterThan(calls.indexOf('mergeable'));
+    await daemon;
+  });
+
+  it('reopens maintenance after a predispatch stale restart request declines, then dispatches', async () => {
+    const calls: string[] = [];
+    let staleChecks = 0;
+    const restart = vi.fn(async () => {
+      calls.push('restart');
+      return { fired: false };
+    });
+
+    const result = await runDaemon(depsFor(calls, [{ slug: 'one' }, { slug: 'two' }], {
+      staleEngineChecker: {
+        check: () => ++staleChecks === 1 ? 'stale' : 'current',
+        targetIdentity: () => 'target',
+        capturedIdentity: () => 'captured',
+      },
+      requestRestart: restart,
+    }), { concurrency: 1, once: false, maxItems: 2, isSelfHost: true, autoRestartOnStaleEngine: true, idlePollMs: 0 });
+
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(result.processed.map((outcome) => outcome.slug)).toEqual(['one', 'two']);
+    expect(calls).toEqual(expect.arrayContaining(['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable']));
+    // Collection after the aborted predispatch restart still triggers a pass.
+    expect(calls.filter((call) => call === 'resume').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('reopens maintenance after a natural-idle stale restart request declines', async () => {
+    const calls: string[] = [];
+    let staleChecks = 0;
+    const restart = vi.fn(async () => {
+      calls.push('restart');
+      return { fired: false };
+    });
+
+    await runDaemon(depsFor(calls, [], {
+      staleEngineChecker: {
+        // The idle boundary first records the stale observation, then asks
+        // restartStaleSupervisor to re-verify it before requesting restart.
+        check: () => ++staleChecks <= 2 ? 'stale' : 'current',
+        targetIdentity: () => 'target',
+        capturedIdentity: () => 'captured',
+      },
+      requestRestart: restart,
+    }), { concurrency: 1, once: false, maxIdlePolls: 1, isSelfHost: true, autoRestartOnStaleEngine: true, idlePollMs: 0 });
+
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(expect.arrayContaining(['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable']));
+    // The following idle poll starts a new pass after the aborted restart.
+    expect(calls.filter((call) => call === 'resume').length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Covers: task:rem-as-built-R10.
+  it('waits for a running maintenance job during shouldStop teardown without starting another step', async () => {
+    const calls: string[] = [];
+    const dashboard = deferred<void>();
+    let stop = false;
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one' }], {
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        stop = true;
+        return done(item.slug);
+      },
+      renderStartupDashboard: async () => {
+        calls.push('dashboard');
+        return dashboard.promise;
+      },
+      shouldStop: () => stop,
+    }), { concurrency: 1, once: false, idlePollMs: 0 });
+
+    await vi.waitFor(() => expect(calls).toEqual(['dispatch:one', 'dashboard']));
+    let returned = false;
+    void daemon.then(() => { returned = true; });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    dashboard.resolve();
+    await daemon;
+    expect(calls).toEqual([
+      'dispatch:one', 'dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
+    ]);
+  });
+
+  // Covers: task:rem-prd-audit-R1, task:rem-prd-audit-R1-2.
+  it('starts a single-flight root refresh on a width-one busy poll without changing the running feature order', async () => {
+    const calls: string[] = [];
+    const feature = deferred<FeatureOutcome>();
+    const poll = deferred<void>();
+    let refreshes = 0;
+    let polls = 0;
+    let clock = 0;
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one', baseSha: 'pinned-base' }], {
+      discoverBacklog: async ({ refresh }) => {
+        if (refresh) refreshes += 1;
+        return [{ slug: 'one', baseSha: 'pinned-base' }];
+      },
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}:${item.baseSha}`);
+        return feature.promise;
+      },
+      sleep: async () => ++polls === 1 ? poll.promise : new Promise<void>(() => {}),
+      now: () => clock,
+    }), { concurrency: 1, once: true, maxItems: 1, idlePollMs: 1 });
+
+    try {
+      await vi.waitFor(() => expect(calls).toContain('dispatch:one:pinned-base'));
+      // The mocked poll has no wall-clock duration. Advance the injected clock
+      // through its configured interval so the scheduler may start the refresh.
+      clock = 1;
+      poll.resolve();
+      await vi.waitFor(() => expect(refreshes).toBe(2));
+      expect(calls).toContain('dispatch:one:pinned-base');
+    } finally {
+      // An assertion failure must not leave the daemon's live worker holding
+      // the Vitest process open and obscure this failure with teardown fallout.
+      poll.resolve();
+      feature.resolve(done('one'));
+      await daemon;
+    }
+  });
+});

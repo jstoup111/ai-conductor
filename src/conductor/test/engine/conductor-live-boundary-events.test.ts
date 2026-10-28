@@ -70,7 +70,7 @@ describe('self-host live-boundary events', () => {
       if (options.selfHost === false) return work();
       const candidateAttempts = options.candidateAttempts ?? 1;
       for (let attempt = 1; attempt <= candidateAttempts; attempt += 1) {
-        const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { runId: 'live-boundary-events', attempt });
+        const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { step, runId: 'live-boundary-events', attempt });
         if (!prepared) throw new Error('self-host candidate preparation was not installed');
         lastPrepared = prepared;
         try {

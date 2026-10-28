@@ -1,6 +1,10 @@
-// Covers: task:1
+// Covers: task:1, task:rem-as-built-1
 // Covers: task:10
-import { describe, expect, it } from 'vitest';
+// Covers: task:2
+import { describe, expect, it, afterEach } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   BUILD_REVIEW_RUBRIC_IDS,
@@ -8,6 +12,7 @@ import {
   fingerprintBuildReviewRubricPolicy,
   getBuildReviewRubricDescriptor,
   isRegisteredRubric,
+  readBuildReviewRubricSkill,
 } from '../../src/engine/build-review-registry.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { validateConfig } from '../../src/engine/config.js';
@@ -15,20 +20,45 @@ import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-
 import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/build-review-registry', () => {
-  it('registers the test-quality and security rubrics with their versioned execution descriptors', () => {
-    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security']);
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it('loads a rubric from its directory when its frontmatter name differs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-registry-'));
+    roots.push(root);
+    const skillPath = join(root, 'skills', 'build-review-security', 'SKILL.md');
+    const content = '---\nname: ac-build-review-security\n---\nrenamed-security-rubric\n';
+    await mkdir(join(root, 'skills', 'build-review-security'), { recursive: true });
+    await writeFile(skillPath, content, 'utf8');
+
+    // Deliberately no `skills/ac-build-review-security/SKILL.md`: a semantic-name
+    // lookup would fail, while the production directory loader must succeed.
+    await expect(readBuildReviewRubricSkill(root, 'security')).resolves.toBe(content);
+  });
+
+  it('registers the default-on implementation-quality rubric with the versioned built-ins', () => {
+    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security', 'implementationQuality']);
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toMatchObject({
       testQuality: {
         skillName: 'build-review-test-quality',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
-        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
+        contract: { projection: { version: 'v4' }, output: { version: 'v4' } },
       },
       security: {
         skillName: 'build-review-security',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
-        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
+        contract: { projection: { version: 'v4' }, output: { version: 'v4' } },
+      },
+      implementationQuality: {
+        skillName: 'build-review-implementation-quality',
+        cachePolicy: 'content-addressed',
+        prerequisite: 'none',
+        contract: { projection: { version: 'v4' }, output: { version: 'v4' } },
       },
     });
     for (const descriptor of Object.values(BUILD_REVIEW_RUBRIC_REGISTRY)) {
@@ -54,6 +84,7 @@ describe('engine/build-review-registry', () => {
 
     expect(isRegisteredRubric('testQuality')).toBe(true);
     expect(isRegisteredRubric('security')).toBe(true);
+    expect(isRegisteredRubric('implementationQuality')).toBe(true);
     expect(isRegisteredRubric('kotlinPolicy')).toBe(false);
     expect(config.catalog).toContainEqual(expect.objectContaining({
       id: 'kotlinPolicy',
@@ -64,6 +95,9 @@ describe('engine/build-review-registry', () => {
     );
     expect(getBuildReviewRubricDescriptor('security')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.security,
+    );
+    expect(getBuildReviewRubricDescriptor('implementationQuality')).toBe(
+      BUILD_REVIEW_RUBRIC_REGISTRY.implementationQuality,
     );
   });
 

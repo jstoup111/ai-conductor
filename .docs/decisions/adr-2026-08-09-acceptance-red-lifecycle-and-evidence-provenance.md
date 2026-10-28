@@ -69,6 +69,8 @@ residual risk is stated rather than discovered.
 step path in `conductor.ts`, `acceptance-red-runner.ts` as the self-heal progresses, and the gate
 verdict itself.
 
+> **Amended 2026-10-15 by #3211:** The `acceptance_red` variant gains an optional `mode` field. A routed repair pass on a stacked host emits `state: satisfied` with `mode: verify-green`; the field is absent outside a routed pass (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 This rides `ConductorEventEmitter → EventPersister → .pipeline/events.jsonl` unchanged. The daemon
 CLI, the UI renderer, the OTel visualizer and the event sinks all gain the signal with **no new
 reader path**. Per `.agents/skills/event-spine/SKILL.md`, this is an occurrence in time and the bus
@@ -87,6 +89,10 @@ parallel channel. Nothing is stamped into it to stand in for an event: every fie
 answers "what is true about this run", and every occurrence is emitted separately on the bus.
 
 > **Amended 2026-10-07 by #2942:** In a stacked feature the RED marker and run contract are per child, under `.pipeline/children/<k>/`, and cover only that child's owned stories; with no child they stay at today's root path (`adr-2026-10-07-per-child-build-region` decision 5).
+
+> **Amended 2026-10-12 by #2944:** `closeChild` records the RED proof's digest under
+> `refs/conductor/<slug>/red/c<k>`, so a closed child's proof survives worktree recreation
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
 **3. Report state, and the exact unmet condition, on the live surface.** The per-step line in
 `daemon-dashboard.ts` distinguishes `working` — the heartbeat belongs to the current dispatch
@@ -129,6 +135,10 @@ The two rejected alternatives are recorded because both are locally cheaper:
   recover this case.
 
 > **Amended 2026-10-07 by #2942:** The self-heal re-run writes the fresh marker at the active child's path when a child exists (`adr-2026-10-07-per-child-build-region` decision 5).
+
+> **Amended 2026-10-12 by #2944:** A routed or re-validation pass on a closed stacked child verifies
+> green against its existing specs. A missing RED marker there is not re-run as RED, because RED was
+> proven before closure (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
 ## Consequences
 

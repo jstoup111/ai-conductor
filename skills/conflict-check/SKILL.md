@@ -95,9 +95,9 @@ practice**, so satisfying one re-breaks the other. This is the costliest conflic
 and the hardest to see, because nothing looks wrong at authoring time — both stories
 read as reasonable, and each is implementable on its own.
 
-- Story A: "Every batch boundary blocks until the evaluator has written a verdict"
-- Story B: "A batch with no code changes skips evaluator dispatch to save tokens"
-- Conflict: a no-change batch must both block on a verdict and never request one. An
+- Story A: "Every build change has current aggregate test-suite evidence before SHIP"
+- Story B: "The test-suite gate may reuse current aggregate evidence without rerunning it"
+- Conflict: a build that requires a fresh rerun can never reuse current evidence. An
   implementation satisfying A fails B's gate; the fix for B then fails A's gate.
 
 The damage is not a failed build — it is a **loop that does not terminate on its own**.
@@ -117,9 +117,9 @@ find one. Resolving it requires changing what is being asked for, not how it is 
 which usually means the root lives upstream (see 5c) in the PRD's FRs or in the design,
 not in story phrasing.
 
-**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer pairs and
-task↔task pairs belong to `/coherence-check`. `/conflict-check` runs before `/plan` and cannot
-see tasks, so `/coherence-check` owns the task↔task sweep once plan tasks exist.
+**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer and task versus task
+pairs belong to plan review at Medium and Large tier, and to the plan's §7b at Small tier.
+`/conflict-check` runs before `/plan` and cannot see tasks.
 
 ### 3. Generate Conflict Report
 
@@ -210,7 +210,7 @@ After user selects:
 DECIDE artifact, perform the amendment during the DECIDE pass in that artifact — never defer it
 as a later BUILD task. Story artifacts under `.docs/stories/` are the narrow exception: replace
 the superseded assertion in place and leave no amendment record. For all other accepted DECIDE
-artifacts, add this note beside the original assertion:
+artifacts already on the base branch, add this note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
@@ -219,6 +219,9 @@ artifacts, add this note beside the original assertion:
 For these non-story artifacts, the amendment is additive: the original assertion remains; do not
 rewrite or delete it, and create no separate record. This makes the correction part of the
 spec-branch baseline before BUILD starts.
+
+An accepted DECIDE artifact absent from the base branch is a draft: revise it in place, remove
+superseded text, and add no amendment note or revision log.
 
 **Conflict reports are overwritten on re-run.** If a re-check after resolution finds new or
 changed conflicts, overwrite the existing conflict report file. The report reflects the CURRENT

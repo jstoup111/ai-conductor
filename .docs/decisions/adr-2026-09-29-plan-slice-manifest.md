@@ -85,6 +85,8 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    production callers. Daemon discovery and `planHasDependencyTree` stay presence-only and
    unchanged.
 
+> **Amended 2026-10-23 by #3365:** `validatePlanSlices`' production callers are the land gate and the slice-topology loader (`slice-topology.ts`), which replaces the removed `coverage_binding` slice layer (adr-2026-10-23-slice-topology-from-sealed-plan decision 2).
+
 3. **Membership rules.** Engine-appended remediation tasks (`isEngineAppendedRemediationTaskId`)
    are exempt, because they are appended after land by the one-appender authority. Their slice
    placement is #2724's decision. Every other task id declared by a task heading must appear in
@@ -146,6 +148,8 @@ strict Dependencies grammar, and none that contradicts this design. The decision
 > ineligible stacking. The flag-turned-on-later gap is closed by re-evaluating both at
 > `coverage_binding`.
 
+> **Amended 2026-10-23 by #3365:** References to `coverage_binding` here read as the slice-topology loader (adr-2026-10-23-slice-topology-from-sealed-plan decision 2).
+
 6. **`coverage_binding` slice layer: re-validation after amendment, with visible membership
    change.** Following the precedent of D17 in `adr-2026-08-31-coverage-binding-judge-step`, the
    `coverage_binding` runner calls `validatePlanSlices` on the plan it resolved.
@@ -154,6 +158,12 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - **An `invalid` result:** records `refused` and ends needs-human through the existing refusal
      path and halt writer. It names each violation, never appends a task, and never routes to
      `plan` (D6).
+
+     > **Amended 2026-10-10 by #3164:** An `invalid` result no longer refuses. `coverage_binding` is
+     > a no-op (`adr-2026-08-31-coverage-binding-judge-step`, amended). It logs the violations, records
+     > no membership, and the feature builds flat. The land `plan-slices` rung (Decision 5) is now the
+     > only refusing check. Membership recording, `plan_slices_changed`, the baseline rule, and the
+     > unsliced-plan rule below are unchanged.
    - **Membership recording:** the runner records the engine-computed membership in the envelope
      as an optional field: task id → slice position, plus the ordered slice titles, excluding
      exempt ids. That field is kept when the envelope is invalidated. It is not completion evidence,
@@ -178,6 +188,8 @@ strict Dependencies grammar, and none that contradicts this design. The decision
 > child branch exists, declared positions must not change. #2942 implements the guard that halts a
 > reseal that would move them.
 
+> **Amended 2026-10-23 by #3365:** The `coverage_binding` slice layer is removed. Membership is derived live from the sealed plan by the slice-topology loader rather than recorded in an envelope, and `plan_slices_changed` is removed. A reseal that changes positions on a feature with child state is refused at `reseal` (adr-2026-10-23-slice-topology-from-sealed-plan decisions 1–3).
+
 7. **Event `plan_slices_changed` joins the persisted spine.** It is a new `ConductorEvent` member
    with an `EVENT_SINKS` row `{ render: false, persist: true, audit: false, otel: false }`. It is
    classified not-audited-by-design, like its `coverage_binding_*` siblings, because a slice move
@@ -185,6 +197,8 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    visualizer list or the metrics listener. A slice move is a new fact that no existing event
    carries, which is why it is a new type rather than an extra field. No sidecar log, marker, or
    timestamp is added.
+
+> **Amended 2026-10-23 by #3365:** `plan_slices_changed` is removed with the step (adr-2026-10-23-slice-topology-from-sealed-plan decision 1).
 
 8. **Config: `stacked_prs.enabled`, default off and reserved.** A new top-level `stacked_prs`
    block accepts only `enabled` (boolean, default `false`). `loadProjectConfig` rejects the

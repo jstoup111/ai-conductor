@@ -14,7 +14,10 @@ import {
 import { isProviderSetupUnavailableError } from '../provider-setup-failure.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
+import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
+import { emitTranscriptHarvest, retireProviderHome, transcriptCapture, transcriptCaptureLeaseStep, type ProviderHomeTranscriptRetirement, type TranscriptCaptureSource } from './transcript-harvest.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 
 export type SelfHostProvider = ProviderWith<'selfHost'>;
 export type SelfHostProviderId = Extract<BuiltInProviderId, SelfHostProvider['id']>;
@@ -29,6 +32,7 @@ export interface ProviderHomeFs {
    * the files they point at, or the copy would carry links back into the worktree.
    */
   cp(source: string, destination: string): Promise<void>;
+  readdir(path: string): Promise<string[]>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   pathExists(path: string): Promise<boolean>;
 }
@@ -38,6 +42,7 @@ export const realProviderHomeFs: ProviderHomeFs = {
   mkdir: async (path) => { await fsp.mkdir(path, { recursive: true }); },
   symlink: (target, path) => fsp.symlink(target, path),
   cp: (source, destination) => fsp.cp(source, destination, { recursive: true, dereference: true }),
+  readdir: (path) => fsp.readdir(path),
   rm: (path, opts) => fsp.rm(path, opts),
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
 };
@@ -82,21 +87,22 @@ interface ProvisionProviderHomeBaseOptions {
   installEngineControls?: (context: ProviderHomeContext) => Promise<ProviderHomeEnvironment | void>;
   /** Worktree-owned assets exposed inside the isolated home. */
   worktreeAssets?: readonly string[];
+  /** Existing event spine; provider-home retirement is observational only. */
+  events?: ConductorEventEmitter;
 }
+
+export type ProviderHomeCaptureIdentity = TranscriptCaptureSource;
 
 type ScratchLeaseIdentity = {
   readonly repository: string;
   readonly featureSlug: string;
-  readonly runId: string;
-  readonly attempt: number;
-  /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
-  readonly member?: string;
+  readonly captureIdentity: ProviderHomeCaptureIdentity;
 };
 
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionProviderHomeOptions = ProvisionProviderHomeBaseOptions & (
   | (ScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly captureIdentity?: ProviderHomeCaptureIdentity }
 );
 
 export class ProviderHomeProvisionError extends Error {
@@ -125,6 +131,7 @@ class ThrowawayProviderHome implements ProviderHome {
     private readonly additions: NodeJS.ProcessEnv,
     private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
+    private readonly transcript: ProviderHomeTranscriptRetirement | undefined,
     private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
@@ -145,9 +152,28 @@ class ThrowawayProviderHome implements ProviderHome {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
-    await this.fs.rm(this.homeDir, { recursive: true, force: true });
-    if (this.releaseScratch) await this.releaseScratch();
+    await retireProviderHome({
+      home: this.homeDir,
+      transcript: this.transcript,
+      remove: () => this.fs.rm(this.homeDir, { recursive: true, force: true }),
+      ...(this.releaseScratch === undefined ? {} : { releaseScratch: this.releaseScratch }),
+    });
   }
+}
+
+function providerHomeTranscript(options: ProvisionProviderHomeOptions, provider: SelfHostProvider): ProviderHomeTranscriptRetirement | undefined {
+  const identity = options.captureIdentity;
+  if (identity === undefined) return undefined;
+  const source = { ...identity, provider: provider.id };
+  const capture = transcriptCapture({ worktreeRoot: options.worktreeRoot, ...source });
+  return {
+    selectedAuthPath: provider.selfHostShape.selectedAuthPath,
+    globs: provider.selfHostShape.transcripts.globs,
+    destination: capture.destination,
+    report: async (result) => {
+      await emitTranscriptHarvest(options.events, { ...source, path: capture.path, interrupted: false }, result);
+    },
+  };
 }
 
 /**
@@ -162,13 +188,15 @@ export async function provisionProviderHome(
   // preparation hook reach its subprocess boundary.
   const provider = requireProviderCapability(options.provider.id, 'selfHost');
   const usesScratch = options.baseDir === undefined;
+  const captureIdentity = options.captureIdentity;
   const baseDir = options.baseDir ?? await acquireScratchHome({
     worktreeRoot: options.worktreeRoot,
     repository: options.repository,
     featureSlug: options.featureSlug,
-    runId: options.runId,
-    attempt: options.attempt,
-    member: options.member,
+    runId: captureIdentity!.runId,
+    attempt: captureIdentity!.attempt,
+    step: transcriptCaptureLeaseStep(captureIdentity!),
+    member: captureIdentity!.auxiliaryMember,
     provider: provider.id,
   });
   const parentEnv = options.parentEnv ?? process.env;
@@ -194,8 +222,6 @@ export async function provisionProviderHome(
       // asset, including its bundled executable helpers, keeps discovery in
       // sync with whatever is currently checked out without exposing the
       // worktree path itself.
-      await fs.cp(target, join(homeDir, asset));
-
       // Operator-only skills exist to debug a run from the outside; a
       // dispatched step that loads one reads its own in-flight state as
       // evidence of failure. Claude gets this via a `skillOverrides` entry in
@@ -204,9 +230,22 @@ export async function provisionProviderHome(
       // (never the worktree) is therefore both provider-neutral and stronger
       // than an override: neither provider has an artifact to load at all.
       if (asset === 'skills') {
-        for (const skill of OPERATOR_ONLY_SKILLS) {
-          await fs.rm(join(homeDir, asset, skill), { recursive: true, force: true });
+        const destination = join(homeDir, asset);
+        await fs.mkdir(destination);
+        for (const directory of await fs.readdir(target)) {
+          // Operator-only identity is an engine contract, so it remains keyed
+          // by the source directory even when the host-visible name differs.
+          if (OPERATOR_ONLY_SKILLS.includes(directory)) continue;
+
+          const source = join(target, directory);
+          const hasSkillFile = await fs.pathExists(join(source, 'SKILL.md'));
+          const name = hasSkillFile
+            ? await resolveSkillName(options.worktreeRoot, directory)
+            : directory;
+          await fs.cp(source, join(destination, name));
         }
+      } else {
+        await fs.cp(target, join(homeDir, asset));
       }
     }
     if (provider.selfHostShape.agentsSkillsLink) {
@@ -227,12 +266,13 @@ export async function provisionProviderHome(
       { ...auth?.env, ...controls?.env },
       [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
+      providerHomeTranscript(options, provider),
       usesScratch
         ? () => releaseScratchHome({
           worktreeRoot: options.worktreeRoot,
-          runId: options.runId!,
-          attempt: options.attempt!,
-          member: options.member,
+          runId: captureIdentity!.runId,
+          attempt: captureIdentity!.attempt,
+          member: captureIdentity!.auxiliaryMember,
           provider: provider.id,
         }).then(() => {})
         : undefined,
@@ -241,9 +281,9 @@ export async function provisionProviderHome(
     if (usesScratch) {
         await releaseScratchHome({
           worktreeRoot: options.worktreeRoot,
-          runId: options.runId!,
-          attempt: options.attempt!,
-          member: options.member,
+          runId: captureIdentity!.runId,
+          attempt: captureIdentity!.attempt,
+          member: captureIdentity!.auxiliaryMember,
           provider: provider.id,
         });
     } else if (homeDir) {

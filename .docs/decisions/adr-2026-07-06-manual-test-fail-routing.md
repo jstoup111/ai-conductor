@@ -59,6 +59,12 @@ Approach B (operator-selected over A "keep advisory" and C "gate-hardening only"
    > through a skip-preserving helper; a `skipped → stale` write is refused and reported by
    > the mutation port.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, a `manual_test` FAIL is a taskless
+> obligation. It is placed in a host child by the residue routing call, or by the mixed-round rule.
+> The kickback still navigates to `build` with the FAIL rows as the retry hint, and that build runs
+> in the host's region. Its self-heal charge is recorded in the route record's receipt, so it
+> survives process restarts (`adr-2026-10-12-routed-whole-feature-repair` decisions 1, 3 and 10).
+
 3. **Fix-evidence (anti-whitewash) gate.** The manual_test completion gate records
    `.pipeline/manual-test-fail-evidence.json` (`headSha`, `observedAt`, fail excerpt) when it
    observes FAIL rows. A subsequent FAIL-free results file is accepted only when `HEAD` has
@@ -68,6 +74,11 @@ Approach B (operator-selected over A "keep advisory" and C "gate-hardening only"
    the conductor with a real `git rev-parse HEAD`; injectable in tests — the seam pattern
    #368 asks for). Missing seam / null sha (no git, test envs) fails open to preserve
    existing behavior outside real runs.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the leaf HEAD moves past the recorded sha
+> when the host's exit restack replays the fix commits onto the leaf. That satisfies this guard
+> without change (`adr-2026-10-12-routed-whole-feature-repair` decision 15).
+
 4. **Append-only per-attempt results.** The manual-test skill appends `## Attempt N — <ts>`
    sections instead of overwriting; the gate evaluates the LATEST attempt section when
    sections are present (whole file otherwise, back-compat), so history is preserved and an

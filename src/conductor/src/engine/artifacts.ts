@@ -36,6 +36,7 @@ import {
   type PrdWideningClassification,
 } from './prd-widening-classification.js';
 import {
+  prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
 } from './remediation-case-store.js';
@@ -60,9 +61,11 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
+import { readCommittedRemediationTaskChildren } from './routing/owner-derivation.js';
 import {
   parsePlanTaskStoryIds,
 } from './plan-task-parse.js';
+import { parsePlanReviewArtifact } from './plan-review-artifact.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import {
   deriveEffectiveBuildReviewVerdict,
@@ -71,6 +74,7 @@ import {
 } from './build-review-aggregate.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import {
+  buildReviewThresholds,
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
@@ -95,17 +99,32 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
+import { evaluateAdrAssumptionLedgers } from './adr-assumption-ledger-scope.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  coverageBindingEnvelopePath,
-  parseCoverageBindingEnvelope,
-  projectChildOwnership,
-} from './coverage-binding-envelope.js';
-import { pipelinePathFor, type ChildId } from './child-context.js';
+import { loadSliceTopology } from './slice-topology.js';
+import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
+
+/**
+ * Adapts the shared per-rubric policy view to the effective-verdict boundary.
+ * This keeps gate completion aligned with the runner for both built-in and
+ * custom rubrics, including severity advisory thresholds.
+ */
+function buildReviewEffectiveResolverThresholds(config: HarnessConfig | undefined): Pick<BuildReviewEffectiveResolverDeps, 'minConfidence' | 'minSeverity'> {
+  const thresholds = buildReviewThresholds(resolveBuildReviewConfig(config ?? {}));
+  return {
+    minConfidence: Object.fromEntries(
+      Object.entries(thresholds).map(([id, threshold]) => [id, threshold!.minConfidence]),
+    ),
+    minSeverity: Object.fromEntries(
+      Object.entries(thresholds).flatMap(([id, threshold]) =>
+        threshold?.minSeverity === undefined ? [] : [[id, threshold.minSeverity]],
+      ),
+    ),
+  };
+}
 
 export type FeatureArtifactIdentityStrategy =
   | { strategy: 'plan-stem' }
@@ -127,7 +146,7 @@ export type ArtifactPatternContract =
       identity?: never;
     };
 
-function artifactMatchesFeatureIdentity(
+export function artifactMatchesFeatureIdentity(
   artifactPath: string,
   featureIdentity: string,
   strategy: FeatureArtifactIdentityStrategy,
@@ -308,6 +327,13 @@ export const STEP_ARTIFACT_CONTRACTS = {
       identity: { strategy: 'plan-stem' },
     },
   ],
+  plan_review: [
+    {
+      pattern: '.docs/plan-review/*.md',
+      scope: 'feature',
+      identity: { strategy: 'plan-stem' },
+    },
+  ],
   architecture_diagram: [
     {
       pattern: '.docs/architecture/*.md',
@@ -330,7 +356,6 @@ export const STEP_ARTIFACT_CONTRACTS = {
     },
   ],
   worktree: [],
-  coverage_binding: [{ pattern: '.pipeline/coverage-binding.json', scope: 'run' }],
   acceptance_specs: [
     'spec/acceptance/**/*',
     'spec/requests/**/*',
@@ -779,6 +804,10 @@ export async function recordAppendedRemediationTaskIds(
   child?: ChildId,
 ): Promise<void> {
   if (ids.length === 0) return;
+  // The committed plan is the durable authority.  `engine-state.json` is
+  // disposable across worktree recreation, so refresh its cache from every
+  // rem task block whenever an append is recorded.
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot);
   const pipelineDir = join(projectRoot, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
   const engineStatePath = join(pipelineDir, 'engine-state.json');
@@ -787,24 +816,22 @@ export async function recordAppendedRemediationTaskIds(
       ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
       : [];
     const appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
-    if (child === undefined) {
-      return {
-        ...state,
-        appendedRemediationTaskIds,
-      };
-    }
     const priorChildren = typeof state.appendedRemediationTaskChildren === 'object'
       && state.appendedRemediationTaskChildren !== null
       && !Array.isArray(state.appendedRemediationTaskChildren)
       ? state.appendedRemediationTaskChildren
       : {};
+    const appendedRemediationTaskChildren = {
+      ...priorChildren,
+      ...(child === undefined ? {} : Object.fromEntries(ids.map((id) => [id, child]))),
+      ...committedChildren,
+    };
     return {
       ...state,
       appendedRemediationTaskIds,
-      appendedRemediationTaskChildren: {
-        ...priorChildren,
-        ...Object.fromEntries(ids.map((id) => [id, child])),
-      },
+      ...(Object.keys(appendedRemediationTaskChildren).length > 0
+        ? { appendedRemediationTaskChildren }
+        : {}),
     };
   });
   if (!result.ok) {
@@ -828,6 +855,32 @@ export async function readAppendedRemediationTaskIds(projectRoot: string): Promi
     // absent/invalid → no recorded ids
   }
   return [];
+}
+
+/**
+ * Read the child membership recorded alongside engine-appended remediation
+ * tasks. Missing or malformed state has no membership; callers decide whether
+ * that absence is recoverable for their operation.
+ */
+export async function readAppendedRemediationTaskChildren(
+  projectRoot: string,
+): Promise<Record<string, ChildId>> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const recorded = parsed?.appendedRemediationTaskChildren;
+    if (typeof recorded === 'object' && recorded !== null && !Array.isArray(recorded)) {
+      return Object.fromEntries(
+        Object.entries(recorded).flatMap(([taskId, value]): Array<[string, ChildId]> => {
+          const child = typeof value === 'number' ? parseChildId(value) : undefined;
+          return child === undefined ? [] : [[taskId, child]];
+        }),
+      );
+    }
+  } catch {
+    // absent/invalid → no recorded membership
+  }
+  return {};
 }
 
 export type FeaturePlanSelection =
@@ -1273,6 +1326,8 @@ export interface CompletionContext {
    * region; absent preserves the legacy feature-root evidence paths.
    */
   activeChild?: ChildId;
+  /** Routed verify-green has already captured the exact host tip; this keeps the predicate process-free. */
+  routedVerifyGreen?: { readonly roundId: string; readonly host: ChildId; readonly headSha: string };
   /**
    * Whether this BUILD lap has already spent its one retry for explicit
    * unverified Done-when closes. Task 9 persists and supplies this flag.
@@ -1987,24 +2042,16 @@ async function groundDispositionOnlyEvidence(
   const allAuthoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
   let authoritativeCriteria = allAuthoritativeCriteria;
   if (ctx.activeChild !== undefined) {
-    let envelope;
-    try {
-      envelope = parseCoverageBindingEnvelope(
-        JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
-      );
-    } catch {
-      envelope = null;
-    }
-    if (
-      envelope === null ||
-      !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
-      envelope.storyOwnership === undefined
-    ) {
+    const topology = ctx.featureDesc === undefined
+      ? undefined
+      : await loadSliceTopology(dir, ctx.featureDesc);
+    if (topology?.kind !== 'sliced') {
       return dispositionGroundingRefusal(
-        `disposition-only evidence cannot be validated for child ${ctx.activeChild}: coverage-binding ownership is missing or invalid`,
+        `disposition-only evidence cannot be validated for child ${ctx.activeChild}: sealed-plan story ownership is unavailable`,
       );
     }
-    const ownedStories = new Set(projectChildOwnership(envelope, ctx.activeChild).storyIds);
+    const ownedStories = new Set(Object.entries(topology.storyOwnership)
+      .flatMap(([storyId, position]) => position === ctx.activeChild ? [storyId] : []));
     authoritativeCriteria = allAuthoritativeCriteria.filter((criterion) =>
       [...ownedStories].some((storyId) => criterion.startsWith(`Story ${storyId} `)),
     );
@@ -2199,6 +2246,20 @@ async function validatePriorChildGreenAttribution(
       done: false,
       acceptanceRedRefusalClass: 'shape',
       reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use parent child ${childBase.parent} closure tip ${childBase.sha}: it is not an ancestor of HEAD`,
+    };
+  }
+  if (childBase.kind === 'routed-repair') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use a routed repair's pinned base ${childBase.sha}`,
+    };
+  }
+  if (childBase.kind === 'revalidation' || childBase.kind === 'revalidation-fix') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use a revalidation base ${childBase.sha}`,
     };
   }
   if (attribution !== childBase.sha) {
@@ -2400,16 +2461,18 @@ export function validateBuildReviewVerdict(
     };
   }
   const rubricSrc = e.rubric as Record<string, unknown>;
-  // Scalar verdicts predate the aggregate envelope and the default-off
-  // security rubric. Keep those persisted legacy PASS/FAIL artifacts readable:
-  // an omitted security flag is its historical disabled state. Aggregates are
-  // emitted by the current engine and remain exhaustive through
-  // parseBuildReviewAggregate above; testQuality was required before either
-  // format and must remain required.
+  // Scalar verdicts predate the aggregate envelope and the later security and
+  // implementation-quality rubric additions. Keep those persisted legacy
+  // PASS/FAIL artifacts readable: an omitted later-added flag is its
+  // historical disabled state. Aggregates are emitted by the current engine
+  // and remain exhaustive through parseBuildReviewAggregate above;
+  // testQuality was required before either format and must remain required.
   const legacyScalarVerdict = e.aggregateVersion === undefined;
   const rubric = {} as BuildReviewRubric;
   for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
-    if (legacyScalarVerdict && rubricName === 'security' && rubricSrc[rubricName] === undefined) {
+    if (legacyScalarVerdict &&
+      (rubricName === 'security' || rubricName === 'implementationQuality') &&
+      rubricSrc[rubricName] === undefined) {
       rubric[rubricName] = false;
       continue;
     }
@@ -2894,21 +2957,24 @@ function unverifiedDoneWhenNudgeCompletion(
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
-  coverage_binding: async (dir): Promise<CompletionResult> => {
-    const path = coverageBindingEnvelopePath(dir);
-    let envelope;
+  plan_review: async (dir, ctx): Promise<CompletionResult> => {
+    const stem = ctx.featureDesc;
+    if (!stem) return { done: false, reason: 'plan review requires feature identity' };
+    let text: string;
     try {
-      envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(path, 'utf8')));
+      text = await readFile(join(dir, '.docs', 'plan-review', `${stem}.md`), 'utf8');
     } catch {
-      envelope = null;
+      return { done: false, reason: 'plan review artifact is missing' };
     }
-    if (envelope === null) {
-      return { done: false, reason: '.pipeline/coverage-binding.json is missing or invalid' };
-    }
-    if (!(COVERAGE_BINDING_COMPLETION_STATUSES as readonly string[]).includes(envelope.status)) {
-      return { done: false, reason: `.pipeline/coverage-binding.json has non-completing status: ${envelope.status}` };
-    }
-    return { done: true };
+    const artifact = parsePlanReviewArtifact(text);
+    if ('kind' in artifact) return { done: false, reason: `plan review artifact is ${artifact.kind}` };
+    const settled = new Set(artifact.dispositions.map(({ findingId }) => findingId));
+    const unresolved = artifact.findings.filter((finding) =>
+      finding.severity === 'blocking' && !settled.has(finding.id),
+    );
+    return unresolved.length === 0
+      ? { done: true }
+      : { done: false, reason: `plan review has unresolved blocking finding(s): ${unresolved.map(({ id }) => id).join(', ')}` };
   },
   // Build is "done" only when (a) no halt marker is present and (b) every
   // task in .pipeline/task-status.json is completed or skipped. The halt-
@@ -3186,27 +3252,33 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // criterion below this layer and therefore must have no spec files or RED-run
   // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
+    if (ctx.routedVerifyGreen !== undefined) {
+      const expected = ctx.routedVerifyGreen;
+      try {
+        const recorded = JSON.parse(await readFile(
+          pipelinePathFor(dir, 'acceptance-verify-green.json', expected.host),
+          'utf-8',
+        )) as Record<string, unknown>;
+        if (
+          recorded.roundId === expected.roundId &&
+          recorded.host === expected.host &&
+          recorded.headSha === expected.headSha &&
+          recorded.done === true
+        ) return { done: true, viaException: false };
+      } catch {
+        // A missing/stale record is an ordinary failed routed verification.
+      }
+      return { done: false, reason: 'routed verify-green result is missing, stale, or belongs to another host/round' };
+    }
     // A stack-eligible child can own implementation tasks while owning no
     // stories.  Its acceptance gate is therefore already complete from the
     // sealed ownership baseline; asking the acceptance author to invent work
     // would make sibling criteria leak into this child.  This outcome is only
     // available with an active child, so flat (non-stacked) features retain
     // the ordinary evidence requirement.
-    if (ctx.activeChild !== undefined) {
-      let envelope;
-      try {
-        envelope = parseCoverageBindingEnvelope(
-          JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
-        );
-      } catch {
-        envelope = null;
-      }
-      if (
-        envelope !== null &&
-        COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) &&
-        envelope.storyOwnership !== undefined &&
-        projectChildOwnership(envelope, ctx.activeChild).storyIds.length === 0
-      ) {
+    if (ctx.activeChild !== undefined && ctx.featureDesc !== undefined) {
+      const topology = await loadSliceTopology(dir, ctx.featureDesc);
+      if (topology.kind === 'sliced' && !Object.values(topology.storyOwnership).includes(ctx.activeChild)) {
         return { done: true, acceptanceOutcome: 'no-owned-criteria' };
       }
     }
@@ -3782,8 +3854,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               const effectiveResolution = await (
                 ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
               )(dir, aggregate, {
-                minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
-                  .map(([id, policy]) => [id, policy.min_confidence])),
+                ...buildReviewEffectiveResolverThresholds(ctx.config),
+                child: ctx.activeChild,
+                adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
               });
               if (!effectiveResolution.ok) {
                 return {
@@ -3890,8 +3963,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       const effectiveResolution = await (
         ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
       )(dir, aggregate, {
-        minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
-          .map(([id, policy]) => [id, policy.min_confidence])),
+        ...buildReviewEffectiveResolverThresholds(ctx.config),
+        child: ctx.activeChild,
+        adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
       });
       if (!effectiveResolution.ok) {
         return {
@@ -4201,6 +4275,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 export const GATE_ONLY_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
+  architecture_review: async (dir): Promise<CompletionResult> => {
+    const result = await evaluateAdrAssumptionLedgers({ worktreePath: dir });
+    if (result.kind === 'merge-base-unresolved') {
+      return { done: false, reason: result.detail };
+    }
+    if (result.failures.length === 0) return { done: true };
+
+    const diagnostics = result.failures.flatMap(({ path, diagnostics: failures }) =>
+      failures.map(({ rule, entryId }) => `${path}: ${rule}${entryId ? ` (${entryId})` : ''}`),
+    );
+    return {
+      done: false,
+      reason: `ADR assumption ledger requirements failed: ${diagnostics.join('; ')}`,
+    };
+  },
+
   // Stories pass when every story is readable under the shared accepted-story
   // predicate and the file has no DRAFT status. The predicate keeps the
   // heading/criterion convention in one place for this gate and land.
@@ -4399,8 +4489,171 @@ export type AdrDecisionParseResult =
   | { kind: 'decisions'; ids: Set<string>; passages: Map<string, string[]>; section: string }
   | { kind: 'diagnostic'; reason: 'missing-decision-heading'; detail: string };
 
+export const ADR_ASSUMPTION_LEDGER_HEADER =
+  '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |';
+
+/** Remove fenced examples before interpreting an ADR's Markdown structure. */
+export function stripFencedCodeBlocks(content: string): string {
+  return content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+}
+
+export type AdrLedgerDiagnostic = {
+  rule:
+    | 'missing-section'
+    | 'empty-section'
+    | 'malformed-header'
+    | 'malformed-entry'
+    | 'missing-approval'
+    | 'contradictory-empty-statement';
+  entryId?: string;
+  detail: string;
+};
+
+export type AdrAssumptionLedgerParseResult =
+  | { kind: 'ok' }
+  | { kind: 'diagnostics'; diagnostics: AdrLedgerDiagnostic[] };
+
 const ADR_DECISION_HEADING_RE = /^\s{0,3}##\s+Decision\s*$/i;
 const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
+const ADR_ASSUMPTION_LEDGER_HEADING_RE = /^\s{0,3}##\s+Assumptions\s*$/i;
+
+/**
+ * Parse an ADR's assumptions section. Section and row validation is added
+ * incrementally alongside the ledger contract; this establishes the shared
+ * fenced-code-safe section boundary used by every later rule.
+ */
+export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerParseResult {
+  const withoutFencedCodeBlocks = stripFencedCodeBlocks(content);
+  const lines = withoutFencedCodeBlocks.split(/\r?\n/);
+  const sectionStarts = lines
+    .map((line, index) => (ADR_ASSUMPTION_LEDGER_HEADING_RE.test(line) ? index : -1))
+    .filter((index) => index !== -1);
+  if (sectionStarts.length === 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'missing-section', detail: 'ADR is missing a ## Assumptions heading.' }],
+    };
+  }
+  if (sectionStarts.length > 1) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-header', detail: 'ADR has a duplicate ## Assumptions heading.' }],
+    };
+  }
+
+  const sectionStart = sectionStarts[0];
+
+  const sectionLines: string[] = [];
+  for (const line of lines.slice(sectionStart + 1)) {
+    if (ADR_SECTION_HEADING_RE.test(line)) break;
+    sectionLines.push(line);
+  }
+
+  if (sectionLines.join('\n').trim() === '') {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'empty-section', detail: 'ADR has an empty ## Assumptions section.' }],
+    };
+  }
+
+  const nonBlankSectionLines = sectionLines.filter((line) => line.trim() !== '');
+  const hasEmptyStatement = nonBlankSectionLines.includes('No load-bearing assumptions.');
+  const headerIndex = nonBlankSectionLines.findIndex((line) => line.trim() === ADR_ASSUMPTION_LEDGER_HEADER);
+  if (headerIndex === -1) {
+    if (hasEmptyStatement && nonBlankSectionLines.length === 1) return { kind: 'ok' };
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-header', detail: 'ADR assumptions ledger has an invalid table header.' }],
+    };
+  }
+
+  const dataRows = nonBlankSectionLines
+    .slice(headerIndex + 1)
+    .filter((line) => /^\s*\|/.test(line))
+    .filter((line) => !/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line));
+  if (dataRows.length === 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'empty-section', detail: 'ADR assumptions ledger has no data rows.' }],
+    };
+  }
+
+  const diagnostics: AdrLedgerDiagnostic[] = [];
+  const entryIds = new Set<string>();
+  for (const row of dataRows) {
+    const cells = row.split('|').slice(1, -1).map((cell) => cell.trim());
+    const [id = '', assumption = '', basis = '', confidence = '', loadBearing = '', impact = '', approval = ''] = cells;
+    const entryId = id === '' ? undefined : id;
+    const normalizedBasis = basis.toLowerCase();
+    const normalizedLoadBearing = loadBearing.toLowerCase();
+    const isDuplicateId = entryIds.has(id);
+    entryIds.add(id);
+    const validConfidence = /^(?:0|[1-9]\d?|100)%$/.test(confidence);
+
+    if (
+      cells.length !== 7 ||
+      !/^A\d+$/.test(id) ||
+      isDuplicateId ||
+      assumption === '' ||
+      !['verified', 'inferred', 'unverified'].includes(normalizedBasis) ||
+      !validConfidence ||
+      !['yes', 'no'].includes(normalizedLoadBearing) ||
+      impact === ''
+    ) {
+      diagnostics.push({
+        rule: 'malformed-entry',
+        ...(entryId === undefined ? {} : { entryId }),
+        detail: `ADR assumptions ledger row ${entryId ?? '(missing id)'} is malformed.`,
+      });
+    }
+
+    if (
+      normalizedLoadBearing === 'yes'
+      && ['inferred', 'unverified'].includes(normalizedBasis)
+      && !hasValidAdrAssumptionApproval(approval)
+    ) {
+      diagnostics.push({
+        rule: 'missing-approval',
+        ...(entryId === undefined ? {} : { entryId }),
+        detail: `ADR assumptions ledger row ${entryId ?? '(missing id)'} requires an APPROVED by operator YYYY-MM-DD marker.`,
+      });
+    }
+  }
+
+  if (hasEmptyStatement && dataRows.some((row) => row.split('|')[5]?.trim().toLowerCase() === 'yes')) {
+    diagnostics.push({
+      rule: 'contradictory-empty-statement',
+      detail: 'No load-bearing assumptions conflicts with a yes row.',
+    });
+  }
+
+  if (diagnostics.length > 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics,
+    };
+  }
+
+  return { kind: 'ok' };
+}
+
+function hasValidAdrAssumptionApproval(approval: string): boolean {
+  const match = /^APPROVED by operator (\d{4})-(\d{2})-(\d{2})$/.exec(approval);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
 
 /**
  * Extract citable decision ids from an ADR's `## Decision` section.
@@ -4647,7 +4900,7 @@ export async function classifyPrdAuditWideningProjection(
       if (!caseRead.ok) {
         evidenceFault = 'corrupt-case-store';
       } else {
-        cases = caseRead.state.version === 'v2' ? caseRead.state.prdWideningCases : [];
+        cases = prdWideningCasesForState(caseRead.state);
         const decisionStore = new AcceptedWideningDecisionStore(dir, {
           version: 1,
           repository: featureRead.feature.repository,

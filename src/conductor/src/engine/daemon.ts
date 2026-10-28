@@ -18,10 +18,13 @@ import chalk from 'chalk';
 import type { ComplexityTier, FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
-import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
+import { encodeClaimKey, featureSlugs, InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
-import { DaemonMaintenance } from './daemon-maintenance.js';
+import { DaemonMaintenance, MaintenanceJob } from './daemon-maintenance.js';
+import { createSupervisorStaleness } from './supervisor-staleness.js';
+import { timeMaintenancePhase, type MaintenancePhaseInput } from './maintenance-phase-timer.js';
+import type { RepairQueue, RepairRequest } from './repair-queue.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
 import { isOperatorActionHalt, type HaltDisposition } from './halt-marker.js';
 
@@ -149,7 +152,7 @@ export async function pickEligible(
   ctx: PickEligibleCtx,
 ): Promise<BacklogItem | undefined> {
   for (const b of backlog.items) {
-    if (ctx.claims.list().includes(b.slug)) continue;
+    if (featureSlugs(ctx.claims).includes(b.slug)) continue;
     // Operator-park (Task 7): a durable, HALT-independent stop. Checked
     // alongside `isHalted` below, but never lifted by a cleared HALT marker —
     // only an explicit un-park makes the slug eligible again.
@@ -206,6 +209,18 @@ export interface DaemonSweepContext {
 }
 
 export interface DaemonDeps {
+  /** Dispatcher-owned repairs compete with features for the same pool slots. */
+  repairs?: {
+    queue: RepairQueue;
+    /** Executes a claim-time validated repair. */
+    run: (request: RepairRequest) => Promise<void>;
+  };
+  /** Resolves a repair slug into the existing feature priority band. */
+  repairPriority?: (slug: string | undefined) => string | undefined;
+  /** Seed the self-host source-refresh throttle after the startup refresh. */
+  recordEngineSourceRefresh?: () => void;
+  /** Optional event-spine projection for maintenance timing. */
+  emitMaintenancePhase?: (event: Extract<import('../types/events.js').ConductorEvent, { type: 'daemon_maintenance_phase' }>) => void | Promise<void>;
   /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
   onTick?: (snapshot: DaemonTickSnapshot) => void;
   /** Most recent real discovery pass, supplied by the production WorkSource. */
@@ -450,13 +465,16 @@ export interface DaemonDeps {
    */
   probeEngineStaleness?: () => Promise<void>;
 
+  /** Set by the child-executor adapter after an incompatible handshake. */
+  protocolMismatchPending?: () => boolean;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
    * FR-1: scan inherited state and render the startup dashboard to both sinks.
    * Invoked ONCE, before any dispatch.
    */
-  renderStartupDashboard?: () => Promise<void>;
+  renderStartupDashboard?: (pausedAtStartup: boolean) => Promise<void>;
   /**
    * FR-4: resolve the current base-branch tip SHA from the discovery ref
    * (`refresh` requests a remote fetch first). Returns `null` when the SHA
@@ -492,7 +510,7 @@ export interface DaemonDeps {
   reconcileParkedFeatures?: (deps: {
     disposeHaltWatcher: (slug: string) => void;
     isFeatureInFlight: (slug: string) => boolean;
-  }) => Promise<void>;
+  }) => Promise<Pick<import('./park-reconciliation.js').ParkedSweepResult, 'counts' | 'outcome'> | void>;
 
   /**
    * Reclaim provider scratch directories left behind by interrupted feature
@@ -634,6 +652,8 @@ export interface DaemonOptions {
   isSelfHost?: boolean;
   /** Config flag: auto-restart on stale engine (default false). */
   autoRestartOnStaleEngine?: boolean;
+  /** Maximum time a stale supervisor may continue claiming before it drains. */
+  supervisorMaxStaleHours?: number;
 }
 
 export type DaemonStopReason =
@@ -654,8 +674,13 @@ export interface DaemonResult {
   restartPendingConsumed?: true;
 }
 
-/** A runFeature promise tagged with its slug so a race can identify the winner. */
-type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
+/** A settled repair worker only signals that its pool slot may be released. */
+type RepairWorkerCompletion = { readonly kind: 'repair-complete' };
+
+/** A pooled worker's completion is tied to its kind, so repairs cannot become features. */
+type Worker =
+  | { readonly kind: 'feature'; readonly slug: string; readonly completion: Promise<FeatureOutcome> }
+  | { readonly kind: 'repair'; readonly request: RepairRequest; readonly completion: Promise<RepairWorkerCompletion> };
 
 /**
  * Task 1 (#651): the park check consulted immediately before every
@@ -701,34 +726,6 @@ export async function runDaemon(
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
-  /** Task 18 + FR-14: best-effort sweep; reconcile halt-PRs before merge-sweep; never throws, never disrupts the daemon loop. */
-  const sweepBestEffort = async (): Promise<void> => {
-    try {
-      await deps.reconcileHaltPrs?.();
-    } catch (err) {
-      log(`[daemon] reconcileHaltPrs error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await deps.reconcileParkedFeatures?.({
-        disposeHaltWatcher: disposeWatcher,
-        isFeatureInFlight: (slug) => inFlight.has(slug),
-      });
-    } catch (err) {
-      log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await deps.sweepProviderScratch?.();
-    } catch (err) {
-      log(`[daemon] sweepProviderScratch error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await deps.sweepMergeableLabels?.({
-        isFeatureInFlight: (slug) => inFlight.has(slug),
-      });
-    } catch (err) {
-      log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
   // FR-1 (Task 13): `isPaused` is a caller-injected predicate — it can throw
   // (unreadable marker, permissions, etc.), not just resolve. A throw must
   // fail closed (treated as paused, zero dispatch) rather than crash the loop
@@ -929,7 +926,7 @@ export async function runDaemon(
   // list only holds the promises needed to await outcomes; it never decides
   // whether a feature may be dispatched.
   const inFlight = {
-    has: (slug: string): boolean => claims.list().includes(slug),
+    has: (slug: string): boolean => featureSlugs(claims).includes(slug),
     get size(): number {
       return claims.list().length;
     },
@@ -939,16 +936,17 @@ export async function runDaemon(
     () => deps.rateLimitEpisode?.active?.() ?? false,
     idlePollMs,
     now,
-    () => claims.list(),
+    () => featureSlugs(claims),
     options.concurrency,
   );
-  const workers: Array<{ slug: string; tagged: Tagged }> = [];
+  const workers: Worker[] = [];
+  const isFeatureInFlight = (slug: string): boolean => featureSlugs(claims).includes(slug);
   // Keep one completion observer for the current worker set. A busy poll must
   // not race every timer tick directly against live workers: every losing race
   // leaves another reaction attached until that worker settles.
-  let nextWorkerCompletion: Tagged | undefined;
+  let nextWorkerCompletion: Promise<Worker> | undefined;
   let completionGeneration = 0;
-  let completedWorker: Awaited<Tagged> | undefined;
+  let completedWorker: Worker | undefined;
   let wakeBusyPoll: (() => void) | undefined;
 
   const observeWorkerSet = (): void => {
@@ -959,7 +957,7 @@ export async function runDaemon(
       return;
     }
 
-    const completion = Promise.race(workers.map(({ tagged }) => tagged));
+    const completion = Promise.race(workers.map((worker) => worker.completion.then(() => worker)));
     nextWorkerCompletion = completion;
     void completion.then((worker) => {
       if (generation !== completionGeneration) return;
@@ -977,9 +975,6 @@ export async function runDaemon(
   // their existing retry-and-recheck behavior is preserved.
   let restartPendingDeferredByEpisode = false;
   let restartPendingConsumed = false;
-  // Task 21: track whether a stale-engine restart request has been made in this
-  // run. Once requested, don't retry (the restart would exit the process).
-  let staleEngineRestartRequested = false;
   let totalCost = 0;
   let idlePolls = 0;
 
@@ -1027,24 +1022,69 @@ export async function runDaemon(
         deps.onExecutorSettled?.();
       }
     };
-    const tagged: Tagged = runFeature()
-      .then((outcome) => ({ slug: item.slug, outcome }))
+    const completion: Promise<FeatureOutcome> = runFeature()
       .catch((err) => ({
         slug: item.slug,
-        outcome: {
-          slug: item.slug,
-          status: 'error' as const,
-          reason: err instanceof Error ? err.message : String(err),
-        },
+        status: 'error' as const,
+        reason: err instanceof Error ? err.message : String(err),
       }));
-    workers.push({ slug: item.slug, tagged });
+    workers.push({ kind: 'feature', slug: item.slug, completion });
     observeWorkerSet();
     return true;
   };
 
+  const repairClaim = (request: RepairRequest): string =>
+    encodeClaimKey({ kind: 'repair', prUrl: request.prUrl });
+  const repairBand = (request: RepairRequest): [number, string] => {
+    const band = deps.repairPriority?.(request.slug);
+    const rank = band && /^P[0-9]+$/i.test(band) ? Number(band.slice(1)) : Number.MAX_SAFE_INTEGER;
+    return [rank, request.prCreatedAt];
+  };
+  const startRepair = deps.repairs ? async (request: RepairRequest): Promise<boolean> => {
+    const claim = repairClaim(request);
+    if (!claims.claim(claim)) return false;
+    const completion: Promise<RepairWorkerCompletion> = (async () => {
+      try {
+        if (deps.emitMaintenancePhase) {
+          await timeMaintenancePhase({ phase: 'repair', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) }, () => deps.repairs!.run(request), {
+            now,
+            emit: deps.emitMaintenancePhase,
+          });
+        } else {
+          await deps.repairs!.run(request);
+        }
+        return { kind: 'repair-complete' };
+      } catch (error) {
+        log(`[daemon] repair ${request.prUrl} error: ${error instanceof Error ? error.message : String(error)}`);
+        return { kind: 'repair-complete' };
+      }
+    })();
+    workers.push({ kind: 'repair', request, completion });
+    observeWorkerSet();
+    return true;
+  } : undefined;
+  /** Select, claim, and start one repair for a free pool slot. */
+  const startNextRepair = deps.repairs && startRepair ? async (): Promise<RepairRequest | undefined> => {
+    const repair = deps.repairs!.queue.list().slice().sort((a, b) => {
+      const [aRank, aCreated] = repairBand(a);
+      const [bRank, bCreated] = repairBand(b);
+      return aRank - bRank || aCreated.localeCompare(bCreated);
+    }).find((candidate) => !candidate.slug || !isFeatureInFlight(candidate.slug));
+    if (!repair) return undefined;
+    // A feature owns its slug for the entire build. Keep the repair queued
+    // until that claim is released; do not create a repair claim or read PR
+    // state while the feature can still mutate the same branch/worktree.
+    if (repair.slug && isFeatureInFlight(repair.slug)) return undefined;
+    if (!deps.repairs!.queue.takeByUrl(repair.prUrl)) return undefined;
+    if (await startRepair(repair)) return repair;
+    // A duplicate claim is still live; leave the request available for a later pass.
+    deps.repairs!.queue.enqueue(repair);
+    return undefined;
+  } : undefined;
+
   // Task 1 (#651): park check immediately before every build-start, closing
   // the selection→dispatch race — pickEligible's selection-time check
-  // (:137) can pass, then `await rebuildAndMaybeRestartForStaleEngine()`
+  // (:137) can pass, then an awaited restart decision
   // (below) opens a window where an operator-park marker can land before
   // this slug is actually dispatched. Delegates to the module-level
   // `guardedDispatchWith` so the gate itself is unit-testable without
@@ -1055,13 +1095,33 @@ export async function runDaemon(
   const collectOne = async (): Promise<void> => {
     const completion = nextWorkerCompletion;
     if (!completion) throw new Error('daemon attempted to collect without a worker completion');
-    const { slug, outcome } = await completion;
-    claims.release(slug);
-    const workerIndex = workers.findIndex((worker) => worker.slug === slug);
+    const worker = await completion;
+    const workerIndex = workers.findIndex((candidate) => {
+      return candidate === worker;
+    });
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
     observeWorkerSet();
+    switch (worker.kind) {
+      case 'repair':
+        // Repairs are pool work, not feature lifecycle work: they must free their
+        // reserved claim without consuming feature ceilings or terminal effects.
+        claims.release(repairClaim(worker.request));
+        maintenanceJob.trigger();
+        return;
+      case 'feature':
+        break;
+      default: {
+        const neverWorker: never = worker;
+        throw new Error(`unknown daemon worker kind: ${String(neverWorker)}`);
+      }
+    }
+    const { slug } = worker;
+    const outcome = await worker.completion;
+    claims.release(slug);
     await deps.onFeatureTerminalEffects?.(outcome);
-    if (outcome.terminalEffects?.sweep) await maintenance.afterTerminalCollection(sweepBestEffort);
+    // A terminal collection is a maintenance trigger, not an inline sweep:
+    // a slow reconciler must never hold the slot-release path hostage.
+    maintenanceJob.trigger();
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
     // A halted OR errored feature is parked for a human, not finished. Both now
@@ -1109,17 +1169,18 @@ export async function runDaemon(
     );
   };
 
-  // ── Startup (ADR-013): dashboard before any dispatch, then base-SHA seed +
-  //    downtime-advance re-kick. All hooks are optional; absent → the pure
-  //    pre-fix behavior (PR #109 markers honored, no re-kick). ────────────────
-  await deps.renderStartupDashboard?.();
-
   // Seed the last-seen SHA from the persisted value. A genuine advance is
   // `current !== lastSeenSha` with `lastSeenSha != null`; a null seed (first
   // run / corrupt file) initializes WITHOUT a sweep (FR-5 first-run path).
   let lastSeenSha: string | null = deps.readPersistedBaseSha
     ? await deps.readPersistedBaseSha()
     : null;
+  // A background maintenance pass and a refreshed-backlog fold can both reach
+  // re-kick while the first sweep is awaiting I/O. Serialize the compare →
+  // sweep → persist transaction so only one of them observes a given advance.
+  // Keep the tail rejection-free: a failed sweep remains visible to its caller
+  // but must not poison a later base reconciliation.
+  let baseShaReconciliation: Promise<void> = Promise.resolve();
 
   /**
    * Detect a base-SHA advance and, on a genuine one, run the re-kick sweep then
@@ -1133,27 +1194,36 @@ export async function runDaemon(
    * Re-evaluated at the same call sites as the fill-pool pause check, so
    * lifting the pause mid-run makes re-kick eligible again at the next call.
    */
-  const maybeRekick = async (refresh: boolean): Promise<void> => {
-    if (!deps.resolveBaseSha) return;
-    if (await checkPaused()) return;
-    let current: string | null = null;
-    try {
-      current = await deps.resolveBaseSha({ refresh });
-    } catch (err) {
-      log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
-      return;
-    }
-    if (!current) return; // unresolved → no advance this tick (FR-10)
-    if (current === lastSeenSha) return; // no advance (PR #109 invariant preserved)
-    // A genuine advance only re-kicks when there is a prior SHA to advance FROM;
-    // a null seed is first-run init (record, no sweep — FR-5).
-    if (lastSeenSha != null) {
-      await deps.rekickSweep?.(current, {
-        isFeatureInFlight: (slug) => inFlight.has(slug),
-      });
-    }
-    lastSeenSha = current;
-    await deps.writePersistedBaseSha?.(current);
+  const maybeRekick = (
+    refresh: boolean,
+    knownCurrent?: string | null,
+  ): Promise<void> => {
+    const reconciliation = baseShaReconciliation.then(async () => {
+      if (await checkPaused()) return;
+      let current = knownCurrent;
+      if (current === undefined) {
+        if (!deps.resolveBaseSha) return;
+        try {
+          current = await deps.resolveBaseSha({ refresh });
+        } catch (err) {
+          log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+          return;
+        }
+      }
+      if (!current) return; // unresolved → no advance this tick (FR-10)
+      if (current === lastSeenSha) return; // no advance (PR #109 invariant preserved)
+      // A genuine advance only re-kicks when there is a prior SHA to advance FROM;
+      // a null seed is first-run init (record, no sweep — FR-5).
+      if (lastSeenSha != null) {
+        await deps.rekickSweep?.(current, {
+          isFeatureInFlight,
+        });
+      }
+      lastSeenSha = current;
+      await deps.writePersistedBaseSha?.(current);
+    });
+    baseShaReconciliation = reconciliation.catch(() => {});
+    return reconciliation;
   };
 
   // ── Background origin refresh (single flight) ─────────────────────────────
@@ -1167,18 +1237,49 @@ export async function runDaemon(
   // for it ("waiting for root-mutation admission"), exactly as before.
   let refreshJob: Promise<void> | undefined;
   let refreshedBacklog: BacklogItem[] | undefined;
+  // Once a restart owns a boundary, no new root-maintenance work may begin.
+  // A running refresh is allowed to settle before the single-generation
+  // handoff; it is never cancelled halfway through a mutation.
+  let restartPending = false;
 
   const startRefresh = (): Promise<void> | undefined => {
-    if (refreshJob || !maintenance.refreshStartable()) return refreshJob;
+    if (restartPending || maintenance.isDraining() || refreshJob || !maintenance.refreshStartable()) return refreshJob;
     const job = (async () => {
       try {
-        const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({ refresh: true }));
+        // The source refresh is the root-mutating half of this maintenance
+        // pass.  Discovery alone refreshes the backlog view, but cannot adopt
+        // a merged engine change into the checkout that rebuildEngine reads.
+        // A skipped/failed fast-forward deliberately suppresses the rebuild:
+        // building a dirty or diverged root would publish an untrustworthy
+        // engine version for later children.  Discovery still runs: a skipped
+        // refresh must never stall backlog pickup.
+        const sourceRefresh = staleGatesArmed && deps.refreshEngineSource
+          ? await deps.refreshEngineSource()
+          : undefined;
+        const sourceRefreshSkipped = sourceRefresh?.status === 'skipped';
+        // `refreshEngineSource` owns fetch/fast-forward cadence. Once it was
+        // skipped (including throttle), discovery must remain local or it
+        // silently performs the very fetch the throttle refused.
+        const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({
+          refresh: sourceRefreshSkipped ? false : true,
+        }));
         if (refreshed !== undefined) {
           refreshedBacklog = refreshed;
           // Wake a busy poll so the result is folded promptly. The idle waker
           // is left alone: a drained loop awaits the job inline before idling,
           // and a held wake signal would cost it a spurious idle poll.
           wakeBusyPoll?.();
+        }
+        // A pinned child does not share the supervisor's loaded modules, so a
+        // rebuild may safely publish a new `dist` while executors are busy.
+        // This stays inside the existing single-flight refresh job; no second
+        // timer or maintenance lane is introduced.
+        if (refreshed !== undefined && !sourceRefreshSkipped && staleGatesArmed && deps.rebuildEngine) {
+          try {
+            await deps.rebuildEngine();
+          } catch (err) {
+            log(`[daemon] background engine rebuild failed (${err instanceof Error ? err.message : String(err)}); a later pass will retry`);
+          }
         }
       } catch (err) {
         log(
@@ -1202,7 +1303,13 @@ export async function runDaemon(
     // re-kick before consuming the backlog so a freshly-cleared marker is
     // un-parked in THIS pass (its dispatch still flows through the existing
     // un-park path, FR-8 — the sweep issues none).
-    await maintenance.run('rekick', () => maybeRekick(false));
+    // Re-kick remains serialized with background reconciliation by its shared
+    // tail, but a slow background pass must not occupy this dispatch slot.
+    // `maybeRekick` catches the tail for later callers; catch this caller's
+    // promise too so a failed durable write is never an unhandled rejection.
+    void maintenance.run('rekick', () => maybeRekick(false)).catch((error) => {
+      log(`base-SHA reconciliation failed (${error instanceof Error ? error.message : String(error)}); continuing`);
+    });
     const parkedBeforeRefresh = new Set(claims.listParked());
     const picked = await pickEligible({ items: refreshed }, pickCtx);
     for (const slug of claims.listParked()) {
@@ -1211,13 +1318,117 @@ export async function runDaemon(
     return picked;
   };
 
-  // Startup advance check: refresh so a base that moved on origin while the
-  // daemon was DOWN is caught (FR-5 downtime-advance path).
-  // FR-14: sweep mergeable labels on startup (after reconciliation).
-  await maintenance.startup(async () => {
-    await maybeRekick(true);
-    await deps.consumeResumeAuthorizations?.();
-  }, sweepBestEffort);
+  // Keep best-effort startup work off the first-claim path.  The job is
+  // deliberately started only after that attempt, whether it dispatches or
+  // finds no eligible item.  Its ordered steps preserve the former startup
+  // maintenance sequence without making the dispatcher await it.
+  // Captured by the startup discovery gate below. The dashboard receives this
+  // exact result rather than re-reading pause state after the first claim.
+  let pausedAtStartup = false;
+  let startupDashboardPending = true;
+  const runPhase = async (phase: Exclude<MaintenancePhaseInput, { phase: 'repair' | 'parked-reconcile' }>, run: () => Promise<void>): Promise<void> => {
+    if (!deps.emitMaintenancePhase) return run();
+    await timeMaintenancePhase(phase, run, { now, emit: deps.emitMaintenancePhase });
+  };
+  let resumeAuthorizationsInFlight: Promise<void> | undefined;
+  const consumeResumeAuthorizations = (): Promise<void> => {
+    if (resumeAuthorizationsInFlight) return resumeAuthorizationsInFlight;
+
+    let pending: Promise<void>;
+    try {
+      pending = deps.consumeResumeAuthorizations?.() ?? Promise.resolve();
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    const shared = pending.finally(() => {
+      if (resumeAuthorizationsInFlight === shared) resumeAuthorizationsInFlight = undefined;
+    });
+    resumeAuthorizationsInFlight = shared;
+    return shared;
+  };
+  const maintenanceJob = new MaintenanceJob([
+    ['startup-dashboard', async () => {
+      if (!startupDashboardPending) return;
+      startupDashboardPending = false;
+      await runPhase({ phase: 'startup-dashboard' }, async () => {
+        if (!pausedAtStartup) await deps.renderStartupDashboard?.(pausedAtStartup);
+      });
+    }],
+    ['rekick', async () => {
+      // A pure scheduler caller with no re-kick hooks has no mutable base
+      // state to reconcile; avoid an extra pause-marker read in that mode.
+      if (!deps.rekickSweep && !deps.resolveBaseSha) {
+        // Telemetry still records the no-op phase; only legacy pure-core
+        // callers avoid an otherwise-observable pause read.
+        if (deps.emitMaintenancePhase) await runPhase({ phase: 'rekick' }, async () => {});
+        return;
+      }
+      // The startup discovery's base is valid for exactly one deferred
+      // reconciliation pass.  Reusing it on every coalesced maintenance pass
+      // would move `lastSeenSha` backwards after a later live advance.
+      const knownStartupBase = startupBaseSha;
+      startupBaseSha = undefined;
+      await runPhase({ phase: 'rekick' }, () => maybeRekick(false, knownStartupBase));
+    }],
+    ['resume-authorizations', consumeResumeAuthorizations],
+    ['reconcileHaltPrs', async () => runPhase({ phase: 'halt-pr-reconcile' }, async () => { await deps.reconcileHaltPrs?.(); })],
+    ['reconcileParkedFeatures', async () => {
+      if (!deps.emitMaintenancePhase) {
+        await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
+        return;
+      }
+      await timeMaintenancePhase({ phase: 'parked-reconcile' }, async () => {
+        const result = await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
+        return {
+          outcome: result?.outcome ?? 'completed',
+          summary: result?.counts,
+        };
+      }, { now, emit: deps.emitMaintenancePhase });
+    }],
+    ['sweepProviderScratch', async () => runPhase({ phase: 'provider-scratch' }, async () => { await deps.sweepProviderScratch?.(); })],
+    ['sweepMergeableLabels', async () => runPhase({ phase: 'mergeable-sweep' }, async () => {
+      await deps.sweepMergeableLabels?.({ isFeatureInFlight });
+    })],
+  ], log);
+
+  // The sole awaited startup I/O before a claim.  Later task work folds its
+  // resolved base through rekick and the refresh throttle; Task 4 only keeps
+  // this refreshed discovery ahead of the first eligibility pass.
+  let startupBacklog: BacklogItem[] | undefined;
+  const firstClaimScanStartedAt = now();
+  // Pause is a claim gate, not maintenance.  Check it before startup discovery:
+  // discovery can invoke consumer-owned work-source hooks, which must not run
+  // while an operator has paused the daemon.
+  pausedAtStartup = await checkPaused();
+  // The first fill pass consumes this reading instead of re-polling: the
+  // first claim has exactly one pause gate (ADR dispatch-first D1).
+  let unconsumedBootPause: boolean | undefined = pausedAtStartup;
+  if (!pausedAtStartup) {
+    try {
+      if (deps.emitMaintenancePhase) {
+        await timeMaintenancePhase({ phase: 'startup-refresh' }, async () => {
+          startupBacklog = await deps.discoverBacklog({ refresh: true });
+        }, { now, emit: deps.emitMaintenancePhase });
+      } else {
+        startupBacklog = await deps.discoverBacklog({ refresh: true });
+      }
+      maintenance.recordRefresh(now());
+      deps.recordEngineSourceRefresh?.();
+    } catch (err) {
+      log(`[daemon] startup origin refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  // The startup discovery has already refreshed origin. Resolve its local base
+  // once so the deferred rekick can use this exact boundary without fetching.
+  let startupBaseSha: string | null | undefined;
+  if (startupBacklog !== undefined && deps.resolveBaseSha) {
+    try {
+      startupBaseSha = await deps.resolveBaseSha({ refresh: false });
+    } catch (err) {
+      log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+      startupBaseSha = null;
+    }
+  }
 
   // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
   const staleGatesArmed =
@@ -1225,6 +1436,20 @@ export async function runDaemon(
     options.isSelfHost === true && // gate 2: self-host enabled
     options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
     deps.staleEngineChecker !== undefined; // gate 4: checker armed
+  const supervisorStaleness = createSupervisorStaleness(now);
+  const staleAgeCapHours = options.supervisorMaxStaleHours ?? 24;
+
+  const observeSupervisorStaleness = (): boolean => {
+    if (!staleGatesArmed || !deps.staleEngineChecker) return false;
+    const stale = deps.staleEngineChecker.check() === 'stale';
+    const bootIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+    supervisorStaleness.observe(
+      bootIdentity,
+      stale ? (deps.staleEngineChecker.targetIdentity?.() ?? null) : bootIdentity,
+    );
+    if (deps.protocolMismatchPending?.()) supervisorStaleness.markProtocolMismatch();
+    return stale;
+  };
 
   /**
    * A queued restart or stale running engine is discovered while workers are
@@ -1236,6 +1461,11 @@ export async function runDaemon(
     const wasDraining = maintenance.isDraining();
     const drain = maintenance.beginDrain(reason);
     if (!wasDraining) {
+      restartPending = true;
+      // A drain owns the next quiescent boundary. Prevent maintenance from
+      // starting another pass while workers finish; the already-running pass
+      // is deliberately allowed to settle before that boundary acts.
+      maintenanceJob.close();
       if (drain.reason === 'restart-pending' && deps.recordRestartPendingDrain) {
         try {
           await deps.recordRestartPendingDrain(drain.slugs);
@@ -1249,8 +1479,45 @@ export async function runDaemon(
     }
   };
 
+  // Width one awaits the drain observation only once a bounded fallback is
+  // already due; an unconditional await adds scheduler turns that let a
+  // settled serial worker skip its busy poll.
+  const serialBusyDrainDue = (): boolean =>
+    !maintenance.isDraining()
+    && inFlight.size > 0
+    && (deps.protocolMismatchPending?.() === true
+      || supervisorStaleness.restartReason === 'protocol-mismatch'
+      || supervisorStaleness.capExceeded(staleAgeCapHours));
+
   const observeBusyDrainRequest = async (): Promise<void> => {
     if (maintenance.isDraining() || inFlight.size === 0) return;
+
+    // A recorded protocol mismatch is a process-boundary incompatibility, not
+    // an inference from the current staleness sample. Drain immediately even
+    // if the pinned engine now happens to match the target.
+    if (deps.protocolMismatchPending?.()) {
+      supervisorStaleness.markProtocolMismatch();
+      await beginDrain('stale-engine');
+      return;
+    }
+
+    if (!maintenance.busyMaintenanceEnabled()) {
+      // Width one keeps the serial lifecycle: the operator marker and fresh
+      // staleness samples stay at the claim and idle boundaries. A busy serial
+      // pool drains only for the bounded fallback, the age cap measured from
+      // staleness those boundaries already recorded.
+      if (supervisorStaleness.restartReason === 'protocol-mismatch') {
+        await beginDrain('stale-engine');
+        return;
+      }
+      if (!supervisorStaleness.capExceeded(staleAgeCapHours)) return;
+      if (deps.isSuppressed) {
+        const target = deps.staleEngineChecker?.targetIdentity?.() ?? null;
+        if (await deps.isSuppressed(target)) return;
+      }
+      await beginDrain('stale-engine');
+      return;
+    }
 
     if (deps.hasRestartPending) {
       try {
@@ -1265,29 +1532,56 @@ export async function runDaemon(
       }
     }
 
-    if (!staleGatesArmed || !deps.staleEngineChecker) return;
-    // The dispatch preflight has already refreshed, rebuilt, checked, and
-    // evaluated suppression for this exact source/build boundary. Do not ask
-    // the busy-pool observer to evaluate the same target again while the
-    // just-dispatched worker is still settling.
-    if (staleAlreadyHandledByPreflight) return;
-    if (deps.staleEngineChecker.check() !== 'stale') return;
-
-    const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
-    if (!suppressed) await beginDrain('stale-engine');
+    const stale = observeSupervisorStaleness();
+    // markProtocolMismatch is applied by the observation itself and remains
+    // restart authority even if the sampled engine now looks current.
+    if (!stale && supervisorStaleness.restartReason !== 'protocol-mismatch') return;
+    // Normal staleness is adopted at natural idle. A protocol mismatch or the
+    // age cap is the deliberately bounded drain fallback.
+    const protocolMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
+    const capExceeded = supervisorStaleness.capExceeded(staleAgeCapHours);
+    if (!protocolMismatch && capExceeded && deps.isSuppressed) {
+      const target = deps.staleEngineChecker?.targetIdentity?.() ?? null;
+      if (await deps.isSuppressed(target)) return;
+    }
+    if (protocolMismatch || capExceeded) await beginDrain('stale-engine');
   };
 
-  /**
-   * Rebuild the engine from the current source, then restart if it is now
-   * stale. Returns true when a restart was requested — in production
-   * `requestRestart` has already exited the process; the return value only
-   * informs tests and the caller's decision not to dispatch the pending item.
-   *
-   * Fires only when quiescent (`inFlight` empty) so a restart never interrupts
-   * an in-flight build. Reuses the shipped suppression + requestRestart path.
-   */
-  const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
+  // Every scheduler collection path goes through here. A fallback child may
+  // record its protocol mismatch as it settles, after the busy observation
+  // in the loop (for example during the busy poll or a direct awaited
+  // collection). Wait for the settled worker, then record that request while
+  // its claim is still active, so collection cannot reopen a slot before the
+  // drain starts. Without a mismatch source and nothing due, a serial pool
+  // collects directly with no added scheduler turn, keeping its recorded N=1
+  // ordering.
+  const collectObservingDrain = (): Promise<void> => {
+    const mayObserve = maintenance.busyMaintenanceEnabled() || deps.protocolMismatchPending !== undefined;
+    if (!mayObserve && !serialBusyDrainDue()) return collectOne();
+    return (async () => {
+      if (mayObserve && !completedWorker && nextWorkerCompletion) await nextWorkerCompletion;
+      if (maintenance.busyMaintenanceEnabled() || serialBusyDrainDue()) await observeBusyDrainRequest();
+      await collectOne();
+    })();
+  };
+
+  /** Request a handoff only at a natural idle or after a forced drain. */
+  const restartStaleSupervisor = async (): Promise<boolean> => {
+    const abandonDrain = () => {
+      // Every non-restart exit from a forced drain restores normal claiming.
+      // Without this, a transient suppression/staleness change wedges the
+      // generation permanently in `paused`.
+      if (maintenance.isDraining()) {
+        maintenance.endDrain();
+      }
+      // A natural-idle restart closes the same job before it awaits the
+      // handoff, but does not create a drain state. A declined handoff must
+      // therefore reopen independently of `isDraining()`; otherwise every
+      // later completion and idle boundary silently loses its maintenance
+      // trigger for the rest of this daemon generation.
+      maintenanceJob.reopen();
+      restartPending = false;
+    };
     if (!staleGatesArmed || !deps.staleEngineChecker) {
       // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
       // is off) — the checker/rebuild/restart chain never runs, but still
@@ -1308,72 +1602,61 @@ export async function runDaemon(
     }
     if (inFlight.size !== 0) return false;
 
-    // Task 7: fast-forward the engine source before rebuilding, so the
-    // rebuild reflects a merge that landed on origin since the last refresh.
-    // Never fatal — a failed refresh degrades to whatever source is on disk.
-    if (deps.refreshEngineSource) {
-      try {
-        await deps.refreshEngineSource();
-      } catch (err) {
-        log(
-          `[daemon] engine source refresh failed: ${err instanceof Error ? err.message : String(err)}; continuing with current source`,
-        );
-      }
+    // Record a newly surfaced mismatch before consulting the durable restart
+    // reason. A fallback child can settle between busy observations, so the
+    // drained boundary must not require a stale sample to preserve its restart.
+    if (deps.protocolMismatchPending?.()) supervisorStaleness.markProtocolMismatch();
+    // A recorded protocol mismatch is itself restart authority even if a
+    // later staleness sample looks current.
+    const recordedMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
+    if (!recordedMismatch && !observeSupervisorStaleness()) {
+      abandonDrain();
+      return false;
     }
-
-    // Gap A (#309): rebuild so the untracked `dist` reflects fast-forwarded
-    // source; without this the content-hash checker never sees merge-driven
-    // drift. Never fatal — a failed rebuild degrades to the current engine.
-    if (deps.rebuildEngine) {
-      try {
-        await deps.rebuildEngine();
-      } catch (err) {
-        log(
-          `[daemon] engine rebuild failed: ${err instanceof Error ? err.message : String(err)}; continuing on current engine`,
-        );
-      }
-    }
-
-    if (deps.staleEngineChecker.check() !== 'stale') return false;
-
-    // A full stale-and-suppression evaluation just ran for this boundary —
-    // the idle-boundary re-check below is redundant if it's the very next
-    // check reached (e.g. this dispatch attempt errors/parks the item and the
-    // loop goes idle before anything else changes). One-shot: consumed by the
-    // very next idle-boundary check, so a later genuine staleness change is
-    // still observed (#598 Task 15).
-    staleAlreadyHandledByPreflight = true;
 
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
-    if (inFlight.size !== 0) return false; // re-verify after the async suppression check
+    if (!recordedMismatch && deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) {
+      abandonDrain();
+      return false;
+    }
+    if (inFlight.size !== 0) { abandonDrain(); return false; } // re-verify after async suppression check
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
-    if (!deps.requestRestart) return false;
-    log(`[daemon] engine stale after rebuild — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
+    if (!deps.requestRestart) { abandonDrain(); return false; }
+    restartPending = true;
+    log(`[daemon] stale supervisor at idle — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
+    maintenanceJob.close();
+    await maintenanceJob.settled();
+    await refreshJob;
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
+    if (!result.fired && !deps.shouldStop?.()) abandonDrain();
     return result.fired;
   };
 
   let stopReason: DaemonStopReason | null = null;
-  // Set whenever the dispatch-boundary preflight (`rebuildAndMaybeRestartForStaleEngine`)
-  // has run its full refresh/rebuild/check/suppression chain this run. The
-  // idle-boundary stale re-check further below is redundant once the preflight
-  // has already made this decision for the current source/build (nothing
-  // changes between preflight calls), so it's skipped while this is set —
-  // fixes #598 Task 15's regression where both independently invoked
-  // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
-  let staleAlreadyHandledByPreflight = false;
+  let firstFillPass = true;
+  let firstClaimEmitted = false;
+  let startupMaintenanceTriggered = false;
+  const triggerStartupMaintenance = (): void => {
+    if (!firstFillPass) return;
+    firstFillPass = false;
+    if (!startupMaintenanceTriggered) {
+      startupMaintenanceTriggered = true;
+      maintenanceJob.trigger();
+    }
+  };
   let latestBlocked = {
     paused: false,
     build_auth_missing: false,
     gh_version: false,
     episode_active: false,
   };
+  const deferredRepairEpisodes = new Set<string>();
 
   while (true) {
     if (deps.shouldStop?.()) {
       log('[daemon] teardown requested — draining in-flight, no new dispatch');
+      maintenanceJob.close();
       stopReason = 'signal_teardown';
       break;
     }
@@ -1409,7 +1692,7 @@ export async function runDaemon(
           parked: snapshot?.counts.parked ?? claims.listParked().length },
         oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
         slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-        inFlight: workers.map((worker) => worker.slug),
+        inFlight: workers.map((worker) => worker.kind === 'feature' ? worker.slug : repairClaim(worker.request)),
         blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
         pollDurationMs: snapshot?.pollDurationMs ?? 0,
         rootRefreshPending: refreshJob !== undefined,
@@ -1424,7 +1707,9 @@ export async function runDaemon(
       // (handled below/at drain) is completely unaffected.
       // A drain reaches this same boundary at zero active claims, but must not
       // select a replacement item before its pending restart action runs.
-      paused = maintenance.isDraining() || (await checkPaused());
+      const bootPause = unconsumedBootPause;
+      unconsumedBootPause = undefined;
+      paused = maintenance.isDraining() || (bootPause ?? (await checkPaused()));
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();
       episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
@@ -1445,14 +1730,43 @@ export async function runDaemon(
         isProgressReKickEligible: isProgressReKickEligibleBounded,
       };
 
-      // An operator adjustment changes the feature ledger, not main's SHA.
-      // Consume it before retained HALTs are classified for this iteration.
-      await deps.consumeResumeAuthorizations?.();
-      if (!paused && !episodeActive && !buildAuthMissing && !ghVersionBlocked) {
+      // The first selection intentionally observes any inherited live HALT
+      // before resume authorizations are consumed by background maintenance.
+      // Subsequent fill passes retain the established authorization behavior.
+      if (!firstFillPass) {
+        // Authorization consumption is best-effort background maintenance.
+        // A slow (or failed) durable cursor must never hold an available slot.
+        void consumeResumeAuthorizations().catch((error) => {
+          log(`[daemon] resume-authorizations error: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      const dispatchBlocked = paused || episodeActive || buildAuthMissing || ghVersionBlocked;
+      if (dispatchBlocked && deps.repairs?.queue.list().length && deps.emitMaintenancePhase) {
+        const reason = paused ? 'paused' : episodeActive ? 'episode' : buildAuthMissing ? 'build-auth' : 'gh-version';
+        for (const request of deps.repairs.queue.list()) {
+          const key = `${reason}:${request.prUrl}`;
+          if (deferredRepairEpisodes.has(key)) continue;
+          deferredRepairEpisodes.add(key);
+          void deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 0, outcome: 'deferred', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) });
+        }
+      }
+      if (!dispatchBlocked) {
+        deferredRepairEpisodes.clear();
+        // Repairs always receive an available pool slot before a new feature.
+        // Sorting is stable by priority band, then oldest PR, independent of
+        // enqueue timing; removal happens only after a successful claim.
+        if (await startNextRepair?.()) {
+          triggerStartupMaintenance();
+          idlePolls = 0;
+          continue;
+        }
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(claims.listParked());
-        next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
+        const items = firstFillPass && startupBacklog !== undefined
+          ? startupBacklog
+          : await deps.discoverBacklog({ refresh: false });
+        next = await pickEligible({ items }, pickCtx);
         // pickEligible's "durable HALT from a prior run" branch adds directly to
         // `parked` for a slug this run never dispatched — register its watcher
         // here (collectOne never sees it, since it never went through runFeature).
@@ -1479,20 +1793,25 @@ export async function runDaemon(
       await emitTick();
 
       if (next) {
-        // Before starting a feature, ensure the running engine matches current
-        // source: rebuild + restart-if-stale so the next feature is built by
-        // fresh code (Gap A/B — the shipped idle-only gate never fires here
-        // because a merge that lands new specs takes THIS dispatch branch, not
-        // the drained-idle branch below). Only acts when quiescent, so at
-        // concurrency 1 it runs before every feature. In production
-        // `requestRestart` exits the process; the break matters only to tests.
-        if (await rebuildAndMaybeRestartForStaleEngine()) {
+        // Natural idle means no executor is live, even when local discovery
+        // already found another eligible claim. Hand off before that next
+        // claim so one daemon generation never overlaps its successor.
+        if (await restartStaleSupervisor()) {
+          triggerStartupMaintenance();
           stopReason = 'engine_restart';
           break;
         }
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
+        if (deps.emitMaintenancePhase && !firstClaimEmitted) {
+          await deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: now() - firstClaimScanStartedAt, outcome: 'completed' });
+          firstClaimEmitted = true;
+        }
         const dispatched = await guardedDispatch(next);
+        // Do not start the job until the guarded claim has either dispatched
+        // or refused.  Calling trigger earlier would let its synchronous
+        // prefix race ahead of this first dispatch.
+        triggerStartupMaintenance();
         if (dispatched) {
           // The ceiling counts consecutive empty polls. A started feature begins
           // a new idle episode; a rejected dispatch deliberately falls through.
@@ -1504,7 +1823,13 @@ export async function runDaemon(
         // re-picking the same parked slug.
       }
       // Nothing new to start.
+      triggerStartupMaintenance();
       if (maintenance.isDrained()) {
+        // Restart/rebuild actions change the root checkout. If a drain was
+        // requested while the maintenance job was running, let that one
+        // bounded pass finish first, but never await maintenance during an
+        // ordinary dispatch or worker collection path.
+        if (maintenance.isDraining()) await maintenanceJob.settled();
         // Task T28/T30: at idle boundary, check for pending restart marker and either
         // fire the supervisor trigger (T28) or consume in bare-run (T30).
         // This check happens BEFORE the once/idle-timeout checks so restart is honored
@@ -1521,6 +1846,9 @@ export async function runDaemon(
                 const hasRestart =
                   restartPendingDeferredByEpisode || (await deps.hasRestartPending());
                 if (hasRestart) {
+                restartPending = true;
+                maintenanceJob.close();
+                await refreshJob;
                 // Task 21 (#392): never fire restart triggers while a rate-limit
                 // episode is active — a respawn mid-episode discards the shared
                 // backoff state and re-enters the API storm.
@@ -1528,6 +1856,8 @@ export async function runDaemon(
                 // T28 path: supervisor mode — fire respawn trigger
                 if (deps.triggerSelfRestart) {
                   log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                  maintenanceJob.close();
+                  await maintenanceJob.settled();
                   let refreshFailed = false;
                   if (deps.refreshEngineSource) {
                     try {
@@ -1579,6 +1909,8 @@ export async function runDaemon(
                 // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
                 else if (deps.consumeRestartPending) {
                   log('[daemon] restart-pending honored (bare-run, no supervisor available)');
+                  maintenanceJob.close();
+                  await maintenanceJob.settled();
                   try {
                     await deps.consumeRestartPending();
                     log('[daemon] restart marker consumed; exiting cleanly');
@@ -1621,66 +1953,15 @@ export async function runDaemon(
                 log('[daemon] stale engine drain reached boundary during episode; deferring restart request');
                 return null;
               }
-              return (await rebuildAndMaybeRestartForStaleEngine()) ? 'engine_restart' : null;
+              return (await restartStaleSupervisor()) ? 'engine_restart' : null;
             }
-            const isSharedMode = !options.once; // continuous mode = shared/not-once
-            const shouldCheckStale =
-              isSharedMode && // gate 1: continuous mode (not once)
-              options.isSelfHost === true && // gate 2: self-host enabled
-              options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
-              deps.staleEngineChecker !== undefined; // gate 4: checker armed
-
-        // One-shot consume: only the very next idle-boundary reach after a
-        // preflight-covered stale evaluation is skipped (#598 Task 15) — a
-        // later genuine staleness change is still observed on subsequent ticks.
-            const skipStaleCheckThisTick = staleAlreadyHandledByPreflight;
-            staleAlreadyHandledByPreflight = false;
-
-            if (shouldCheckStale && deps.staleEngineChecker && !skipStaleCheckThisTick) {
-              const verdict = deps.staleEngineChecker.check();
-
-          // Task 13: Handle stale verdict with in-flight re-verify
-              if (verdict === 'stale') {
-            // Task 11: Check if this identity is suppressed before proceeding.
-            // Suppressed identities hold (no restart request) and log once per session.
-            const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-            const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
-
-            if (suppressed) {
-              // Restart suppressed for this identity: hold and don't request restart.
-              // The suppression check has already logged once per session.
-              // Fall through to idle behavior (sleep/sweep), don't request restart.
-            } else {
-              // Not suppressed: proceed with restart request (if gates still pass).
-              // Re-verify that inFlight is still empty before requesting restart.
-              // A task could have been added between the verdict check and now.
-              if (inFlight.size === 0) {
-                if (episodeActive) {
-                  // Defer restart request while episode is active
-                  log('[daemon] stale engine detected but episode active; deferring restart request');
-                } else if (!staleEngineRestartRequested) {
-                  // All gates still pass, request restart with identities (only once per run)
-                  const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
-                  // Task 11: Log the stale verdict with both identities before requesting restart
-                  log(`[daemon] stale engine detected — captured: ${fromIdentity}, target: ${targetIdentity}`);
-
-                  if (deps.requestRestart) {
-                    const result = await deps.requestRestart({
-                      fromIdentity,
-                      targetIdentity,
-                    });
-                    // Only break if restart was actually fired. If fired: false,
-                    // the restart request was aborted and the loop retries at the next idle boundary.
-                    if (result.fired) {
-                      return 'engine_restart';
-                    }
-                    // If fired: false, fall through to continue idle polling and retry
-                  }
-                }
-              }
-              // If inFlight not empty, someone added a task while we checked.
-              // Fall through to next iteration; will not enter idle branch again.
-            }
+            const stale = observeSupervisorStaleness();
+            const recordedMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
+            if (stale || recordedMismatch) {
+              if (episodeActive) {
+                log('[daemon] stale engine detected but episode active; deferring restart request');
+              } else if (await restartStaleSupervisor()) {
+                return 'engine_restart';
               }
             }
             return null;
@@ -1712,7 +1993,11 @@ export async function runDaemon(
         await Promise.race([sleep(idlePollMs), waker.armed()]);
         // FR-14: sweep once per idle poll tick, then recover episode-caused
         // HALTs if the maintenance scheduler observed the episode end.
-        await maintenance.afterIdlePoll(sweepBestEffort, async () => {
+        // The scheduler still owns episode-end observation, but the ordinary
+        // sweep is now a fire-and-forget MaintenanceJob trigger.
+        await maintenance.afterIdlePoll(async () => {
+          maintenanceJob.trigger();
+        }, async () => {
           if (deps.sweepEpisodeHalts) {
             try {
               await deps.sweepEpisodeHalts(deps.isParked);
@@ -1747,7 +2032,9 @@ export async function runDaemon(
 
     // Observe restart conditions only after the claim attempt. A drain begun
     // here stops the next free slot from being filled after a worker settles.
-    if (maintenance.busyMaintenanceEnabled()) await observeBusyDrainRequest();
+    // A serial pool still needs to observe an age cap or protocol mismatch;
+    // the active child is what must drain before a handoff can occur.
+    if (maintenance.busyMaintenanceEnabled() || serialBusyDrainDue()) await observeBusyDrainRequest();
 
     // Workers are running. Race their completion against the poll timer so
     // busy pools still execute the scheduler-owned periodic sweep; a timer
@@ -1758,7 +2045,7 @@ export async function runDaemon(
     // maintenance sweep below.
     await Promise.resolve();
     if (completedWorker) {
-      await collectOne();
+      await collectObservingDrain();
       continue;
     }
     // An immediate-idle-boundary run has no poll interval to observe. Collect
@@ -1767,7 +2054,7 @@ export async function runDaemon(
     // the scheduler must be able to refresh a free slot and sweep in-flight
     // work before the one-shot drain completes.
     if (maxIdlePolls === 0) {
-      await collectOne();
+      await collectObservingDrain();
       continue;
     }
     // A worker completion wakes this one poll waiter; timer ticks only resolve
@@ -1793,13 +2080,14 @@ export async function runDaemon(
     await yieldToEventLoop();
     if (wakeBusyPoll === resolveBusyPoll) wakeBusyPoll = undefined;
     if (!completedWorker) {
-      if (maintenance.busyMaintenanceEnabled()) {
-        await maintenance.afterBusyPoll(sweepBestEffort);
-      }
+      // A busy poll is a job trigger at every width. In particular, width 1
+      // may refresh root while its single pinned-base worker is in flight.
+      void startRefresh();
+      maintenanceJob.trigger();
       continue;
     }
 
-    await collectOne();
+    await collectObservingDrain();
   }
 
   // Drain remaining workers before returning (in-flight features finish).
@@ -1810,6 +2098,10 @@ export async function runDaemon(
   // provider windows; await it so shutdown never orphans a root mutation.
   // Its result is discarded — no dispatch follows.
   if (refreshJob) await refreshJob;
+  // Final teardown must not orphan a background reconciler. Closing first
+  // suppresses a coalesced rerun before waiting for the active pass.
+  maintenanceJob.close();
+  await maintenanceJob.settled();
 
   // Dispose all remaining watchers before exiting
   for (const dispose of watchers.values()) {

@@ -1,14 +1,16 @@
-// Covers: task:12
-import { readFile } from 'node:fs/promises';
+// Covers: task:12, task:13, task:rem-prd-audit-10
+import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
-  parseBuildReviewFindingAnchor,
-  parseBuildReviewFindingConcernKind,
+  describeBuildReviewJudgedResultRejection,
+  parseBuildReviewJudgedResult,
 } from '../../src/engine/build-review-domain.js';
+import { renderBuildReviewFrozenInputScope } from '../../src/engine/build-review-materialization.js';
+import { renderAuxiliarySkillInvocation } from '../../src/engine/skill-invocation.js';
 
 const testQualitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url),
@@ -16,9 +18,32 @@ const testQualitySkillPath = fileURLToPath(
 const securitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url),
 );
+const implementationQualitySkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-implementation-quality/SKILL.md', import.meta.url),
+);
+const implementationQualityOpenAiPath = fileURLToPath(
+  new URL('../../../../skills/build-review-implementation-quality/agents/openai.yaml', import.meta.url),
+);
+
+const DELTA_CONTRACT = 'Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.';
+
+const BUILD_REVIEW_SKILLS = [
+  ['security', securitySkillPath],
+  ['implementationQuality', implementationQualitySkillPath],
+  ['testQuality', testQualitySkillPath],
+] as const;
+
+function normalizedContract(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
 
 function judgementSection(skill: string): string {
   return skill.split('## Judgement\n')[1]?.split('\n## ')[0] ?? '';
+}
+
+function forbiddenImplementationQualityQuestion(skill: string): string | undefined {
+  const question = judgementSection(skill);
+  return question.match(/(?:judge|determine|assess)[^.\n]*(acceptance.criteria|plan conformance|ADR conformance)/i)?.[0];
 }
 
 function expectVocabularyDefinitions(skill: string, rubric: keyof typeof BUILD_REVIEW_FINDING_VOCABULARIES): void {
@@ -106,12 +131,90 @@ describe('build-review Security skill contract', () => {
       evidenceLocations: ['src/legacy-request.ts:42'],
       anchor: { rubric: 'security', locus },
     };
-
-    expect(parseBuildReviewFindingConcernKind(finding.concernKind, 'security')).toBe('injection');
-    expect(parseBuildReviewFindingAnchor(finding.anchor, {
+    const references = {
       changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [],
-    })).toEqual(finding.anchor);
-    expect(finding.anchor.locus.path).toBe('src/request.ts');
-    expect(finding.evidenceLocations).toEqual(['src/legacy-request.ts:42']);
+    };
+    const payload = {
+      kind: 'judged', rubric: 'security', lapId: 'lap-unchanged-sink', snapshotDigest: 'sha256:unchanged-sink', contractVersion: 'v3', findings: [finding],
+    };
+
+    expect(parseBuildReviewJudgedResult(payload, references)).toEqual({
+      ...payload,
+      findings: [finding],
+      verdict: 'FAIL',
+    });
+
+    const unchangedSinkLocus = {
+      path: 'src/legacy-request.ts',
+      contentHash: `sha256:${'b'.repeat(64)}`,
+      display: 'existing execution sink',
+    };
+    const sinkAnchoredPayload = {
+      ...payload,
+      findings: [{ ...finding, anchor: { rubric: 'security', locus: unchangedSinkLocus } }],
+    };
+
+    expect(parseBuildReviewJudgedResult(sinkAnchoredPayload, references)).toBeUndefined();
+    expect(describeBuildReviewJudgedResultRejection(
+      sinkAnchoredPayload,
+      'security',
+      { lapId: 'lap-unchanged-sink', snapshotDigest: 'sha256:unchanged-sink' },
+      references,
+    )).toContain('findings[0].anchor.locus must reference a projected changed content region');
+  });
+});
+
+describe('build-review implementation-quality skill contract', () => {
+  it('is a gated, judgement-only contract with a findings-only result', async () => {
+    const skill = await readFile(implementationQualitySkillPath, 'utf8');
+    await expect(access(implementationQualityOpenAiPath)).resolves.toBeUndefined();
+    await expect(readFile(implementationQualityOpenAiPath, 'utf8')).resolves.toMatch(/allow_implicit_invocation:\s*false/);
+    expectVocabularyDefinitions(skill, 'implementationQuality');
+    expect(skill).toMatch(/judgement-only contract/i);
+    expect(skill).toMatch(/Return only.*findings/i);
+    expect(skill).not.toMatch(/scopeResolutions|counterfactualSensitivity|testScopeEvidence|relocationAudit/);
+    expect(skill).toMatch(/acceptance-criteria compliance.*prd_audit/i);
+    expect(skill).toMatch(/ADR conformance.*as-built architecture review/i);
+  });
+
+  it.each([
+    'Judge acceptance-criteria compliance.',
+    'Determine plan conformance.',
+    'Assess ADR conformance.',
+  ])('rejects a forbidden judgement question: %s', (question) => {
+    expect(forbiddenImplementationQualityQuestion(`## Judgement\n${question}`)).toBeDefined();
+  });
+
+  it('permits the shipped skill to name those reviews as exclusions, not its question', async () => {
+    expect(forbiddenImplementationQualityQuestion(await readFile(implementationQualitySkillPath, 'utf8'))).toBeUndefined();
+  });
+});
+
+describe('build-review delta contract', () => {
+  it('states the same delta-review obligation in every built-in skill and the custom-rubric prompt', async () => {
+    for (const [, skillPath] of BUILD_REVIEW_SKILLS) {
+      await expect(readFile(skillPath, 'utf8')).resolves.toSatisfy((skill) =>
+        normalizedContract(skill).includes(DELTA_CONTRACT));
+    }
+
+    expect(normalizedContract(renderBuildReviewFrozenInputScope({
+      contentDigest: 'sha256:content',
+      mergeBase: 'base-sha',
+      headSha: 'head-sha',
+      changes: [],
+      reviewScope: { mode: 'delta', deltaHunks: [] },
+    }))).toContain(DELTA_CONTRACT);
+  });
+
+  it('renders the same security skill contract for Claude and Codex candidates', async () => {
+    const skill = await readFile(securitySkillPath, 'utf8');
+    const claudePrompt = `${renderAuxiliarySkillInvocation('build-review-security', 'claude')}\n${skill}`;
+    const codexPrompt = `${renderAuxiliarySkillInvocation('build-review-security', 'codex')}\n${skill}`;
+
+    expect(claudePrompt).toContain('/build-review-security');
+    expect(codexPrompt).toContain('$build-review-security');
+    expect(normalizedContract(claudePrompt)).toContain(DELTA_CONTRACT);
+    expect(normalizedContract(codexPrompt)).toContain(DELTA_CONTRACT);
+    expect(claudePrompt.slice(claudePrompt.indexOf('\n'))).toBe(codexPrompt.slice(codexPrompt.indexOf('\n')));
   });
 });

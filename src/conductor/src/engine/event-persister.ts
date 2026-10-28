@@ -81,7 +81,14 @@ export class EventPersistError extends Error {
 export interface EventPersisterDependencies {
   /** Test seam for observing the one-time canonical replay index scan. */
   readonly readPersistedEvents?: (filePath: string) => string | undefined;
+  /** Test seam for the canonical append. */
+  readonly appendFile?: (filePath: string, contents: string, encoding: BufferEncoding) => void;
 }
+
+// Persistence is composed at the application boundary.  Engine code that must
+// durably acknowledge an outbox entry borrows that already-active owner rather
+// than constructing a second writer for the same feature ledger.
+const activePersisters = new WeakMap<ConductorEventEmitter, EventPersister>();
 
 /**
  * EventPersister subscribes to every ConductorEvent and appends each event
@@ -103,6 +110,7 @@ export class EventPersister {
   private readonly persistedObservationIds = new Set<string>();
   private observationIndexBuilt = false;
   private dirEnsured = false;
+  private readonly appendCanonical: (filePath: string, contents: string, encoding: BufferEncoding) => void;
 
   constructor(
     filePath: string,
@@ -114,11 +122,10 @@ export class EventPersister {
     this.emitter = emitter;
     this.clock = clock;
     this.readPersistedEvents = dependencies.readPersistedEvents ?? readCanonicalEvents;
+    this.appendCanonical = dependencies.appendFile ?? appendFileSync;
     this.executionScope = { featureId: filePath, runId: 'event-persister' };
 
-    this.handler = (event: ConductorEvent): void => {
-      this.persist(event);
-    };
+    this.handler = (event: ConductorEvent) => this.persistDurably(event).then(() => undefined);
   }
 
   private readonly readPersistedEvents: (filePath: string) => string | undefined;
@@ -128,6 +135,7 @@ export class EventPersister {
    */
   start(): void {
     this.buildObservationIndex();
+    activePersisters.set(this.emitter, this);
     for (const type of persistedEventTypes()) {
       this.emitter.on(type, this.handler);
     }
@@ -140,13 +148,15 @@ export class EventPersister {
     for (const type of persistedEventTypes()) {
       this.emitter.off(type, this.handler);
     }
+    if (activePersisters.get(this.emitter) === this) activePersisters.delete(this.emitter);
   }
 
-  private persist(event: ConductorEvent): void {
+  /** Append once to the canonical event spine, preserving a producer occurrence timestamp. */
+  async persistDurably(event: ConductorEvent): Promise<'persisted' | 'duplicate'> {
     try {
       this.buildObservationIndex();
       const observationId = observationEventId(event);
-      if (observationId !== undefined && this.persistedObservationIds.has(observationId)) return;
+      if (observationId !== undefined && this.persistedObservationIds.has(observationId)) return 'duplicate';
       if (!this.dirEnsured) {
         mkdirSync(dirname(this.filePath), { recursive: true });
         this.dirEnsured = true;
@@ -212,9 +222,9 @@ export class EventPersister {
           ? { observedIntervals: [...(lifecycleEvent?.observedIntervals ?? []), lifecycleInterval] }
           : {}),
         ...(activeInterval ? { activeInterval } : {}),
-        ts: new Date().toISOString(),
+        ts: isRoutingOccurrence(event) ? event.occurredAt : new Date().toISOString(),
       });
-      appendFileSync(this.filePath, record + '\n', 'utf-8');
+      this.appendCanonical(this.filePath, record + '\n', 'utf-8');
       if (observationId !== undefined) this.persistedObservationIds.add(observationId);
       if (event.type === 'step_started' && intervalKey !== undefined) {
         this.openSteps.set(intervalKey, this.clock.nowMs());
@@ -236,6 +246,7 @@ export class EventPersister {
           this.openSteps.set(lifecycleKey, lifecycleNow);
         }
       }
+      return 'persisted';
     } catch (err) {
       throw new EventPersistError(this.filePath, err);
     }
@@ -274,6 +285,20 @@ export class EventPersister {
   }
 }
 
+/**
+ * Persist an outbox occurrence through the emitter's composition-owned ledger.
+ * The acknowledgement is intentionally direct: normal event delivery swallows
+ * subscriber errors, while an outbox must retain its entry on a write failure.
+ */
+export async function persistOnActiveEventSpine(
+  events: ConductorEventEmitter,
+  event: ConductorEvent,
+): Promise<'persisted' | 'duplicate'> {
+  const persister = activePersisters.get(events);
+  if (persister === undefined) throw new EventPersistError('<active event spine>', new Error('no active event persister'));
+  return persister.persistDurably(event);
+}
+
 function readCanonicalEvents(filePath: string): string | undefined {
   if (!existsSync(filePath) || !statSync(filePath).isFile()) return undefined;
   return readFileSync(filePath, 'utf8');
@@ -286,14 +311,27 @@ const OBSERVATION_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'github_possible_bypass',
   'session_event_delivery_diagnostic',
 ]);
+const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
+  'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'child_revalidated',
+]);
+const REMEDIATION_CASE_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
+  'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
+]);
 
-/** Only producer observations are replay-deduplicated; ordinary events still append. */
+/** Producer observations and at-least-once lifecycle events are replay-deduplicated; ordinary events still append. */
 function observationEventId(event: ConductorEvent): string | undefined {
-  return OBSERVATION_EVENT_TYPES.has(event.type)
+  return (OBSERVATION_EVENT_TYPES.has(event.type)
+    || ROUTING_OCCURRENCE_TYPES.has(event.type)
+    || REMEDIATION_CASE_OCCURRENCE_TYPES.has(event.type)
+    || event.type === 'stack_member_lifecycle')
     && 'eventId' in event
     && typeof event.eventId === 'string'
     ? event.eventId
     : undefined;
+}
+
+function isRoutingOccurrence(event: ConductorEvent): event is Extract<ConductorEvent, { occurredAt: string }> {
+  return ROUTING_OCCURRENCE_TYPES.has(event.type) && 'occurredAt' in event;
 }
 
 /**
@@ -331,6 +369,18 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
     if (this.slug) forwardedFeature.set(forwarded, this.slug);
     await this.globalEvents.emit(forwarded);
   }
+}
+
+/**
+ * A feature-scoped bus for an executor that writes its own feature ledger.
+ * The supervisor deliberately owns no persister for this bus: forwarding only
+ * reuses renderer, OTel, memory and root-bus subscribers.
+ */
+export function createForwardingFeatureEventEmitter(
+  globalEvents: ConductorEventEmitter,
+  slug: string,
+): ConductorEventEmitter {
+  return new ForwardingEventEmitter(globalEvents, slug);
 }
 
 function cloneForwardedEvent(event: ConductorEvent): ConductorEvent {
@@ -373,6 +423,8 @@ export interface SessionEventTailOwner {
   stop(): void;
   /** Stop polling, join an in-flight read, then make one settled final pass. */
   drain(): Promise<void>;
+  /** Poll once without stopping the tail, joining any in-flight poll. */
+  flush(): Promise<void>;
 }
 
 /**
@@ -384,8 +436,10 @@ export function startSessionEventTail(
   projectRoot: string,
   events: ConductorEventEmitter,
   featureSlug?: string,
+  /** Test seam for a controlled in-flight ledger read. */
+  tailOverride?: CloseoutEventTail,
 ): SessionEventTailOwner {
-  const tail = new CloseoutEventTail({ projectRoot, featureSlug, events });
+  const tail = tailOverride ?? new CloseoutEventTail({ projectRoot, featureSlug, events });
   tail.start();
   let drainPromise: Promise<void> | undefined;
   return {
@@ -399,6 +453,7 @@ export function startSessionEventTail(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 
@@ -425,8 +480,8 @@ export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
   slug?: string,
-): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
-  const featureEvents = new ForwardingEventEmitter(globalEvents, slug ?? basename(worktreePath));
+): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void>; flush: () => Promise<void> } {
+  const featureEvents = createForwardingFeatureEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
     featureEvents,
@@ -473,6 +528,7 @@ export function startFeatureEventPersistence(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 
@@ -489,15 +545,11 @@ export function startDaemonEventPersistence(
   let loggedMemorySampleFailure = false;
   const handler: EventHandler = (event) => {
     if (isForwardedFromFeature(event)) return;
-    try {
-      // EventPersister is intentionally private; invoke its subscribed handler through a small local emitter
-      // would duplicate subscriptions. The direct method is runtime-private only and preserves its schema.
-      (persister as unknown as { persist(event: ConductorEvent): void }).persist(event);
-    } catch (error) {
+    return persister.persistDurably(event).then(() => undefined).catch((error: unknown) => {
       if (event.type === 'daemon_memory_sample' && loggedMemorySampleFailure) return;
       if (event.type === 'daemon_memory_sample') loggedMemorySampleFailure = true;
       log(`[daemon] event persistence failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    });
   };
   for (const type of persistedEventTypes()) events.on(type, handler);
   return { stop: () => { for (const type of persistedEventTypes()) events.off(type, handler); } };

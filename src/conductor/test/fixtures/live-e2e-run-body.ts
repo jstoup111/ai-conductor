@@ -93,7 +93,7 @@ export class ProvisionedHome implements LLMProvider {
   }
 }
 
-type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<void>;
+type LiveProviderPreflight = (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>;
 
 export interface LiveE2ERunBodyDependencies {
   readonly binaryAvailable?: (binaryName: string) => boolean;
@@ -107,6 +107,18 @@ export interface LiveE2ERunBodyDependencies {
 }
 
 export const DEFAULT_LIVE_E2E_TOKEN_CAP = 300000;
+
+/** The live daemon fixture must never consume a provider turn for build review. */
+export const LIVE_E2E_BUILD_REVIEW_CONFIG = {
+  build_review: {
+    maxParallel: 1,
+    rubrics: {
+      testQuality: { enabled: false },
+      security: { enabled: false },
+      implementationQuality: { enabled: false },
+    },
+  },
+} as const;
 
 /** Every descriptor enters through this shared cap policy. */
 export function resolveLiveE2ETokenCap(environment: NodeJS.ProcessEnv = process.env): number {
@@ -146,8 +158,9 @@ export async function dispatchAfterLivePreflight<T>(
   dispatch: () => Promise<T>,
   providerKey: string,
   preflight: LiveProviderPreflight = dispatchableStepCommands.assertResolves,
+  sourceRoot = process.cwd(),
 ): Promise<T> {
-  await preflight(home.homeDir, providerKey);
+  await preflight(home.homeDir, sourceRoot, providerKey);
   return dispatch();
 }
 
@@ -466,7 +479,7 @@ export async function runLiveE2ERunBody(
             featureDesc: slug, pipelineDir, planPath, mode: 'auto',
             // The test-quality preflight cannot run in this standalone temp
             // repository, so disable the sole optional rubric.
-            config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: false } } } },
+            config: LIVE_E2E_BUILD_REVIEW_CONFIG,
             buildReviewInputOptions: {
               inspectTestSuite: async () => ({
                 status: 'CURRENT',
@@ -502,7 +515,7 @@ export async function runLiveE2ERunBody(
           } finally {
             await dependencies.afterRunDaemon?.(liveWorktreeDir);
           }
-        }, descriptor.providerKey, dependencies.preflight);
+        }, descriptor.providerKey, dependencies.preflight, sourceRoot);
         const { stdout: commitSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: liveWorktreeDir });
         const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], { cwd: liveWorktreeDir });
         const { stdout: changedFiles } = await execa('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], { cwd: liveWorktreeDir });

@@ -99,7 +99,7 @@ function materializedPolicyRunner(input: {
       featureDesc: 'feature', planPath: join(input.root, '.docs', 'plans', 'feature.md'), gitRunner: materialized.runner,
       config: { llm_provider: 'claude', build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false }, ...(input.mixed ? { security: { enabled: true } } : {}) },
+        rubrics: { testQuality: { enabled: false }, security: { enabled: input.mixed ?? false }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -128,7 +128,7 @@ it('records Pi as a skipped reviewPolicyCatalog candidate before invoking Claude
   const root = await fixture();
   const piInvoke = vi.fn();
   const claudeInvoke = vi.fn(async () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
   });
   const attempts: unknown[] = [];
@@ -145,7 +145,7 @@ it('records Pi as a skipped reviewPolicyCatalog candidate before invoking Claude
   };
   const runner = new DefaultStepRunner(claude, 'custom-policy-pi-fallback', root, {
     featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-    config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+    config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
       portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: ['pi', 'claude'] },
     } } } as HarnessConfig,
     providerRuntimes: new ProviderRuntimeSet([
@@ -211,7 +211,7 @@ async function runOrdinaryCustomMember(
   const policy = providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
   const runner = new DefaultStepRunner(provider, `ordinary-${providerKey}`, root, {
     featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-    config: { llm_provider: providerKey, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+    config: { llm_provider: providerKey, build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
       portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: providerKey },
     } } } as HarnessConfig,
     providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
@@ -242,7 +242,7 @@ describe('custom build-review policy runner', () => {
     // launcher: a non-self-host custom review must never request bwrap.
     const bwrapSpawns = vi.fn();
     const invoke = vi.fn(async () => {
-      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }), finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] } };
+      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }), finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } };
     });
     const { run, artifact } = await runOrdinaryCustomMember('claude', invoke);
 
@@ -258,7 +258,7 @@ describe('custom build-review policy runner', () => {
   });
 
   it('keeps the Linux unrestricted custom-member launch identical to a nested-namespaces refusal', async () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const nestedNamespacesRefused = successfulInvoke(payload);
     const linuxUnrestricted = successfulInvoke(payload);
     const nested = await runOrdinaryCustomMember('claude', nestedNamespacesRefused);
@@ -279,7 +279,7 @@ describe('custom build-review policy runner', () => {
   });
 
   it('passes read-only custom launches through the ordinary environment and keeps only Codex schema scratch state', async () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const claudeInvoke = successfulInvoke(payload);
     const codexInvoke = successfulInvoke(payload);
     const claude = await runOrdinaryCustomMember('claude', claudeInvoke);
@@ -310,7 +310,7 @@ describe('custom build-review policy runner', () => {
     ['codex', 'project'], ['codex', 'global'], ['codex', 'plugin'],
   ] as const)('runs an installed %s %s policy through a prepared candidate', async (providerKey, source) => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
     const preparedEnv = { CODEX_HOME: '/prepared/candidate-home', CANDIDATE_ONLY: providerKey };
     const policyCatalog = vi.fn(async () => [{
@@ -332,7 +332,7 @@ describe('custom build-review policy runner', () => {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
         llm_provider: providerKey,
-        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: { enabled: true, skill: source === 'plugin' ? 'policy-plugin:portable-policy' : 'portable-policy', question: 'Check the selected policy.', source, llm_provider: providerKey },
         } },
       } as HarnessConfig,
@@ -405,7 +405,7 @@ describe('custom build-review policy runner', () => {
 
   it('records the unchanged custom-lap input digests as build-review evidence', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -413,7 +413,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-input-digest', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -431,7 +431,7 @@ describe('custom build-review policy runner', () => {
 
   it('keeps a captured-input verdict when a reviewer writes branch evidence and changes the feature checkout', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
         await writeFile(join(root, 'src', 'a.ts'), 'export const value = 2;\n');
@@ -441,7 +441,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-feature-checkout-write', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -464,7 +464,7 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const eventLog = join(root, '.pipeline', 'events.jsonl');
     await writeFile(eventLog, '{"type":"step_started","step":"build_review"}\n');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -476,7 +476,7 @@ describe('custom build-review policy runner', () => {
     try {
       const runner = new DefaultStepRunner(provider, 'custom-policy-event-log', root, {
         featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
-        config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
         } } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -505,7 +505,7 @@ describe('custom build-review policy runner', () => {
     await mkdir(packageRoot, { recursive: true });
     await writeFile(join(packageRoot, 'SKILL.md'), '# Original policy\n');
     await writeFile(preExistingEvidence, '{"status":"CURRENT"}\n');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => {
       await writeFile(join(materialPath, 'SKILL.md'), '# Mutated during review\n');
       await writeFile(preExistingEvidence, '{"status":"MUTATED"}\n');
@@ -520,7 +520,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-input-mutation', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -564,7 +564,7 @@ describe('custom build-review policy runner', () => {
         lifecycle: { phase: 'settled', attempt: { logicalStep: 'build_review', id: 'prior-dispatch' }, recoveryCount: 0, outcome: 'failed' },
       })}\n`);
     }
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async (options: InvokeOptions) => {
       await input.duringReview?.(options.selfHost!.env!.CODEX_HOME!);
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
@@ -578,7 +578,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-throwaway-home', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         // A fallback list makes every candidate capture a baseline in its own
         // prepared home, which the executor tears down before fan-out.
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'global', llm_provider: ['codex', 'claude'] },
@@ -645,7 +645,7 @@ describe('custom build-review policy runner', () => {
     let setup!: ReturnType<typeof materializedPolicyRunner>;
     setup = materializedPolicyRunner({ root, events, invoke: vi.fn(async () => {
       await writeFile(join(setup.materialized.paths.headPath!, 'frozen.ts'), 'export const frozen = 2;\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
 
@@ -663,7 +663,7 @@ describe('custom build-review policy runner', () => {
     let setup!: ReturnType<typeof materializedPolicyRunner>;
     setup = materializedPolicyRunner({ root, invoke: vi.fn(async () => {
       await writeFile(join(setup.materialized.paths.baselinePath!, 'frozen.ts'), 'export const frozen = -1;\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
 
@@ -720,7 +720,7 @@ describe('custom build-review policy runner', () => {
       const lapRoot = join(root, '.pipeline', 'build-review', `lap-${'a'.repeat(40)}`);
       await mkdir(lapRoot, { recursive: true });
       await writeFile(join(lapRoot, 'new-evidence.json'), '{"new":true}\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
 
@@ -733,7 +733,7 @@ describe('custom build-review policy runner', () => {
       const lapRoot = join(freshRoot, '.pipeline', 'build-review', `lap-${'a'.repeat(40)}`);
       await mkdir(lapRoot, { recursive: true });
       await writeFile(join(lapRoot, 'new-evidence.json'), '{"new":true}\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
     await expect(unchangedSetup.runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
@@ -747,7 +747,7 @@ describe('custom build-review policy runner', () => {
     let securityMaterialPath: string | undefined;
     await mkdir(packageRoot, { recursive: true });
     await writeFile(join(packageRoot, 'SKILL.md'), '# Installed policy\n');
-    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const customPayload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
         if (securityMaterialPath === undefined) throw new Error('security policy was not captured before fan-out');
@@ -765,7 +765,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-policy-input-mutation', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
       config: { llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -783,12 +783,13 @@ describe('custom build-review policy runner', () => {
     });
 
     await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: false, currentLapMechanicalFault: true });
-    expect(failures).toHaveLength(3);
+    expect(failures).toHaveLength(4);
     expect(failures).toEqual(expect.arrayContaining([
       // The captured copy lives under an engine-owned pipeline path, so only
       // its own policy-material root (never the evidence root) reports it.
       expect.objectContaining({ rubric: 'portable', cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] }),
       expect.objectContaining({ rubric: 'security', cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] }),
+      expect.objectContaining({ rubric: 'implementationQuality', cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] }),
     ]));
     await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
   });
@@ -800,7 +801,7 @@ describe('custom build-review policy runner', () => {
       await mkdir(join(packages, skill), { recursive: true });
       await writeFile(join(packages, skill, 'SKILL.md'), `# ${skill}\n`);
     }
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     let mutated = false;
     const provider: LLMProvider = {
       // The first reviewer to run rewrites the other member's installed
@@ -819,7 +820,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event as never); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-serialized-baseline', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
-      config: { llm_provider: 'claude', build_review: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         alpha: { enabled: true, skill: 'alpha-policy', question: 'Check alpha.', source: 'project', llm_provider: 'claude' },
         beta: { enabled: true, skill: 'beta-policy', question: 'Check beta.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
@@ -849,7 +850,7 @@ describe('custom build-review policy runner', () => {
     let securityInvoked!: () => void;
     const securityStarted = new Promise<void>((resolve) => { securityInvoked = resolve; });
     let securityStartedBeforeCustomSettled: boolean | undefined;
-    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const customPayload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
         if (options.prompt.includes('Build Review Security rubric.')) {
@@ -869,7 +870,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-concurrent-fan-out', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: {
-        enabled: true, maxParallel: 2, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, maxParallel: 2, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -890,7 +891,7 @@ describe('custom build-review policy runner', () => {
     const evidence = join(root, '.pipeline', 'test-suite-evidence.json');
     await writeFile(evidence, '{"status":"CURRENT"}\n');
     let mutateNextCustomReview = true;
-    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const customPayload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async (options: InvokeOptions) => {
       if (options.prompt.includes('Build Review Security rubric.')) {
         return { success: true, exitCode: 0, output: '{"findings":[]}', finalStructuredResult: { findings: [] } };
@@ -908,7 +909,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-policy-mutated-cache', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -953,8 +954,8 @@ describe('custom build-review policy runner', () => {
   it('never lets an empty-test-scope built-in PASS replace a custom FAIL', async () => {
     const root = await fixture();
     const frozenLine = 'export const value = 0;\n';
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [{
-      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', confidence: 90,
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', confidence: 90, severity: 'minor',
       evidenceLocations: ['src/a.ts:1'],
       sourceRegions: [{
         path: 'src/a.ts', startLine: 1, endLine: 1, display: 'value',
@@ -981,7 +982,7 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const evidence = join(root, '.pipeline', 'test-suite-evidence.json');
     await writeFile(evidence, '{"status":"CURRENT"}\n');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const runner = emptyTestScopeRunner(root, vi.fn(async () => {
       await writeFile(evidence, '{"status":"MUTATED"}\n');
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
@@ -1000,7 +1001,7 @@ describe('custom build-review policy runner', () => {
       .mockImplementationOnce(async () => undefined)
       .mockImplementationOnce(async () => undefined);
     const materialPath = join(root, '.pipeline', 'build-review', 'policy-material', 'portable');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
         await writeFile(join(materialPath, 'SKILL.md'), '# Mutated during review\n');
@@ -1011,7 +1012,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-input-mutation-exhausted', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1038,7 +1039,7 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const skillBody = `# Portable policy\n\n${'Review every changed handler for the portable policy. '.repeat(400)}`;
     const siblingBody = `# Sibling skill\n\n${'Unrelated sibling reviewer instructions. '.repeat(400)}`;
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1048,7 +1049,7 @@ describe('custom build-review policy runner', () => {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
         llm_provider: 'claude',
-        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: { enabled: true, skill: 'policy-plugin:portable-policy', question: 'Check the selected policy.', source: 'plugin', resources: ['references/criteria.md'], llm_provider: 'claude' },
         } },
       } as HarnessConfig,
@@ -1087,8 +1088,8 @@ describe('custom build-review policy runner', () => {
     const lapId = parseBuildReviewLapId('lap-head')!;
     const sourceRegion = { path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'b'.repeat(64)}`, display: 'changed value' };
     const stamped = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1',
-      findings: [{ concernId: 'policy-gap', summary: 'The change misses the policy.', evidenceLocations: ['src/a.ts:1'], confidence: 90, sourceRegions: [sourceRegion] }],
+      kind: 'custom-findings', version: 'v2',
+      findings: [{ concernId: 'policy-gap', summary: 'The change misses the policy.', evidenceLocations: ['src/a.ts:1'], confidence: 90, severity: 'major', sourceRegions: [sourceRegion] }],
     }, {
       rubric: 'portable', lapId, declaration: descriptor.declaration, policy: descriptor.effectivePolicy,
       candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
@@ -1111,7 +1112,7 @@ describe('custom build-review policy runner', () => {
 
   it('publishes a custom-only outer verdict when effective resolution fails', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false,
@@ -1123,7 +1124,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_outer_verdict', (event) => { outerVerdicts.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-resolution-failure', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1149,7 +1150,7 @@ describe('custom build-review policy runner', () => {
     readonly timeoutSeconds?: number;
     readonly resolver: (projectRoot: string, aggregate: unknown) => Promise<unknown>;
   }): DefaultStepRunner {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: options.findings };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: options.findings };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
         options.onInvoke?.();
@@ -1161,7 +1162,7 @@ describe('custom build-review policy runner', () => {
     };
     return new DefaultStepRunner(provider, 'custom-only-durable-evidence', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: {
           enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude',
           ...(options.timeoutSeconds === undefined ? {} : { timeout_seconds: options.timeoutSeconds }),
@@ -1208,7 +1209,7 @@ describe('custom build-review policy runner', () => {
     const runner = customOnlyRunner(root, {
       minConfidence: 70,
       findings: [{
-        concernId: 'portable-policy-gap', summary, confidence: 40,
+        concernId: 'portable-policy-gap', summary, confidence: 40, severity: 'minor',
         evidenceLocations: ['src/a.ts:1'],
         sourceRegions: [{
           path: 'src/a.ts', startLine: 1, endLine: 1, display: 'value',
@@ -1236,7 +1237,7 @@ describe('custom build-review policy runner', () => {
     if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
     expect(suppressedFindingId).toEqual(expect.any(String));
     expect(persisted.state.suppressions).toEqual([{
-      findingId: suppressedFindingId, rubric: 'portable', summary, confidence: 40, floor: 70, lastSeenLap: 'lap-head',
+      kind: 'confidence', findingId: suppressedFindingId, rubric: 'portable', summary, confidence: 40, floor: 70, lastSeenLap: 'lap-head',
     }]);
   });
 
@@ -1272,10 +1273,10 @@ describe('custom build-review policy runner', () => {
         exitCode: 0,
         output: prompt.includes('Build Review Security rubric.')
           ? JSON.stringify({ findings: [] })
-          : JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+          : JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }),
         finalStructuredResult: prompt.includes('Build Review Security rubric.')
           ? { findings: [] }
-          : { kind: 'custom-findings', version: 'v1', findings: [] },
+          : { kind: 'custom-findings', version: 'v2', findings: [] },
       })),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1287,7 +1288,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: {
-        testQuality: { enabled: false }, security: { enabled: true },
+        testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false },
       }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
@@ -1327,7 +1328,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1369,7 +1370,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-failure', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', resources: ['criteria.md'], llm_provider: 'codex' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1447,7 +1448,7 @@ describe('custom build-review policy discovery under candidate authority', () =>
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-authority', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude', timeout_seconds: timeoutSeconds },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),

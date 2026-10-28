@@ -60,6 +60,10 @@ The ownership map is:
 > **Amended 2026-10-03 by #2750:** D1's map gains one question — *Can the plan's tasks be satisfied together with every sealed story criterion and every approved ADR decision the plan is subject to?* — owned by the `coverage_binding` step's conflict claims (`adr-2026-08-31-coverage-binding-judge-step` D21–D24, gated by the same `coverage_binding.judge.enabled` key), judged before any build task against the plan's full task table. It may halt `needs-human`; it never reopens, appends a task, or routes to `plan`, so the appender clause and `prd_audit`'s completion authority are untouched. The as-built review's `PLAN_GAP` and `prd_audit`'s PLAN_GAP grade still own any residue that reaches SHIP.
 > **Amended 2026-10-09 by #475:** D1's map gains two questions, *Does the diff introduce a code-quality defect (duplication, complexity, readability)?* and *Does the diff introduce a domain-modelling defect (primitive obsession, representable invalid states, non-exhaustive domain matching, non-semantic naming)?*, both owned by the build_review `implementationQuality` rubric (enabled by default; adr-2026-08-22-build-review-opt-in-rubric-container decision 1 as amended by #475). Before this amendment only the `/pipeline` batch evaluator asked these questions, and nothing enforced that it ran. The rubric does not judge acceptance-criteria compliance, which `prd_audit` keeps as the completion authority, or ADR conformance, which the as-built review keeps. Its findings enter the shared build-review adjudicator like every other rubric's. It may fail a lap, it never appends a task and never routes to `plan`, so the appender clause and `prd_audit`'s completion authority are untouched.
 
+> **Amended 2026-10-12 by #3056:** the owners in this map are now the only reviewers of their questions during BUILD. The `/pipeline` batch evaluator is retired. It asked acceptance-criteria, code-quality, domain-integrity, and security questions at every batch boundary without being recorded in this map. Its verdict no longer satisfies any code-review gate, and no batch boundary waits on it. The *Does the diff introduce a security defect?* row's owner, the build_review `security` rubric, is now enabled by default rather than opt-in (adr-2026-08-22-build-review-opt-in-rubric-container decision 1 as amended by #3056). Every other owner, the appender clause, and `prd_audit`'s completion authority are unchanged.
+
+> **Amended 2026-10-23 by #3190:** the *Did BUILD finish each task?* row's owner gains one reviewer for one class of task. For engine-appended `rem-*` remediation tasks, BUILD's session boundary also asks whether the change the task's plan block names is present, through the remediation-closure judgement (`adr-2026-10-21-remediation-closure-judgement`), after the citation judgement of `adr-2026-08-22-done-when-evidence-at-task-close` D13. It may only reopen that task inside BUILD and withhold hand-off, under a bound of two reopens per task. It never appends a task, never routes to `plan`, never fails a gate lap, and adds no halt class of its own, so the appender clause and `prd_audit`'s completion authority are untouched. The as-built review and `prd_audit` remain the backstop for any repair it misses.
+
 The `scope`, `completeness`, and `rootCause` rubrics are retired and deleted with their exemptions,
 projections, vocabularies, fixtures, and tests (FR-23). `prd_audit` replaces `completeness` as the
 completion authority wherever an ADR named it; those ADRs carry an amendment note and keep their
@@ -77,6 +81,14 @@ does not authorize.**
 > `architecture_review_as_built` as its only admitted sources, each under its own cap; no gate
 > may direct BUILD to a mechanism the approved plan (or the governing approved clause a
 > remediation task cites) does not authorize. The ownership map and all other decisions stand.
+
+> **Amended 2026-10-12 by #2944:** The ownership map gains one routing question for stacked
+> features: which child hosts admitted repair work. Task-bound placement is mechanical. The residue
+> is answered by an engine-owned routing call that places already-admitted work and never re-grades
+> findings or supplies operator decisions. The admitted appender sources are unchanged
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 2 and 3).
+
+> **Amended 2026-10-24 by #3294:** The build_review rubrics still own their questions over the whole feature diff since the merge base, but after the first lap at a merge base they judge only the unsettled delta. The whole diff stays reference context. A non-critical finding on settled, unchanged code blocks only when it names a delta cause hunk. A `critical` finding in any rubric is never out of delta and is classified exactly as without delta scoping, so an off-plan critical security defect that is not accepted or settled still fails build_review before the SHIP tail (adr-2026-10-24-lap-monotonic-build-review-scope D3, D5).
 
 ## Consequences
 

@@ -63,10 +63,7 @@ import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.j
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
-import { voidCoverageBindingForDecideChange } from '../../src/engine/coverage-binding-void.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
-import { rewindState } from '../../src/engine/rewind.js';
-import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import {
   creditKickbackGateLaps,
@@ -84,7 +81,6 @@ import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
   CODEX_MODEL_POLICY,
 } from '../../src/engine/provider-model-policy.js';
-import { CoverageBindingPayloadError } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -104,6 +100,7 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
 describe('protected artifact rebaseline logging', () => {
   // Covers: task:9
@@ -295,6 +292,41 @@ function createMockStepRunner(result: StepRunResult = { success: true }): StepRu
   };
 }
 
+function decisionGateState(tier: 'M' | 'S'): ConductState {
+  const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'skipped'])) as ConductState;
+  for (const step of ALL_STEPS) {
+    if (step.name === 'architecture_review') break;
+    state[step.name] = 'done';
+  }
+  state.complexity_tier = tier;
+  state.architecture_review = 'pending';
+  return state;
+}
+
+function useRealGitExeca(): () => void {
+  const execaMock = vi.mocked(execa);
+  const originalImplementation = execaMock.getMockImplementation();
+  // execa's overloaded callable type makes Vitest select its two-argument
+  // binding overload even though this runtime seam receives file, args, opts.
+  execaMock.mockImplementation((async (file: string | URL, args?: readonly string[], options?: { cwd?: string }) => {
+    try {
+      const result = await execFile(String(file), (args ?? []).map(String), { cwd: options?.cwd });
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 } as never;
+    } catch (error) {
+      const result = error as { stdout?: string; stderr?: string; code?: number };
+      return {
+        stdout: result.stdout ?? '', stderr: result.stderr ?? '',
+        exitCode: typeof result.code === 'number' ? result.code : 1,
+      } as never;
+    }
+  }) as never);
+  return () => execaMock.mockImplementation(originalImplementation!);
+}
+
+async function seedGenericTail(statePath: string): Promise<void> {
+  await writeState(statePath, { plan_review: 'done' });
+}
+
 function buildBoundaryState(featureDesc = 'feature'): ConductState {
   return {
     ...Object.fromEntries(
@@ -335,6 +367,127 @@ describe('engine/conductor', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: task:9, task:rem-prd-audit-9-R1, S4.4
+  it('halts an auto-mode architecture review when a real feature worktree adds an unledgered ADR', async () => {
+    const repository = join(dir, 'repository');
+    const featureWorktree = join(dir, 'feature-worktree');
+    await mkdir(repository, { recursive: true });
+    await initTestRepo(repository);
+    await writeFile(join(repository, 'README.md'), 'base\n');
+    await commitAll(repository, 'seed main');
+    await execFile('git', ['worktree', 'add', '-b', 'feature', featureWorktree, 'main'], { cwd: repository });
+    await mkdir(join(featureWorktree, '.docs', 'decisions'), { recursive: true });
+    const adrPath = '.docs/decisions/adr-2026-10-10-unledgered.md';
+    await writeFile(join(featureWorktree, adrPath), '# ADR: Unledgered\n\n**Status:** APPROVED\n');
+    const featureState = join(featureWorktree, 'conduct-state.json');
+    await writeState(featureState, decisionGateState('M'));
+
+    const restoreExeca = useRealGitExeca();
+
+    const verdicts: Array<{ satisfied: boolean; reason?: string }> = [];
+    let halted = false;
+    events.on('gate_verdict', (event) => {
+      if (event.type === 'gate_verdict' && event.step === 'architecture_review') {
+        verdicts.push({ satisfied: event.satisfied, reason: event.reason });
+      }
+    });
+    events.on('loop_halt', () => { halted = true; });
+
+    try {
+      await new Conductor({
+        projectRoot: featureWorktree,
+        stateFilePath: featureState,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        fromStep: 'architecture_review',
+        maxRetries: 1,
+        verifyArtifacts: true,
+      }).run();
+    } finally {
+      restoreExeca();
+    }
+
+    expect(verdicts).toContainEqual(expect.objectContaining({
+      satisfied: false,
+      reason: expect.stringContaining(`${adrPath}: missing-section`),
+    }));
+    expect(halted).toBe(true);
+    const finalState = await readState(featureState);
+    expect(finalState.ok && finalState.value.architecture_review).not.toBe('skipped');
+  });
+
+  // Covers: task:9, task:rem-prd-audit-9-R3, S4.5
+  it('does not complete an interactive architecture review with an unapproved load-bearing A3', async () => {
+    const repository = join(dir, 'interactive-repository');
+    await mkdir(join(repository, '.docs', 'decisions'), { recursive: true });
+    await initTestRepo(repository);
+    await writeFile(join(repository, 'README.md'), 'base\n');
+    await commitAll(repository, 'seed main');
+    const adrPath = '.docs/decisions/adr-2026-10-10-unapproved.md';
+    await writeFile(join(repository, adrPath), [
+      '# ADR: Unapproved assumption',
+      '',
+      '## Assumptions',
+      '',
+      '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |',
+      '|---|---|---|---|---|---|---|',
+      '| A3 | The input is stable | unverified | 50% | yes | The gate may reject valid work | — |',
+      '',
+    ].join('\n'));
+    await writeState(join(repository, 'conduct-state.json'), decisionGateState('M'));
+
+    const restoreExeca = useRealGitExeca();
+    const verdicts: Array<{ satisfied: boolean; reason?: string }> = [];
+    events.on('gate_verdict', (event) => {
+      if (event.type === 'gate_verdict' && event.step === 'architecture_review') {
+        verdicts.push({ satisfied: event.satisfied, reason: event.reason });
+      }
+    });
+
+    try {
+      await new Conductor({
+        projectRoot: repository,
+        stateFilePath: join(repository, 'conduct-state.json'),
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'interactive',
+        fromStep: 'architecture_review',
+        maxRetries: 1,
+        verifyArtifacts: true,
+      }).run();
+    } finally {
+      restoreExeca();
+    }
+
+    expect(verdicts).toContainEqual(expect.objectContaining({
+      satisfied: false,
+      reason: expect.stringContaining(`${adrPath}: missing-approval (A3)`),
+    }));
+    const finalState = await readState(join(repository, 'conduct-state.json'));
+    expect(finalState.ok && finalState.value.architecture_review).not.toBe('done');
+  });
+
+  // Covers: task:9, S4.5
+  it('skips architecture_review for the S tier', async () => {
+    await writeState(statePath, decisionGateState('S'));
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'interactive',
+      fromStep: 'architecture_review',
+      verifyArtifacts: false,
+    }).run();
+
+    const finalState = await readState(statePath);
+    expect(finalState.ok && finalState.value.architecture_review).toBe('skipped');
+    expect(runner.run).not.toHaveBeenCalledWith('architecture_review', expect.anything(), expect.anything());
   });
 
   // Covers: rem-prd-audit-rem-prd-audit-t8-restart-prompt
@@ -1408,61 +1561,6 @@ describe('engine/conductor', () => {
 
   });
 
-  it('re-dispatches a typed coverage-binding payload failure without halting', async () => {
-    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
-    state.coverage_binding = 'pending';
-    await writeState(statePath, state);
-
-    let coverageDispatches = 0;
-    const retryReasons: string[] = [];
-    const loopHalts: ConductorEvent[] = [];
-    events.on('loop_halt', (event) => { loopHalts.push(event); });
-    const runner: StepRunner = {
-      run: vi.fn().mockImplementation(async (step, _state, options?: StepRunOptions) => {
-        if (step !== 'coverage_binding') return { success: true };
-        coverageDispatches++;
-        if (coverageDispatches === 1) {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(
-            join(dir, '.pipeline', 'coverage-binding.json'),
-            JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'failed', entries: [] }),
-          );
-          const infrastructureFailure = new CoverageBindingPayloadError('out-of-vocabulary verdict');
-          return {
-            success: false,
-            // Deliberately unrelated to prove the retry consumes the typed
-            // classifier rather than routing on arbitrary provider text.
-            output: 'provider output that must not select the retry route',
-            infrastructureFailure,
-          };
-        }
-        retryReasons.push(options?.retryReason ?? '');
-        return { success: true };
-      }),
-    };
-    const conductor = new Conductor({
-      projectRoot: dir,
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      fromStep: 'coverage_binding',
-      verifyArtifacts: false,
-      config: { steps: { coverage_binding: { max_retries: 2 } } },
-    });
-
-    await conductor.run();
-
-    expect(coverageDispatches).toBe(2);
-    expect(retryReasons).toEqual([
-      expect.stringContaining('coverage-binding judge infrastructure failure: out-of-vocabulary verdict'),
-    ]);
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
-    expect(loopHalts).toEqual([]);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-      status: 'failed', entries: [],
-    });
-  });
-
   it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {
     const state: ConductState = { build_review: 'done' };
     await writeState(statePath, state);
@@ -1585,49 +1683,8 @@ describe('engine/conductor', () => {
     expect(state.manual_test).toBe('pending');
   });
 
-  // Covers: task:2
-  it('does not reopen a decide-change kickback while advancing the rebase step', async () => {
-    const state: ConductState = { coverage_binding: 'done' };
-    await writeState(statePath, state);
-    await writeVerdict(dir, 'coverage_binding', {
-      satisfied: false,
-      checkedAt: 1,
-      kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },
-    });
-
-    const conductor = new Conductor({
-      projectRoot: dir,
-      stateFilePath: statePath,
-      stepRunner: createMockStepRunner(),
-      events,
-      verifyArtifacts: true,
-    });
-    (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
-      kind: 'changed',
-    };
-    const advanceTail = (conductor as unknown as {
-      advanceTail: (
-        step: (typeof ALL_STEPS)[number],
-        state: ConductState,
-        stuckGate: Map<StepName, number>,
-        steps: typeof ALL_STEPS,
-        indexOf: (name: StepName) => number,
-      ) => Promise<number | null | 'halt'>;
-    }).advanceTail.bind(conductor);
-
-    await advanceTail(
-      ALL_STEPS.find((step) => step.name === 'rebase')!,
-      state,
-      new Map(),
-      ALL_STEPS,
-      (name) => ALL_STEPS.findIndex((step) => step.name === name),
-    );
-
-    expect(state.coverage_binding).toBe('done');
-  });
-
   // Covers: task:5
-  it('dispatches BUILD without voiding coverage binding for a seal-reported plan self-amendment', async () => {
+  it('dispatches BUILD for a seal-reported plan self-amendment', async () => {
     const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
     vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
     try {
@@ -1644,16 +1701,11 @@ describe('engine/conductor', () => {
         baselineCommit: (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout,
       });
       await writeFile(planPath, 'self-amended plan\n');
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-        version: 1, slug: 'feature', runId: 'coverage-run', status: 'done', entries: [],
-      }));
       const state: ConductState = { feature_desc: 'feature', complexity_tier: 'M' };
       for (const step of ALL_STEPS) {
         if (step.name === 'build') break;
         state[step.name] = 'done';
       }
-      state.coverage_binding = 'done';
       await writeState(statePath, state);
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
@@ -1675,117 +1727,11 @@ describe('engine/conductor', () => {
       }).run();
 
       expect(dispatched).toContain('build');
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done' });
     } finally {
       vi.mocked(execa).mockImplementation(() =>
         Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
     }
-  });
-
-  // Covers: task:6
-  describe('coverage binding re-entry after a DECIDE void', () => {
-    const changedDecidePath = '.docs/decisions/adr-governing.md';
-
-    async function voidCompletedCoverageBinding(lastStep: StepName, buildStatus: StepStatus = 'done'): Promise<ConductState> {
-      const state = Object.fromEntries(
-        ALL_STEPS
-          .slice(0, ALL_STEPS.findIndex((step) => step.name === lastStep) + 1)
-          .map((step) => [step.name, 'done']),
-      ) as ConductState;
-      state.last_step = lastStep;
-      state.build = buildStatus;
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeState(statePath, state);
-      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
-        tasks: [{ id: '6', status: 'completed' }],
-      }) + '\n');
-      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({
-        version: 1,
-        slug: 'test-feature',
-        runId: 'before-decide-change',
-        status: 'done',
-        entries: [],
-      }) + '\n');
-      await writeVerdict(dir, 'coverage_binding', {
-        satisfied: true,
-        checkedAt: 1,
-        reason: 'coverage binding complete',
-      });
-
-      await voidCoverageBindingForDecideChange({
-        projectRoot: dir,
-        decideSet: { paths: new Set([changedDecidePath]) },
-        rebaselines: [{
-          path: changedDecidePath,
-          priorFingerprint: 'sha256:before',
-          newFingerprint: 'sha256:after',
-        }],
-        events,
-        stateFilePath: statePath,
-      });
-      const voided = await readState(statePath);
-      if (!voided.ok) throw new Error(voided.error.message);
-      return voided.value;
-    }
-
-    function runnerThatStopsAtBuild(dispatched: StepName[]): StepRunner {
-      return {
-        run: async (step) => {
-          dispatched.push(step);
-          return step === 'build'
-            ? { success: false, output: 'expected test boundary' }
-            : { success: true };
-        },
-      };
-    }
-
-    it('re-runs coverage_binding before BUILD after an operator rewind to build', async () => {
-      const voided = await voidCompletedCoverageBinding('build_review');
-      const rewindStore = createFilesystemConductStateStore(statePath);
-      await rewindState({
-        state: voided,
-        config: {},
-        target: 'build',
-        store: rewindStore,
-        readCurrentState: async () => {
-          const current = await readState(statePath);
-          return current.ok ? current.value : {};
-        },
-      });
-
-      const dispatched: StepName[] = [];
-      await new Conductor({
-        projectRoot: dir,
-        stateFilePath: statePath,
-        stepRunner: runnerThatStopsAtBuild(dispatched),
-        events,
-        resume: true,
-        verifyArtifacts: false,
-        onRecovery: async () => 'quit',
-      }).run();
-
-      expect(dispatched[0]).toBe('coverage_binding');
-      expect(dispatched.findIndex((step) => step === 'build')).toBe(1);
-    });
-
-    it('re-runs coverage_binding before BUILD when a daemon resumes after the void', async () => {
-      await voidCompletedCoverageBinding('acceptance_specs', 'stale');
-      const dispatched: StepName[] = [];
-      await new Conductor({
-        projectRoot: dir,
-        stateFilePath: statePath,
-        stepRunner: runnerThatStopsAtBuild(dispatched),
-        events,
-        resume: true,
-        daemon: true,
-        verifyArtifacts: false,
-        onRecovery: async () => 'quit',
-      }).run();
-
-      expect(dispatched[0]).toBe('coverage_binding');
-      expect(dispatched.findIndex((step) => step === 'build')).toBe(1);
-    });
   });
 
   it('halts build_review for a human when consuming the sixth cumulative kickback', async () => {
@@ -1851,7 +1797,7 @@ describe('engine/conductor', () => {
     expect(haltReasons).toEqual([
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
-        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n[security] skipped: disabled\n' +
+        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n[security] skipped: disabled\n[implementationQuality] skipped: disabled\n' +
         'Adjustment history: unavailable\n' +
         'Resume authorization: none\n' +
         'Mechanical faults: 0',
@@ -1916,7 +1862,7 @@ describe('engine/conductor', () => {
     expect(haltReasons).toEqual([
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
-        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n[security] skipped: disabled\n' +
+        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n[security] skipped: disabled\n[implementationQuality] skipped: disabled\n' +
         'Adjustment history: unavailable\n' +
         'Resume authorization: none\n' +
         'Mechanical faults: 0',
@@ -2942,7 +2888,7 @@ describe('engine/conductor', () => {
       events,
       stateStore,
     });
-    const state: ConductState = {};
+    const state: ConductState = { feature_desc: 'feature' };
 
     await expect((conductor as unknown as {
       resolveTrack(state: ConductState): Promise<Track>;
@@ -2952,6 +2898,45 @@ describe('engine/conductor', () => {
     expect(stateStore.apply).toHaveBeenCalledWith(expect.objectContaining({
       field: 'track', expected: undefined, next: 'technical',
     }));
+  });
+
+  describe('track marker ownership (#3334)', () => {
+    // A worktree inherits every feature's committed `.docs/track` marker from
+    // its base branch; only the marker this branch wrote may decide the track.
+    const branchGit = (changedOnBranch: string[]) => vi.fn(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n', exitCode: 0 };
+      if (args[0] === 'merge-base') return { stdout: 'base-sha\n', exitCode: 0 };
+      if (args[0] === 'diff' && args[2] === 'base-sha..HEAD') return { stdout: changedOnBranch.join('\n'), exitCode: 0 };
+      return { stdout: '', exitCode: 0 };
+    });
+    const resolveTrackFor = (conductor: Conductor, state: ConductState) =>
+      (conductor as unknown as { resolveTrack(state: ConductState): Promise<Track> }).resolveTrack(state);
+
+    it('resolves the marker this branch wrote, not the alphabetically last inherited one', async () => {
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'explore-named-this.md'), 'Track: technical\n');
+      await writeFile(join(dir, '.docs', 'track', 'zzz-other-feature.md'), 'Track: product\n');
+      const git = branchGit(['.docs/track/explore-named-this.md']);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events, git,
+      });
+
+      await expect(resolveTrackFor(conductor, { feature_desc: 'Make interactive runs faster' }))
+        .resolves.toBe('technical');
+      expect(git).toHaveBeenCalledWith(['merge-base', 'origin/main', 'HEAD'], expect.anything());
+    });
+
+    it('defaults to product without caching when only other features own markers', async () => {
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'zzz-other-feature.md'), 'Track: technical\n');
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events, git: branchGit([]),
+      });
+      const state: ConductState = { feature_desc: 'my-feature' };
+
+      await expect(resolveTrackFor(conductor, state)).resolves.toBe('product');
+      expect(state.track).toBeUndefined();
+    });
   });
 
   it('propagates rejected initialization and DECIDE mutations', async () => {
@@ -3392,7 +3377,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: technical\n');
       await writeState(statePath, {
         worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        complexity_tier: 'M',
+        complexity_tier: 'M', feature_desc: 'feat',
       } as ConductState);
 
       const stepsRun: StepName[] = [];
@@ -3415,7 +3400,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: product\n');
       await writeState(statePath, {
         worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        complexity_tier: 'M',
+        complexity_tier: 'M', feature_desc: 'feat',
       } as ConductState);
 
       const stepsRun: StepName[] = [];
@@ -3608,8 +3593,9 @@ describe('engine/conductor', () => {
   });
 
   it('starts at step index 0 for new feature', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3622,7 +3608,8 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'rebase',
+        s.name !== 'rebase' &&
+        s.name !== 'plan_review',
     ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('memory');
@@ -3665,8 +3652,9 @@ describe('engine/conductor', () => {
   });
 
   it('marks step done after success', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3681,6 +3669,7 @@ describe('engine/conductor', () => {
   });
 
   it('advances to next step after success', async () => {
+    await seedGenericTail(statePath);
     const callOrder: StepName[] = [];
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -3688,7 +3677,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3699,14 +3688,16 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'rebase',
+        s.name !== 'rebase' &&
+        s.name !== 'plan_review',
     ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
 
   it('sets feature_status=complete when all steps done', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3718,8 +3709,9 @@ describe('engine/conductor', () => {
   });
 
   it('emits step_started and step_completed events', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     const emitted: Array<{ type: string; step: string }> = [];
     events.on('step_started', (e) => {
@@ -3733,14 +3725,14 @@ describe('engine/conductor', () => {
 
     // Should have started + completed events for every step (complexity
     // dispatches via the engine path but still emits the same event pair).
-    expect(emitted.length).toBe(ALL_STEPS.length * 2);
+    expect(emitted.length).toBe((ALL_STEPS.length - 1) * 2);
 
     // Check first step events are in correct order
     expect(emitted[0]).toEqual({ type: 'step_started', step: 'worktree' });
     expect(emitted[1]).toEqual({ type: 'step_completed', step: 'worktree' });
 
     // Check last step
-    const lastIdx = (ALL_STEPS.length - 1) * 2;
+    const lastIdx = (ALL_STEPS.length - 2) * 2;
     expect(emitted[lastIdx]).toEqual({ type: 'step_started', step: 'finish' });
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
   });

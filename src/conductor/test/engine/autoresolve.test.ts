@@ -39,7 +39,7 @@ describe('engine/autoresolve — eligibility gate', () => {
   };
 
   const basePrState: PrMergeState = {
-    state: 'CONFLICTING',
+    state: 'OPEN',
     mergeable: 'CONFLICTING',
     hasFailingOrPendingChecks: false,
     labels: [],

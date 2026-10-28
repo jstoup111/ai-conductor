@@ -627,8 +627,8 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     const git = vi.fn(async (args: string[]) => {
       if (args[0] === 'remote') return { stdout: 'origin\n' };
       if (args[0] === 'rev-list') return { stdout: '1\n' };
-      if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
-      if (args[0] === 'merge-base') return { stdout: '' };
+      if (args[0] === 'rev-parse') return { stdout: `${'a'.repeat(40)}\n` };
+      if (args[0] === 'fetch' || args[0] === 'merge-base') return { stdout: '' };
       if (args[0] === 'push') return { stdout: '' };
       throw new Error(`unexpected git command: git ${args.join(' ')}`);
     });
@@ -870,8 +870,8 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     const git = vi.fn(async (args: string[]) => {
       if (args[0] === 'remote') return { stdout: 'origin\n' };
       if (args[0] === 'rev-list') return { stdout: '1\n' };
-      if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
-      if (args[0] === 'merge-base' || args[0] === 'push') return { stdout: '' };
+      if (args[0] === 'rev-parse') return { stdout: `${'a'.repeat(40)}\n` };
+      if (args[0] === 'fetch' || args[0] === 'merge-base' || args[0] === 'push') return { stdout: '' };
       throw new Error(`unexpected git command: ${args.join(' ')}`);
     });
     const conductor = new Conductor({

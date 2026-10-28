@@ -211,7 +211,8 @@ so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files
 | `test/execution/` | 25 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
 | `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
 | `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
-| `test/structural/` | 13 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
+| `test/corpus/` | 6 | Checks whose verdict depends on the live `.docs/` corpus: ADR corpus conformance, shipped records, and projection limits that must admit the largest corpus inputs. The only tier docs-only pull requests run. | `npm test -- test/corpus/` |
+| `test/structural/` | 26 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
@@ -418,6 +419,26 @@ no-caller claims (`nothing imports`, `no callers`/`no importers`, inert-module c
 calling, using, or invoking a backticked identifier). It fails only when a relative import or symbol
 reference contradicts a claim; truthful claims and matching prose below the leading comment block pass.
 
+### Layer ratchet
+
+**`layer-ratchet.test.ts`** reads every `.ts` file under `src/conductor/src/`, classifies it by its
+first path segment, and checks its top-level value imports and `export … from` re-exports against
+the [dependency direction](code-organization.md#dependency-direction) and the committed
+`layer-allowlist.txt`. The checker is the pure module `layer-ratchet.ts`. Each failure line reads
+`<kind> <location> <detail>`; `upward` and `cycle` lines end with the edge's allowlist entry.
+
+| Kind | Fix |
+| --- | --- |
+| `upward`, `cycle` | Remove the import, or make it `import type`. Do not allowlist new edges. |
+| `stale-entry` | Delete the named line from `layer-allowlist.txt`; its edge is gone or no longer violates. |
+| `malformed-entry` | Fix or delete the line. Each is `<from> -> <to>`, paths relative to `src/conductor/src/`, lines sorted and unique; `#` lines and blank lines are ignored. |
+| `unclassifiable-file` | Move the file under `types/`, `execution/`, `engine/`, `ui/`, `tools/`, or the `src/` root. |
+| `unresolved-specifier` | Fix the relative import so it resolves to a `.ts` file or `index.ts` inside `src/conductor/src/`. |
+
+```bash
+cd src/conductor && npm test -- test/structural/layer-ratchet.test.ts
+```
+
 ### Conductor facade guards
 
 Three structural tests keep `engine/conductor.ts` a thin facade (layout in
@@ -446,7 +467,9 @@ npm run smoke
 ```
 
 The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers eighteen
-files. Each declares exactly one required capability beside the test:
+files. Each declares exactly one required capability beside the test; the default-suite
+`test/structural/test-execution-policy.test.ts` fails when any discovered smoke file declares none or an
+unknown one:
 
 | Capability | Current files | Requirement |
 | --- | --- | --- |
@@ -475,15 +498,41 @@ execute smoke tests.
 
 ## Bash test scripts
 
-40 `.sh` files live under `test/`. Only six ever execute:
+`test/shell_tests.manifest` classifies every `test/*.sh` script. Each non-blank, non-comment line is
+`<script> <class> <reason>`:
 
-- `test/test_harness_integrity.sh`, run by CI and by the BUILD `test_suite` gate. See
-  [validation](validation.md).
-- `test/test_ci_detect_docs_only.sh` and `test/test_provider_skill_contracts.sh`, executed by the
-  integrity suite as checks 13 and 14.
-- `test/test_docs_navigation.sh` and `test/test_docs_pages_smoke.sh`, executed by the integrity
-  suite as check 17. `test_docs_navigation.sh` in turn shells out to `test/check_docs_navigation.sh`,
-  the offline contract checker it validates against fixture and real-tree cases.
+| Class | Meaning | Executed by |
+| --- | --- | --- |
+| `integrity` | Run directly by `test/test_harness_integrity.sh`. | The integrity suite. See [validation](validation.md). |
+| `invoked-by:<parent>` | Called by another classified script. | `<parent>`, whose chain must reach `integrity` or `shell-runner`. |
+| `shell-runner` | A standalone behavioral test. Reason optional. | `test/run_shell_tests.sh`, in CI job `shell-tests`. |
+| `sourced-helper` | A library sourced by other scripts. | Never executed. |
+
+Run every `shell-runner` script locally:
+
+```bash
+bash test/run_shell_tests.sh   # options: --manifest FILE, --test-dir DIR, --timeout SECONDS
+```
+
+Each script runs in its own sandbox with a fresh `HOME`, `TMPDIR`, `XDG_CONFIG_HOME`,
+`XDG_CACHE_HOME`, `XDG_DATA_HOME`, and `GIT_CONFIG_GLOBAL`, and with `GH_TOKEN`, `GITHUB_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `CODEX_HOME` unset. The per-script
+timeout is `SHELL_TEST_TIMEOUT` seconds (default 600). The runner prints `PASS <script>`,
+`FAIL <script> (exit N)`, or `TIMEOUT <script> after Ns` per script, then
+`shell tests: N passed, M failed`, and exits non-zero on any failure. A manifest that is unreadable or
+has no `shell-runner` entry fails with `UNREADABLE MANIFEST` or `EMPTY MANIFEST`.
+
+Integrity check 16b runs `test/check_shell_test_classification.sh` and fails on:
+
+- `UNCLASSIFIED` — a `test/*.sh` script has no manifest entry.
+- `STALE ENTRY` — an entry names a script that does not exist.
+- `DUPLICATE ENTRY`, `INVALID CLASS`, or `MISSING REASON` (every class except `shell-runner` needs a reason).
+- `UNVERIFIED integrity` or `UNVERIFIED invoked-by` — the declared parent does not reference the
+  script, or an `invoked-by` chain never reaches integrity or a `shell-runner` script.
+
+To add a shell test, create the script, add its manifest line, and confirm it passes under
+`bash test/run_shell_tests.sh`. `# triage:` comment lines in the manifest record why existing scripts
+were kept, fixed, or deleted.
 
 ### ripgrep is optional, and skipping is silent
 
@@ -496,19 +545,8 @@ reporting green. `bin/install --check` warns when `rg` is missing; nothing the h
 runtime needs it.
 
 `test/docs_pages.smoke.test.sh` is a real, opt-in Pages probe — run it by hand after a default-branch
-deployment; it is never invoked from integrity or CI. `test/run_browsable_documentation_site_acceptance.sh`
-runs `test_docs_navigation.sh` and `test_docs_pages_smoke.sh` together as the deterministic acceptance
-suite for the hosted documentation site story; nothing invokes it automatically.
-
-> **Known limitation.** The rest — `test_bin_update.sh`, `test_conduct_worktree.sh`, the five
-> `test_install_*.sh`, the ten `test_examples_*.sh`, `test_skill_pipeline_contract.sh`,
-> `test_release_unreleased_state.sh`, `docs_pages.smoke.test.sh`, and
-> `run_browsable_documentation_site_acceptance.sh` — are statically checked only: `bash -n` by integrity
-> check 1 and ShellCheck by check 1b. Nothing *executes* them, in CI or locally, and no documented
-> command runs them as a suite. Static analysis raises the floor but does not make them tests: a
-> behavioral regression in `bin/install`, `bin/update`, or `bin/setup` is still caught by no automated
-> gate. Run the relevant script by hand (`bash test/test_bin_update.sh`) when you change those surfaces.
-> Tracked in [#1021](https://github.com/jstoup111/ai-conductor/issues/1021).
+deployment. Integrity reaches it only through the deterministic `test_docs_pages_smoke.sh` fixture,
+which replaces `gh` and `curl` at the process boundary.
 
 `examples/` holds runnable end-to-end scenarios (`interactive.sh`, `daemon.sh`,
 `engineer.sh`, `intake-loop.sh`, each taking a tier `s|m|l`). Each creates a throwaway sandbox via
@@ -545,27 +583,37 @@ For where `test_suite` sits in the flow and what happens when it fails, see
    `.github/scripts/ci-detect-docs-only.sh`.
 2. `integrity` — skipped when `docs_only` is true; installs `shellcheck`, then runs
    `bash test/test_harness_integrity.sh`.
-3. `shellcheck` — skipped when `docs_only` is true; runs `bash test/lint_shell.sh`, the same script
+3. `shell-tests` — skipped when `docs_only` is true; installs `shellcheck` and `ripgrep`, runs `npm ci`
+   in `src/conductor`, then `bash test/run_shell_tests.sh`. See [Bash test scripts](#bash-test-scripts).
+4. `shellcheck` — skipped when `docs_only` is true; runs `bash test/lint_shell.sh`, the same script
    integrity check 1b calls.
-4. `lint` — skipped when `docs_only` is true; `npm ci` then `npm run lint` in `src/conductor`, then
+5. `lint` — skipped when `docs_only` is true; `npm ci` then `npm run lint` in `src/conductor`, then
    each `plugins/*/` is installed and linted with its own `eslint.config.mjs`, which shares the
    engine's rule set.
-5. `typecheck` — `npm ci`, `npm run typecheck`, and `npm run typecheck:test` in `src/conductor`, then
+6. `typecheck` — `npm ci`, `npm run typecheck`, and `npm run typecheck:test` in `src/conductor`, then
    `npm ci` and `npm run typecheck` in each `plugins/*/`.
-6. `conductor` — `npm ci`, `npm run build`, then `npm test` in `src/conductor`, split by file across
+7. `conductor` — `npm ci`, `npm run build`, then `npm test` in `src/conductor`, split by file across
    four shards (`--shard=N/4`) with a 15-minute job timeout. Each shard adds
    `--reporter=./test/reporters/ci-progress-reporter.ts`; see
    [Reading a conductor shard log](#reading-a-conductor-shard-log).
-7. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
-8. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
+8. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
+9. `docs-corpus` — runs **only** when `docs_only` is true; `npm ci`, `npm run build`, then
+   `npm test -- test/corpus/` in `src/conductor`. A spec landing that grows the `.docs/` corpus past a
+   shipped projection limit fails here instead of on the next code pull request.
+10. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
    required-status aggregator.
 
 `links` is deliberately the one job with no `docs_only` gate. `docs_only` is true only when every
 changed path is under `.docs/` (the internal spec-artifact tree) — see
-`.github/scripts/ci-detect-docs-only.sh` — and such a pull request skips every other job here. A link
+`.github/scripts/ci-detect-docs-only.sh` — and such a pull request skips every other job here except `docs-corpus`. A link
 checker carrying the same gate would inherit that hole. Leaving it ungated also means the guarantee
 survives any future widening of the predicate, and it costs about six seconds with no npm install and
 no network.
+
+`docs-corpus` is the inverse: the `conductor` job already runs `test/corpus/` on every other pull
+request, so this job covers only the docs-only case. Put any test whose verdict depends on the live
+`.docs/` corpus in `src/conductor/test/corpus/`, and have projection-limit checks assert that the
+limits admit the corpus, never equality with recorded maxima.
 
 ### Reading a conductor shard log
 

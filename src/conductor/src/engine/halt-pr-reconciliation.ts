@@ -34,7 +34,13 @@ export interface HaltPrReconciliationTarget {
   headRefName?: string;
 }
 
-export type PrSweepOutcome = 'conforming' | 'healed' | 'unconfirmed' | 'cleared' | 'clear-unconfirmed';
+export type PrSweepOutcome =
+  | 'conforming'
+  | 'healed'
+  | 'unconfirmed'
+  | 'cleared'
+  | 'clear-unconfirmed'
+  | 'in-flight';
 
 /**
  * Durable, positive evidence that the halt which drafted+labeled this PR has
@@ -78,6 +84,8 @@ interface ReconcileOpts {
   operations?: GithubOperationRunner | ((pr: HaltPrReconciliationTarget) => GithubOperationRunner | undefined);
   runGit?: GitRunner;
   cache?: Map<string, PrSweepOutcome>;
+  /** Live daemon feature ownership; active features own their halt mutations. */
+  isFeatureInFlight?: (slug: string) => boolean;
 }
 
 // ── Reconciliation ────────────────────────────────────────────────────────────
@@ -95,7 +103,15 @@ interface ReconcileOpts {
  * - Best-effort / non-throwing (errors logged but never re-thrown)
  * - Returns void
  */
-export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, runGit, cache }: ReconcileOpts): Promise<void> {
+export async function reconcileHaltPrs({
+  projectRoot,
+  log,
+  runGh,
+  operations,
+  runGit,
+  cache,
+  isFeatureInFlight,
+}: ReconcileOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   const git = runGit ?? makeProductionGit();
   const outcomeCache = cache ?? new Map<string, PrSweepOutcome>();
@@ -162,6 +178,17 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
             : undefined;
         const probeBranch =
           identity.kind === 'child' ? leafBranchFor(identity.slug) : pr.headRefName ?? '';
+
+        // A live feature owns its own halt state. Do not race its clear/presentation
+        // work; record the distinct state in the existing delta cache so only a
+        // transition into or out of this skip is logged.
+        if (slug && isFeatureInFlight?.(slug)) {
+          if (outcomeCache.get(pr.url) !== 'in-flight') {
+            emit(`[halt-pr-reconciliation] ${pr.url} skipped: feature ${slug} is in flight`);
+          }
+          outcomeCache.set(pr.url, 'in-flight');
+          continue;
+        }
 
         if (slug && (await hasShippedRecordOnBranch(git, projectRoot, probeBranch, slug))) {
           if (outcomeCache.get(pr.url) !== 'cleared') {

@@ -11,7 +11,6 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { ParsedIssueRef } from './engineer/issue-ref.js';
 import {
   executeGithubOperation,
@@ -19,8 +18,6 @@ import {
   type GithubOperationResult,
   type GithubOperationRunner,
 } from './github-operations.js';
-
-const execFileP = promisify(execFileCb);
 
 // ── Runner types ──────────────────────────────────────────────────────────────
 
@@ -51,8 +48,8 @@ export { makeProductionGh, assertRealExecAllowed, type GhRunner };
  */
 export type GitRunner = (
   args: string[],
-  opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' },
-) => Promise<{ stdout: string }>;
+  opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string },
+) => Promise<{ stdout: string; exitCode?: number }>;
 
 /**
  * The PR seam accepts its historical raw runner for read-only compatibility,
@@ -126,24 +123,47 @@ async function runMutation(
 // ── Production factories ──────────────────────────────────────────────────────
 
 /** Construct the real git runner used in production. */
-export function makeProductionGit(): GitRunner {
-  return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }) => {
-    assertRealExecAllowed('git');
+export function makeProductionGit(dependencies: {
+  execFile?: typeof execFileCb;
+  readCredential?: typeof readGithubBotCredential;
+  readToken?: typeof readGithubBotToken;
+  assertRealExecAllowed?: typeof assertRealExecAllowed;
+} = {}): GitRunner {
+  const execFile = dependencies.execFile ?? execFileCb;
+  const readCredential = dependencies.readCredential ?? readGithubBotCredential;
+  const readToken = dependencies.readToken ?? readGithubBotToken;
+  const assertAllowed = dependencies.assertRealExecAllowed ?? assertRealExecAllowed;
+  return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string }) => {
+    assertAllowed('git');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
     if (opts.credential === 'write') {
-      const credential = await readGithubBotCredential();
+      const credential = await readCredential();
       if (credential.kind === 'configured') {
         if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
-        const token = await readGithubBotToken(credential.tokenFile);
+        const token = await readToken(credential.tokenFile);
         if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
         botToken = token.token;
         env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
       }
     }
     try {
-      const result = await execFileP('git', args, { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) });
-      return { stdout: String(result.stdout) };
+      const result = await new Promise<{ stdout: string | Buffer }>((resolve, reject) => {
+        const child = execFile(
+          'git',
+          args,
+          { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) },
+          (error, stdout) => error === null ? resolve({ stdout }) : reject(error),
+        );
+        if (opts.input !== undefined) {
+          if (child.stdin === null) {
+            reject(new Error('git stdin is unavailable'));
+          } else {
+            child.stdin.end(opts.input);
+          }
+        }
+      });
+      return { exitCode: 0, stdout: String(result.stdout) };
     } catch (error) {
       if (botToken !== undefined && classifyGitPushAuthRefusal(error)) throw new GithubBotAuthRefusalError('auth-refused');
       // Do not retain the raw child as Error.cause: inspect/error reporters
@@ -290,14 +310,25 @@ export type PrMergeStateReadFailure =
   | { kind: 'invalid-json'; error: unknown }
   | { kind: 'invalid-response' };
 
+/** States understood by the PR reader. Unknown provider values fail closed. */
+export type PullRequestState = 'OPEN' | 'MERGED' | 'CLOSED' | 'UNKNOWN' | 'NOTFOUND';
+
 /** A response was read, but its check context cannot safely be consumed. */
 export type PrCheckContextFailure =
   | { kind: 'invalid-rollup' }
   | { kind: 'invalid-rollup-entry'; index: number };
 
 export interface PrMergeState {
-  state: string;
+  state: PullRequestState;
   mergeable: string;
+  /** GitHub's PR creation timestamp, used to order pooled repairs. */
+  createdAt?: string;
+  /** GitHub's detailed merge-state classification when present. */
+  mergeStateStatus?: string;
+  /** The target branch name when present. */
+  baseRefName?: string;
+  /** The current head commit SHA when present. */
+  headRefOid?: string;
   hasFailingOrPendingChecks: boolean;
   /** Whether the PR body contains the needs-remediation halt marker. */
   hasHaltBodyMarker?: boolean;
@@ -466,6 +497,10 @@ export function classifyChecksOutcome(
 interface GhPrViewJson {
   state?: string;
   mergeable?: string;
+  createdAt?: string;
+  mergeStateStatus?: string;
+  baseRefName?: string;
+  headRefOid?: string;
   body?: string | null;
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null }> | null;
   labels?: Array<{ name?: string }> | null;
@@ -559,7 +594,7 @@ export async function prMergeState(
   log?: (msg: string) => void,
 ): Promise<PrMergeState> {
   try {
-    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body']);
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,createdAt,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid']);
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
@@ -570,7 +605,9 @@ export async function prMergeState(
       return { ...ERROR_SENTINEL, readFailure: { kind: 'invalid-response' } };
     }
     const data = parsed as GhPrViewJson;
-    const state = data.state ?? 'UNKNOWN';
+    const state: PullRequestState = data.state === 'OPEN' || data.state === 'MERGED' || data.state === 'CLOSED'
+      ? data.state
+      : 'UNKNOWN';
     const mergeable = data.mergeable ?? 'UNKNOWN';
     const rollup = parseCheckRollup(data.statusCheckRollup);
     if ('failure' in rollup) {
@@ -590,6 +627,10 @@ export async function prMergeState(
     return {
       state,
       mergeable,
+      ...(typeof data.createdAt === 'string' ? { createdAt: data.createdAt } : {}),
+      mergeStateStatus: data.mergeStateStatus,
+      baseRefName: data.baseRefName,
+      headRefOid: data.headRefOid,
       hasFailingOrPendingChecks,
       hasHaltBodyMarker: typeof data.body === 'string' && maskProjectOwnedRegions(data.body).includes(NEEDS_REMEDIATION_BODY_MARKER),
       labels,

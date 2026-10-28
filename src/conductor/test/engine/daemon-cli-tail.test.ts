@@ -67,11 +67,11 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
   it('gives each mergeable-sweep entry a feature-scoped guarded runner', () => {
     const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
     const content = readFileSync(daemonCliPath, 'utf-8');
-    const sweepStart = content.indexOf('sweepMergeableLabels: async () =>');
+    const sweepStart = content.indexOf('sweepMergeableLabels: async');
     // The nested autoresolve and CI-fix blocks appear before the per-entry
     // operations binding. Bound the whole daemon dependency entry, not its
     // first nested feature block.
-    const sweepEnd = content.indexOf('// Task T28: check for pending restart marker', sweepStart);
+    const sweepEnd = content.indexOf('hasRestartPending: async () =>', sweepStart);
     const sweep = content.slice(sweepStart, sweepEnd);
 
     expect(sweep).toMatch(/operations:\s*\(entry\)\s*=>\s*{[\s\S]*?parseIssueRef\(entry\.prUrl\)[\s\S]*?haltPrOperations\(/);

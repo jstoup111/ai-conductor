@@ -41,6 +41,7 @@ function fakeProvider(result: InvokeResult): LLMProvider {
   return {
     supportsSessionResume: false,
     lifecycleCapability: { synchronousSpawnPermit: true },
+    systemPromptCapability: { deliversSystemPrompt: true },
     invoke: vi.fn(async () => result),
   };
 }
@@ -119,6 +120,7 @@ describe('Pi lifecycle abort', () => {
         isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
         isDirectory: () => false,
       }),
+      access: async () => {},
       env: {},
       homeDir: () => '/home/agent',
       cwd: () => '/workspace',
@@ -445,6 +447,7 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
         success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
       })),
@@ -478,6 +481,7 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
         success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
       })),
@@ -594,7 +598,7 @@ describe('preferred Pi escalation and fallback isolation', () => {
     };
 
     const result = await executeProviderCandidates({
-      step: 'coverage_binding', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
+      step: 'plan_review', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
       runtimes: runtimeSet(config, { claude, pi }), sessions: new ProviderSessionScope(vi.fn()), config,
       modelFallbackLadder: ['opus', 'sonnet'], options: { prompt: 'Judge.', cwd: '/workspace' },
     });

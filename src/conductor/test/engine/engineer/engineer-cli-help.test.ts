@@ -19,6 +19,7 @@ const argv = (verb: 'engineer' | 'compose', ...rest: string[]) => ['node', 'cond
 const SUBCOMMANDS = [
   'projects',
   'worktree',
+  'phase',
   'land',
   'handoff',
   'poll',

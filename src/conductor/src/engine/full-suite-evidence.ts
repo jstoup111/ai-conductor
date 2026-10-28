@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { constants as osConstants } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import {
   FULL_SUITE_FINGERPRINT_CATEGORIES,
   type FullSuiteCategoryFingerprints,
@@ -216,6 +216,38 @@ export function sanitizeFullSuiteDiagnosticOutput(
   }
 
   return removeSecretsToFixedPoint(bounded, secrets);
+}
+
+export const FULL_SUITE_OUTPUT_LOG = 'test-suite-output.log';
+
+/**
+ * Persist a failed run's complete, redacted output beside its evidence. The
+ * failure message is a bounded head+tail excerpt, so when many tests fail the
+ * middle failures are cut and the build repairs them one test_suite round at a
+ * time until the gate's retry cap halts the feature. The log keeps every
+ * failure readable in one pass. Returns the project-relative path written.
+ */
+export async function writeFullSuiteOutputLog(
+  projectRoot: string,
+  output: { stdout: string; stderr: string },
+  secretValues: readonly string[] = [],
+  child?: ChildId,
+): Promise<{ path: string; bytes: number }> {
+  const secrets = normalizedSecrets(secretValues);
+  const stdout = removeSecretsToFixedPoint(output.stdout, secrets);
+  const stderr = removeSecretsToFixedPoint(output.stderr, secrets);
+  const contents = stdout !== '' && stderr !== ''
+    ? `${stdout}\n--- stderr ---\n${stderr}`
+    : stdout || stderr;
+  const destination = pipelinePathFor(projectRoot, FULL_SUITE_OUTPUT_LOG, child);
+  await mkdir(join(destination, '..'), { recursive: true });
+  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporary, contents, 'utf8');
+  await rename(temporary, destination);
+  return {
+    path: relative(projectRoot, destination),
+    bytes: Buffer.byteLength(contents, 'utf8'),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

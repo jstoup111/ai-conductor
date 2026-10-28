@@ -1,7 +1,7 @@
 ---
 name: simplify
 implicit_invocation: required
-description: "Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, and over-engineering; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code."
+description: "Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code."
 enforcement: gating
 phase: build
 standalone: false
@@ -11,8 +11,8 @@ model: sonnet
 
 ## Purpose
 
-Runs at pipeline batch boundaries. Catches accumulated duplication, complexity, and
-over-engineering before they compound across batches. Enforces "dry business logic, not dry code"
+Runs at pipeline batch boundaries. Catches accumulated duplication, complexity,
+over-engineering, and domain-modelling defects before they compound across batches. Enforces "dry business logic, not dry code"
 — extract shared *behavior*, not shared *shape*.
 
 This is NOT a full codebase audit. It is scoped to the current batch's changes, except
@@ -119,7 +119,34 @@ Before recommending an inline or replacement abstraction, apply the focused patt
 from Duplication Check. Do not raise an independent finding for a variation, verified no-fit
 decision, or authorized departure that the applicable basis already permits.
 
-### 7. Dead Code Detection
+### 7. Domain-Modelling Check
+
+`build_review`'s `implementationQuality` rubric enforces a closed vocabulary of implementation and
+domain-modelling defects across the whole feature diff (see the `build-review-implementation-quality`
+skill's Judgement section for each kind and its non-finding). That rubric stays the authority. This
+check is the build's good-faith first pass: catch the concrete cases in this batch while the code is
+fresh, so they do not each cost a review lap later. Duplication (§2) and complexity (§3) already
+cover two kinds. Check batch-changed code for the other five:
+
+| Kind | Must-fix when the batch... | Not a finding |
+|------|----------------------------|---------------|
+| `representable-invalid-state` | adds a state shape that can hold a contradictory or meaningless combination (two fields that can disagree, independently optional fields that must appear together) | invalid combinations are impossible at construction |
+| `non-exhaustive-domain-match` | adds a branch over a closed domain (union, enum, event kind) that silently drops a meaningful case | an exhaustive match, or an explicit default that preserves the remaining cases |
+| `primitive-obsession` | encodes a domain concept with invariants (an identity, a path component, a slug, a count with a unit) as a bare primitive that callers can confuse or misuse | the primitive's range and meaning are enforced where it is used |
+| `obscured-intent` | hides the domain operation it performs (a hidden second return value, a computed value that is discarded and recomputed) | a local detail with a clear name and boundary |
+| `non-semantic-name` | gives a public or domain name a meaning other than its role, or reuses one name for two concepts | a conventional iterator or a private temporary |
+
+Report only concrete defects you can point to in a batch-changed hunk: name the invalid state, the
+dropped case, or the confused value. Do not report style preferences, hypothetical risks, plan or
+acceptance conformance, or defects in code this batch did not change.
+
+**Carry decisions forward.** Before reporting, read the earlier
+`.pipeline/audit-trail/batch-*-simplification.md` files. Do not re-raise a finding an earlier batch
+fixed or recorded as advisory with a reason, unless this batch changed that code again. Record every
+finding you leave unfixed as advisory with its reason, so later batches and reviewers can see the
+decision.
+
+### 8. Dead Code Detection
 
 Check for code added in this batch that is never called:
 
@@ -130,7 +157,7 @@ Check for code added in this batch that is never called:
 Use the linter output if available (tech-context may specify one). Otherwise, grep for
 references to each new symbol.
 
-### 8. Output
+### 9. Output
 
 Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
 
@@ -163,6 +190,11 @@ Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
 |---|-------------|-----------|---------|----------------|
 | 1 | [class/method] | [file:line] | [count] | [inline / remove / keep with justification] |
 
+### Domain Modelling
+| # | Kind | File:Line | Defect | Severity |
+|---|------|-----------|--------|----------|
+| 1 | [representable-invalid-state / non-exhaustive-domain-match / ...] | [file:line] | [the invalid state, dropped case, or confused value] | must-fix / advisory (reason) |
+
 ### Dead Code
 | # | Symbol | File:Line | Reason Unused |
 |---|--------|-----------|---------------|
@@ -179,7 +211,7 @@ Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
 **Advisory items:** [count]
 ```
 
-### 9. Verdict and Gating
+### 10. Verdict and Gating
 
 | Verdict | Condition | Action |
 |---------|-----------|--------|
@@ -201,6 +233,8 @@ If the rework budget is exhausted, escalate to user.
 - [ ] Extract-worthy patterns identified (3+ similar blocks)
 - [ ] Over-engineering flagged (single-caller abstractions, unnecessary indirection)
 - [ ] ADR exceptions respected (documented abstractions not flagged)
+- [ ] Domain-modelling check run on batch-changed code for the five kinds in §7; concrete defects marked must-fix
+- [ ] Earlier batches' simplification records read; fixed or advisory findings not re-raised unless their code changed again
 - [ ] Dead code in batch detected
 - [ ] Changed/added tests compared only with existing tests at the same production seam, including outside the batch when needed
 - [ ] Distinct failure boundaries stated for any intentionally overlapping tests

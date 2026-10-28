@@ -17,6 +17,7 @@
  * All operations are best-effort / non-throwing (C3, FR-15).
  */
 
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -30,13 +31,42 @@ import {
   type PrMergeState,
   type PrRunner,
 } from './pr-labels.js';
-import { createGithubTrackerClient, type TrackerClient } from './tracker-client.js';
+import { createGithubTrackerClient, runTrackerRepositoryRead, type TrackerClient } from './tracker-client.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
-import type { CiFixOutcome } from './ci-fix.js';
+import { makeGitRunner } from './rebase.js';
+import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
+import { parseGithubUrl } from './github-target.js';
+import {
+  activePublicationRecord,
+  readPublicationRecord,
+  writePublicationRecord,
+  type PublicationMemberLifecycle,
+  type PublicationRecordDependencies,
+  type StoredPublicationRecord,
+} from './stack-publication-record.js';
+import { recordUnreachableMemberReport, verifyMemberReachability } from './stack-publication.js';
+import { deleteStackChildren } from './stack-teardown.js';
+import {
+  classifyShippedReadiness,
+  routeShippedReadiness,
+  type ShippedReadinessVerdict,
+} from './shipped-readiness.js';
+import {
+  type RepairQueue,
+  type RepairCompletion,
+  type RepairRequest,
+  type WatchEntry,
+  type AutoresolveOutcome,
+  type CiFixRepairOutcome,
+} from './repair-queue.js';
+import { PUBLISHED_STACK_CI_FIX_REASON, type CiFixOutcome } from './ci-fix.js';
+import { escalate, logOutcome } from './autoresolve.js';
+import { emitRestackRefused } from './restack/restack-events.js';
+export type { WatchEntry } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -67,18 +97,6 @@ function buildExhaustionComment(entry: WatchEntry, state: PrMergeState): string 
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
-export interface WatchEntry {
-  prUrl: string;
-  slug: string;
-  repoCwd: string;
-  resolveAttempts?: number;
-  lastResolveAt?: string;
-  ciFixAttempts?: number;
-  lastCiFixAt?: string;
-  ciFailureDetected?: boolean;
-  escalationCause?: 'conflict-resolution';
-  labelClearAttempts?: number;
-}
 
 /**
  * Retire a conflict-resolution remediation label only after GitHub reports a
@@ -102,11 +120,54 @@ export async function maybeClearConflictLabel(
     log?.(`[mergeable-sweep] label clear retry cap reached for ${entry.prUrl}`);
     return clear();
   }
+  const result = await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+  if (result.kind === 'executed') return clear();
+  return { ...entry, labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
+}
+
+/**
+ * Retire only the remediation label the shipped-readiness path applied. A
+ * human, CI-exhaustion, or conflict-resolution label has no equivalent
+ * provenance and must remain sticky. Read uncertainty and transient readiness
+ * states deliberately preserve the label to avoid flapping.
+ */
+export async function maybeClearReadinessLabel(
+  entry: WatchEntry,
+  state: PrMergeState,
+  verdict: ShippedReadinessVerdict,
+  gh: PrRunner,
+  log?: (message: string) => void,
+): Promise<WatchEntry> {
+  if (entry.escalationCause !== 'shipped-readiness') return entry;
+  const clear = (): WatchEntry => {
+    const { escalationCause: _cause, labelClearAttempts: _attempts, ...cleared } = entry;
+    return cleared;
+  };
+  if (!state.labels.includes('needs-remediation')) return clear();
+  if (
+    state.hasHaltBodyMarker ||
+    state.readFailure ||
+    verdict === 'no-checks' ||
+    verdict === 'draft' ||
+    verdict === 'ci-pending' ||
+    verdict === 'indeterminate'
+  ) return entry;
+  if ((entry.labelClearAttempts ?? 0) >= 3) {
+    log?.(`[mergeable-sweep] readiness label clear retry cap reached for ${entry.prUrl}`);
+    return clear();
+  }
   await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
   return { ...entry, labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
+
+/**
+ * In-process, per-project serialization for watch-registry read-modify-write
+ * updates. Each waiter keeps the tail promise alive until its own mutation has
+ * either persisted or failed, so a throwing mutation cannot strand the queue.
+ */
+const watchUpdateLocks = new Map<string, Promise<void>>();
 
 /**
  * Hard cap on the number of entries retained in the watch registry. The
@@ -146,6 +207,96 @@ function logDisposition(
   message: string,
 ): void {
   if (recordDisposition(log, entry, disposition)) log?.(message);
+}
+
+// ── Task 27: published-stack lower-member lifecycle ────────────────────────
+
+/**
+ * The leaf's watch entry is the sole lifecycle observer.  It deliberately
+ * observes only lower members: the leaf was just read by the normal sweep and
+ * its state belongs to the ordinary ship/reap path below.
+ */
+async function observeStackMemberLifecycle(
+  entry: WatchEntry,
+  leafState: PrMergeState,
+  gh: GhRunner,
+  dependencies: PublicationRecordDependencies | undefined,
+  emit: (event: ConductorEvent) => void,
+): Promise<void> {
+  if (leafState.state !== 'OPEN') return;
+  const stored = await activePublicationRecord(entry.repoCwd, entry.slug, dependencies);
+  if (!stored || stored.record.members.length < 2) return;
+
+  const target = parseGithubUrl(entry.prUrl);
+  if (!target) return;
+  const repository = target.repository;
+  const leaf = stored.record.members.at(-1);
+  if (!leaf) return;
+
+  // This is both an existence observation and a deliberately bounded stack
+  // API read: exactly one per open stacked leaf, before any member reads.
+  try {
+    const stdout = await runTrackerRepositoryRead(
+      gh, entry.repoCwd, 'repository.read', repository, { kind: 'repository' },
+      ['api', `repos/${repository}/stacks?pull_request=${leaf.pr}`],
+    );
+    JSON.parse(stdout);
+  } catch {
+    return;
+  }
+
+  let current: StoredPublicationRecord = stored;
+  for (const member of stored.record.members.slice(0, -1)) {
+    let lifecycle: PublicationMemberLifecycle | undefined;
+    try {
+      const stdout = await runTrackerRepositoryRead(
+        gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
+        ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state'],
+      );
+      const observed: unknown = JSON.parse(stdout);
+      const state = observed && typeof observed === 'object' && !Array.isArray(observed)
+        ? (observed as { state?: unknown }).state
+        : undefined;
+      if (state === 'CLOSED') lifecycle = 'closed';
+      if (state === 'MERGED') {
+        const reverted = await runTrackerRepositoryRead(
+          gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
+          ['pr', 'list', '-R', repository, '--state', 'merged', '--base', 'main', '--json', 'number,body'],
+        );
+        const matches: unknown = JSON.parse(reverted);
+        const revertLine = new RegExp(`(^|\\n)Reverts ${repository.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}#${member.pr}(?:\\s|$)`);
+        lifecycle = Array.isArray(matches) && matches.some((candidate) =>
+          candidate !== null && typeof candidate === 'object'
+            && typeof (candidate as { body?: unknown }).body === 'string'
+            && revertLine.test((candidate as { body: string }).body),
+        ) ? 'reverted' : 'merged';
+      }
+    } catch {
+      // This is an observation only. A transient read leaves lastSeen intact
+      // so a later sweep can make the same at-least-once observation.
+      continue;
+    }
+    if (!lifecycle || member.lastSeen === lifecycle) continue;
+
+    emit({
+      type: 'stack_member_lifecycle',
+      child: member.position,
+      pr: member.pr,
+      state: lifecycle,
+      eventId: `${entry.slug}:${member.position}:${lifecycle}`,
+    });
+    const next = {
+      ...current.record,
+      members: current.record.members.map((candidate) => candidate.position === member.position
+        ? { ...candidate, lastSeen: lifecycle }
+        : candidate),
+    };
+    const written = await writePublicationRecord(entry.repoCwd, entry.slug, current, next, dependencies);
+    if (written.kind !== 'updated') return;
+    const refreshed = await activePublicationRecord(entry.repoCwd, entry.slug, dependencies);
+    if (!refreshed) return;
+    current = refreshed;
+  }
 }
 
 // ── Registry helpers ──────────────────────────────────────────────────────────
@@ -203,7 +354,23 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               ...(typeof raw.ciFailureDetected === 'boolean' && {
                 ciFailureDetected: raw.ciFailureDetected,
               }),
-              ...(raw.escalationCause === 'conflict-resolution' && { escalationCause: 'conflict-resolution' as const }),
+              ...(typeof raw.headSha === 'string' && { headSha: raw.headSha }),
+              ...(typeof raw.headFirstSeenAt === 'string' && {
+                headFirstSeenAt: raw.headFirstSeenAt,
+              }),
+              ...(raw.readinessEmitted !== null &&
+                typeof raw.readinessEmitted === 'object' &&
+                typeof (raw.readinessEmitted as Record<string, unknown>).verdict === 'string' &&
+                typeof (raw.readinessEmitted as Record<string, unknown>).headSha === 'string' && {
+                  readinessEmitted: {
+                    verdict: (raw.readinessEmitted as Record<string, unknown>).verdict as ShippedReadinessVerdict,
+                    headSha: (raw.readinessEmitted as Record<string, unknown>).headSha as string,
+                  },
+                }),
+              ...((raw.escalationCause === 'conflict-resolution' ||
+                raw.escalationCause === 'shipped-readiness') && {
+                escalationCause: raw.escalationCause,
+              }),
               ...(typeof raw.labelClearAttempts === 'number' && { labelClearAttempts: raw.labelClearAttempts }),
             };
             return [entry];
@@ -233,6 +400,79 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
   }
 }
 
+/** Overwrite the registry and surface a persistence failure to a durable caller. */
+async function rewriteWatchStrict(projectRoot: string, entries: WatchEntry[]): Promise<void> {
+  await mkdir(join(projectRoot, '.daemon'), { recursive: true });
+  const content = entries.length > 0 ? entries.map((e) => JSON.stringify(e)).join('\n') + '\n' : '';
+  await writeFile(join(projectRoot, WATCH_FILE), content);
+}
+
+/**
+ * Apply a watch-registry mutation as one serialized read-modify-write update.
+ * Mutator failures deliberately propagate before `rewriteWatch`, preserving
+ * the existing bytes while still releasing the per-project mutex.
+ */
+export type WatchUpdate<T> = {
+  entries: WatchEntry[];
+  result: T;
+  /** A read-only outcome must not normalize or rewrite the registry. */
+  write?: boolean;
+};
+
+export async function updateWatch<T = undefined>(
+  projectRoot: string,
+  mutate: (entries: WatchEntry[]) =>
+    | WatchEntry[]
+    | WatchUpdate<T>
+    | Promise<WatchEntry[] | WatchUpdate<T>>,
+  options: { strictWrite?: boolean } = {},
+): Promise<T | undefined> {
+  const previous = watchUpdateLocks.get(projectRoot) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => done);
+  watchUpdateLocks.set(projectRoot, tail);
+
+  await previous;
+  try {
+    const mutation = await mutate(await readWatch(projectRoot));
+    if (Array.isArray(mutation)) {
+      await (options.strictWrite ? rewriteWatchStrict(projectRoot, mutation) : rewriteWatch(projectRoot, mutation));
+      return undefined;
+    }
+    if (mutation.write !== false) {
+      await (options.strictWrite ? rewriteWatchStrict(projectRoot, mutation.entries) : rewriteWatch(projectRoot, mutation.entries));
+    }
+    return mutation.result;
+  } finally {
+    release();
+    if (watchUpdateLocks.get(projectRoot) === tail) watchUpdateLocks.delete(projectRoot);
+  }
+}
+
+/** Apply only the fields the sweep changed, preserving concurrent updates. */
+function mergeSweepEntry(
+  before: WatchEntry,
+  after: WatchEntry,
+  fresh: WatchEntry,
+): WatchEntry {
+  const merged: Record<string, unknown> = { ...fresh };
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (Object.is(before[key as keyof WatchEntry], after[key as keyof WatchEntry])) continue;
+    if (key in after) merged[key] = after[key as keyof WatchEntry];
+    else delete merged[key];
+  }
+  return {
+    ...merged,
+    prUrl: fresh.prUrl,
+    slug: fresh.slug,
+    repoCwd: fresh.repoCwd,
+  };
+}
+
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -244,6 +484,7 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
  * `enabled` is read by the caller from `mergeable_autoresolve.enabled` so the
  * sweep stays byte-identical to today when the feature is off (AC4).
  */
+/** The dispatcher result retained by a queued repair until its claim completes. */
 export interface AutoresolveDispatchOpts {
   /** Config gate — when false, the sweep runs exactly as before (no new work). */
   enabled: boolean;
@@ -257,12 +498,11 @@ export interface AutoresolveDispatchOpts {
     state: PrMergeState,
   ) => Promise<{ eligible: boolean; reason?: string }>;
   /**
-   * Dispatch resolution for the chosen entry. Called with the entry AFTER
-   * its attempt counter has already been bumped and `lastResolveAt` set
-   * (AC3) — the git work itself happens inside this callback.
-   * Returns the outcome kind so the sweep can reset the counter on success.
+   * Dispatch resolution for the chosen entry. The request-owned adapter calls
+   * this only after the daemon claims and stamps the entry (AC3).
+   * Returns the outcome consumed by the pooled outcome handler.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<AutoresolveOutcome | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -289,10 +529,9 @@ export interface CiFixDispatchOpts {
     state: PrMergeState,
   ) => Promise<{ eligible: boolean; reason?: string }>;
   /**
-   * Dispatch CI fix for the chosen entry. Called with the entry AFTER
-   * its attempt counter has already been bumped and `lastCiFixAt` set
-   * (AC3) — the git work itself happens inside this callback.
-   * Returns the outcome kind so the sweep can reset the counter on success.
+   * Dispatch CI fix for the chosen entry. The request-owned adapter calls
+   * this only after the daemon claims and stamps the entry (AC3).
+   * Returns the outcome consumed by the pooled outcome handler.
    */
   dispatch: (
     entry: WatchEntry,
@@ -307,6 +546,8 @@ export interface CiFixDispatchOpts {
 export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
+  /** Clock override for persisted watch observations; defaults to `new Date()`. */
+  now?: () => Date;
   runGh?: GhRunner;
   /** Typed PR-state reader; raw gh remains scoped to legacy label mutations. */
   tracker?: Pick<TrackerClient, 'readPullRequestMergeState'>;
@@ -316,6 +557,14 @@ export interface SweepOpts {
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
+  /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
+  repairs?: {
+    queue: RepairQueue;
+  };
+  /** True while a pooled repair has already claimed this PR. */
+  isRepairRunning?: (prUrl: string) => boolean;
+  /** True while the feature worker owns this slug; repairs must remain queued. */
+  isFeatureInFlight?: (slug: string) => boolean;
   /**
    * Optional worktree teardown seam for the shipped-record gate.
    * MERGED and CLOSED may use this dependency; NOTFOUND never does.
@@ -331,6 +580,8 @@ export interface SweepOpts {
    * Omitted preserves the standalone sweep's existing behavior.
    */
   canRemoveWorktree?: (slug: string) => boolean | Promise<boolean>;
+  /** Test seam for the ref-backed publication receipt read. */
+  publicationRecordDependencies?: PublicationRecordDependencies;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -347,6 +598,148 @@ function runnerForEntry(
   return Object.assign(gh.bind(undefined), operationRunner);
 }
 
+type PooledRepairOutcomeOptions = {
+  projectRoot: string;
+  previous: WatchEntry;
+  runGh?: GhRunner;
+  operations?: SweepOpts['operations'];
+  log?: (message: string) => void;
+} & RepairCompletion;
+
+function isAutoresolveOutcome(
+  options: PooledRepairOutcomeOptions,
+): options is PooledRepairOutcomeOptions & {
+  request: Extract<RepairCompletion, { request: { kind: 'autoresolve' } }>['request'];
+  outcome: AutoresolveOutcome;
+} {
+  return options.request.kind === 'autoresolve';
+}
+
+/**
+ * Apply the registry and PR-facing consequences of a completed pooled repair.
+ *
+ * The pool claims and stamps an entry before calling its adapter; this handler
+ * is the one counterpart to the former inline dispatch branches.  Keeping the
+ * result union here prevents a newly-added adapter outcome from silently
+ * skipping its bookkeeping on the queued path.
+ */
+export async function applyPooledRepairOutcome(options: PooledRepairOutcomeOptions): Promise<void> {
+  if (isAutoresolveOutcome(options)) return applyAutoresolveRepairOutcome(options);
+  return applyCiFixRepairOutcome(options);
+}
+
+/** Rewrite just the completed repair's current watch entry. */
+async function rewritePooledRepairWatchEntry(
+  projectRoot: string,
+  prUrl: string,
+  mutate: (entry: WatchEntry) => WatchEntry,
+  log?: (message: string) => void,
+): Promise<boolean> {
+  const outcome = await updateWatch(projectRoot, (entries): WatchUpdate<boolean> => {
+    if (!entries.some((entry) => entry.prUrl === prUrl)) {
+      return { entries, result: false, write: false };
+    }
+    return {
+      entries: entries.map((entry) => entry.prUrl === prUrl ? mutate(entry) : entry),
+      result: true,
+    };
+  });
+  if (!outcome) log?.(`[mergeable-sweep] dropping repair outcome for ${prUrl}: watch entry missing`);
+  return outcome ?? false;
+}
+
+/** Mark a repair paused before provider work and leave a durable recovery comment. */
+async function markPooledSetupRecovery({
+  entryRunner,
+  previous,
+  marker,
+  body,
+  description,
+  log,
+}: {
+  entryRunner: GhRunner | (GhRunner & GithubOperationRunner);
+  previous: WatchEntry;
+  marker: string;
+  body: string;
+  description: string;
+  log?: (message: string) => void;
+}): Promise<void> {
+  try {
+    await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
+    await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
+  } catch (err) {
+    log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
+  }
+}
+
+async function applyAutoresolveRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
+  request: { kind: 'autoresolve' };
+}>): Promise<void> {
+  const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
+  const entryRunner = runnerForEntry(runGh, previous, operations);
+
+  switch (outcome.kind) {
+    case 'refreshed':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: 0 }), log);
+      return;
+    case 'escalated':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, escalationCause: 'conflict-resolution' }), log);
+      return;
+    case 'published-stack':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }), log);
+      return;
+    case 'setup-stop':
+      if (!await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }), log)) return;
+      await markPooledSetupRecovery({ entryRunner, previous,
+        marker: '<!-- conductor:rebase-setup -->',
+        body: '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        description: 'rebase', log,
+      });
+      return;
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+}
+
+async function applyCiFixRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
+  request: { kind: 'ci-fix' };
+}>): Promise<void> {
+  const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
+  const entryRunner = runnerForEntry(runGh, previous, operations);
+  switch (outcome.kind) {
+    case 'needs-human':
+      if (!await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
+        ...entry,
+        ciFixAttempts: previous.ciFixAttempts,
+        ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
+      }), log)) return;
+      await markPooledSetupRecovery({ entryRunner, previous,
+        marker: '<!-- conductor:ci-fix-setup -->',
+        body: '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        description: 'ciFix', log,
+      });
+      return;
+    case 'not-started':
+    case 'branch-gone':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
+        ...entry,
+        ciFixAttempts: previous.ciFixAttempts,
+        ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
+      }), log);
+      return;
+    case 'noop':
+    case 'failed':
+    case 'published':
+      return;
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+}
+
 /**
  * For each tracked PR: evaluate merge state then update the `mergeable` label
  * according to the decision tree; prune closed/merged PRs. Never throws (FR-15).
@@ -359,10 +752,15 @@ export async function sweepMergeableLabels({
   operations,
   autoresolve,
   ciFix,
+  repairs,
+  isRepairRunning,
+  isFeatureInFlight,
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
+  publicationRecordDependencies,
   onEvent,
+  now = () => new Date(),
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   const prStateTracker = tracker ?? createGithubTrackerClient(gh);
@@ -374,26 +772,54 @@ export async function sweepMergeableLabels({
         ...(await git(args, opts)),
         stderr: '',
       })));
+  const emitEvent = (event: ConductorEvent): void => {
+    try {
+      onEvent?.(event);
+    } catch (error) {
+      log?.(`[mergeable-sweep] event listener error: ${error}`);
+    }
+  };
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
-    // Task 17 (AC1/AC2): PRs whose `mergeable` field is CONFLICTING, gathered
-    // during the label pass so the autoresolve dispatch below never re-fetches
-    // PR state. Only populated/consulted when autoresolve is configured.
+    // Repair candidates are gathered from the one merge-state read per entry;
+    // the sweep neither re-reads state nor awaits a repair session.
     const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
-    // Task 10 (AC1/AC2): PRs whose `checksOutcome` is 'failed', gathered
-    // during the label pass so the ciFix dispatch below never re-fetches
-    // PR state. Only populated/consulted when ciFix is configured.
     const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
-    for (const entry of entries) {
+    for (let entry of entries) {
       try {
         const entryGh = runnerForEntry(gh, entry, operations);
-        const state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+        let state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
-        // GitHub checks are authoritative for CI state. Retire the redundant
-        // custom label whenever a reconciliation read finds it on a PR.
-        if (state.labels.includes('ci-failed')) {
+        // GitHub can initially return UNKNOWN while it calculates mergeability
+        // for an otherwise readable OPEN PR. Give that lazy result exactly one
+        // more read. Handle a terminal state from that re-read through the
+        // normal lifecycle path below rather than classifying it as OPEN.
+        let mergeabilityReread: 'not-needed' | 'completed' | 'failed' = 'not-needed';
+        if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
+          try {
+            const reread = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+            if (reread.state === 'UNKNOWN' || reread.readFailure) {
+              mergeabilityReread = 'failed';
+            } else {
+              state = reread;
+              mergeabilityReread = 'completed';
+            }
+          } catch (error) {
+            mergeabilityReread = 'failed';
+            state = {
+              ...state,
+              readFailure: { kind: 'runner', error },
+            };
+          }
+        }
+
+        // Preserve lifecycle reconciliation: closed, merged, and not-found
+        // states retain their existing stale CI-label cleanup before taking
+        // their dedicated lifecycle path. Open states wait for readiness
+        // classification so indeterminate observations stay read-only.
+        if (state.state !== 'OPEN' && state.labels.includes('ci-failed')) {
           await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
         }
 
@@ -405,21 +831,122 @@ export async function sweepMergeableLabels({
           );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
+            // `tornDown` records completed worktree removal or a retained
+            // member. It is deliberately not a terminal receipt: the same
+            // record is the durable input for later per-member cleanup.
+            const storedPublication = await readPublicationRecord(
+              entry.repoCwd,
+              entry.slug,
+              publicationRecordDependencies,
+            );
             if (canRemoveWorktree && !(await canRemoveWorktree(entry.slug))) {
               survivors.push(entry);
               continue;
             }
             try {
-              if (!teardownWorktree) {
-                throw new Error('worktree teardown dependency unavailable');
+              const worktree = {
+                path: join(entry.repoCwd, '.worktrees', entry.slug),
+                branch: leafBranchFor(entry.slug),
+              };
+              const entryLeafPr = parseGithubUrl(entry.prUrl)?.number;
+              const isReceiptForEntry = (publication: StoredPublicationRecord) =>
+                publication.record.tornDown === true
+                && publication.record.members.at(-1)?.pr === entryLeafPr;
+              let publication: StoredPublicationRecord | undefined;
+              if (storedPublication.kind === 'record' && isReceiptForEntry(storedPublication) && !existsSync(worktree.path)) {
+                // The matching worktree is already gone. Retain this receipt
+                // so a later per-member retry can finish child cleanup.
+                publication = storedPublication;
+              } else {
+                if (!teardownWorktree) {
+                  throw new Error('worktree teardown dependency unavailable');
+                }
+                await teardownWorktree(worktree, false);
+                const reread = await readPublicationRecord(
+                  entry.repoCwd,
+                  entry.slug,
+                  publicationRecordDependencies,
+                );
+                // A torn-down receipt left by an earlier publication of this
+                // slug is not evidence for this watch entry's child cleanup.
+                publication = reread.kind === 'record'
+                  && (reread.record.tornDown !== true || isReceiptForEntry(reread))
+                  ? reread
+                  : undefined;
               }
-              await teardownWorktree(
-                {
-                  path: join(entry.repoCwd, '.worktrees', entry.slug),
-                  branch: leafBranchFor(entry.slug),
-                },
-                false,
-              );
+              // A one-member publication is the ordinary leaf path.  Stack
+              // lifecycle and child cleanup apply only once a second member
+              // makes the receipt a real chained stack.
+              if (publication && publication.record.members.length > 1) {
+                const repository = parseGithubUrl(entry.prUrl)?.repository;
+                const reachability = await verifyMemberReachability(entry.repoCwd, publication.record, {
+                  gh,
+                  repository,
+                });
+                // A failed reachability observation cannot authorize any
+                // deletion. An unreachable member is retained, while the
+                // dedicated teardown still considers every other member.
+                if (reachability.kind === 'unreachable') {
+                  if (publication.record.unreachableReported !== true) {
+                    emitEvent({
+                      type: 'stack_members_unreachable',
+                      child: reachability.member.position,
+                      pr: reachability.member.pr,
+                    });
+                    await recordUnreachableMemberReport(
+                      entry.repoCwd,
+                      publication,
+                      publicationRecordDependencies,
+                    );
+                    const refreshed = await readPublicationRecord(
+                      entry.repoCwd,
+                      entry.slug,
+                      publicationRecordDependencies,
+                    );
+                    if (refreshed.kind === 'record') publication = refreshed;
+                  }
+                  log?.(
+                    `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-unreachable`,
+                  );
+                } else if (reachability.kind === 'indeterminate') {
+                  log?.(
+                    `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
+                  );
+                  survivors.push(entry);
+                  continue;
+                }
+                if (repository) {
+                  const result = await deleteStackChildren(entry.repoCwd, entry.slug, publication.record, {
+                    git: makeGitRunner(entry.repoCwd), gh, repository,
+                  });
+                  if (result.kind === 'deleted') {
+                    log?.(`[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`);
+                    continue;
+                  }
+                  if (result.kind === 'kept') {
+                    // A kept member is terminal: its branch and the tornDown
+                    // record stay, and only a failure keeps the watch entry.
+                    await writePublicationRecord(entry.repoCwd, entry.slug, publication, {
+                      ...publication.record,
+                      tornDown: true,
+                    }, publicationRecordDependencies);
+                    log?.(
+                      `[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main (stack members kept, record tornDown)`,
+                    );
+                    continue;
+                  }
+                  log?.(`[mergeable-sweep] retained ${entry.slug} — reason: stack-teardown-failed`);
+                  survivors.push(entry);
+                } else {
+                  log?.(`[mergeable-sweep] retained ${entry.slug} — reason: stack-repository-unresolved`);
+                  survivors.push(entry);
+                }
+                continue;
+              }
+              // Teardown has established all of its own shipped-record and
+              // worktree safety gates. Ref cleanup is best-effort and must not
+              // turn a successful reap into a retained watch entry.
+              await deleteFeatureConductorRefs(entry.slug, makeGitRunner(entry.repoCwd));
               log?.(
                 `[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`,
               );
@@ -428,6 +955,10 @@ export async function sweepMergeableLabels({
               log?.(
                 `[mergeable-sweep] reap failed ${entry.slug} (${entry.prUrl}) — reason: shipped-record-on-main — error: ${detail}`,
               );
+              // A reap can have removed the worktree before a later stack
+              // member/ref operation fails. Keep the receipt and watch entry
+              // so the finite, per-member teardown resumes on the next sweep.
+              survivors.push(entry);
             }
           } else if (state.state === 'MERGED') {
             logDisposition(
@@ -478,20 +1009,124 @@ export async function sweepMergeableLabels({
           continue;
         }
 
+        // A published stack stays open at its leaf while lower members may be
+        // merged, closed, or reverted by a human.  This observation is
+        // intentionally before all label/repair work and cannot change it.
+        await observeStackMemberLifecycle(
+          entry,
+          state,
+          gh,
+          publicationRecordDependencies,
+          emitEvent,
+        );
+
+        // The timestamp begins with the first observation of a head and is
+        // reset only when that SHA changes. Do this before classification so
+        // the first tick for a new head receives a full grace period.
+        if (state.headRefOid && state.headRefOid !== entry.headSha) {
+          entry = {
+            ...entry,
+            headSha: state.headRefOid,
+            headFirstSeenAt: now().toISOString(),
+          };
+        }
+
+        // Missing head data leaves legacy bookkeeping intact until GitHub
+        // supplies an OID.
+        const headFirstSeenAt = entry.headFirstSeenAt
+          ? Date.parse(entry.headFirstSeenAt)
+          : undefined;
+        const readiness = classifyShippedReadiness(
+          state,
+          {
+            mergeabilityReread,
+            ...(Number.isFinite(headFirstSeenAt) ? { headFirstSeenAt } : {}),
+          },
+          now().getTime(),
+        );
+
+        if (
+          entry.headSha !== undefined &&
+          (entry.readinessEmitted?.verdict !== readiness ||
+            entry.readinessEmitted.headSha !== entry.headSha)
+        ) {
+          const headSha = entry.headSha;
+          entry = {
+            ...entry,
+            readinessEmitted: { verdict: readiness, headSha },
+          };
+          emitEvent({
+            type: 'shipped_pr_readiness',
+            prUrl: entry.prUrl,
+            slug: entry.slug,
+            verdict: readiness,
+            headSha,
+            mergeable: state.mergeable,
+            ...(state.mergeStateStatus === undefined ? {} : { mergeStateStatus: state.mergeStateStatus }),
+            checksOutcome: state.checksOutcome,
+            isDraft: state.isDraft === true,
+            ...(state.baseRefName === undefined ? {} : { baseRefName: state.baseRefName }),
+          });
+        }
+
         // Entry is live — keep it in the registry.
         recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
 
-        // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass
-        // autoresolve dispatch below. Collected unconditionally (cheap) but
-        // only ever consulted when `autoresolve` is configured, so a disabled
-        // config leaves the sweep's observable behavior unchanged (AC4).
-        //
-        // Draft PRs are never resolution candidates (see `isDraft` note on
-        // PrMergeState): a draft is an in-flight build's own PR, so dispatching
-        // autoresolve/CI-fix against it fights the running build. The ordinary
-        // `mergeable` label reconciliation below is unaffected.
-        if (state.mergeable === 'CONFLICTING') {
+        let conflicting = false;
+        let ciFailing = false;
+        let needsReadinessRemediation = false;
+        const indeterminate = routeShippedReadiness(readiness, {
+          ready: () => false,
+          conflicting: () => {
+            conflicting = true;
+            return false;
+          },
+          'ci-failing': () => {
+            ciFailing = true;
+            return false;
+          },
+          'ci-pending': () => false,
+          'no-checks': () => {
+            needsReadinessRemediation = true;
+            return false;
+          },
+          draft: () => {
+            needsReadinessRemediation = true;
+            return false;
+          },
+          indeterminate: () => true,
+        });
+
+        // An indeterminate GitHub observation is deliberately read-only. It
+        // remains watched for the next tick, but neither a stale label nor a
+        // repair/escalation action can turn uncertainty into a side effect.
+        if (indeterminate) continue;
+
+        // Retire only labels whose recorded cause says they are stale. This is
+        // deliberately before normal reconciliation and candidate collection.
+        const readinessClearAttempts = entry.labelClearAttempts ?? 0;
+        const clearingReadinessLabel =
+          entry.escalationCause === 'shipped-readiness' && state.labels.includes('needs-remediation');
+        entry = await maybeClearReadinessLabel(entry, state, readiness, entryGh, log);
+        const readinessEntryIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+        if (readinessEntryIdx >= 0) survivors[readinessEntryIdx] = entry;
+        const readinessLabelRemoved =
+          clearingReadinessLabel && entry.labelClearAttempts === readinessClearAttempts + 1;
+
+        // GitHub checks are authoritative for CI state. Retire the redundant
+        // custom label whenever a readable reconciliation observation finds it.
+        if (state.labels.includes('ci-failed')) {
+          await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+        }
+
+        // Shipped readiness owns only its own attribution. CI and human
+        // remediation labels stay sticky during readiness recovery.
+
+        // Task 17 (AC1): preserve the historical conflict candidate behavior,
+        // but collect after remediation recovery so later dispatch sees the
+        // entry's current bookkeeping.
+        if (conflicting) {
           if (state.isDraft) {
             log?.(`[mergeable-sweep] skipping resolve for ${entry.prUrl} (draft PR)`);
           } else {
@@ -502,10 +1137,33 @@ export async function sweepMergeableLabels({
         // A conflict-resolution label becomes stale once GitHub reports the PR
         // mergeable again. Legacy/unattributed labels remain sticky.
         const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        if (idx >= 0) survivors[idx] = await maybeClearConflictLabel(entry, state, entryGh, log);
+        if (idx >= 0) {
+          entry = await maybeClearConflictLabel(entry, state, entryGh, log);
+          survivors[idx] = entry;
+        }
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
-        let hasRemediation = state.labels.includes('needs-remediation');
+        let hasRemediation = state.labels.includes('needs-remediation') && !readinessLabelRemoved;
+
+        // A stale shipped PR with no checks, or a draft PR, needs human
+        // attention. Attribute only a confirmed absent→present label write:
+        // failed/refused writes deliberately retain no cause so the next tick
+        // retries the same bounded, label-only action.
+        if (needsReadinessRemediation && !hasRemediation) {
+          const labelResult = await addLabel(
+            entryGh,
+            entry.repoCwd,
+            entry.prUrl,
+            'needs-remediation',
+            log,
+          );
+          if (labelResult.kind === 'executed') {
+            entry = { ...entry, escalationCause: 'shipped-readiness' };
+            const entryIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+            if (entryIdx >= 0) survivors[entryIdx] = entry;
+            hasRemediation = true;
+          }
+        }
 
         // Task 21: exhaustion — escalate exactly once. Gated on the
         // label-absent→present transition so a sweep that finds
@@ -556,7 +1214,7 @@ export async function sweepMergeableLabels({
           } catch (err) {
             log?.(`[mergeable-sweep] exhaustion comment error for ${entry.prUrl}: ${err}`);
           }
-          onEvent?.({
+          emitEvent({
             type: 'ci_failed',
             prUrl: entry.prUrl,
             slug: entry.slug,
@@ -581,7 +1239,7 @@ export async function sweepMergeableLabels({
           // Draft PRs are excluded here for the same reason as the
           // CONFLICTING collection above — resolution only ever runs against
           // non-draft (ready-for-review) PRs.
-          if (state.checksOutcome === 'failed') {
+          if (ciFailing) {
             if (state.isDraft) {
               log?.(`[mergeable-sweep] skipping ci-fix for ${entry.prUrl} (draft PR)`);
             } else {
@@ -593,7 +1251,7 @@ export async function sweepMergeableLabels({
         // Keep edge-triggered failure events independent of GitHub label state.
         if (state.checksOutcome === 'failed') {
           if (!entry.ciFailureDetected) {
-            onEvent?.({
+            emitEvent({
               type: 'ci_failed',
               prUrl: entry.prUrl,
               slug: entry.slug,
@@ -646,145 +1304,112 @@ export async function sweepMergeableLabels({
       }
     }
 
-    // Task 17: after the label pass, dispatch resolution for the first
-    // eligible CONFLICTING PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastResolveAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // autoresolve is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
+    const enqueue = (request: RepairRequest): void => {
+      if (!repairs) return;
+      if (request.slug && isFeatureInFlight?.(request.slug)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (feature in flight)`);
+        return;
+      }
+      if (isRepairRunning?.(request.prUrl)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
+        return;
+      }
+      if (!repairs.queue.enqueue(request)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
+      }
+    };
+
+    // The sweep only selects and queues repair work. The daemon pool owns
+    // claim-time attempt accounting, adapter execution, and outcomes.
     if (autoresolve?.enabled) {
-      let dispatched = false;
       for (const { entry, state } of conflictingCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
-        const elig = await autoresolve.isEligible(entry, state);
-        if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
-        }
-
-        dispatched = true;
-        const now = autoresolve.now ? autoresolve.now() : new Date();
-        const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
-          lastResolveAt: now.toISOString(),
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        const dispatchResult = await autoresolve.dispatch(updated);
-        if (dispatchResult?.kind === 'refreshed') {
-          survivors[idx] = { ...updated, resolveAttempts: 0 };
-        } else if (dispatchResult?.kind === 'escalated') {
-          survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
-        } else if (dispatchResult?.kind === 'setup-stop') {
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-          try {
-            await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-            await upsertComment(
-              entryGh,
-              entry.repoCwd,
-              entry.prUrl,
-              '<!-- conductor:rebase-setup -->',
-              '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-              log,
-            );
-          } catch (err) {
-            log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
-          }
-        }
+        const eligibility = await autoresolve.isEligible(entry, state);
+        if (!eligibility.eligible) continue;
+        const queuedAt = now().toISOString();
+        enqueue({
+          kind: 'autoresolve', prUrl: entry.prUrl, slug: entry.slug,
+          prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
+          run: async (claimed) => (await autoresolve.dispatch(claimed)) ?? { kind: 'escalated' },
+        });
       }
     }
 
-    // Task 10: after the label pass, dispatch CI fix for the first
-    // eligible failed PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastCiFixAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // ciFix is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
     if (ciFix?.enabled) {
-      let dispatched = false;
       for (const { entry, state } of failedCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
-        const elig = await ciFix.isEligible(entry, state);
-        if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+        const eligibility = await ciFix.isEligible(entry, state);
+        if (!eligibility.eligible) {
+          // Keep the published-stack stop on the same human-escalation path
+          // used by autoresolve.  It runs before a repair request exists, so
+          // no attempt is claimed or ci-fix dispatcher is invoked.
+          if (eligibility.reason === PUBLISHED_STACK_CI_FIX_REASON) {
+            const reason = 'published stacked feature requires manual resolution (#2945)';
+            emitEvent(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
+            await escalate(entry.prUrl, 'published-stack', reason, {
+              runGh: runnerForEntry(gh, entry, operations),
+              cwd: entry.repoCwd,
+              log,
+            });
+            logOutcome(log ?? (() => {}), entry.prUrl, 'published-stack', 'escalated');
+          }
           continue;
         }
-
-        dispatched = true;
-        const now = ciFix.now ? ciFix.now() : new Date();
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        // The label pass may have set ciFailureDetected since this candidate
-        // was collected. Reserve from that current survivor so a later refund
-        // cannot discard the observed failure transition.
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
-          lastCiFixAt: now.toISOString(),
-          ciFailureDetected: true,
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        try {
-          const dispatchResult = await ciFix.dispatch(updated, state);
-          // Only an affirmative pre-provider refusal can restore the exact
-          // reservation. A local publication is not GitHub green; remote green
-          // is reconciled by the normal state transition on a later sweep.
-          if (dispatchResult?.kind === 'needs-human') {
-            survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
-            try {
-              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-              await upsertComment(
-                entryGh,
-                entry.repoCwd,
-                entry.prUrl,
-                '<!-- conductor:ci-fix-setup -->',
-                '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-                log,
-              );
-            } catch (err) {
-              log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
+        const queuedAt = now().toISOString();
+        enqueue({
+          kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug,
+          prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
+          run: async (claimed): Promise<CiFixRepairOutcome> => {
+            const outcome = await ciFix.dispatch(claimed, state);
+            if (!outcome) return { kind: 'failed', stage: 'worktree' };
+            switch (outcome.kind) {
+              case 'green-verified':
+                return { kind: 'published' };
+              case 'needs-human':
+                return 'providerSetupExhaustion' in outcome
+                  ? { kind: 'needs-human', providerSetupExhaustion: outcome.providerSetupExhaustion }
+                  : { kind: 'failed', stage: 'provider' };
+              case 'not-started':
+              case 'noop':
+              case 'failed':
+              case 'published':
+              case 'branch-gone':
+                return outcome;
             }
-          } else if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
-            survivors[idx] = {
-              // Preserve the state transition from the label pass (notably a
-              // newly detected CI failure), while refunding only the fields
-              // this reservation changed.
-              ...current,
-              ciFixAttempts: entry.ciFixAttempts,
-              ...(entry.lastCiFixAt === undefined
-                ? { lastCiFixAt: undefined }
-                : { lastCiFixAt: entry.lastCiFixAt }),
-            };
-          }
-        } catch (err) {
-          // Task 11: dispatch error is logged but not propagated (AC1b)
-          // The bumped counter persists (already written to survivors[idx])
-          log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
+          },
+        });
+      }
+    }
+
+    // Reconcile the sweep result against the lock-protected, current registry.
+    // A concurrent update can land while the asynchronous GitHub work above is
+    // in progress; retain its fields unless this sweep changed that same field.
+    const identity = (entry: WatchEntry): string => `${entry.repoCwd}\0${entry.prUrl}\0${entry.slug}`;
+    const before = new Map(entries.map((entry) => [identity(entry), entry]));
+    const after = new Map(survivors.map((entry) => [identity(entry), entry]));
+    await updateWatch(projectRoot, (freshEntries) => {
+      const currentSurvivors = freshEntries.flatMap((fresh) => {
+        const key = identity(fresh);
+        const original = before.get(key);
+        const updated = after.get(key);
+        // Entries enrolled after the sweep began were never observed by it, so
+        // they survive unchanged. Entries that were observed and omitted were
+        // deliberately pruned by this sweep.
+        if (!original) return [fresh];
+        if (!updated) return [];
+        return [mergeSweepEntry(original, updated, fresh)];
+      });
+      // Task 1: cap the fresh survivor set while holding the same update lock.
+      const trimmed = currentSurvivors.length > MAX_WATCH_ENTRIES
+        ? currentSurvivors.slice(-MAX_WATCH_ENTRIES)
+        : currentSurvivors;
+      if (trimmed.length !== currentSurvivors.length) {
+        for (const entry of currentSurvivors.slice(0, currentSurvivors.length - MAX_WATCH_ENTRIES)) {
+          log?.(
+            `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
+          );
         }
       }
-    }
-
-    // Task 1: cap the persisted registry so it cannot grow without bound.
-    // survivors is append-ordered oldest-first, so trim from the front.
-    const trimmed =
-      survivors.length > MAX_WATCH_ENTRIES ? survivors.slice(-MAX_WATCH_ENTRIES) : survivors;
-    if (trimmed !== survivors) {
-      const dropped = survivors.slice(0, survivors.length - MAX_WATCH_ENTRIES);
-      for (const entry of dropped) {
-        log?.(
-          `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
-        );
-      }
-    }
-    await rewriteWatch(projectRoot, trimmed);
+      return trimmed;
+    });
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
     log?.(`[mergeable-sweep] sweep error: ${err}`);

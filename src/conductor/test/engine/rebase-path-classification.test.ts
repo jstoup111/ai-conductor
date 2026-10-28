@@ -60,7 +60,6 @@ describe('Task 9–11 rebase path classification', () => {
     );
 
     expect(result.preserved).toEqual([
-      'coverage_binding',
       'build_review',
       'prd_audit',
       'architecture_review_as_built',
@@ -99,13 +98,12 @@ describe('Task 9–11 rebase path classification', () => {
     if (kind === 'changed') {
       // Document-bound gates are not reopened by feature code changes; the
       // regrade judgement decides whether they need a new grade.
-      expect(result.preserved).toEqual(['coverage_binding', 'prd_audit', 'architecture_review_as_built']);
+      expect(result.preserved).toEqual(['prd_audit', 'architecture_review_as_built']);
       expect(result.invalidated).toEqual(['build_review', 'test_suite']);
     } else {
       // An unproved replay has no expected tree to bind preservation to.
       expect(result.preserved).toEqual([]);
       expect(result.invalidated).toEqual([
-        'coverage_binding',
         'build_review',
         'test_suite',
         'prd_audit',
@@ -127,7 +125,6 @@ describe('Task 9–11 rebase path classification', () => {
     );
 
     expect(result.invalidated).toEqual([
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -146,19 +143,15 @@ describe('Task 9–11 rebase path classification', () => {
       ['.docs/stories/active.md'],
     );
 
-    expect(active.invalidated).toEqual(['coverage_binding', 'prd_audit', 'architecture_review_as_built']);
+    expect(active.invalidated).toEqual(['prd_audit', 'architecture_review_as_built']);
     expect(active.preserved).toEqual(['build_review', 'test_suite']);
-    expect(active.candidates).toHaveLength(6);
+    expect(active.candidates).toHaveLength(5);
     expect(active.candidates.find(({ gate }) => gate === 'prd_audit')).toMatchObject({
       decision: 'invalidate',
       source: {
         activeInputs: ['.docs/stories/active.md'],
         combinedDelta: ['.docs/stories/active.md', '.docs/plans/unrelated.md'],
       },
-    });
-    expect(active.candidates.find(({ gate }) => gate === 'coverage_binding')).toMatchObject({
-      decision: 'invalidate',
-      source: { activeInputs: ['.docs/stories/active.md'] },
     });
 
     const unrelated = classifyReplayGateInvalidation(
@@ -170,7 +163,6 @@ describe('Task 9–11 rebase path classification', () => {
     );
     expect(unrelated.invalidated).toEqual([]);
     expect(unrelated.preserved).toEqual([
-      'coverage_binding',
       'build_review',
       'test_suite',
       'prd_audit',
@@ -187,11 +179,7 @@ describe('Task 9–11 rebase path classification', () => {
       ['.docs/decisions/adr-active.md'],
     );
 
-    expect(result.invalidated).toEqual(['coverage_binding', 'architecture_review_as_built']);
-    expect(result.candidates.find(({ gate }) => gate === 'coverage_binding')).toMatchObject({
-      decision: 'invalidate',
-      source: { activeInputs: ['.docs/decisions/adr-active.md'] },
-    });
+    expect(result.invalidated).toEqual(['architecture_review_as_built']);
     expect(result.candidates.find(({ gate }) => gate === 'architecture_review_as_built')).toMatchObject({
       decision: 'invalidate',
       source: { activeInputs: ['.docs/decisions/adr-active.md'] },

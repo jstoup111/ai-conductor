@@ -118,11 +118,15 @@ the obligation name and its start/end, added to the existing union in
 `FULL_SUITE_EVIDENCE_VERSION` is **not** bumped, preserving `test_suite`'s fingerprint-reuse
 path (`build_member_evidence_reused`).
 
+> **Amended 2026-10-12 by #3056:** D1 is superseded by adr-2026-10-12-retire-pipeline-closeout-obligation-telemetry decision 1. The `pipeline_closeout_started` and `pipeline_closeout` kinds, the `closeout-event` primitive, and their consumers are removed, because the retired `/pipeline` batch evaluator was their only producer.
+
 **D2 — One writer per ledger file.** The engine keeps `.pipeline/events.jsonl`; the pipeline
 owns `.pipeline/pipeline-events.jsonl`, written by a `conduct-ts` primitive. Readers merge by
 `ts`. This is chosen specifically because `parseLedger` fails closed on a single malformed
 line, making cross-process append to one file a whole-ledger corruption risk rather than a
 localized one.
+
+> **Amended 2026-10-12 by #3056:** D2 remains in force. The sibling ledger and its tail carry the external event kinds admitted by adr-2026-08-13-stable-build-review-finding-dispositions decision 5, and the tail now re-emits only those kinds (adr-2026-10-12-retire-pipeline-closeout-obligation-telemetry decisions 2 and 3).
 
 **D3 — Emission is gate-enforced, reading is tolerant.** The existing blocking batch-boundary
 gate (`skills/pipeline/SKILL.md:288-299`, which today stat-checks `review.json` for
@@ -132,11 +136,15 @@ prompt discipline" principle. The **reader** must tolerate absence and report th
 `unrecorded`, because the baseline corpus (piece 4) predates the event entirely. Fail-closed
 forward, tolerant backward.
 
+> **Amended 2026-10-12 by #3056:** D3 is superseded by adr-2026-10-12-retire-pipeline-closeout-obligation-telemetry decision 1. No batch-boundary gate requires a closeout event, and no closeout obligation is emitted.
+
 **D4 — Degradation mirrors `TimingRollup`.** `computeBuildTailRollup` returns
 `{ state: 'measured' | 'partial' | 'unavailable' }`, matching `timing-rollup.ts`. On an inline
 run there is no engine ledger and therefore no `build` window boundaries, so the
 task-execution and remediation segments are uncomputable: the result is `partial` carrying the
 closeout timeline only. An inline run is a supported mode, **not** an error.
+
+> **Amended 2026-10-12 by #3056:** D4's closeout timeline is superseded by adr-2026-10-12-retire-pipeline-closeout-obligation-telemetry decision 4. The rollup measures task execution and post-resolution ticks only, and a ledger with no completed build window is `unavailable`, never a closeout-only `partial`.
 
 **Relationship to adr-2026-07-10.** This ADR does **not** supersede it. That ADR owns the live
 task-progress signal and its engine-side watcher; piece 1 of this feature (tick provenance) is

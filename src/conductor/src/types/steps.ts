@@ -9,7 +9,7 @@ export type StepName =
   | 'conflict_check'
   | 'plan'
   | 'coherence_check'
-  | 'coverage_binding'
+  | 'plan_review'
   | 'architecture_diagram'
   | 'architecture_review'
   | 'worktree'
@@ -53,6 +53,14 @@ export interface StepDefinition {
   enforcement: EnforcementLevel;
   prerequisites: StepName[];
   skippableForTiers: ComplexityTier[];
+  /**
+   * A legacy feature may predate this DECIDE step's artifact contract. When
+   * every artifact matching the contract is absent, record this disposition
+   * instead of autonomously entering the authoring step.
+   */
+  absentArtifactDisposition?: 'skipped';
+  /** Human-readable provenance recorded with an absent-artifact skip. */
+  absentArtifactReason?: string;
   /**
    * Tracks (product/technical) for which this step is skipped. `prd` is skipped
    * on the `technical` track (no product requirements to spec). Empty/absent →

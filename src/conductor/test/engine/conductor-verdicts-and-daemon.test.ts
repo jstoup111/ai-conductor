@@ -1672,6 +1672,9 @@ describe('engine/conductor', () => {
         config: {
           kickback_escalation: { enabled: false },
           retry_routing: { enabled: false },
+          // This fallback test owns a single BUILD attempt, independent of
+          // the feature-tier default remediation allowance.
+          prd_audit: { max_remediation_laps: 1 },
         },
       });
 
@@ -2014,10 +2017,7 @@ describe('engine/conductor', () => {
     async function satisfyUnrelatedValidation(step: StepName, runId?: string): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       if (step === 'prd_audit') {
-        await writeFile(
-          join(dir, '.pipeline/prd-audit.md'),
-          '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
-        );
+        await writePrdAuditFixture(dir, runId);
       } else if (step === 'architecture_review_as_built') {
         await writeAsBuiltFixture(dir, runId, asBuiltApprovedFixture());
       }
@@ -2212,7 +2212,7 @@ describe('engine/conductor', () => {
       expect(kickbacks).toHaveLength(0);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/step 'manual_test' failed/);
+      expect(halt).toMatch(/branch "manual_test" produced no-verdict/);
     });
 
     it('auto mode non-daemon: a failing manual_test HALTs — never silently auto-skipped (#367 gating flip)', async () => {
@@ -4921,9 +4921,10 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(6);
+    expect(tierSkipEvents.length).toBe(7);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('coherence_check');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('plan_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');

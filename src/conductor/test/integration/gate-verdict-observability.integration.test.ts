@@ -10,9 +10,22 @@ import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const MANUAL_TEST_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n';
-const AS_BUILT_PASS = '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n';
+const AS_BUILT_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: false, reason: 'fixture' },
+  diagramDrift: { enabled: false, reason: 'fixture' },
+};
+
+async function writeAsBuiltPass(dir: string, attemptId: string | undefined): Promise<void> {
+  await persistAsBuiltVerdict(dir, {
+    version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
+  }, { attemptId: attemptId ?? 'fixture-run', codeStamp: null, policy: AS_BUILT_POLICY });
+}
 const NEGATIVE_PATH_STORIES = [
   '# Stories',
   '',
@@ -79,7 +92,7 @@ describe('validation-group gate verdict observability', () => {
               recordedDispositions: [],
             }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), AS_BUILT_PASS);
+            await writeAsBuiltPass(dir, options?.runId);
           }
           return { success: true } as StepRunResult;
         }),
@@ -150,7 +163,7 @@ describe('validation-group gate verdict observability', () => {
               recordedDispositions: [],
             }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), AS_BUILT_PASS);
+            await writeAsBuiltPass(dir, options?.runId);
           }
           return { success: true } as StepRunResult;
         }),
@@ -201,13 +214,13 @@ describe('validation-group gate verdict observability', () => {
       persister.start();
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MANUAL_TEST_PASS);
             return { success: true } as StepRunResult;
           }
           if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), AS_BUILT_PASS);
+            await writeAsBuiltPass(dir, options?.runId);
             return { success: true } as StepRunResult;
           }
           if (step === 'prd_audit') return { success: false, error: 'injected prd-audit failure' } as StepRunResult;

@@ -50,7 +50,7 @@ export type AuditRecord = {
   caseId?: string;
   residualEffectId?: string;
   /** Present for kickback-budget authorizations. */
-  allowance?: 'laps' | 'growth';
+  allowance?: 'laps' | 'growth' | 'restacks';
   at: number;
   /**
    * #647 D3: for `event: 'kickback'` records, distinguishes a kickback that

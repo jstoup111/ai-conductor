@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 /**
  * AB-2 (FINISH class): the canonical emitter handed to the FINISH composition
@@ -44,7 +45,7 @@ describe('FINISH publication threads the canonical event emitter', () => {
     const { createProductionFinishPublicationCoordinator } = await import('../../src/engine/finish-publication-production.js');
     const root = await mkdtemp(join(tmpdir(), 'finish-emitter-'));
     try {
-      const events = { emit: vi.fn(async () => {}) };
+      const events = new ConductorEventEmitter();
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
@@ -75,7 +76,7 @@ describe('FINISH publication threads the canonical event emitter', () => {
   it('presentation repair passes events to provenance-derived operations', async () => {
     await loadWithMocks();
     const { createProvenanceGuardedFinishPresentationRepair } = await import('../../src/engine/conductor.js');
-    const events = { emit: vi.fn(async () => {}) };
+    const events = new ConductorEventEmitter();
     const repair = createProvenanceGuardedFinishPresentationRepair({
       projectRoot: '/fixture',
       git: async () => ({ stdout: '' }),

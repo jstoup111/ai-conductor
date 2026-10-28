@@ -1,5 +1,6 @@
 import { relative, resolve } from 'node:path';
 import { canonicalTaskId } from './autoheal.js';
+import { isValidGitBranchName } from './git-branch-name.js';
 import {
   createEngineStateStore,
   type EngineState,
@@ -17,6 +18,8 @@ export interface RepairAdmission {
     instruction: string;
   };
   baseline: {
+    /** Present only when a routed repair is bound to its host branch. */
+    branch?: string;
     head: string;
     tree: string;
     resolvedTaskIds: readonly string[];
@@ -36,6 +39,7 @@ export interface RepairObligation {
   taskIds: string[];
   source: RepairAdmission['source'];
   baseline: {
+    branch?: string;
     head: string;
     tree: string;
     resolvedTaskIds: string[];
@@ -50,6 +54,10 @@ export interface RepairObligationSection {
   records: Record<string, RepairObligation>;
   currentByPlan: Record<string, Record<string, string>>;
   admissionsByPlan: Record<string, Record<string, string>>;
+  /** Counted by the citation judge so a replay cannot spend a refusal twice. */
+  citationRefusals: Record<string, number>;
+  /** Admission keys already applied to the refusal counter. */
+  citationRefusalAdmissions: Record<string, true>;
 }
 
 export type TaskObligationStanding =
@@ -80,6 +88,7 @@ export interface RepairObligationStore {
     evidence: RepairClosureEvidence;
   }): Promise<RepairClosureResult>;
   read(): Promise<RepairResult<RepairObligationSection>>;
+  recordCitationRefusals(admissionKey: string, keys: readonly string[]): Promise<RepairResult<Record<string, number>>>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -152,6 +161,7 @@ function validObligation(value: unknown): value is RepairObligation {
   if (typeof value.source.findingId !== 'string' || typeof value.source.authority !== 'string' ||
     typeof value.source.instruction !== 'string' || typeof value.baseline.head !== 'string' ||
     typeof value.baseline.tree !== 'string' || !isStringArray(value.baseline.resolvedTaskIds) ||
+    (value.baseline.branch !== undefined && !isValidGitBranchName(value.baseline.branch)) ||
     (value.baseline.resolvedCount !== undefined &&
       (typeof value.baseline.resolvedCount !== 'number' ||
         !Number.isSafeInteger(value.baseline.resolvedCount) || value.baseline.resolvedCount < 0)) ||
@@ -163,9 +173,11 @@ function validObligation(value: unknown): value is RepairObligation {
 
 function parseSection(state: Readonly<EngineState>): RepairResult<RepairObligationSection> {
   const raw = state.repairObligations;
-  if (raw === undefined) return { ok: true, value: { version: 1, records: {}, currentByPlan: {}, admissionsByPlan: {} } };
+  if (raw === undefined) return { ok: true, value: { version: 1, records: {}, currentByPlan: {}, admissionsByPlan: {}, citationRefusals: {}, citationRefusalAdmissions: {} } };
   if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.records) || !isRecord(raw.currentByPlan) ||
-    (raw.admissionsByPlan !== undefined && !isRecord(raw.admissionsByPlan))) {
+    (raw.admissionsByPlan !== undefined && !isRecord(raw.admissionsByPlan)) ||
+    (raw.citationRefusals !== undefined && (!isRecord(raw.citationRefusals) || !Object.values(raw.citationRefusals).every((count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0))) ||
+    (raw.citationRefusalAdmissions !== undefined && (!isRecord(raw.citationRefusalAdmissions) || !Object.values(raw.citationRefusalAdmissions).every((value) => value === true)))) {
     return failure('Engine state repairObligations section is incompatible');
   }
   if (!Object.values(raw.records).every(validObligation) ||
@@ -176,7 +188,7 @@ function parseSection(state: Readonly<EngineState>): RepairResult<RepairObligati
   }
   return {
     ok: true,
-    value: { ...raw, admissionsByPlan: raw.admissionsByPlan ?? {} } as unknown as RepairObligationSection,
+    value: { ...raw, admissionsByPlan: raw.admissionsByPlan ?? {}, citationRefusals: raw.citationRefusals ?? {}, citationRefusalAdmissions: raw.citationRefusalAdmissions ?? {} } as unknown as RepairObligationSection,
   };
 }
 
@@ -199,7 +211,10 @@ export function createRepairObligationStore(
       let result: RepairAdmissionResult | undefined;
       const planIdentity = repairPlanIdentity(projectRoot, admission.planPath);
       const taskIds = uniqueCanonicalTaskIds(admission.taskIds);
-      if (!admission.id || taskIds.length === 0 || (admissionKey !== undefined && !admissionKey.trim())) return failure('Repair admission requires an id, task, and non-empty key') as RepairAdmissionResult;
+      if (!admission.id || taskIds.length === 0 || (admissionKey !== undefined && !admissionKey.trim()) ||
+        (admission.baseline.branch !== undefined && !isValidGitBranchName(admission.baseline.branch))) {
+        return failure('Repair admission requires an id, task, valid optional branch, and non-empty key') as RepairAdmissionResult;
+      }
 
       const updated = await store.update((current) => {
         const parsed = parseSection(current);
@@ -214,6 +229,19 @@ export function createRepairObligationStore(
           if (!replay) {
             result = failure('Repair admission key points to a missing obligation') as RepairAdmissionResult;
             return current as EngineState;
+          }
+          // A routed reroute deliberately keeps the admission key but changes
+          // its host boundary.  Preserve one obligation per key while making
+          // that durable engine-state projection follow the route record.
+          if (replay.source.authority === 'routed_repair') {
+            replay.baseline = {
+              ...replay.baseline,
+              branch: admission.baseline.branch,
+              head: admission.baseline.head,
+              tree: admission.baseline.tree,
+            };
+            result = { ok: true, obligation: clone(replay), replayed: true };
+            return { ...current, repairObligations: section };
           }
           result = { ok: true, obligation: clone(replay), replayed: true };
           return current as EngineState;
@@ -232,18 +260,25 @@ export function createRepairObligationStore(
           settlement: 'unsettled',
           tasks: Object.fromEntries(taskIds.map((taskId) => [taskId, { status: 'open' as const }])),
         };
-        // A rewritten plan task supersedes only an earlier rewrite of that
-        // same task.  Review/gate obligations deliberately remain open: the
-        // resolver folds every open record, rather than treating this index as
-        // the sole source of authority.
-        if (admission.source.authority === 'plan_amendment') {
+        // A replacement authority supersedes its own earlier authority for
+        // the same task.  Review/gate obligations deliberately remain open:
+        // the resolver folds every open record, rather than treating this
+        // index as the sole source of authority.
+        if (admission.source.authority === 'plan_amendment' || admission.source.authority === 'done-when-citation' || admission.source.authority === 'remediation-closure') {
           for (const prior of Object.values(section.records)) {
-            if (prior.planIdentity !== planIdentity || prior.source.authority !== 'plan_amendment') continue;
+            if (prior.planIdentity !== planIdentity || prior.source.authority !== admission.source.authority) continue;
             for (const taskId of taskIds) {
               if (prior.tasks[taskId]?.status === 'open') {
                 prior.tasks[taskId] = {
                   status: 'resolved',
-                  evidence: { kind: 'superseded-by-plan-amendment', value: admission.id },
+                  evidence: {
+                    kind: admission.source.authority === 'plan_amendment'
+                      ? 'superseded-by-plan-amendment'
+                      : admission.source.authority === 'done-when-citation'
+                        ? 'superseded-by-citation-refusal'
+                        : 'superseded-by-remediation-closure',
+                    value: admission.id,
+                  },
                 };
               }
             }
@@ -267,6 +302,28 @@ export function createRepairObligationStore(
   return {
     read,
     admitOrReplay: (admissionKey, admission) => admit(admission, admissionKey),
+
+    async recordCitationRefusals(admissionKey, keys) {
+      let result: RepairResult<Record<string, number>> | undefined;
+      const unique = [...new Set(keys.filter((key) => key.trim()))];
+      const updated = await store.update((current) => {
+        const parsed = parseSection(current);
+        if (!parsed.ok) {
+          result = parsed as RepairResult<Record<string, number>>;
+          return current as EngineState;
+        }
+        const section = clone(parsed.value);
+        if (section.citationRefusalAdmissions[admissionKey]) {
+          result = { ok: true, value: Object.fromEntries(unique.map((key) => [key, section.citationRefusals[key] ?? 0])) };
+          return current as EngineState;
+        }
+        for (const key of unique) section.citationRefusals[key] = (section.citationRefusals[key] ?? 0) + 1;
+        section.citationRefusalAdmissions[admissionKey] = true;
+        result = { ok: true, value: Object.fromEntries(unique.map((key) => [key, section.citationRefusals[key]!])) };
+        return { ...current, repairObligations: section };
+      });
+      return updated.ok ? result! : persistenceFailure(updated);
+    },
 
     async rewriteBaselines(translations): Promise<RepairResult<{ rewritten: string[] }>> {
       if (translations.size === 0) return { ok: true, value: { rewritten: [] } };

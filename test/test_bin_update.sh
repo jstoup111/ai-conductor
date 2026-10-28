@@ -305,13 +305,13 @@ assert "repo-relative launcher: config read succeeds without ai-conductor on PAT
 # VERSION deliberately disagree, so installer identity must come from checkout
 # state rather than the fixture's VERSION file.
 run_install_configure_conductor() {
-  local home=$1 update_mode=$2 requested_fixture=${3:-} identity_fixture=${3:-exact-tag} installer_dir fragment stubs
+  local home=$1 update_mode=$2 requested_fixture=${3:-} identity_fixture=${3:-exact-tag} installer_dir fragment
   installer_dir="$TMP_ROOT/install-configure-${RANDOM}"
   fragment="$installer_dir/bin/install-configure-test"
-  stubs="$installer_dir/stubs"
   mkdir -p "$installer_dir/bin/lib"
   ln -s "$HARNESS_DIR/skills" "$installer_dir/skills"
   ln -s "$HARNESS_DIR/HARNESS.md" "$installer_dir/HARNESS.md"
+  ln -s "$HARNESS_DIR/ARCHITECTURE.md" "$installer_dir/ARCHITECTURE.md"
   if [ -n "$requested_fixture" ]; then
     printf '9.9.9\n' > "$installer_dir/VERSION"
   else
@@ -319,8 +319,7 @@ run_install_configure_conductor() {
   fi
   cp "$HARNESS_DIR/bin/install" "$installer_dir/bin/install"
   cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$installer_dir/bin/lib/harness-common.sh"
-  mkdir -p "$stubs"
-  cat > "$stubs/ai-conductor" <<'EOF'
+  cat > "$installer_dir/bin/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -354,7 +353,7 @@ case "$2" in
   *) exit 2 ;;
 esac
 EOF
-  chmod +x "$stubs/ai-conductor"
+  chmod +x "$installer_dir/bin/ai-conductor"
   awk '/^# ─── Main /{exit} {print}' "$installer_dir/bin/install" > "$fragment"
   printf '%s\n' "UPDATE_MODE=$update_mode" 'configure_conductor' >> "$fragment"
   chmod +x "$fragment"
@@ -374,7 +373,7 @@ EOF
 
   set +e
   INSTALL_CONFIG_OUT=$(INSTALL_CONFIG_CALLS="$home/install-config-calls" \
-    HOME="$home" PATH="$stubs:$TEST_PATH" "$fragment" 2>&1)
+    HOME="$home" PATH="$TEST_PATH" "$fragment" 2>&1)
   INSTALL_CONFIG_CODE=$?
   set -e
 }

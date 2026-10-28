@@ -1,4 +1,4 @@
-// Covers: task:2, task:10.3, task:rem-prd-audit-11-r2
+// Covers: task:2, task:10.3, task:39, task:rem-prd-audit-11-r2
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -23,49 +23,38 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/conductor.ts:ConductStateStore.applyBatch': 2,
   'engine/conductor.ts:readAllVerdicts': 3,
   'engine/conductor.ts:readKickbackLedger': 11,
-  'engine/conductor.ts:readVerdict': 4,
+  'engine/conductor.ts:readVerdict': 3,
   'engine/conductor.ts:updateKickbackLedger': 5,
   'engine/conductor.ts:writeVerdict': 2,
-  'engine/coverage-binding-void.ts:ConductStateStore.apply': 1,
-  'engine/coverage-binding-void.ts:readVerdict': 1,
-  'engine/coverage-binding-void.ts:writeVerdict': 1,
-  'engine/daemon-observe-cli.ts:readKickbackLedger': 2,
-  'engine/daemon-rekick.ts:readKickbackLedger': 1,
+  'engine/daemon-observe-cli.ts:readKickbackLedger': 1,
+  'engine/daemon-rekick.ts:readKickbackLedger': 3,
   'engine/finish-publication-production.ts:readAllVerdicts': 1,
   'engine/finish-publication-production.ts:readVerdict': 2,
   'engine/finish-record-cli.ts:ConductStateStore.apply': 1,
   'engine/gate-verdicts.ts:readVerdict': 3,
   'engine/gate-verdicts.ts:writeVerdict': 2,
-  'engine/kickback-budget-cli.ts:readKickbackLedger': 5,
+  'engine/kickback-budget-cli.ts:readKickbackLedger': 7,
   'engine/kickback-ledger.ts:bumpKickbackGate': 2,
   'engine/kickback-ledger.ts:readKickbackLedger': 20,
   'engine/rebase-transition.ts:ConductStateStore.applyBatch': 1,
-  'engine/rebase-transition.ts:readVerdict': 9,
+  'engine/rebase-transition.ts:readVerdict': 7,
   'engine/rebase-transition.ts:updateKickbackLedger': 1,
   'engine/rebase-transition.ts:writeVerdict': 3,
   'engine/rebase.ts:readVerdict': 4,
   'engine/rebase.ts:writeVerdict': 4,
-  'engine/remediation-caps.ts:readKickbackLedger': 2,
+  'engine/remediation-caps.ts:readKickbackLedger': 3,
+  'engine/restack/restack-transition.ts:readVerdict': 2,
   'engine/rewind.ts:ConductStateStore.applyBatch': 3,
   'engine/rewind.ts:ConductStateStore.applyCorrection': 1,
+  'engine/routing/host-region-entry.ts:ConductStateStore.applyBatch': 2,
+  'engine/routing/routed-exit.ts:writeVerdict': 1,
+  'engine/routing/round-receipt.ts:readKickbackLedger': 2,
+  'engine/routing/round-receipt.ts:updateKickbackLedger': 2,
   'engine/state.ts:ConductStateStore.apply': 3,
   'engine/state.ts:ConductStateStore.applyBatch': 2,
   'engine/state.ts:ConductStateStore.applyCorrection': 1,
   'engine/state.ts:ConductStateStore.replace': 2,
 };
-
-/** Feature-wide rebase records and pure in-memory ledger updates have no child path. */
-const WHOLE_FEATURE_ONLY_SITES = new Set([
-  'engine/rebase-transition.ts:244:readVerdict',
-  'engine/rebase-transition.ts:288:writeVerdict',
-  'engine/rebase-transition.ts:363:writeVerdict',
-  'engine/rebase-transition.ts:388:readVerdict',
-  'engine/rebase-transition.ts:389:readVerdict',
-  'engine/rebase.ts:2430:writeVerdict',
-  'engine/rebase.ts:2490:writeVerdict',
-  'engine/kickback-ledger.ts:1068:bumpKickbackGate',
-  'engine/kickback-ledger.ts:1086:bumpKickbackGate',
-]);
 
 /**
  * `conductor.ts` owns both a whole-feature `prd_audit` reconciliation write
@@ -77,6 +66,33 @@ const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classific
   prd_audit: 'whole-feature-only',
   'current-step': 'child-aware',
 };
+
+/**
+ * Restack reaches the legacy flat-region APIs only through these named,
+ * child-scoped call sites. Keep these separate from the feature-wide
+ * allowlist: each is a deliberate routing decision, not a blanket exemption
+ * for the restack directory.
+ */
+const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
+  'engine/daemon-rekick.ts:readKickbackLedger(path)': 'whole-feature-only',
+  'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)': 'child-aware',
+  'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)': 'child-aware',
+  'engine/restack/restack-transition.ts:readVerdict(worktree,gate,range.child)': 'child-aware',
+  'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)': 'child-aware',
+};
+
+/**
+ * These writers do not call a flat-region accessor directly: transition
+ * delegates verdict/state writes to the rebase transition, cascade-cap writes
+ * a per-child durable ref, and re-kick supplies the child-scoped ledger input.
+ * Pin them individually so a future broad writer cannot hide behind a path
+ * wildcard.
+ */
+const RESTACK_WRITER_MANIFEST = {
+  'engine/restack/restack-transition.ts': ['applyDecision', 'options.activeChild', 'leaf.child'],
+  'engine/restack/cascade-cap.ts': ['updateCascadeLimit', 'cascadeUpdateLines', 'String(child)'],
+  'engine/daemon-rekick.ts': ['readKickbackLedger(path, executionChild)', 'readKickbackLedger(path, cursorChild)'],
+} as const;
 
 const PENDING_CHILD_WIRING: readonly string[] = [];
 
@@ -139,6 +155,35 @@ function conductorWriteVerdictIdentity(args: readonly string[]): string | undefi
   return undefined;
 }
 
+/**
+ * Restack's deliberately routed reads are identified by their argument shape,
+ * not a source line.  Insertions in an unrelated path must not erase a
+ * classification, while a changed child argument remains a new audit site.
+ */
+function restackAccessIdentity({ site, arguments: args }: CallSite): string {
+  const [path, _line, accessor] = site.split(':');
+  return `${path}:${accessor}(${args.map((argument) => argument.replace(/\s+/g, '')).join(',')})`;
+}
+
+/**
+ * Feature-wide rebase, re-kick, and pure in-memory ledger accesses have no
+ * child path.  Classify by path, operation, and gate rather than source line:
+ * harmless insertions must not turn a known whole-feature access into an
+ * unlabelled child-aware one.
+ */
+function isWholeFeatureOnly(call: CallSite): boolean {
+  const { site, arguments: args } = call;
+  const [path, _line, accessor] = site.split(':');
+  const gate = args[1]?.replace(/\s+/g, '');
+  return (path === 'engine/daemon-rekick.ts' &&
+      RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] === 'whole-feature-only') ||
+    ((path === 'engine/rebase-transition.ts' || path === 'engine/rebase.ts') &&
+      (accessor === 'readVerdict' || accessor === 'writeVerdict') &&
+      (gate === "'rebase'" || gate === "'coverage_binding'")) ||
+    (path === 'engine/routing/routed-exit.ts' && accessor === 'writeVerdict') ||
+    (path === 'engine/kickback-ledger.ts' && accessor === 'bumpKickbackGate');
+}
+
 function childArgumentCarriesActiveRegionChild({ arguments: args, source }: CallSite): boolean {
   const childArgument = args[3];
   if (childArgument === undefined) return false;
@@ -191,9 +236,23 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
       `active-region conductor writeVerdict sites missing child: ${activeRegionWritesMissingChild.join(', ') || 'none'}`,
     ].join('\n'));
   }
-  return sites.map((site) => WHOLE_FEATURE_ONLY_SITES.has(site)
-    ? { site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
-    : { site, classification: 'child-aware' as const });
+  const restackAccesses = calls.filter(({ site }) => {
+    const path = site.split(':', 1)[0] ?? '';
+    return (path === 'engine/daemon-rekick.ts' || path.startsWith('engine/restack/')) &&
+      FLAT_REGION_ACCESSORS.has(site.split(':').at(-1) ?? '');
+  });
+  const unclassifiedRestackAccesses = restackAccesses
+    .filter((call) => RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] === undefined)
+    .map(({ site }) => site);
+  if (unclassifiedRestackAccesses.length > 0) {
+    throw new Error(`unclassified restack region access sites: ${unclassifiedRestackAccesses.join(', ')}`);
+  }
+  return calls.map((call) => isWholeFeatureOnly(call)
+    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'This access is deliberately whole-feature scoped.' }
+    : {
+      site: call.site,
+      classification: RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] ?? 'child-aware' as const,
+    });
 }
 
 describe('child-region flat-access audit', () => {
@@ -210,5 +269,21 @@ describe('child-region flat-access audit', () => {
 
   it('has no pending child wiring', () => {
     expect(PENDING_CHILD_WIRING).toEqual([]);
+  });
+
+  it('keeps each restack writer deliberately classified without a wildcard', async () => {
+    const files = await sourceFiles(ENGINE_ROOT);
+    for (const [path, requiredSnippets] of Object.entries(RESTACK_WRITER_MANIFEST)) {
+      const source = files.get(path);
+      expect(source, `missing restack writer ${path}`).toBeDefined();
+      for (const snippet of requiredSnippets) expect(source).toContain(snippet);
+    }
+    expect(Object.keys(RESTACK_REGION_ACCESS_CLASSIFICATIONS)).toEqual([
+      'engine/daemon-rekick.ts:readKickbackLedger(path)',
+      'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)',
+      'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)',
+      'engine/restack/restack-transition.ts:readVerdict(worktree,gate,range.child)',
+      'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)',
+    ]);
   });
 });

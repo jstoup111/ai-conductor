@@ -3,6 +3,7 @@ import { posix } from 'node:path';
 import ts from 'typescript';
 
 import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { isPlanFileHint } from './build-review-scope-source.js';
 
 export type BuildReviewDependencySourceSide = 'base' | 'head';
 
@@ -128,9 +129,9 @@ export async function discoverBuildReviewScopeDependencies(
   };
   const seeds = unique([
     ...input.changedTestPaths,
-    // Only explicit files seed blob discovery; directory hints are task scope.
+    // Only explicit files seed blob discovery; directory and glob hints are task scope.
     ...[...parsePlanTaskPaths(input.planText).values()].flatMap((paths) =>
-      [...paths].filter((path) => !path.endsWith('/') && isPlanTestPath(path))),
+      [...paths].filter((path) => isPlanFileHint(path) && isPlanTestPath(path))),
   ].filter(isPlanTestPath), (path) => path);
   const effects: BuildReviewScopeDependencyEffect[] = [];
   const uncertainties: BuildReviewScopeDependencyUncertainty[] = [];

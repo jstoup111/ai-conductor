@@ -1,0 +1,13 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+## Why
+
+Freeze the single-leaf FINISH baseline.
+
+## What Changed
+
+Committed N=1 goldens.
+
+## Testing
+
+ai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts
+Plan: .docs/plans/n1-golden.md

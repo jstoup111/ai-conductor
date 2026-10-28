@@ -1,3 +1,4 @@
+// Covers: task:4
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests for daemon-cli priority resolver wiring (Task 13).
 //
@@ -22,7 +23,6 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 async function loadBacklogPriority() {
   return (await import('../../src/engine/backlog-priority.js')) as {
     createPriorityResolver: (reader: any, log: any) => any;
-    ghIssueLabelReader: (runner: any) => any;
     orderBacklog: (items: BacklogItem[], res: any) => BacklogItem[];
     parsePriorityLabels: (labels: string[]) => string | undefined;
   };
@@ -35,7 +35,22 @@ async function loadDaemonWorkSource() {
   };
 }
 
-type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
+type LabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
+
+function orderingSourceFor(reader: LabelReader) {
+  return {
+    async readFacts(refs: string[]) {
+      const labelsByRef = await reader(refs);
+      return new Map([...labelsByRef].map(([ref, labels]) => [
+        ref,
+        labels === 'not-found'
+          ? 'not-found'
+          : { priority: labels.includes('priority: high') ? 'high' as const : labels.includes('priority: low') ? 'low' as const : undefined, size: undefined },
+      ]));
+    },
+    async readBlockers() { return []; },
+  };
+}
 
 let workDirs: string[] = [];
 
@@ -56,8 +71,8 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
   it('TEST 1: Resolver accepts dependencies and produces ordering results', async () => {
     const backlogMod = await loadBacklogPriority();
 
-    // Create a fake label reader (mimicking ghIssueLabelReader)
-    const fakeReader: IssueLabelReader = async (refs) => {
+    // Create a fake label reader at the ordering-source boundary.
+    const fakeReader: LabelReader = async (refs) => {
       const result = new Map<string, string[] | 'not-found'>();
       for (const ref of refs) {
         if (ref === 'acme/app#1') result.set(ref, ['priority: high']);
@@ -70,7 +85,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     const log = (msg: string) => logs.push(msg);
 
     // Test 1: Resolver is constructed with reader and log
-    const resolver = backlogMod.createPriorityResolver(fakeReader, log);
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(fakeReader), log);
     expect(resolver).toBeDefined();
     expect(typeof resolver.resolve).toBe('function');
 
@@ -102,7 +117,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
       'acme/app#2': ['priority: high'],
     };
 
-    const fakeReader: IssueLabelReader = async (refs) => {
+    const fakeReader: LabelReader = async (refs) => {
       const result = new Map<string, string[] | 'not-found'>();
       for (const ref of refs) {
         result.set(ref, labels[ref] ?? 'not-found');
@@ -114,7 +129,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     const log = (msg: string) => logs.push(msg);
 
     // Create resolver
-    const resolver = backlogMod.createPriorityResolver(fakeReader, log);
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(fakeReader), log);
 
     // Create backlog items (in chronological order, not priority order)
     const backlogItems: BacklogItem[] = [
@@ -158,7 +173,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
 
     // Track how many times the reader is called
     let readerCallCount = 0;
-    const fakeReader: IssueLabelReader = async (refs) => {
+    const fakeReader: LabelReader = async (refs) => {
       readerCallCount++;
       const result = new Map<string, string[] | 'not-found'>();
       for (const ref of refs) {
@@ -168,7 +183,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     };
 
     const logs: string[] = [];
-    const resolver = backlogMod.createPriorityResolver(fakeReader, (msg: string) => logs.push(msg));
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(fakeReader), (msg: string) => logs.push(msg));
 
     const items: BacklogItem[] = [{ slug: 'a', sourceRef: 'acme/app#1' }];
 
@@ -211,12 +226,12 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     const backlogMod = await loadBacklogPriority();
 
     // Create a reader that fails (simulating GitHub/network outage)
-    const failingReader: IssueLabelReader = async () => {
+    const failingReader: LabelReader = async () => {
       throw new Error('priority source unreachable');
     };
 
     const logs: string[] = [];
-    const resolver = backlogMod.createPriorityResolver(failingReader, (msg: string) => logs.push(msg));
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(failingReader), (msg: string) => logs.push(msg));
 
     const items: BacklogItem[] = [
       { slug: 'a', sourceRef: 'acme/app#1' },

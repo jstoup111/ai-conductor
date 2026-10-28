@@ -2,32 +2,23 @@
 // A configured bot credential is a capability of exactly one gh/git child. It
 // must never become daemon state that later reaches provider or build children.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execFile as execFileCb } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { execFile as ExecFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 
-const boundary = vi.hoisted(() => ({
+const boundary = {
   calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
   failure: undefined as (Error & { stderr?: string }) | undefined,
-}));
+};
 
-// setup.ts imports engine modules before this file's mock is registered.
-// Reset the cached graph so the production adapter reaches this fake boundary.
-vi.hoisted(() => { vi.resetModules(); });
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  return {
-    ...actual,
-    execFile: vi.fn((file, args: string[], options: Record<string, unknown>, callback) => {
-      boundary.calls.push({ file, args, options });
-      queueMicrotask(() => callback(boundary.failure, { stdout: '', stderr: boundary.failure?.stderr ?? '' }));
-      return {};
-    }),
-  };
-});
+const mockExecFile = ((file: string, args: string[], options: Record<string, unknown>, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+  boundary.calls.push({ file, args, options });
+  queueMicrotask(() => callback(boundary.failure ?? null, '', boundary.failure?.stderr ?? ''));
+  return {};
+}) as typeof ExecFile;
 
 import { scrubTmuxEnvironment } from '../../src/execution/child-environment.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from '../../src/engine/tracker-client.js';
@@ -36,8 +27,6 @@ import { provisionProviderHome } from '../../src/engine/self-host/provider-home.
 import { provisionSandboxBuildEnv } from '../../src/engine/self-host/sandbox-build-env.js';
 
 const sentinel = 'task-12-bot-token-must-not-escape';
-const savedEnvironment = new Map<string, string | undefined>();
-
 function propagatedErrorText(error: unknown): string {
   const seen = new Set<unknown>();
   const visit = (value: unknown): string => {
@@ -54,40 +43,32 @@ describe('GitHub bot token confinement', () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'github-bot-token-confinement-'));
-    await mkdir(join(root, 'home', '.ai-conductor'), { recursive: true });
-    await writeFile(join(root, 'bot-token'), `${sentinel}\n`);
-    await writeFile(join(root, 'home', '.ai-conductor', 'config.yml'), `github_bot:\n  token_file: ${join(root, 'bot-token')}\n`);
     await mkdir(join(root, 'worktree', 'skills'), { recursive: true });
     await mkdir(join(root, 'homes'), { recursive: true });
     await mkdir(join(root, 'builds'), { recursive: true });
-
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'AI_CONDUCTOR_USER_CONFIG_DIR', 'GH_TOKEN', 'HOME']) savedEnvironment.set(key, process.env[key]);
-    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
-    process.env.GH_TOKEN = 'operator-token';
-    process.env.HOME = join(root, 'home');
     boundary.calls.length = 0;
     boundary.failure = undefined;
-    vi.mocked(execFileCb).mockClear();
   });
 
   afterEach(async () => {
-    for (const [key, value] of savedEnvironment) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    savedEnvironment.clear();
     await rm(root, { recursive: true, force: true });
   });
 
   it('confines a bot write to gh/git children and redacts a failed child stderr before later children are built', async () => {
-    const gh = makeProductionGh({ execFile: execFileCb });
+    const credential = { kind: 'configured' as const, tokenFile: join(root, 'bot-token') };
+    const productionDependencies = {
+      execFile: mockExecFile,
+      readCredential: async () => credential,
+      readToken: async () => ({ kind: 'token' as const, token: sentinel }),
+      assertRealExecAllowed: () => {},
+    };
+    const gh = makeProductionGh(productionDependencies);
 
     await gh(['issue', 'comment', '1'], { cwd: root, credential: 'write' });
     expect(boundary.calls[0]).toMatchObject({
       file: 'gh', args: ['issue', 'comment', '1'], options: { env: expect.objectContaining({ GH_TOKEN: sentinel }) },
     });
-    expect(process.env.GH_TOKEN).toBe('operator-token');
+    expect(process.env.GH_TOKEN).not.toBe(sentinel);
 
     const leakedStderr = `fatal: Authentication failed for ${sentinel}`;
     boundary.failure = Object.assign(new Error(`gh failed: ${leakedStderr}`), { stderr: leakedStderr });
@@ -127,7 +108,7 @@ describe('GitHub bot token confinement', () => {
       for (const environment of children) expect(Object.values(environment)).not.toContain(sentinel);
 
       boundary.failure = undefined;
-      await makeProductionGit()(['push', 'origin', 'HEAD:refs/heads/topic'], {
+      await makeProductionGit(productionDependencies)(['push', 'origin', 'HEAD:refs/heads/topic'], {
         cwd: root, credential: 'write', endpoint: 'https',
       });
       const push = boundary.calls.find((call) => call.file === 'git');
@@ -136,7 +117,7 @@ describe('GitHub bot token confinement', () => {
       expect(JSON.stringify(push?.args)).not.toMatch(/[^:]:[^@]+@/);
 
       boundary.failure = Object.assign(new Error(`push failed: ${sentinel}`), { stderr: `fatal ${sentinel}` });
-      const pushFailure = await makeProductionGit()(['push', 'origin', 'HEAD:refs/heads/topic'], {
+      const pushFailure = await makeProductionGit(productionDependencies)(['push', 'origin', 'HEAD:refs/heads/topic'], {
         cwd: root, credential: 'write', endpoint: 'https',
       }).catch((error: unknown) => error);
       expect(propagatedErrorText(pushFailure)).not.toContain(sentinel);

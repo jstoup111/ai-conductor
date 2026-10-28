@@ -38,9 +38,12 @@ There are two surfaces and you use both:
 
 Every primitive prints a single JSON line on success, so each step's output feeds the next.
 
-For Medium and Large work, authoring runs `coherence_check` immediately after `plan` and commits
-`.docs/coherence/<plan-stem>.md` with the spec artifacts. Small work skips both the gate and the
-artifact, allowing the daemon to begin at BUILD after the spec PR merges.
+For Medium and Large work, authoring runs `coherence_check` immediately after `plan`, then
+`compose plan-review`. Land verifies `.docs/plan-review/<plan-stem>.md` in the authoring worktree and
+commits `.docs/coherence/<plan-stem>.md` with the spec artifacts; the plan-review record itself is
+never committed. `plan-review` prints plain text, not JSON.
+Small work skips both gates and both artifacts, allowing the daemon to begin at BUILD after the spec
+PR merges.
 
 ## Start a session
 
@@ -151,16 +154,20 @@ instead. A resolved empty or bulletless body still creates an outcomes file with
 and zero bullets. An unreadable, missing, or unparseable source leaves no outcomes file, prints a
 diagnostic that names `--body`, and still creates the worktree. `--body` always takes precedence.
 
-> **Known limitation.** `--source-ref` and `--body` are both parsed and honoured by
-> `composer worktree`, but neither is declared in the commander tree, so help output omits them. If
-> you pass `--body "<text>"` it wins over the claim record or issue body. Tracked in
-> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+`compose worktree --help` lists `--source-ref` and `--body`; the root `ai-conductor --help` omits them.
 
 ## Step 4 — Run DECIDE inside the worktree
 
 With `worktreePath` as the working directory, run the real DECIDE skills in canonical order. The
 engineer owns the whole DECIDE phase; the daemon only builds. Every artifact is written inside the
 worktree, never the primary checkout.
+
+As each step starts, mark it so a herdr or tmux pane shows `<slug> · <step>`
+([pane labels](../reference/cli.md#composer-pane-labels)):
+
+```bash
+ai-conductor compose phase --worktree <worktreePath> --phase <step>
+```
 
 1. `/explore` — discovery and the confirmed track.
 2. Complexity assessment — write the tier to `.docs/complexity/<plan-stem>.md`. The stem must match
@@ -170,15 +177,58 @@ worktree, never the primary checkout.
 5. `/architecture-review` — skipped at tier S. Every ADR must be APPROVED before landing. Each ADR
    added or changed by the spec must also declare at least one citable decision: use a numbered item
    in its `## Decision` section (preferred), an ATX numbered heading (`### 4. Termination`), a bold
-   `D<number>` heading, or an ATX `D<number>` heading.
+   `D<number>` heading, or an ATX `D<number>` heading. Each added ADR also needs a valid
+   [assumptions ledger](#adr-assumptions-ledger).
 6. `/stories` — must end `Status: Accepted`.
 7. `/conflict-check` — skipped at tier S.
 8. `/plan`.
 9. `/coherence-check` — tiers M and L only.
+10. Plan review — tiers M and L only. A fresh read-only reviewer judges the final plan against the
+    worktree source:
+
+    ```bash
+    ai-conductor compose plan-review --project <name> --worktree <worktreePath>
+    ```
+
+    You should see `plan review clean`. Otherwise read the `blocking` findings in
+    `.docs/plan-review/<plan-stem>.md`, amend the plan, and run the command once more. Review stops
+    after round 2: accept each finding that still stands, and acknowledge any plan edit made after
+    round 2, before landing:
+
+    ```bash
+    ai-conductor compose plan-review --project <name> --worktree <worktreePath> \
+      --accept <finding-id> --reason "<why it is safe to proceed>"
+    ai-conductor compose plan-review --project <name> --worktree <worktreePath> \
+      --acknowledge --reason "<what changed after review>"
+    ```
+
+    Never edit the review file by hand; its integrity line rejects the change at land.
+
+    If review refuses with `plan review prompt is too large`, shrink the named largest section, or
+    rerun with the printed `--max-prompt-chars <n>` value.
 
 Do not hand-write stub or DRAFT artifacts. See [steps reference](../reference/steps.md) for the
 per-step tier-skip and enforcement table, and [SDLC phases](../explanation/sdlc-phases.md) for why
 the order is fixed.
+
+### Hotfix route: skip the spec for a minor fix
+
+Before running DECIDE, the composer reads the code the idea touches. When the idea is a few minor
+edits inside an existing feature, it proposes a hotfix instead of a spec and waits for your
+approval. Every condition must hold:
+
+- The work is tiny: one logical change of at most two production files and about 15 changed
+  production lines, provable with one or two focused tests.
+- It stays inside the existing architecture and every APPROVED ADR, and needs no new ADR.
+- It changes no API, schema, data format, CLI, hook, or settings contract.
+- It refines behavior an existing accepted story already intends.
+
+On approval the composer writes a failing test, makes the fix, and amends the owning accepted story
+in the worktree. It then runs the target repo's checks, commits, and opens a PR with `gh pr create`.
+For an intake idea it also runs `ai-conductor compose resolve <ref> --pr-url <url>`. It skips
+Steps 5 and 6 entirely: no plan is landed, so the daemon never dispatches the work. You review and
+merge the PR yourself. If the fix grows past these limits, the composer stops and returns to full
+DECIDE.
 
 ## Step 5 — Land the spec
 
@@ -202,24 +252,64 @@ Before committing, `land` refuses on any of:
 - any artifact carrying `Status: DRAFT`,
 - an ADR under `.docs/decisions/` whose first declared status is not `APPROVED` or `SUPERSEDED`, or that declares no status at all,
 - an added or changed approved ADR with no citable decision in its `## Decision` section,
+- an invalid assumptions ledger (`adr-assumption-ledger`) in an added ADR, or in a changed ADR that
+  has an `## Assumptions` section,
 - an empty or stub artifact,
+- at tiers M and L, a plan review (`plan-review`) that is missing, unparseable, integrity-mismatched,
+  or stale against the plan, stories, in-scope ADR decisions, or coherence artifact, or that has a
+  `blocking` finding without an accepted disposition,
 - uncommitted changes to tracked files at any path, including tracked artifacts under `.docs/`,
 - untracked files outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).
 
+### ADR assumptions ledger
+
+Copy the `## Assumptions` section from `templates/adr.md.template`. Keep exactly one of:
+
+- the ledger table, with this exact header row:
+
+  ```markdown
+  | # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |
+  |---|---|---|---|---|---|---|
+  | A1 | Upstream API is idempotent | inferred | 70% | yes | Duplicate writes | APPROVED by operator 2026-10-10 |
+  ```
+
+- the single line `No load-bearing assumptions.`
+
+| Column | Constraint |
+| --- | --- |
+| `#` | `A<number>`, unique within the ADR |
+| Assumption, Impact if wrong | Non-empty |
+| Basis | `verified`, `inferred`, or `unverified` |
+| Confidence | Integer percentage, `0%`–`100%` |
+| Load-bearing | `yes` or `no` |
+| Approval | `APPROVED by operator YYYY-MM-DD` (a real date) when Load-bearing is `yes` and Basis is not `verified` |
+
+`No load-bearing assumptions.` alongside a `yes` row fails, and fenced code blocks are ignored. ADRs
+already on the default branch are exempt unless a change gives them an `## Assumptions` section. The
+same check runs as the `architecture_review` gate during a conducted run.
+
 `--worktree` is required. `land` never falls back to the primary checkout. On failure the worktree
 is kept for inspection and its path is printed.
+
+With a GitHub `--source-ref`, `land` also proposes dependencies — declared but unlinked edges and
+open issues or in-flight branches that overlap the plan's paths — and refuses until each has an
+operator-confirmed decision:
+
+1. Read the `engineer land: dependency proposal <owner/repo#N> (…)` lines.
+2. Ask the operator about each one. Never auto-answer.
+3. Re-run `land` with `--depends-on <owner/repo#N>` for each accepted edge and
+   `--decline-dependency <owner/repo#N>` for each declined one. Both flags repeat.
+
+If the check itself is unavailable, retry, or — with operator agreement — pass
+`--skip-dependency-check "<reason>"`. Accepted edges are linked after the commit. See
+[land dependency gate](../reference/cli.md#land-dependency-gate) for every refusal and output line.
 
 With `--source-ref`, `land` also comments "Routed to `<repo>`" on the originating issue and advances
 the ledger to `routed`. That write-back is advisory: a `gh` failure never fails a successful land.
 
-> **Known limitation.** `ai-conductor compose land --help` claims land will "open the spec PR" and
-> that it "pushes the `spec/<slug>` branch, opens a PR". The code does neither: the `land` dispatch
-> arm calls only `landSpec`, which commits in the worktree and returns. The push
-> (`git push -u origin <branch>`) and `gh pr create` happen in `handoff`. The commander description,
-> the `ai-conductor compose` guide text, and the source grammar comment all agree with the code —
-> only the per-subcommand help text disagrees. If you stop after `land`, nothing has been pushed and
-> no PR exists. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+`land` commits in the worktree and returns. The push and `gh pr create` happen in `handoff`; if you
+stop after `land`, nothing has been pushed and no PR exists.
 
 ## Step 6 — Hand off: push, PR, daemon nudge
 
@@ -311,6 +401,7 @@ Claimed entries that already have a PR are reserved for `resolve`/`forget` and a
 | `ai-conductor compose poll` | One synchronous sweep of the GitHub issues adapter into the durable inbox. No routing, no background process. The ledger dedups, so a double-poll enqueues nothing new. |
 | `ai-conductor compose unclaim <sourceRef>` | Returns one claimed entry to pending so it can be claimed again. Use it for a known stranded claim. |
 | `ai-conductor compose requeue --stale [--older-than <dur>]` | Bulk-recovers stale claimed entries. The default age is `stale_claim_window_hours` (24 hours); `--older-than` overrides it once. |
+| `ai-conductor compose dep-audit --project <name>` | Read-only dependency drift report: unlinked, stale, cyclic, contradictory, and indeterminate edges. Writes nothing; `intake-loop` runs the same sweep hourly. |
 | `ai-conductor compose migrate-issue-deps` | One-time prose-to-structured-link dependency migration. Dry-run by default; prints the proposal and `Dry run — no links written. Re-run with --confirm to apply.` |
 | `ai-conductor compose migrate-issue-deps --confirm` | Applies the migration and prints `N link(s) created, M already present.` |
 

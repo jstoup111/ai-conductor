@@ -26,8 +26,35 @@ import type {
   BuildReviewJudgedResultRejection,
 } from '../engine/build-review-domain.js';
 import type { ChildId } from '../engine/child-context.js';
+import type {
+  CommitSha,
+  JournalState,
+  RefName,
+  RestackCause,
+  RestackOpId,
+  RestackRefusalReason,
+} from '../engine/restack/restack-types.js';
+import type { HostState, RoundId, RouteKind } from '../engine/routing/route-types.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
+
+/** Legacy leases written before a conductor step was recorded own this bucket. */
+export const LEGACY_TRANSCRIPT_OWNER_STEP = 'unknown-step' as const;
+/** @deprecated Use TranscriptOwner for newly captured transcripts. */
+export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
+
+/**
+ * A transcript belongs either to a registered lifecycle step, a configured
+ * member executing under its registered parent group, or an old lease whose
+ * owner could not be reconstructed.  Do not represent configured members as
+ * StepName: their names are deliberately outside that registry.
+ */
+export type TranscriptOwner =
+  | { readonly kind: 'registered-step'; readonly step: StepName }
+  // Configured group names are operator-defined (e.g. `quality/audit`), not
+  // registered lifecycle steps, so parentGroup is deliberately a plain string.
+  | { readonly kind: 'configured-group-member'; readonly parentGroup: string; readonly member: string }
+  | { readonly kind: 'legacy-unknown-step' };
 
 /** Closed disposition of pull-request publication for a completed run. */
 export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
@@ -65,6 +92,13 @@ export interface GithubOperationRefusedEvent {
   reason: GithubOperationRefusalReason;
   remedy: GithubOperationRefusalRemedy;
 }
+/** A guarded GitHub operation executed but GitHub rejected or failed it. */
+export interface GithubOperationFailedEvent {
+  type: 'github_operation_failed';
+  target: GithubOperationTarget;
+  operation: GithubOperationName;
+  error: string;
+}
 /** A bot credential was unavailable for an authorized write; the operation retried once as the operator. */
 export interface GithubWriteCredentialFallbackEvent {
   type: 'github_write_credential_fallback';
@@ -74,7 +108,7 @@ export interface GithubWriteCredentialFallbackEvent {
 }
 export interface BotCoAuthorSkippedEvent {
   type: 'bot_co_author_skipped';
-  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed';
+  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed' | 'resolver-absent';
 }
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
@@ -82,6 +116,58 @@ export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parke
 export type DispatchKind = 'initial' | 'resume' | 'rekick';
 export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
 export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
+
+/** Closed daemon-maintenance phases so the persisted timing vocabulary remains bounded. */
+export type MaintenancePhase =
+  | 'startup-refresh'
+  | 'first-claim'
+  | 'rekick'
+  | 'startup-dashboard'
+  | 'halt-pr-reconcile'
+  | 'parked-reconcile'
+  | 'provider-scratch'
+  | 'mergeable-sweep'
+  | 'repair';
+
+/** Terminal outcome of one daemon-maintenance phase occurrence. */
+export type MaintenancePhaseOutcome = 'completed' | 'skipped-unchanged' | 'failed' | 'deferred';
+
+/** Counters emitted only by parked-worktree reconciliation. */
+export interface ParkedReconcileMaintenanceSummary {
+  reconciled: number;
+  deferred: number;
+  orphaned: number;
+  parked: number;
+  refused: number;
+  skipped: number;
+}
+
+type DaemonMaintenancePhaseBase<Outcome extends MaintenancePhaseOutcome> = {
+  type: 'daemon_maintenance_phase';
+  durationMs: number;
+  outcome: Outcome;
+};
+
+/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data or another phase's outcome. */
+export type DaemonMaintenancePhaseEvent =
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed' | 'deferred'> & {
+      phase: 'repair';
+      prUrl: string;
+      slug?: string;
+      summary?: never;
+    })
+  | (DaemonMaintenancePhaseBase<'completed' | 'skipped-unchanged' | 'failed'> & {
+      phase: 'parked-reconcile';
+      summary?: ParkedReconcileMaintenanceSummary;
+      prUrl?: never;
+      slug?: never;
+    })
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed'> & {
+      phase: Exclude<MaintenancePhase, 'repair' | 'parked-reconcile'>;
+      prUrl?: never;
+      slug?: never;
+      summary?: never;
+    });
 
 /** Closed outcomes for the daemon's bounded setup repair session. */
 export type SetupRepairDisposition =
@@ -110,10 +196,12 @@ type ScratchCleanupAttempt = number | 'unknown';
 /** Closed, credential-safe FINISH publication observability vocabulary. */
 export type FinishPublicationTransition =
   | 'establish_pr'
+  | 'establish_child_prs'
   | 'verify_release_readiness'
   | 'author_pr_prose'
   | 'judge_pr_prose'
   | 'write_shipped_record'
+  | 'assemble_stack'
   | 'ready_pr'
   | 'record_outcome';
 
@@ -147,7 +235,27 @@ export type FinishPublicationEvent =
   | {
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
+      /** Present for a typed human-required FINISH publication halt. */
+      reason?: string;
+      /** Detail retained from the typed human-required publication disposition. */
+      detail?: string;
     };
+
+/** Stack-publication occurrences remain on the canonical conductor event spine. */
+export type StackPublicationEvent =
+  | { type: 'stack_member_published'; child: ChildId; pr: number }
+  | { type: 'stack_member_redrafted'; child: ChildId; pr: number }
+  | { type: 'stack_assembled'; prs: readonly number[] }
+  | {
+      type: 'stack_member_lifecycle';
+      child: ChildId;
+      pr: number;
+      state: 'merged' | 'closed' | 'reverted';
+      /** Deterministic identity makes at-least-once sweep delivery replay-safe. */
+      eventId: string;
+    }
+  | { type: 'stack_members_unreachable'; child: ChildId; pr: number }
+  | { type: 'stack_tip_diverged'; prs: readonly number[] };
 
 /** Closed, non-diagnostic context for credential-park progress telemetry. */
 export type CredentialParkProgressDegradation =
@@ -306,6 +414,20 @@ export interface ProviderAttemptEvent {
   lifecycle?: ProviderLifecycleEventMetadata;
 }
 
+/** Explicit identity for a provider candidate at the moment it starts. */
+export type ProviderStartIdentity =
+  | { kind: 'known'; id: string }
+  | { kind: 'unknown' };
+
+/** A provider candidate has started invocation for a step. */
+export interface ProviderAttemptStartedEvent {
+  type: 'provider_attempt_started';
+  step: StepName;
+  provider: ProviderStartIdentity;
+  model?: string;
+  executionContext?: ExecutionContext;
+}
+
 /**
  * Live intra-step provider signal. An absent `activeChildren` is unobserved,
  * never zero; this observation carries no terminal usage authority.
@@ -385,7 +507,17 @@ export interface SessionEventDeliveryDiagnosticEvent {
 }
 
 type ConductorEventBody =
+  | {
+      /** Operator-run cleanup of transient DECIDE artifacts for shipped work. */
+      type: 'decide_artifacts_pruned';
+      removed: string[];
+      deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[];
+      skipped: { stem: string; reason: 'no-shipped-record' }[];
+      excluded: string[];
+      pullRequestUrl?: string;
+    }
   | BotCoAuthorSkippedEvent
+  | GithubOperationFailedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
   | GithubBypassResultEvent
@@ -446,7 +578,36 @@ type ConductorEventBody =
       signal: string | null;
       at: string;
     }
-  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
+  /** Duration and result of a daemon maintenance occurrence on the canonical event spine. */
+  | DaemonMaintenancePhaseEvent
+  | {
+      type: 'feature_dispatch_started';
+      slug: string;
+      kind: DispatchKind;
+      tier?: ComplexityTier;
+      /** Immutable executor build selected at claim time (absent in legacy ledgers). */
+      engineVersionId?: string;
+      /** Why this dispatch used the supervisor build rather than `dist`. */
+      pinFallbackReason?: string;
+    }
+  | {
+      type: 'executor_started';
+      slug: string;
+      engineVersionId: string;
+      protocolVersion: number;
+      supervisorEngineVersionId: string;
+    }
+  | {
+      /** A child was rejected before receiving a work order. */
+      type: 'executor_protocol_mismatch';
+      slug: string;
+      engineVersionId: string;
+      expectedProtocolVersion: number;
+      actualProtocolVersion?: number;
+      reason: string;
+      /** D7's drain fallback was requested through the armed supervisor seam. */
+      restartRequested: boolean;
+    }
   | {
       type: 'feature_dispatch_ended';
       slug: string;
@@ -489,6 +650,26 @@ type ConductorEventBody =
       project: string;
       worktreePath: string;
       sourceRef?: string;
+    }
+  | {
+      type: 'land_dependency_decided';
+      repository: string;
+      sourceRef: string;
+      proposals: string[];
+      accepted: string[];
+      declined: string[];
+      skipped: { reason: string } | null;
+      writes: Array<{ target: string; status: string; reason?: string }>;
+    }
+  | {
+      type: 'dependency_drift_swept';
+      repository: string;
+      status: 'swept' | 'repository-indeterminate';
+      unlinked: string[];
+      stale: string[];
+      cycles: string[];
+      contradictions: string[];
+      indeterminate: string[];
     }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
@@ -540,57 +721,27 @@ type ConductorEventBody =
       reason?: string;
     }
   | {
-      /** One terminal judgement of a criterion-to-Done-when binding claim. */
-      type: 'coverage_binding_judged';
-      step: 'coverage_binding';
-      verdict: 'asserts' | 'does-not-assert' | 'not-applicable';
-      digest: string;
-      taskIds: string[];
+      /** A source-grounded reviewer session was dispatched for one plan-review round. */
+      type: 'plan_review_dispatched';
+      round: number;
+      reviewerProvider: string;
+      independence: 'cross-provider' | 'same-provider' | 'unknown-host';
     }
   | {
-      /** One terminal judgement of a DECIDE amendment's plan obligation. */
-      type: 'coverage_binding_amendment_judged';
-      step: 'coverage_binding';
-      verdict: 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
-      digest: string;
-      artifactPath: string;
-      taskIds: string[];
+      /** A source-grounded reviewer session completed with severity totals. */
+      type: 'plan_review_completed';
+      round: number;
+      reviewerProvider: string;
+      independence: 'cross-provider' | 'same-provider' | 'unknown-host';
+      blockingCount: number;
+      significantCount: number;
+      advisoryCount: number;
     }
   | {
-      /** One terminal judgement that a plan task can coexist with a sealed claim. */
-      type: 'coverage_binding_conflict_judged';
-      step: 'coverage_binding';
-      claimKind: 'criterion' | 'adr-decision';
-      claimId: string;
-      verdict: 'consistent' | 'conflicts' | 'not-applicable' | 'unjudged';
-      taskIds: string[];
-    }
-  | {
-      /** The default-off coverage-binding judge completed without dispatching. */
-      type: 'coverage_binding_disabled';
-      step: 'coverage_binding';
-    }
-  | {
-      /** A changed resolved DECIDE input voided completed coverage evidence. */
-      type: 'coverage_binding_invalidated';
-      paths: string[];
-      origin: 'decide-change';
-    }
-  | {
-      /** A void exposed a completed task contradicted by current DECIDE coverage. */
-      type: 'coverage_binding_task_reopened';
-      step: 'coverage_binding';
-      taskId: string;
-      digest: string;
-    }
-  | {
-      /** Recorded slice membership changed after a coverage-binding re-validation. */
-      type: 'plan_slices_changed';
-      step: 'coverage_binding';
-      moved: Array<{ taskId: string; from: number; to: number }>;
-      added: string[];
-      removed: string[];
-      manifest: 'unchanged' | 'dropped';
+      /** An operator accepted a bounded plan-review finding. */
+      type: 'plan_review_finding_accepted';
+      findingId: string;
+      reason: string;
     }
   | {
       /** A retired configuration key was accepted as a compatibility no-op. */
@@ -698,6 +849,16 @@ type ConductorEventBody =
       unresolvedReasons: readonly string[];
       excludedMarkerFiles?: readonly { readonly selector: string; readonly reason: string }[];
     }
+  /** Durable announcement of the engine-decided scope for one rubric lap. */
+  | {
+      type: 'build_review_review_scope';
+      rubric: string;
+      lapId: string;
+      mode: 'full' | 'delta';
+      reason: 'first-lap' | 'merge-base-changed' | 'version-changed' | 'record-unreadable' | 'open-source-unmapped' | 'delta';
+      deltaHunkCount: number;
+      settledHunkCount: number;
+    }
   /** adr-2026-08-21 D5: a cached judgement discarded because the judging engine or rubric skill text changed. */
   | { type: 'build_review_cache_discarded'; rubric: string; lapId: string; reason: 'engine-version-mismatch' | 'skill-digest-mismatch'; cachedEngineStamp?: string; currentEngineStamp: string }
   | {
@@ -712,6 +873,8 @@ type ConductorEventBody =
       cause?: BuildReviewInfrastructureFailureReason;
       /** Field-named native structured-result contract rejection, when present. */
       rejection?: BuildReviewJudgedResultRejection;
+      /** Best-effort retained reviewer response record, relative to the worktree root. */
+      retainedResponsePath?: string;
       excerpt?: string;
       /** Present only when the canonical rubric projection exceeded its configured byte bound. */
       measuredBytes?: number;
@@ -765,12 +928,18 @@ type ConductorEventBody =
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
       /** Findings below the configured per-rubric confidence floor. */
       suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
+      /** Below-threshold findings are durable advisory history, never a route. */
+      advisoryFindings?: readonly { findingId: string; rubric: string; severity: 'critical' | 'major' | 'minor' | 'nit'; threshold: 'critical' | 'major' | 'minor' | 'nit' }[];
+      /** Scope bookkeeping: visible, never accepted risk or remediation work. */
+      outOfDeltaCount?: number;
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */
       type: 'remediation_adjudication_started';
       domain: 'build_review';
       lapId: string;
+      /** The index-only task bodies added for the bounded second adjudication round. */
+      expansionTaskIds?: readonly string[];
     }
   | {
       /** A valid remediation judgement was fully reconciled for one build-review lap. */
@@ -788,14 +957,43 @@ type ConductorEventBody =
       domain: 'build_review';
       lapId: string;
       reason: string;
+      /** Present when a proposed case-store transition was refused without corrupting persisted history. */
+      rejectedTransition?: {
+        readonly invariant: 'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
+        readonly caseIds: readonly string[];
+        readonly sourceIds: readonly string[];
+      };
+    }
+  | {
+      /** A new source was carried from a prior operator-accepted remediation case. */
+      type: 'build_review_acceptance_carried';
+      eventId: string;
+      feature: string;
+      lapId: string;
+      sourceId: string;
+      caseId: string;
+      originSourceIds: readonly string[];
+      originLapIds: readonly string[];
+    }
+  | {
+      /** An operator resolved a remediation case outside the adjudication judgement. */
+      type: 'remediation_case_operator_resolved';
+      eventId: string;
+      feature: string;
+      caseId: string;
+      sourceIds: readonly string[];
     }
   | {
       /** One canonical remediation case was reconciled against the current lap. */
       type: 'remediation_case_reconciled';
+      /** Makes outbox delivery of a retirement occurrence replay-safe. */
+      eventId?: string;
       domain: 'build_review';
       lapId: string;
       caseId: string;
       resolution: 'open' | 'resolved';
+      recurrenceOf?: readonly string[];
+      distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
     }
   | {
       /** One attempted remediation case was refuted against the current lap. */
@@ -849,7 +1047,8 @@ type ConductorEventBody =
       lapId: string;
       caseId: string;
       effectId?: string;
-      reason: 'already-attempted' | 'regressed';
+      reason: 'already-attempted' | 'regressed' | 'recurrence-limit';
+      lineageCaseIds?: readonly string[];
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | {
@@ -936,6 +1135,7 @@ type ConductorEventBody =
   | GithubWriteCredentialFallbackEvent
   | ProviderDiscoveryEvent
   | ProviderAttemptEvent
+  | ProviderAttemptStartedEvent
   | ProviderStreamProgressEvent
   | {
       /** A provider scratch home was removed during a daemon sweep or legacy collection. */
@@ -966,6 +1166,63 @@ type ConductorEventBody =
       attempt: ScratchCleanupAttempt;
       path: string;
       reason: string;
+    }
+  | ({
+      /** Allowlisted provider transcripts were captured before a scratch home was retired. */
+      type: 'provider_transcripts_captured';
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      files: number;
+      bytes: number;
+      interrupted: boolean;
+      skipped: number;
+      omittedLines: number;
+    } & (
+      /** Current captures retain their owner and project its display step. */
+      | { readonly owner: TranscriptOwner; readonly step: string }
+      /** Rows persisted before owner identities were introduced. */
+      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+    ))
+  | ({
+      /** Provider transcript capture failed, but scratch-home retirement continued. */
+      type: 'provider_transcripts_harvest_failed';
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      error: string;
+    } & (
+      /** Current captures retain their owner and project its display step. */
+      | { readonly owner: TranscriptOwner; readonly step: string }
+      /** Rows persisted before owner identities were introduced. */
+      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+    ))
+  | {
+      /** A captured provider transcript was retained after its step verdict settled. */
+      type: 'provider_transcripts_retained';
+      path: string;
+    }
+  | {
+      /** A captured provider transcript was pruned after successful step progress. */
+      type: 'provider_transcripts_pruned';
+      path: string;
+    }
+  | {
+      /** A retained provider transcript was evicted to satisfy a retention cap. */
+      type: 'provider_transcripts_evicted';
+      path: string;
+      reason: 'count' | 'size';
+    }
+  | {
+      /** A provider transcript retention cleanup action failed. */
+      type: 'provider_transcripts_retention_failed';
+      path: string;
+      action: 'prune' | 'evict';
+      error: string;
     }
   | {
       /**
@@ -1116,6 +1373,7 @@ type ConductorEventBody =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
+  | StackPublicationEvent
   | {
       type: 'feature_complete';
       prUrl?: string;
@@ -1271,6 +1529,35 @@ type ConductorEventBody =
       checks: readonly { readonly taskId: string; readonly check: string }[];
     }
   | {
+      /** One native citation-judgement pass, including an unavailable fallback. */
+      type: 'done_when_citation_judged';
+      citations: readonly {
+        readonly taskId: string;
+        readonly check: number;
+        readonly verdict?: 'asserts' | 'does-not-assert';
+        readonly unavailable?: string;
+      }[];
+    }
+  | {
+      /** One remediation-close judgement pass, including its unavailable fallback. */
+      type: 'remediation_closure_judged';
+      outcome: 'judged' | 'unjudged';
+      attempts: number;
+      candidates: readonly {
+        readonly taskId: string;
+        readonly verdict: 'resolved' | 'persists' | 'partial' | 'unjudged';
+        readonly rationale: string;
+        readonly disposition: 'reopened' | 'left-closed' | 'bound-exhausted';
+      }[];
+    }
+  | {
+      /** An operator accepted one previously refused Done-when citation. */
+      type: 'done_when_citation_accepted';
+      taskId: string;
+      check: number;
+      reason: string;
+    }
+  | {
       type: 'build_stall';
       step: StepName;
       reason: 'no_task_progress' | 'halt_marker' | 'active_stall';
@@ -1351,25 +1638,9 @@ type ConductorEventBody =
       featureSlug?: string;
     }
   | {
-      /** A pipeline-owned closeout obligation completed during a build. */
-      type: 'pipeline_closeout';
-      obligation:
-        | 'evaluator'
-        | 'simplify'
-        | 'architecture-diagram'
-        | 'memory'
-        | 'summary';
-      /** Epoch milliseconds when the obligation began. */
-      startedAt: number;
-      /** Epoch milliseconds when the obligation completed. */
-      endedAt: number;
-      /** Epoch milliseconds when the pipeline recorded this event. */
-      ts: number;
-    }
-  | {
-      /** A malformed complete record observed in the pipeline closeout ledger. */
+      /** A skipped complete record observed in the pipeline-owned event ledger. */
       type: 'pipeline_tail_diagnostic';
-      reason: 'malformed-line' | 'poll-failed';
+      reason: 'malformed-line' | 'unadmitted-type' | 'poll-failed';
       /** Relative path to the tailed pipeline-owned ledger. */
       path: string;
       /** Byte offset of a malformed line, when a line was skipped. */
@@ -1595,7 +1866,7 @@ type ConductorEventBody =
       type: 'halt_record_written';
       path: string;
       slug: string;
-      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap';
+      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap' | 'stack-tip-diverged';
     }
   | {
       /** Writing or committing a durable halt record failed. */
@@ -1881,7 +2152,7 @@ type ConductorEventBody =
       beforeLimit: number;
       afterLimit: number;
       ts: string;
-      allowance?: 'laps' | 'growth';
+      allowance?: 'laps' | 'growth' | 'restacks';
     }
   // ── Ship→CI feedback loop (Task 5): CI failure events ──
   | {
@@ -1892,6 +2163,19 @@ type ConductorEventBody =
       checks: string[];
       attempts: number;
       phase: 'detected' | 'dispatched' | 'exhausted';
+    }
+  | {
+      /** Current readiness verdict for a watched shipped PR. */
+      type: 'shipped_pr_readiness';
+      prUrl: string;
+      slug: string;
+      verdict: 'ready' | 'conflicting' | 'ci-failing' | 'ci-pending' | 'no-checks' | 'draft' | 'indeterminate';
+      headSha: string;
+      mergeable: string;
+      mergeStateStatus?: string;
+      checksOutcome: 'failed' | 'pending' | 'green' | 'none';
+      isDraft: boolean;
+      baseRefName?: string;
     }
   | {
       /** Bounded, credential-safe observation from CI-repair preparation or publication. */
@@ -1924,7 +2208,9 @@ type ConductorEventBody =
       step: StepName;
       reason?: string;
       failingTests?: Array<{ name: string; reason: string }>;
-      viaException: boolean;
+      viaException?: boolean;
+      /** A routed child re-ran its recorded contract rather than authoring RED evidence. */
+      mode?: 'verify-green';
     }
   // ── Per-child build region lifecycle ──────────────────────────────────────
   | {
@@ -1956,12 +2242,90 @@ type ConductorEventBody =
       child: ChildId;
       reason: string;
     }
+  // ── Stacked restack and expected-lease occurrences ──────────────────────
   | {
-      /** A reseal changed a story's owner without moving any task. */
-      type: 'story_reowned';
-      story: string;
-      from: number;
-      to: number;
+      type: 'restack_planned';
+      opId: RestackOpId;
+      cause: RestackCause;
+      children: ChildId[];
+    }
+  | {
+      type: 'restack_applied';
+      opId: RestackOpId;
+      cause: RestackCause;
+      child: ChildId;
+      oldTip: CommitSha;
+      newTip: CommitSha;
+      wouldInvalidate: StepName[];
+      parentOverlapPaths: string[];
+    }
+  | {
+      type: 'restack_conflict';
+      opId: RestackOpId;
+      child: ChildId;
+      commit: CommitSha;
+      paths: string[];
+    }
+  | {
+      type: 'restack_refused';
+      reason: RestackRefusalReason;
+      child?: ChildId;
+      detail?: string;
+    }
+  | {
+      type: 'restack_recovered';
+      opId: RestackOpId;
+      fromState: Exclude<JournalState, 'applied' | 'aborted'>;
+    }
+  | {
+      type: 'push_lease_refused';
+      ref: RefName;
+      expected: CommitSha;
+      actual: CommitSha;
+    }
+  // ── Routed whole-feature repair occurrences ─────────────────────────────
+  | {
+      type: 'remediation_routed';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      kind: RouteKind;
+      items: readonly {
+        findingId: string;
+        owner: ChildId;
+        host: ChildId;
+        reason: string;
+      }[];
+      child: ChildId;
+    }
+  | {
+      type: 'remediation_rerouted';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      from: ChildId;
+      to: ChildId;
+      evidence: string;
+      child: ChildId;
+    }
+  | {
+      type: 'routed_repair_phase';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      host: ChildId;
+      phase: HostState;
+      credit: boolean;
+      child: ChildId;
+    }
+  | {
+      type: 'child_revalidated';
+      eventId: string;
+      occurredAt: string;
+      child: ChildId;
+      generation: number;
+      closureSha: CommitSha;
+      outcome: 'passed' | 'fixed';
     }
   // ── Worktree reclamation lifecycle ──
   | {

@@ -126,7 +126,7 @@ describe('acceptance: self-host live-checkout containment', () => {
         const prepared = await prepare(
           { step, providerKey: 'claude', model: 'opus', effort: 'high' } as never,
           runtimes.get('claude') as never,
-          { runId: 'containment-acceptance', attempt: 1 },
+          { step, runId: 'containment-acceptance', attempt: 1 },
         );
         if (!prepared) throw new Error('self-host candidate preparation returned no command');
         try {

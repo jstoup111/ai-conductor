@@ -42,7 +42,7 @@ describe('custom build-review convergence', () => {
       lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke,
     };
     const config = { llm_provider: ['codex', 'claude'], build_review: {
-      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
       custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: ['codex', 'claude'] } },
     } } as HarnessConfig;
     const resolved = resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY);
@@ -126,7 +126,7 @@ describe('custom build-review convergence', () => {
     const projectRoot = join(main, '.worktrees', slug);
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     const config = { llm_provider: 'claude', build_review: {
-      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
       custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'claude' } },
     } } as HarnessConfig;
     let useStoredDisposition = false;
@@ -140,12 +140,12 @@ describe('custom build-review convergence', () => {
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
       probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'unavailable' as const, reason: 'fixture unavailable' }),
       buildReviewEffectiveResolver: async (root, aggregate) => useStoredDisposition
-        ? resolveEffectiveBuildReviewVerdict(root, aggregate, { resolveMainRoot: async () => main, realpath: async (path) => path })
+        ? resolveEffectiveBuildReviewVerdict(root, aggregate, { resolveMainRoot: async () => main, realpath: async (path) => path, child: undefined, adjudicationEnabled: true })
         : ({ ok: true, feature: { version: 'v1', repository: main, feature: slug }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } } as never),
     });
     const source = { identity: { snapshotDigest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head' }, baselinePath: join(projectRoot, 'baseline'), headPath: join(projectRoot, 'head') };
     await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
-    const inputs = { sourceSnapshot: { digest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head', sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } };
+    const inputs = { sourceSnapshot: { digest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head', diff: '', sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } };
     const resolved = resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY);
     const first = await (runner as unknown as { runRubricBuildReview(inputs: unknown, config: unknown, tier: 'M'): Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolved, 'M');
     expect(first).toMatchObject({ success: false, output: expect.stringContaining('read-only-review-unavailable') });
@@ -211,7 +211,7 @@ describe('custom build-review convergence', () => {
     if (!reconciled.ok) return;
 
     const transition = reduceBuildReviewAdjudication({
-      currentSourceIds: [sourceId], cases: reconciled.state.cases, mechanical: 'retry',
+      currentSourceIds: [sourceId], feature: 'custom-convergence', child: undefined, cases: reconciled.state.cases, mechanical: 'retry',
     });
 
     expect({ record: reconciled.state.cases[0], transition }).toMatchObject({

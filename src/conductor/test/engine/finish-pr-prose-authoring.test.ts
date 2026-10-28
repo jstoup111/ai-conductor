@@ -406,9 +406,9 @@ describe('FINISH authors PR prose before it judges it', () => {
     });
   });
 
-  it('counts the authoring transition in the publication progress allowance', async () => {
+  it('counts the N=1 authoring transition in the per-feature publication progress allowance', async () => {
     const mod = await import(FINISH_PUBLICATION_MODULE);
-    expect(mod.FINISH_PUBLICATION_PROGRESS_ALLOWANCE).toBe(2 * 7);
+    expect(mod.publicationProgressAllowance(snapshot())).toBe(2 * 7);
   });
 
   it('accepts the authoring transition at the disposition routing boundary', async () => {

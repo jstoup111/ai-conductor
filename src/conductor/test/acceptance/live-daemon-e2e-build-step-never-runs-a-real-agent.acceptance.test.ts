@@ -1,3 +1,4 @@
+// Covers: task:7
 /**
  * RED acceptance specs for
  * `.docs/stories/live-daemon-e2e-build-step-never-runs-a-real-agent.md`.
@@ -26,6 +27,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const SOURCE_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const LIVE_RUN_BODY_PATH = join(
   CONDUCTOR_ROOT,
   'test/fixtures/live-e2e-run-body.ts',
@@ -66,6 +68,47 @@ async function invokeEnvelope(
 }
 
 describe('live daemon E2E command resolution (#1311)', () => {
+  it('runs the live fixture build-review setup without dispatching a security grader', async () => {
+    const { createLiveE2EStepRunner, LIVE_E2E_BUILD_REVIEW_CONFIG } = await import(/* @vite-ignore */ LIVE_RUN_BODY_PATH) as {
+      createLiveE2EStepRunner: (provider: { invoke: ReturnType<typeof vi.fn> }, descriptor: { providerKey: string }, sessionId: string, projectDir: string, options: Record<string, unknown>) => {
+        run(step: string, state: unknown): Promise<{ success: boolean; output?: string }>;
+      };
+      LIVE_E2E_BUILD_REVIEW_CONFIG: Record<string, unknown>;
+    };
+    const projectRoot = await mkdtemp(join(tmpdir(), 'live-e2e-build-review-'));
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }));
+    const gitRunner = async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+      if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
+      if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
+      if (args[0] === 'show' && args[1] === 'head:plan.md') return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
+      if (args[0] === 'show' && args[1] === 'head:.docs/stories/plan.md') return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
+      if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    try {
+      await writeFile(join(projectRoot, 'plan.md'), '# Plan\n');
+      const runner = createLiveE2EStepRunner({ invoke }, { providerKey: 'claude' }, 'fixture-session', projectRoot, {
+        featureDesc: 'live-fixture', pipelineDir: join(projectRoot, '.pipeline'), planPath: join(projectRoot, 'plan.md'),
+        gitRunner, config: LIVE_E2E_BUILD_REVIEW_CONFIG,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          }),
+        },
+      });
+
+      await expect(runner.run('build_review', {})).resolves.toMatchObject({
+        success: true, output: expect.stringContaining('build_review_no_rubrics'),
+      });
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('provisions copied checkout skills inside the selected live case and routes that home into dispatch', async () => {
     const { provisionLiveProviderHome } = await import(/* @vite-ignore */ LIVE_HOME_PATH) as {
       provisionLiveProviderHome: (
@@ -127,6 +170,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
       dispatchableStepCommands: ((providerKey: string) => readonly { step: string; skillName: string; rendered: string }[]) & {
         assertResolves: (
           homeDir: string,
+          sourceRoot: string,
           providerKey?: string,
           dependencies?: { access?: (path: string) => Promise<void> },
         ) => Promise<void>;
@@ -137,7 +181,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
         home: { homeDir: string },
         dispatch: () => Promise<T>,
         providerKey: string,
-        preflight?: (homeDir: string, providerKey?: string) => Promise<void>,
+        preflight?: (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>,
       ) => Promise<T>;
     };
 
@@ -152,14 +196,14 @@ describe('live daemon E2E command resolution (#1311)', () => {
     // A home holding every registry skill passes preflight; a home missing one
     // fails it, naming the unresolved skill.
     const resolvedPaths: string[] = [];
-    await dispatchableStepCommands.assertResolves('/provisioned-home', 'claude', {
+    await dispatchableStepCommands.assertResolves('/provisioned-home', SOURCE_ROOT, 'claude', {
       access: async (path: string) => { resolvedPaths.push(path); },
     });
     expect(resolvedPaths).toEqual(commands.map(
       (command) => join('/provisioned-home', 'skills', command.skillName, 'SKILL.md'),
     ));
     const missing = commands[0].skillName;
-    await expect(dispatchableStepCommands.assertResolves('/provisioned-home', 'claude', {
+    await expect(dispatchableStepCommands.assertResolves('/provisioned-home', SOURCE_ROOT, 'claude', {
       access: async (path: string) => {
         if (path.includes(join('skills', missing))) throw new Error('ENOENT');
       },
@@ -173,7 +217,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
       { homeDir: '/provisioned-home' },
       dispatch,
       'claude',
-      async (homeDir, providerKey) => { order.push(`preflight:${homeDir}:${providerKey}`); },
+      async (homeDir: string, _sourceRoot: string, providerKey?: string) => { order.push(`preflight:${homeDir}:${providerKey}`); },
     )).resolves.toBe('dispatched');
     expect(order).toEqual(['preflight:/provisioned-home:claude', 'dispatch']);
 

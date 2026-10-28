@@ -12,6 +12,8 @@ import {
 import type { GhRunner, GitRunner } from './pr-labels.js';
 import { renderShippedRecord, specHash } from './shipped-record.js';
 import { runTrackerAmbientRead, runTrackerGraphqlRead } from './tracker-client.js';
+import { listPullRequestsWithFiles } from './pull-request-files.js';
+import { readPlanOrPruned } from './pruned-plan.js';
 
 export const DEFAULT_SHIPMENT_AUDIT_REPORT =
   '.docs/audits/2026-07-25-durable-shipped-record-backfill.json';
@@ -68,6 +70,8 @@ interface AuditSource {
   plan?: { path: string; slug: string };
   relatedSourcePaths?: string[];
   reason?: string;
+  /** Historical bytes recovered when a plan was pruned at audit HEAD. */
+  planContent?: Buffer;
 }
 
 interface MergedPullRequest {
@@ -76,6 +80,7 @@ interface MergedPullRequest {
   body: string;
   changedPaths: string[];
   headSha: string;
+  headRef: string;
   mergedAt: string;
 }
 
@@ -147,13 +152,28 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
   ])).split('\n').filter(Boolean));
   const planPaths = paths.filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
   const plans = new Map(planPaths.map((path) => [path, { path, slug: stem(path) }]));
-  const sources: AuditSource[] = planPaths.map((path) => ({
-    path,
-    kind: 'plan',
-    plan: plans.get(path),
-    relatedSourcePaths: [],
-    ...(!currentPaths.has(path) ? { reason: 'historical plan is not present at the audit head' } : {}),
-  }));
+  const sources: AuditSource[] = [];
+  for (const path of planPaths) {
+    let reason: string | undefined;
+    let planContent: Buffer | undefined;
+    if (!currentPaths.has(path)) {
+      const resolved = await readPlanOrPruned(
+        async (commit, candidate) => committedFile(options, commit, candidate),
+        async (args) => {
+          try {
+            return { stdout: await git(options, args), stderr: '', exitCode: 0 };
+          } catch (error) {
+            return { stdout: '', stderr: errorMessage(error), exitCode: 1 };
+          }
+        },
+        auditHead,
+        path,
+      );
+      if (Buffer.isBuffer(resolved)) planContent = resolved;
+      else reason = resolved.code;
+    }
+    sources.push({ path, kind: 'plan', plan: plans.get(path), relatedSourcePaths: [], ...(reason ? { reason } : {}), ...(planContent ? { planContent } : {}) });
+  }
   const sourcesByPlanPath = new Map(sources.flatMap((source) => source.plan ? [[source.plan.path, source]] : []));
 
   for (const path of paths.filter((candidate) => candidate.startsWith('.docs/specs/') && candidate.endsWith('.md'))) {
@@ -229,6 +249,17 @@ async function latestCommittedFile(options: ShipmentAuditOptions, path: string):
 }
 
 async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promise<MergedPullRequest[]> {
+  const shared = await listPullRequestsWithFiles({ runGh: options.runGh, cwd: options.cwd, state: 'MERGED' });
+  return shared.map((pullRequest) => ({
+    number: pullRequest.number,
+    url: pullRequest.url,
+    body: pullRequest.body,
+    changedPaths: pullRequest.changedPaths,
+    headSha: pullRequest.headSha,
+    headRef: pullRequest.headRef,
+    mergedAt: pullRequest.mergedAt ?? '',
+  }));
+  /* legacy implementation retained below temporarily for historical query fixtures. */
   const repository = await repositoryName(options);
   const [owner, name] = repository.split('/');
   if (!owner || !name || repository.split('/').length !== 2) {
@@ -260,6 +291,7 @@ async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promi
         body: pullRequest.body,
         changedPaths: pullRequest.changedPaths,
         headSha: pullRequest.headSha,
+        headRef: pullRequest.headRef,
         mergedAt: pullRequest.mergedAt,
       });
     }
@@ -320,6 +352,7 @@ interface MergedPullRequestNode {
   url: string;
   body: string;
   headSha: string;
+  headRef: string;
   mergedAt: string;
   changedPaths: string[];
   filesPageInfo: GraphqlPageInfo;
@@ -335,6 +368,7 @@ query($owner: String!, $name: String!, $endCursor: String) {
         body
         mergedAt
         headRefOid
+        headRefName
         files(first: 100) {
           nodes { path }
           pageInfo { hasNextPage endCursor }
@@ -450,6 +484,10 @@ function mergedPullRequestFromNode(node: unknown): MergedPullRequestNode {
     url: requiredString(value.url, 'merged PR URL'),
     body: typeof value.body === 'string' ? value.body : '',
     headSha: requiredString(value.headRefOid, 'merged PR head SHA'),
+    // A historical API response without the head ref is not a transport
+    // failure. It is an unclassified association and must not authorize a
+    // record proposal.
+    headRef: typeof value.headRefName === 'string' ? value.headRefName.trim() : '',
     mergedAt: requiredString(value.mergedAt, 'merged PR merge timestamp'),
     changedPaths: requiredArray(files.nodes, 'merged PR changed-file nodes').map((file) =>
       requiredString(object(file, 'merged PR changed-file node').path, 'merged PR changed-file path')),
@@ -515,30 +553,59 @@ async function auditSource(
       reason: source.reason ?? 'canonical plan is unavailable',
     };
   }
+  const plan = source.plan;
 
-  const referencedByAmbiguousPr = mergedPullRequests.some((pullRequest) => {
+  const associations = mergedPullRequests.map((pullRequest) => ({
+    pullRequest,
+    association: classifyShipmentAssociation({
+      planStems,
+      pr: {
+        headRef: pullRequest.headRef,
+        metadataPlanStems: extractPlanStems(pullRequest.body),
+        changedPaths: pullRequest.changedPaths,
+      },
+    }),
+  }));
+  // Stack children intentionally carry the leaf's declaration. Filter them
+  // before any plan-level classification so a child mention cannot eclipse a
+  // legitimate leaf implementation candidate.
+  const nonChildren = associations.filter(({ association }) =>
+    !(association.kind === 'not-applicable' && association.classification === 'stack-child'));
+  const candidates = nonChildren.flatMap(({ pullRequest, association }) =>
+    association.kind === 'implementation' && association.slug === plan.slug ? [pullRequest] : []);
+
+  const referencedByAmbiguousPr = nonChildren.some(({ pullRequest }) => {
     const stems = extractPlanStems(pullRequest.body).filter((candidate) => planStems.includes(candidate));
-    return stems.includes(source.plan!.slug) && new Set(stems).size > 1;
+    return stems.includes(plan.slug) && new Set(stems).size > 1;
   });
   if (referencedByAmbiguousPr) {
     return row(source, 'ambiguous', 'merged PR metadata references multiple canonical plans');
   }
 
-  const candidates = mergedPullRequests.filter((pullRequest) => {
-    const association = classifyShipmentAssociation({
-      planStems,
-      pr: {
-        metadataPlanStems: extractPlanStems(pullRequest.body),
-        changedPaths: pullRequest.changedPaths,
-      },
-    });
-    return association.kind === 'implementation' && association.slug === source.plan!.slug;
-  });
+  const unclassifiedPullRequest = nonChildren.find(({ pullRequest }) =>
+    !pullRequest.headRef && extractPlanStems(pullRequest.body).includes(plan.slug));
+  if (unclassifiedPullRequest) {
+    return row(
+      source,
+      'unresolved',
+      `merged PR #${unclassifiedPullRequest.pullRequest.number} is unclassified: head ref is unavailable`,
+    );
+  }
+
+  if (candidates.length === 1) return auditImplementationCandidate(options, source, plan, candidates[0]!);
 
   if (candidates.length === 0) return row(source, 'absent', 'no exact associated merged implementation PR');
   if (candidates.length > 1) return row(source, 'ambiguous', 'multiple exact associated merged implementation PRs');
 
-  const implementationPr = candidates[0];
+  return row(source, 'absent', 'no exact associated merged implementation PR');
+}
+
+async function auditImplementationCandidate(
+  options: ShipmentAuditOptions,
+  source: AuditSource,
+  plan: { path: string; slug: string },
+  implementationPr: MergedPullRequest,
+): Promise<ShipmentAuditRow> {
   await ensureCommitAvailable(options, implementationPr.headSha);
   const pr = {
     number: implementationPr.number,
@@ -546,9 +613,12 @@ async function auditSource(
     mergedAt: implementationPr.mergedAt,
     headSha: implementationPr.headSha,
   };
-  const historicalVerdict = await evaluateHistoricalRecord(options, source.plan, implementationPr);
+  const historicalVerdict = await evaluateHistoricalRecord(options, plan, implementationPr);
   if (historicalVerdict?.kind === 'valid') {
     return { ...row(source, 'aligned', 'valid durable record is committed after implementation merge'), implementationPr: pr, verdict: historicalVerdict };
+  }
+  if (historicalVerdict?.kind === 'pruned') {
+    return { ...row(source, 'unresolved', historicalVerdict.code), implementationPr: pr };
   }
   if (historicalVerdict?.kind === 'refusal') {
     if (isContradictoryEvidence(historicalVerdict.code)) {
@@ -561,7 +631,7 @@ async function auditSource(
   const verdict = await evaluateEvidence(
     {
       repoDir: options.cwd,
-      slug: source.plan.slug,
+      slug: plan.slug,
       implementationPr: implementationPr.url,
       candidateCommit: implementationPr.headSha,
     },
@@ -574,7 +644,7 @@ async function auditSource(
   if (verdict.kind === 'refusal' && verdict.code === 'shipped-record-missing') {
     let proposal: { path: string; content: string };
     try {
-      proposal = await expectedProposal(options, source.plan, implementationPr);
+      proposal = await expectedProposal(options, plan, implementationPr, source.planContent);
     } catch (error) {
       return {
         ...row(source, 'unresolved', `implementation head cannot prove record proposal: ${errorMessage(error)}`),
@@ -603,8 +673,9 @@ async function expectedProposal(
   options: ShipmentAuditOptions,
   plan: { path: string; slug: string },
   pullRequest: MergedPullRequest,
+  recoveredPlan?: Buffer,
 ): Promise<{ path: string; content: string }> {
-  const planBytes = await committedFile(options, pullRequest.headSha, plan.path);
+  const planBytes = recoveredPlan ?? await committedFile(options, pullRequest.headSha, plan.path);
   if (planBytes === null) throw new Error(`implementation head is missing ${plan.path}`);
   const planContent = planBytes.toString('utf8');
   const referencedStories = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
@@ -639,10 +710,22 @@ async function evaluateHistoricalRecord(
   options: ShipmentAuditOptions,
   plan: { path: string; slug: string },
   pullRequest: MergedPullRequest,
-): Promise<ShipmentEvidenceResult | undefined> {
+): Promise<ShipmentEvidenceResult | { readonly kind: 'pruned'; readonly code: 'shipment-plan-pruned' } | undefined> {
   const auditHead = (await git(options, ['rev-parse', 'HEAD'])).trim();
   const recordPath = `.docs/shipped/${plan.slug}.md`;
   if (await committedFile(options, auditHead, recordPath) === null) return undefined;
+  // The implementation head can predate a docs-prune. Recover only an absent
+  // plan; a present plan must not trigger a deletion-history lookup.
+  const historicalPlan = await readPlanOrPruned(
+    async (commit, path) => committedFile(options, commit, path),
+    async (args) => {
+      try { return { stdout: await git(options, args), stderr: '', exitCode: 0 }; }
+      catch (error) { return { stdout: '', stderr: errorMessage(error), exitCode: 1 }; }
+    },
+    pullRequest.headSha,
+    plan.path,
+  );
+  if (!Buffer.isBuffer(historicalPlan)) return { kind: 'pruned', code: historicalPlan.code };
   const evaluateEvidence = options.evaluateEvidence ?? evaluateShipmentEvidence;
   return evaluateEvidence(
     {
@@ -654,7 +737,9 @@ async function evaluateHistoricalRecord(
     {
       readFile: async (path) => path === recordPath
         ? committedFile(options, auditHead, path)
-        : committedFile(options, pullRequest.headSha, path),
+        : path === plan.path
+          ? historicalPlan
+          : committedFile(options, pullRequest.headSha, path),
       gitRunner: async (args) => strictGit(options, args),
       githubRunner: async () => ({ url: pullRequest.url, headRefOid: auditHead }),
     },

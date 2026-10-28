@@ -17,6 +17,9 @@ import type {
 } from './daemon-runner.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
+import { resolveHarnessRoot } from './install-freshness.js';
+import { defaultSelfHostDetector } from './self-host/detector.js';
+import { skillNameRootFor } from './skill-names.js';
 import { observeMemorySetup } from './memory-cli.js';
 import { makeProductionGh } from './pr-labels.js';
 import { createDaemonHaltPrOperations } from './daemon-halt-pr-operations.js';
@@ -205,12 +208,18 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     prepareWorktree: async (wt, log, events, order) => {
       await observeMemorySetup(wt.path, events);
       const baseSha = order?.baseSha ?? await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
+      const skillNameRoot = skillNameRootFor({
+        isSelfHost: await defaultSelfHostDetector().isSelfHost(cfg.projectRoot),
+        worktreePath: wt.path,
+        harnessRoot: await resolveHarnessRoot(),
+      });
       await prepareWorktree(wt.path, log ?? cfg.log, {
         verbose: cfg.verbose ?? false,
         baseSha,
         events,
         dispatchStart: true,
         dispatchStartTimeoutSeconds: cfg.dispatchStartTimeoutSeconds,
+        skillNameRoot,
       });
     },
 

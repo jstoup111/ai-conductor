@@ -1,4 +1,4 @@
-// Covers: task:24
+// Covers: task:18, task:24
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import {
 } from '../../src/engine/build-review-inputs.js';
 import { runScopeFailDisposition } from '../../src/engine/build-review-disposition.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { resolveChildBase } from '../../src/engine/child-cursor.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 
@@ -164,5 +165,40 @@ describe('build_review child base', () => {
       regrade: async () => 'pass',
     })).resolves.toMatchObject({ kind: 'invalidated', freshBaseSha: fixture.parentSha });
     expect(calls.some((args) => args[0] === 'remote' || args[0] === 'ls-remote' || args[0] === 'fetch')).toBe(false);
+  });
+
+  it('uses a restacked closed child as child 2’s fresh base and never rebases in build-review disposition', async () => {
+    const fixture = await createFixture();
+    await git(fixture.root, ['checkout', '-q', 'feat/c1/demo']);
+    await writeFile(join(fixture.root, 'parent.ts'), 'export const parent = "restacked";\n');
+    await git(fixture.root, ['add', 'parent.ts']);
+    await git(fixture.root, ['commit', '-qm', 'restacked parent']);
+    const restackedParent = (await git(fixture.root, ['rev-parse', 'HEAD'])).trim();
+    await git(fixture.root, ['update-ref', 'refs/conductor/demo/closed/c1', restackedParent]);
+    await git(fixture.root, ['checkout', '-q', 'feat/daemon-demo']);
+    await git(fixture.root, ['rebase', '--onto', restackedParent, fixture.parentSha]);
+
+    const calls: string[][] = [];
+    const real = makeGitRunner(fixture.root);
+    const gitRunner = async (args: string[]) => {
+      calls.push(args);
+      return real(args);
+    };
+    const child = parseChildId(2)!;
+
+    await expect(resolveChildBase(fixture.root, 'demo', child, { git: gitRunner })).resolves.toEqual({
+      kind: 'parent', parent: 1, sha: restackedParent,
+    });
+    calls.length = 0;
+
+    await expect(runScopeFailDisposition({
+      git: gitRunner,
+      root: fixture.root,
+      gradedBaseSha: restackedParent,
+      flaggedPaths: ['child.ts'],
+      childBase: { slug: 'demo', child },
+      regrade: async () => { throw new Error('regrade must not run'); },
+    })).resolves.toEqual({ kind: 'kicked-to-build' });
+    expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
   });
 });

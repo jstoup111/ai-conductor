@@ -53,6 +53,10 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > ledger key `gates.coverage_binding` under the engine's default per-gate lap cap (no new config
 > key), never to another gate's allowance. For decision 8, its governing review is the feature's next `build_review` lap;
 > `coverage_binding` does not re-review repaired code.
+>
+> **Amended 2026-10-10 by #3164:** Decision 10 is retired. `coverage_binding` is now a no-op
+> (`adr-2026-08-31-coverage-binding-judge-step`, amended), so it never admits a repair or reopens a
+> task. `gates.coverage_binding` is no longer charged. Decisions 1–9 are unchanged.
 
 > **Amended 2026-10-02 by #2014:** a change to a plan task's own text becomes an admitted repair
 > source, so `Task:` trailers that predate the change no longer resolve the rewritten task. Decisions
@@ -65,6 +69,61 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > "missing task-status rows" recovery now applies per row, not only to a wholesale-missing file.
 >
 > 12. Every task seed restores a plan task that has **no** task-status row as `completed`, with `restored_from: task-trailer`, when a branch-scoped `Task:` trailer proves it, using the same fail-closed merge-base range as wholesale reconstruction. The trailer scan runs only when at least one plan task lacks a row. Restore is additive: an existing row of any status is never upgraded from a trailer, so a deliberately restaged or reopened `pending` row stays pending. The open-repair override still runs after restore, so an open obligation is never restored as completed from a pre-reopen trailer. Only the pre-BUILD dispatch seed, where no live session holds a task, resets an `in_progress` row to `pending`, and only when no branch-scoped `Task:` trailer exists for that task; every other seed preserves `in_progress` rows unchanged. Like wholesale reconstruction, this restore is the recovery exception to `adr-2026-07-23-trailer-union-build-step-routing` constraint 3 ("No machinery writes `completed` rows"): it restores a row lost from disk, never derives a new completion, and `build_review` remains the sole completion authority.
+
+> **Amended 2026-10-12 by #2944:** For stacked features (`adr-2026-10-12-routed-whole-feature-repair` decision 11):
+> - **Decision 1.** An obligation's boundary is `{branch, head}` plus the tree-hash baseline, taken at host region entry.
+> - **Decision 2.** The admission key is `(roundId, findingId, taskIds)`. A verified reroute re-targets the open obligation's branch and boundary in the same transaction that records the fallback, so no second obligation is minted.
+> - **Decision 6.** The shared reader resolves trailers in `head..tip(branch)`.
+> - **Decision 8.** A routed repair returns to its governing review only after the host's region, the exit restack and the re-validation queue have finished.
+> - **Decision 9.** Budgets are charged through the round receipt.
+> - **Decision 12.** The per-row trailer restore applies on the host branch.
+>
+> N=1 obligations omit `branch` and are unchanged.
+
+
+> **Amended 2026-10-21 by #3200:** a refused Done-when test citation becomes an admitted repair source,
+> narrowly, for the reopen that `adr-2026-08-22-done-when-evidence-at-task-close` D14 defines. Decisions
+> 1-12 are unchanged.
+>
+> 13. When the BUILD-boundary citation judgement refuses one or more checks of a task, the engine
+> admits one obligation for that task with source authority `done-when-citation`. Its finding id is
+> digested from the task id and the set of the task's currently open refused checks (check index, check
+> text, and cited reference). Admission uses the same idempotent admission, replay, and restage path as
+> the other existing-task sources. A later refusal on the same task admits a new obligation covering
+> every check still open, which supersedes the prior one under the existing current-obligation rule, so
+> exactly one citation obligation per task is live. It charges no lap and no gate allowance. The
+> per-check refusal count bounding it belongs to D14 of that ADR; it is not a repair retry counter, so
+> decision 8's "no new retry counter" stands. Under decision 4, pre-reopen trailers and the old close
+> record do not resolve the task. For decision 8, its governing review is the next BUILD-boundary
+> citation judgement of the re-closed checks: a `task done` re-close settles a listed check only when
+> its new record is `verified`, and a `pending-judgement` re-close leaves it open until that judgement.
+> It is not a gate remediation for decision 11: a plan-text change drops a listed check whose text no
+> longer appears in the plan task rather than leaving the obligation open beside the plan-change reopen.
+> The obligation resolves when none of its checks is still
+> open, whether each was re-closed and accepted, demoted under D14, dropped because its plan text
+> changed, or accepted by the operator under D16.
+
+> **Amended 2026-10-23 by #3190:** a completed remediation task whose named change the BUILD-boundary
+> remediation-closure judgement finds absent becomes an admitted repair source, narrowly, for the
+> reopen that `adr-2026-10-21-remediation-closure-judgement` decision 8 defines. Decisions 1-13 are
+> unchanged.
+>
+> 14. When the BUILD-boundary remediation-closure judgement returns `persists` or `partial` for an
+> engine-appended `rem-*` task under its reopen bound, the engine admits one obligation for that task
+> with source authority `remediation-closure`. Its finding id is the task's close identity
+> (`adr-2026-10-21-remediation-closure-judgement` decision 2), its instruction is the judge's
+> rationale, and its boundary is the HEAD at admission; in a stacked feature it is `{branch, head}`
+> on the execution child's branch, taken at admission rather than at host region entry, and keyed by
+> close identity rather than by a round. Admission uses the same idempotent admission, replay, and
+> restage path as the other existing-task sources, and is marked settled at admission. It charges no
+> lap and no gate allowance. The per-task reopen count bounding it belongs to decision 9 of that ADR
+> and lives in its verdict state; it is not a repair retry counter, so decision 8's "no new retry
+> counter" stands. Under decision 4, pre-reopen trailers and the old close record do not resolve the
+> task. For decision 8 it has no governing review of its own, as for `plan_amendment`: it ends when
+> its task resolves, and the next BUILD-boundary judgement judges the new close. A newer
+> `remediation-closure` obligation for the same task supersedes an older open one, as decision 11 does
+> for its own source. A plan-text change of its task admits a `plan_amendment` obligation beside it
+> without superseding it, and one fresh close resolves both.
 
 ## Architectural Alignment
 

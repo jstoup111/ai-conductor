@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:11, task:15
+// Covers: task:1, task:2, task:4, task:5, task:6, task:9, task:11, task:15
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -29,6 +29,9 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
 import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
+import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
 
 /**
@@ -61,6 +64,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   daemon_memory_sample: 'not-audited-by-design',
   daemon_heap_dump_written: 'not-audited-by-design',
   daemon_exited: 'not-audited-by-design',
+  daemon_maintenance_phase: 'not-audited-by-design',
+  executor_started: 'not-audited-by-design',
+  executor_protocol_mismatch: 'not-audited-by-design',
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
@@ -72,23 +78,26 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   intake_overlap_checked: 'not-audited-by-design',
   // Command rejection telemetry is persisted but has no audit-trail projection.
   land_gate_rejected: 'not-audited-by-design',
+  land_dependency_decided: 'not-audited-by-design',
+  dependency_drift_swept: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
-  coverage_binding_judged: 'not-audited-by-design',
-  coverage_binding_amendment_judged: 'not-audited-by-design',
-  coverage_binding_conflict_judged: 'not-audited-by-design',
-  coverage_binding_disabled: 'not-audited-by-design',
-  coverage_binding_invalidated: 'not-audited-by-design',
-  coverage_binding_task_reopened: 'not-audited-by-design',
-  plan_slices_changed: 'not-audited-by-design',
+  plan_review_dispatched: 'not-audited-by-design',
+  plan_review_completed: 'not-audited-by-design',
+  plan_review_finding_accepted: 'not-audited-by-design',
   // Per-child transitions remain in the durable event spine but are not
   // audit-trail friction records (event-sinks declares audit: false).
   child_started: 'not-audited-by-design',
   child_closed: 'not-audited-by-design',
   child_switched: 'not-audited-by-design',
   rebase_skipped_for_stack: 'not-audited-by-design',
-  story_reowned: 'not-audited-by-design',
+  restack_planned: 'not-audited-by-design',
+  restack_applied: 'not-audited-by-design',
+  restack_conflict: 'not-audited-by-design',
+  restack_refused: 'not-audited-by-design',
+  restack_recovered: 'not-audited-by-design',
+  push_lease_refused: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   build_review_read_only_capability: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
@@ -101,6 +110,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_rubric_prompt: 'not-audited-by-design',
   build_review_rubric_result: 'not-audited-by-design',
   build_review_rubric_skipped: 'not-audited-by-design',
+  build_review_review_scope: 'not-audited-by-design',
   build_review_cache_hit: 'friction-mapped',
   build_review_scope_summary: 'not-audited-by-design',
   build_review_cache_discarded: 'friction-mapped',
@@ -115,6 +125,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   remediation_adjudication_started: 'not-audited-by-design',
   remediation_adjudication_completed: 'not-audited-by-design',
   remediation_adjudication_failed: 'not-audited-by-design',
+  build_review_acceptance_carried: 'not-audited-by-design',
+  remediation_case_operator_resolved: 'not-audited-by-design',
   remediation_case_reconciled: 'not-audited-by-design',
   remediation_case_refuted: 'friction-mapped',
   prd_widening_reconciled: 'not-audited-by-design',
@@ -135,6 +147,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Ownership refusals remain durable in the event ledger and terminal, but
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
+  github_operation_failed: 'not-audited-by-design',
   session_command_refused: 'not-audited-by-design',
   github_bypass_attempt: 'not-audited-by-design',
   github_bypass_result: 'not-audited-by-design',
@@ -144,6 +157,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   bot_co_author_skipped: 'not-audited-by-design',
   provider_discovery: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
+  provider_attempt_started: 'not-audited-by-design',
   // Daemon-only suppression durability is not an operator-friction record.
   provider_suppressed: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
@@ -194,7 +208,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_progress: 'not-audited-by-design',
   step_in_flight: 'not-audited-by-design',
   build_no_progress: 'not-audited-by-design',
-  pipeline_closeout: 'not-audited-by-design',
   pipeline_tail_diagnostic: 'not-audited-by-design',
   renderer_error: 'not-audited-by-design',
   when_skip: 'not-audited-by-design', // skipped steps must have zero records
@@ -248,6 +261,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   operator_rewind: 'friction-mapped',
   plan_growth: 'not-audited-by-design',
   ci_failed: 'not-audited-by-design',
+  shipped_pr_readiness: 'not-audited-by-design',
   ci_repair_diagnostic: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
@@ -256,7 +270,32 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_inapplicable_refused: 'not-audited-by-design',
   build_active_stall: 'not-audited-by-design',
   build_done_when_unverified: 'not-audited-by-design',
+  decide_artifacts_pruned: 'not-audited-by-design',
+  done_when_citation_judged: 'not-audited-by-design',
+  remediation_closure_judged: 'not-audited-by-design',
+  done_when_citation_accepted: 'not-audited-by-design',
+  remediation_routed: 'not-audited-by-design',
+  remediation_rerouted: 'not-audited-by-design',
+  routed_repair_phase: 'not-audited-by-design',
+  child_revalidated: 'not-audited-by-design',
+  // Stack-publication occurrences persist on the spine but are not audited (event-sinks audit: false).
+  stack_member_published: 'not-audited-by-design',
+  stack_member_redrafted: 'not-audited-by-design',
+  stack_assembled: 'not-audited-by-design',
+  stack_member_lifecycle: 'not-audited-by-design',
+  stack_members_unreachable: 'not-audited-by-design',
+  stack_tip_diverged: 'not-audited-by-design',
+  provider_transcripts_captured: 'not-audited-by-design',
+  provider_transcripts_harvest_failed: 'not-audited-by-design',
+  provider_transcripts_retained: 'not-audited-by-design',
+  provider_transcripts_pruned: 'not-audited-by-design',
+  provider_transcripts_evicted: 'not-audited-by-design',
+  provider_transcripts_retention_failed: 'not-audited-by-design',
 };
+
+it('classifies remediation-closure judgements as intentionally outside the audit trail', () => {
+  expect(EVENT_TYPE_CLASSIFICATION.remediation_closure_judged).toBe('not-audited-by-design');
+});
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
@@ -284,6 +323,17 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   daemon_exited: {
     type: 'daemon_exited', pid: 1, code: 0, signal: null, at: '2026-09-23T00:00:00.000Z',
+  },
+  daemon_maintenance_phase: {
+    type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed',
+  },
+  executor_started: {
+    type: 'executor_started', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId,
+    protocolVersion: 1, supervisorEngineVersionId: '20261019T120000Z-bbbbbbbbbbbb' as EngineVersionId,
+  },
+  executor_protocol_mismatch: {
+    type: 'executor_protocol_mismatch', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa',
+    expectedProtocolVersion: 1, actualProtocolVersion: 2, reason: 'protocol mismatch', restartRequested: false,
   },
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
@@ -320,6 +370,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     project: 'alpha',
     worktreePath: '/tmp/alpha-worktree',
   },
+  land_dependency_decided: {
+    type: 'land_dependency_decided', repository: 'owner/repo', sourceRef: 'owner/repo#1',
+    proposals: [], accepted: [], declined: [], skipped: null, writes: [],
+  },
+  dependency_drift_swept: {
+    type: 'dependency_drift_swept', repository: 'owner/repo', status: 'swept',
+    unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+  },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
   memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },
   setup_repair: {
@@ -327,43 +385,25 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     disposition: 'engine-committed',
     preservedPaths: [],
   },
-  coverage_binding_judged: {
-    type: 'coverage_binding_judged',
-    step: 'coverage_binding',
-    verdict: 'asserts',
-    digest: 'sha256:claim',
-    taskIds: ['1'],
+  plan_review_dispatched: {
+    type: 'plan_review_dispatched',
+    round: 1,
+    reviewerProvider: 'codex',
+    independence: 'cross-provider',
   },
-  coverage_binding_amendment_judged: {
-    type: 'coverage_binding_amendment_judged',
-    step: 'coverage_binding',
-    verdict: 'carried',
-    digest: 'sha256:amendment',
-    artifactPath: '.docs/decisions/architecture-review-example.md',
-    taskIds: ['1'],
+  plan_review_completed: {
+    type: 'plan_review_completed',
+    round: 1,
+    reviewerProvider: 'codex',
+    independence: 'cross-provider',
+    blockingCount: 1,
+    significantCount: 2,
+    advisoryCount: 3,
   },
-  coverage_binding_conflict_judged: {
-    type: 'coverage_binding_conflict_judged',
-    step: 'coverage_binding',
-    claimKind: 'criterion',
-    claimId: 'stories#criterion-1',
-    verdict: 'conflicts',
-    taskIds: ['1'],
-  },
-  coverage_binding_disabled: { type: 'coverage_binding_disabled', step: 'coverage_binding' },
-  coverage_binding_invalidated: {
-    type: 'coverage_binding_invalidated', paths: ['.docs/decisions/adr-governing.md'], origin: 'decide-change',
-  },
-  coverage_binding_task_reopened: {
-    type: 'coverage_binding_task_reopened', step: 'coverage_binding', taskId: '1', digest: 'sha256:claim',
-  },
-  plan_slices_changed: {
-    type: 'plan_slices_changed',
-    step: 'coverage_binding',
-    moved: [{ taskId: '4', from: 1, to: 2 }],
-    added: ['9'],
-    removed: ['3'],
-    manifest: 'unchanged',
+  plan_review_finding_accepted: {
+    type: 'plan_review_finding_accepted',
+    findingId: 'finding-1',
+    reason: 'accepted with operator rationale',
   },
   child_started: { type: 'child_started', child: parseChildId(1)!, position: 1, branch: 'feat/c1/feature' },
   child_closed: {
@@ -371,7 +411,24 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   child_switched: { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/c2/feature' },
   rebase_skipped_for_stack: { type: 'rebase_skipped_for_stack', child: parseChildId(1)!, reason: 'intermediate child' },
-  story_reowned: { type: 'story_reowned', story: '1', from: 1, to: 2 },
+  restack_planned: {
+    type: 'restack_planned', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', children: [parseChildId(1)!],
+  },
+  restack_applied: {
+    type: 'restack_applied', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', child: parseChildId(1)!,
+    oldTip: parseCommitSha('a'.repeat(40))!, newTip: parseCommitSha('b'.repeat(40))!,
+    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'],
+  },
+  restack_conflict: {
+    type: 'restack_conflict', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
+    commit: parseCommitSha('c'.repeat(40))!, paths: ['src/feature.ts'],
+  },
+  restack_refused: { type: 'restack_refused', reason: 'dirty-overlap', child: parseChildId(1)!, detail: 'src/feature.ts' },
+  restack_recovered: { type: 'restack_recovered', opId: 'restack-1' as RestackOpId, fromState: 'ready' },
+  push_lease_refused: {
+    type: 'push_lease_refused', ref: parseRefName('refs/heads/feat/daemon-feature')!,
+    expected: parseCommitSha('d'.repeat(40))!, actual: parseCommitSha('e'.repeat(40))!,
+  },
   config_deprecated_key: {
     type: 'config_deprecated_key',
     key: 'build_review.rubrics.scope',
@@ -419,6 +476,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
   build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
   build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
+  build_review_review_scope: { type: 'build_review_review_scope', rubric: 'scope', lapId: 'lap-1', mode: 'full', reason: 'first-lap', deltaHunkCount: 0, settledHunkCount: 0 },
   build_review_cache_hit: { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-1' },
   build_review_scope_summary: { type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-1', establishedTargetCount: 2, candidateCount: 1, unresolvedReasons: ['uncertain-association'] },
   build_review_cache_discarded: { type: 'build_review_cache_discarded', rubric: 'testQuality', lapId: 'lap-1', reason: 'engine-version-mismatch', cachedEngineStamp: 'aaaaaaaaaaaa', currentEngineStamp: 'bbbbbbbbbbbb' },
@@ -433,6 +491,8 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   remediation_adjudication_started: { type: 'remediation_adjudication_started', domain: 'build_review', lapId: 'lap-1' },
   remediation_adjudication_completed: { type: 'remediation_adjudication_completed', domain: 'build_review', lapId: 'lap-1', caseIds: ['case-1'], effectIds: ['effect-1'] },
   remediation_adjudication_failed: { type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-1', reason: 'invalid-result' },
+  build_review_acceptance_carried: { type: 'build_review_acceptance_carried', eventId: 'carried-1', feature: 'feature', lapId: 'lap-1', sourceId: 'testQuality:finding-1', caseId: 'case-1', originSourceIds: ['testQuality:finding-0'], originLapIds: ['lap-0'] },
+  remediation_case_operator_resolved: { type: 'remediation_case_operator_resolved', eventId: 'operator-resolved-1', feature: 'feature', caseId: 'case-1', sourceIds: ['testQuality:finding-1'] },
   remediation_case_reconciled: { type: 'remediation_case_reconciled', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1', resolution: 'open' },
   remediation_case_refuted: { type: 'remediation_case_refuted', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1' },
   prd_widening_reconciled: { type: 'prd_widening_reconciled', sourceId: 'source-1', caseId: 'case-1', outcome: 'same-case' },
@@ -465,6 +525,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     reason: 'other-owner',
     remedy: 'ask-resource-owner',
+  },
+  github_operation_failed: {
+    type: 'github_operation_failed',
+    target: { repository: 'acme/repo', kind: 'pull-request', number: 1 },
+    operation: 'pull-request.edit',
+    error: 'GitHub rejected the update',
   },
   session_command_refused: {
     type: 'session_command_refused', eventId: 'refusal-1',
@@ -509,6 +575,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  provider_attempt_started: {
+    type: 'provider_attempt_started',
+    step: 'build',
+    provider: { kind: 'known', id: 'claude' },
   },
   provider_suppressed: {
     type: 'provider_suppressed', provider: 'claude', deadline: 1,
@@ -707,13 +778,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3, activity: 'quiet' },
   step_in_flight: { type: 'step_in_flight', step: 'test_suite', elapsedMs: 1 },
   build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3, activity: 'quiet' },
-  pipeline_closeout: {
-    type: 'pipeline_closeout',
-    obligation: 'evaluator',
-    startedAt: 100,
-    endedAt: 140,
-    ts: 140,
-  },
   pipeline_tail_diagnostic: {
     type: 'pipeline_tail_diagnostic',
     reason: 'malformed-line',
@@ -897,6 +961,18 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     attempts: 1,
     phase: 'detected',
   },
+  shipped_pr_readiness: {
+    type: 'shipped_pr_readiness',
+    prUrl: 'https://github.com/acme/repo/pull/1',
+    slug: 'my-feature',
+    verdict: 'ready',
+    headSha: 'abc123',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    checksOutcome: 'green',
+    isDraft: false,
+    baseRefName: 'main',
+  },
   attribution_divergence: { type: 'attribution_divergence', feature: 'my-feature', taskId: '1' },
   build_active_stall: {
     type: 'build_active_stall',
@@ -909,6 +985,60 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_done_when_unverified: {
     type: 'build_done_when_unverified',
     checks: [{ taskId: '1', check: '[test] proves the outcome' }],
+  },
+  decide_artifacts_pruned: {
+    type: 'decide_artifacts_pruned', removed: [], deferred: [], skipped: [], excluded: [],
+  },
+  done_when_citation_judged: {
+    type: 'done_when_citation_judged',
+    citations: [],
+  },
+  remediation_closure_judged: {
+    type: 'remediation_closure_judged', outcome: 'judged', attempts: 1,
+    candidates: [{ taskId: 'rem-as-built-R1', verdict: 'resolved', rationale: 'present', disposition: 'left-closed' }],
+  },
+  done_when_citation_accepted: {
+    type: 'done_when_citation_accepted',
+    taskId: '1',
+    check: 1,
+    reason: 'operator accepted the citation',
+  },
+  remediation_routed: {
+    type: 'remediation_routed', eventId: 'route-1', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, kind: 'audit', items: [], child: parseChildId(1)!,
+  },
+  remediation_rerouted: {
+    type: 'remediation_rerouted', eventId: 'route-2', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, from: parseChildId(1)!, to: parseChildId(2)!, evidence: 'test', child: parseChildId(2)!,
+  },
+  routed_repair_phase: {
+    type: 'routed_repair_phase', eventId: 'route-3', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, host: parseChildId(1)!, phase: 'repairing', credit: false, child: parseChildId(1)!,
+  },
+  child_revalidated: {
+    type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',
+    child: parseChildId(1)!, generation: 1, closureSha: parseCommitSha('a'.repeat(40))!, outcome: 'passed',
+  },
+  provider_transcripts_captured: {
+    type: 'provider_transcripts_captured', step: 'build', runId: 'transcript-run', attempt: 1,
+    provider: 'codex', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+    files: 1, bytes: 1, interrupted: false, skipped: 0, omittedLines: 0,
+  },
+  provider_transcripts_harvest_failed: {
+    type: 'provider_transcripts_harvest_failed', step: 'build', runId: 'transcript-run', attempt: 1,
+    provider: 'codex', path: '.pipeline/transcripts/build/transcript-run-a1-codex', error: 'read failed',
+  },
+  provider_transcripts_retained: {
+    type: 'provider_transcripts_retained', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+  },
+  provider_transcripts_pruned: {
+    type: 'provider_transcripts_pruned', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+  },
+  provider_transcripts_evicted: {
+    type: 'provider_transcripts_evicted', path: '.pipeline/transcripts/build/transcript-run-a1-codex', reason: 'count',
+  },
+  provider_transcripts_retention_failed: {
+    type: 'provider_transcripts_retention_failed', path: '.pipeline/transcripts/build/transcript-run-a1-codex', action: 'prune', error: 'unlink failed',
   },
   acceptance_red: {
     type: 'acceptance_red',
@@ -923,6 +1053,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   step_inapplicable_refused: {
     type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'failed',
   },
+  stack_member_published: { type: 'stack_member_published', child: parseChildId(1)!, pr: 101 },
+  stack_member_redrafted: { type: 'stack_member_redrafted', child: parseChildId(1)!, pr: 101 },
+  stack_assembled: { type: 'stack_assembled', prs: [101, 500] },
+  stack_member_lifecycle: {
+    type: 'stack_member_lifecycle', child: parseChildId(1)!, pr: 101, state: 'merged', eventId: 'stack-lifecycle-1',
+  },
+  stack_members_unreachable: { type: 'stack_members_unreachable', child: parseChildId(1)!, pr: 101 },
+  stack_tip_diverged: { type: 'stack_tip_diverged', prs: [101] },
 };
 
 async function loadWriter(): Promise<Record<string, any>> {

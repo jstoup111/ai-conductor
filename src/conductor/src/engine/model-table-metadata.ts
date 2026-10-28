@@ -4,6 +4,8 @@ import {
   CLAUDE_DISPLAY_NAME,
   CLAUDE_PROVIDER,
   CODEX_DISPLAY_NAME,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
 } from '../execution/provider-catalog.js';
 
 // These steps retain exhaustive provider-policy placeholders for StepName
@@ -41,16 +43,17 @@ export const STEP_RATIONALE: Record<StepName, string> = {
     `Task breakdown and dependency sequencing use a stronger ${CLAUDE_DISPLAY_NAME} reasoning model at S/M; Large tier uses each provider policy's high-capability model and XHIGH effort for planning at scale.`,
   coherence_check:
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
+  plan_review:
+    'Adversarially judges the final plan against the target worktree source. M/L tier only (S is skippable), with a fresh reviewer session to preserve independence from plan authoring.',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
   architecture_review:
     'Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy.',
   worktree: 'Git operations — mechanical branch/worktree management.',
-  coverage_binding: 'Engine-native coverage-claim gate; its later auxiliary judge has a separate model-table row.',
   acceptance_specs: 'Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work.',
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
-    'Fresh-session grader for explicitly enabled, criterion-bound test-quality concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review.',
+    'Fresh-session grader for the default-on implementation-quality rubric and explicitly enabled peer concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',
   manual_test: 'Structured validation against stories — pattern-following.',
@@ -95,6 +98,7 @@ export const SKILL_STEP_MAP: Record<string, StepName> = {
 // numbered engine step), so there is no autonomous Claude policy entry to
 // compare the pin against.
 export const PIN_EXEMPT_SKILLS: readonly string[] = [
+  'coverage-binding', // plan §7a coverage-judge policy has no engine step
   'code-review', // dispatches an evaluator agent directly; not an engine step
   'composer', // interactive idea→spec authoring loop; orchestrates DECIDE skills, not an engine step
   'debugging', // standalone investigation skill; not an engine step
@@ -159,7 +163,6 @@ export type AuxiliaryModelTableRow = AuxiliaryModelTableRowBase & (
 );
 
 const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
-const RESOLVED_COVERAGE_BINDING_POLICY = 'inherits resolved coverage-binding policy' as const;
 const RESOLVED_REBASE_POLICY = 'inherits resolved rebase policy' as const;
 const PI_NOT_APPLICABLE = 'n/a' as const;
 
@@ -189,13 +192,14 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary.',
   },
   {
-    name: 'coverage-binding',
-    executionPath: 'engine-managed auxiliary judge',
-    providerCells: providerCellsForReview(
-      RESOLVED_COVERAGE_BINDING_POLICY,
-      RESOLVED_COVERAGE_BINDING_POLICY,
-    ),
-    why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
+    name: 'build-review-implementation-quality',
+    executionPath: 'engine-managed auxiliary rubric',
+    providerCells: {
+      [CLAUDE_PROVIDER]: { model: 'opus', effort: 'medium' },
+      [CODEX_PROVIDER]: { model: 'gpt-5.6-sol', effort: 'medium' },
+      [PI_PROVIDER]: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
+    },
+    why: 'Judges the whole feature diff for concrete, changed-hunk-anchored code-quality and domain-modelling defects in the closed implementation-quality vocabulary.',
   },
   {
     name: 'rebase-regrade',
@@ -251,7 +255,7 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: ExtraModelTableRowInput[] = [
     claudeModel:
       'sonnet (default) / fable (concurrency, state mutation, security, auth, money)',
     claudeEffort: '',
-    why: 'A single risk-domain criterion protects higher-stakes batches from weaker evaluation.',
+    why: '`/code-review` dispatches this evaluator; its risk-domain criterion protects higher-stakes reviews from weaker evaluation.',
   },
   {
     name: 'code-review',

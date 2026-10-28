@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm,} from 'fs/promises';
 import { join } from 'path';
@@ -2247,6 +2247,11 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            // The validation-group handshake now requires the typed verdict
+            // from this dispatch. Keep this sibling green so the fixture
+            // reaches its intended as-built/manual-test remediation path.
+            await writePrdAuditFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             // Perpetually BLOCKED — build's mock never actually fixes it.
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
@@ -3851,10 +3856,9 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done', coherence_check: 'done', plan_review: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
-        coverage_binding: 'done',
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
@@ -4725,12 +4729,12 @@ describe('engine/conductor', () => {
         const codexInvocation = await prepare(
           { step: 'build', providerKey: 'codex', model: 'gpt-5.6-terra', effort: 'medium' },
           runtimes.get('codex'),
-          { runId: input.runId, attempt: 0 },
+          { step: 'build', runId: input.runId ?? 'held-conductor-run', attempt: 0 },
         );
         const claudeInvocation = await prepare(
           { step: 'build', providerKey: 'claude', model: 'sonnet', effort: 'medium' },
           runtimes.get('claude'),
-          { runId: input.runId, attempt: 1 },
+          { step: 'build', runId: input.runId ?? 'held-conductor-run', attempt: 1 },
         );
         for (const [attempt, invocation] of [codexInvocation, claudeInvocation].entries()) {
           const provider = attempt === 0 ? 'codex' : 'claude';
@@ -4788,34 +4792,44 @@ describe('engine/conductor', () => {
         worktreeRoot: dir,
         repository: dir,
         featureSlug: 'self-host-identity',
-        runId: 'held-conductor-run',
-        attempt: 0,
+        captureIdentity: expect.objectContaining({
+          owner: { kind: 'registered-step', step: 'build' },
+          runId: 'held-conductor-run', attempt: 0,
+        }),
       }),
       claude: expect.objectContaining({
         worktreeRoot: dir,
         harnessRoot: dir,
         repository: dir,
         featureSlug: 'self-host-identity',
-        runId: 'held-conductor-run',
-        attempt: 1,
+        captureIdentity: expect.objectContaining({
+          owner: { kind: 'registered-step', step: 'build' },
+          runId: 'held-conductor-run', attempt: 1,
+        }),
       }),
     });
     for (const [attempt, lease] of leases.entries()) {
-      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
       expect(lease).toMatchObject({ repository: dir, featureSlug: 'self-host-identity', runId: 'held-conductor-run', attempt, ownerPid: process.pid });
       expect(new Date((lease as { startedAt: string }).startedAt).toISOString()).toBe((lease as { startedAt: string }).startedAt);
     }
   });
 
-  it('writes the authoritative lease before cleanup on the legacy Claude self-host path', async () => {
+  it('captures same-session legacy Claude dispatches in distinct attempt directories', async () => {
     await mkdir(join(dir, 'skills'), { recursive: true });
     const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
-    const leasePath = join(dir, '.daemon', 'scratch', 'legacy-held-run', '1-claude', 'owner.json');
-    let lease: unknown;
+    const captures: string[] = [];
+    events.on('provider_transcripts_captured', (event) => {
+      if (event.type === 'provider_transcripts_captured') captures.push(event.path);
+    });
     const runner: StepRunner = {
       selfHostRunId: () => 'legacy-held-run',
       run: vi.fn(async () => {
-        lease = JSON.parse(await readFile(leasePath, 'utf8'));
+        const configDir = process.env.CLAUDE_CONFIG_DIR;
+        expect(configDir).toBeDefined();
+        const transcript = join(configDir!, 'projects', 'legacy-project', 'session.jsonl');
+        await mkdir(join(configDir!, 'projects', 'legacy-project'), { recursive: true });
+        await writeFile(transcript, '{"type":"assistant","message":"legacy dispatch"}\n');
         return { success: true };
       }),
     };
@@ -4844,14 +4858,18 @@ describe('engine/conductor', () => {
     await (conductor as unknown as {
       runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
     }).runSelfBuildDispatch('build', {} as ConductState);
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
 
-    expect(lease).toMatchObject({
-      repository: dir,
-      featureSlug: 'legacy-self-host-identity',
-      runId: 'legacy-held-run',
-      attempt: 1,
-    });
-    await expect(readFile(leasePath, 'utf8')).rejects.toThrow();
+    expect(captures).toEqual([
+      join('.pipeline', 'transcripts', 'build', 'legacy-held-run-a1-claude'),
+      join('.pipeline', 'transcripts', 'build', 'legacy-held-run-a2-claude'),
+    ]);
+    for (const capture of captures) {
+      await expect(readFile(join(dir, capture, 'projects', 'legacy-project', 'session.jsonl'), 'utf8'))
+        .resolves.toContain('legacy dispatch');
+    }
   });
 
   it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
@@ -6499,7 +6517,13 @@ describe('engine/conductor', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'pending' }] }),
       );
-      await writeState(statePath, { coverage_binding: 'done' } as ConductState);
+      await writeState(statePath, {
+        // This fixture targets the BUILD completion predicate. Its temporary
+        // directory has no merge base for the architecture-review ledger gate.
+        architecture_review: 'done',
+        plan_review: 'done',
+        coverage_binding: 'done',
+      } as ConductState);
 
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
@@ -6605,7 +6629,8 @@ describe('engine/conductor', () => {
       const seed = seedRes.ok ? seedRes.value : {};
       seed.feature_desc = 'add foo';
       // This fixture proves the ordinary artifact walk, not the separate
-      // build-review or PRD-audit effective-verdict resolvers.
+      // plan-review, build-review, or PRD-audit effective-verdict resolvers.
+      seed.plan_review = 'done';
       seed.build_review = 'done';
       seed.prd_audit = 'done';
       await writeState(statePath, seed);
@@ -6624,9 +6649,6 @@ describe('engine/conductor', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify(passingBuildReviewAggregate()),
             );
-          } else if (step === 'coverage_binding') {
-            await _mkdir(join(dir, '.pipeline'), { recursive: true });
-            await _wf(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'test-feature', runId: 'test-run', status: 'disabled', entries: [] }));
           } else if (step === 'manual_test') {
             await _wf(
               join(dir, '.pipeline/manual-test-results.md'),

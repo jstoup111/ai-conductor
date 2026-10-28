@@ -1055,6 +1055,7 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
           body: `Implements \`.docs/plans/${slug}.md\``,
           files: [{ path: `src/${slug}.ts` }],
           headRefOid: await git(['rev-parse', `refs/heads/feature/${slug}`]),
+          headRefName: `feature/${slug}`,
         });
       }
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === repairPr) {

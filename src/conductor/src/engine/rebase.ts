@@ -14,6 +14,7 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { isPinnedEngineGitCommand, withPinnedGitConfig } from './git-pinned-config.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
@@ -47,6 +48,7 @@ import {
 import type { ReplayEvidence } from './gate-verdicts.js';
 import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
 import type { RebasePreservedCandidate } from './gate-verdicts.js';
+import type { RestackCause } from './restack/restack-types.js';
 import {
   REBASE_REGRADE_GATES,
   computeOwnContributionDelta,
@@ -68,7 +70,13 @@ import type { ConductorEvent } from '../types/events.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
-  (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult>;
+  (args: string[], opts?: {
+    input?: string;
+    credential?: 'operator' | 'write';
+    endpoint?: 'https' | 'ssh';
+    /** Per-invocation environment, merged over the ambient process environment. */
+    env?: NodeJS.ProcessEnv;
+  }): Promise<GitResult>;
 }
 
 export interface GitResult {
@@ -86,7 +94,7 @@ export type ProspectiveMergeResult = 'clean' | 'conflicting' | 'indeterminate';
  * `merge-tree --write-tree` uses exit 0 for a clean merge and 1 for conflicts;
  * every other exit is an operational failure whose mergeability is unknown.
  */
-async function classifyProspectiveMerge(
+export async function classifyProspectiveMerge(
   git: GitRunner,
   baseRef: string,
 ): Promise<ProspectiveMergeResult> {
@@ -102,14 +110,22 @@ async function classifyProspectiveMerge(
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
-  return async (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult> => {
+  return async (args: string[], opts?: {
+    input?: string;
+    credential?: 'operator' | 'write';
+    endpoint?: 'https' | 'ssh';
+    env?: NodeJS.ProcessEnv;
+  }): Promise<GitResult> => {
     try {
       // Engine bookkeeping marker (#505 Task 8): any `git commit` this runner
       // spawns is engine-authored (rebase mechanics, quarantine, etc.), never
       // dispatched implementation work — mark it so the commit-msg gate
       // exempts it from the Task: trailer requirement.
       const isCommit = args[0] === 'commit';
-      let env: NodeJS.ProcessEnv | undefined;
+      // Callers can safely provide per-command identity without mutating
+      // process.env.  Merge it before credentials and pins so both compose
+      // into the same environment handed to this git child.
+      let env: NodeJS.ProcessEnv | undefined = opts?.env ? { ...process.env, ...opts.env } : undefined;
       let botToken: string | undefined;
       if (opts?.credential === 'write') {
         const credential = await readGithubBotCredential();
@@ -118,8 +134,11 @@ export function makeGitRunner(cwd: string): GitRunner {
           const token = await readGithubBotToken(credential.tokenFile);
           if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
           botToken = token.token;
-          env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
+          env = { ...(env ?? process.env), GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
         }
+      }
+      if (isPinnedEngineGitCommand(args)) {
+        env = withPinnedGitConfig(env ?? process.env);
       }
       const r = await execa('git', args, {
         cwd,
@@ -780,6 +799,59 @@ export interface FlattenedReplayPlan {
   absorptionPoints: Array<{ from: string; to: string }>;
 }
 
+/** The replay treatment for one two-parent merge. */
+export type ReplayMergeClassification =
+  | { kind: 'ancestry-only'; mergeSha: string; firstParent: string; secondParent: string; mergeTree: string }
+  | { kind: 'q-carried'; mergeSha: string; firstParent: string; secondParent: string; mergeTree: string; autoTree: string }
+  | { kind: 'flattened'; mergeSha: string; firstParent: string; secondParent: string; mergeTree: string };
+
+/**
+ * Classify a merge before replaying it.  N=1 deliberately preserves the
+ * established two-class result; stacked replays can distinguish a carried Q
+ * side from a side that must be flattened.
+ */
+export async function classifyReplayMerge(
+  git: GitRunner,
+  merge: string,
+  newParent: string,
+  mode: 'n1' | 'stacked',
+): Promise<ReplayMergeClassification> {
+  const parentsResult = await git(['rev-list', '--parents', '-n', '1', merge]);
+  if (parentsResult.exitCode !== 0) throw new Error(`could not read parents for replay entry ${merge}`);
+  const parents = parentsResult.stdout.trim().split(/\s+/).slice(1);
+  if (parents.length < 2) throw new Error(`replay entry ${merge} is not a merge`);
+  const [firstParent, secondParent] = parents as [string, string];
+
+  const [mergeTreeResult, firstParentTreeResult] = await Promise.all([
+    git(['rev-parse', `${merge}^{tree}`]),
+    git(['rev-parse', `${merge}^1^{tree}`]),
+  ]);
+  if (mergeTreeResult.exitCode !== 0 || firstParentTreeResult.exitCode !== 0) {
+    throw new Error(`could not read tree identity for merge ${merge}`);
+  }
+  if (mode === 'n1') {
+    return mergeTreeResult.stdout.trim() === firstParentTreeResult.stdout.trim()
+      ? { kind: 'ancestry-only', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() }
+      : { kind: 'flattened', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() };
+  }
+
+  const [automatic, carried] = await Promise.all([
+    git(['merge-tree', '--write-tree', firstParent, secondParent]),
+    git(['merge-base', '--is-ancestor', secondParent, newParent]),
+  ]);
+  if (automatic.exitCode !== 0) throw new Error(`could not calculate automatic merge for ${merge}: ${automatic.stderr}`);
+  if (carried.exitCode !== 0 && carried.exitCode !== 1) {
+    throw new Error(`could not determine whether merge side is carried for ${merge}: ${carried.stderr}`);
+  }
+  if (carried.exitCode === 0 && mergeTreeResult.stdout.trim() === automatic.stdout.trim()) {
+    return { kind: 'ancestry-only', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() };
+  }
+  if (carried.exitCode === 0) {
+    return { kind: 'q-carried', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim(), autoTree: automatic.stdout.trim() };
+  }
+  return { kind: 'flattened', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() };
+}
+
 export type FlattenedReplayProof =
   | { kind: 'proven'; inPlaceTree: string; targetTree: string }
   | { kind: 'refused'; reason: string }
@@ -930,19 +1002,13 @@ export async function planFlattenedReplay(
       continue;
     }
 
-    const [firstParentSha] = parents;
-    const [mergeTreeResult, parentTreeResult] = await Promise.all([
-      git(['rev-parse', `${sha}^{tree}`]),
-      git(['rev-parse', `${sha}^1^{tree}`]),
-    ]);
-    if (mergeTreeResult.exitCode !== 0 || parentTreeResult.exitCode !== 0) {
-      throw new Error(`could not read tree identity for merge ${sha}`);
-    }
-    const mergeTree = mergeTreeResult.stdout.trim();
-    if (mergeTree === parentTreeResult.stdout.trim()) {
+    const classification = await classifyReplayMerge(git, sha, mergeBase, 'n1');
+    if (classification.kind === 'ancestry-only') {
       ancestryOnlyMerges.push(sha);
       continue;
     }
+    const firstParentSha = classification.firstParent;
+    const mergeTree = classification.mergeTree;
 
     const metadata = await git(['show', '-s', '--format=%an%n%ae%n%cn%n%ce%n%s', sha]);
     if (metadata.exitCode !== 0) {
@@ -960,7 +1026,7 @@ export async function planFlattenedReplay(
     entries.push({ kind: 'flattened', sha: flattenedSha, mergeSha: sha, firstParent: firstParentSha, subject });
     flattenedMerges.push(sha);
     pairs.push({ from: sha, to: flattenedSha });
-    const side = await git(['rev-list', `${firstParentSha}..${parents[1]}`]);
+    const side = await git(['rev-list', `${firstParentSha}..${classification.secondParent}`]);
     if (side.exitCode !== 0) {
       throw new Error(`could not list side lineage for merge ${sha}`);
     }
@@ -1278,7 +1344,7 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
   }
   // Decision records are inputs only when the feature CITES them.  Binding
   // every ADR in the checkout made each ADR landed on main reopen
-  // coverage_binding / prd_audit / as-built on nearly every rebase, although
+  // prd_audit / as-built on nearly every rebase, although
   // none of those gates read an uncited decision.  Scan the feature's own
   // documents (plan, coherence, stories, specs/PRD) for decision paths or
   // `adr-<stem>` references; a cited ADR edit still reopens its reviews.
@@ -2367,6 +2433,7 @@ export async function reverifyOrInvalidateRebaseGate(
   evidence: string,
   invalidateOnFailure = true,
   child?: ChildId,
+  cause?: RestackCause,
 ): Promise<{ kind: 'reverified'; preservationBasis?: 'test_suite_drift_budget' } | { kind: 'invalidated' } | { kind: 'unverified' }> {
   const gateChild = isRegionStep(gate) ? child : undefined;
   const definition = ALL_STEPS.find((step) => step.name === gate);
@@ -2392,7 +2459,7 @@ export async function reverifyOrInvalidateRebaseGate(
     satisfied: false,
     reason: 'invalidated by file-changing rebase',
     checkedAt: Date.now(),
-    kickback: { from: 'rebase', evidence },
+    kickback: { from: 'rebase', evidence, ...(cause === undefined ? {} : { cause }) },
   }, gateChild);
   return { kind: 'invalidated' };
 }
@@ -2410,6 +2477,7 @@ export async function applyRebaseVerdicts(
     emit?: (event: Extract<ConductorEvent, { type: 'rebase_regrade_judged' }>) => Promise<void>;
   },
   child?: ChildId,
+  cause?: RestackCause,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2597,6 +2665,17 @@ export async function applyRebaseVerdicts(
   const partition = outcome.featureSurface !== undefined
     ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
+  // The classifier is an input boundary: persisted or cross-version callers
+  // can still name a retired gate. Apply replay effects only to the current
+  // lifecycle registry, so an old `coverage_binding` decision cannot recreate
+  // its gate verdict after the step has been removed.
+  const activeGates = new Set<StepName>(ALL_STEPS.map((step) => step.name));
+  const activePartition = partition === undefined
+    ? undefined
+    : {
+        preserved: partition.preserved.filter((gate): gate is StepName => activeGates.has(gate as StepName)),
+        invalidated: partition.invalidated.filter((gate): gate is StepName => activeGates.has(gate as StepName)),
+      };
   // A current original PASS is enough to retain a classifier-preserved gate.
   // Capturing replay identity is stricter: it grants the PASS durable bounded
   // replay authority for later readers.  A gate is never named preserved
@@ -2610,9 +2689,9 @@ export async function applyRebaseVerdicts(
   // Only the replay classifier has immutable candidate provenance. The legacy
   // path retains its existing gate-selection behavior but cannot mint bounded
   // replay authority from a path-only preservation.
-  const replayCandidates = replayPartition?.candidates ?? [];
-  if (partition !== undefined) {
-    for (const gate of partition.preserved as StepName[]) {
+  const replayCandidates = (replayPartition?.candidates ?? []).filter((candidate) => activeGates.has(candidate.gate as StepName));
+  if (activePartition !== undefined) {
+    for (const gate of activePartition.preserved) {
       const original = await applicableOriginalPass(projectRoot, gate, outcome.replay?.preRebaseHead ?? '', git, child);
       const classified = replayCandidates.find((candidate) => candidate.gate === gate);
       if (original) {
@@ -2642,15 +2721,15 @@ export async function applyRebaseVerdicts(
   // coverage/build/test-suite passes that lack stampable provenance out of
   // the gap between the classifier and the applied decision.
   const boundPreservations = new Set(preservedCandidates.map(({ gate }) => gate));
-  const unprovedPreservations = partition === undefined
+  const unprovedPreservations = activePartition === undefined
     ? []
-    : (partition.preserved as StepName[]).filter((gate) => !boundPreservations.has(gate));
-  const targets: StepName[] = partition !== undefined
+    : activePartition.preserved.filter((gate) => !boundPreservations.has(gate));
+  const targets: StepName[] = activePartition !== undefined
     // A completed BUILD is attested before this decision is applied. Replay
     // equivalence changes which reviews need another judgement, not whether
     // the already-established authoring/BUILD work is selected again by tail
     // position. Current combined-tree verification remains in test_suite.
-    ? ([...partition.invalidated, ...unprovedPreservations] as StepName[])
+    ? [...activePartition.invalidated, ...unprovedPreservations]
     : ([
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
@@ -2658,17 +2737,16 @@ export async function applyRebaseVerdicts(
   // Applying the classifier's invalidated and unproved-preservation buckets
   // directly makes observable verdict/event order depend on why a gate
   // reopened. Keep effects in lifecycle order, with changed requirement
-  // inputs refreshing their audit immediately after coverage.
+  // inputs refreshing their audit first.
   const activePrdInputChanged = reviewDelta(outcome).some((path) =>
     path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
   );
   const gateOrder = new Map<StepName, number>([
-    ['coverage_binding', 0],
-    ['prd_audit', activePrdInputChanged ? 1 : 4],
-    ['build_review', 1 + Number(activePrdInputChanged)],
-    ['test_suite', 2 + Number(activePrdInputChanged)],
-    ['manual_test', 3 + Number(activePrdInputChanged)],
-    ['architecture_review_as_built', 5],
+    ['prd_audit', activePrdInputChanged ? 0 : 3],
+    ['build_review', Number(activePrdInputChanged)],
+    ['test_suite', 1 + Number(activePrdInputChanged)],
+    ['manual_test', 2 + Number(activePrdInputChanged)],
+    ['architecture_review_as_built', 4],
   ]);
   const orderedTargets = [...new Set(targets)].sort(
     (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
@@ -2692,7 +2770,7 @@ export async function applyRebaseVerdicts(
         continue;
       }
     }
-    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence, true, child);
+    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence, true, child, cause);
     kickedBack.push(target);
   }
   // A completed changed rebase without P/B/O is still a first-class,
@@ -2769,8 +2847,7 @@ export async function recordRebaseStepCompletion(
  * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
  *   - 'feature-prd-inputs' (prd_audit): changed declared stories/spec/PRD
  *     inputs only.
- *   - 'feature-coverage-inputs' (coverage_binding,
- *     architecture_review_as_built): changed declared plan, coherence,
+ *   - 'feature-coverage-inputs' (architecture_review_as_built): changed declared plan, coherence,
  *     stories, spec and cited-ADR inputs only.
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.

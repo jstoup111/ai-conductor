@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:29
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access, chmod } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -111,6 +111,65 @@ describe('consumeResumeAuthorizations', () => {
 
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
       expect((await readKickbackLedger(worktree, child)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the active child ledger when stack repair is pending', async () => {
+    const { root, worktree } = await seed();
+    try {
+      const child = 2 as import('../../src/engine/child-context.js').ChildId;
+      await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { build_review: gateEntry } }),
+      );
+
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/feature', repairChildren: [1],
+        }),
+      }) as never)).resolves.toEqual(['feature']);
+
+      expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
+      expect((await readKickbackLedger(worktree, child)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a restack authorization in the cursor leaf ledger while a routed host is repairing', async () => {
+    const { root, worktree } = await seed();
+    try {
+      const host = 1 as import('../../src/engine/child-context.js').ChildId;
+      const leaf = 3 as import('../../src/engine/child-context.js').ChildId;
+      await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }));
+      await mkdir(join(worktree, '.pipeline', 'children', '1'), { recursive: true });
+      await mkdir(join(worktree, '.pipeline', 'children', '3'), { recursive: true });
+      const restackEntry = {
+        ...gateEntry,
+        capEvidence: { gate: 'restack', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'g1' },
+      };
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '3', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { restack: restackEntry } }),
+      );
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '1', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { restack: { ...restackEntry, resumeAuthorization: { adjustmentId: 'host', haltGeneration: 'g1', consumed: false } } } }),
+      );
+
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        readLiveHaltClass: async () => 'needs-human',
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child: leaf, position: leaf, isLeaf: true, branch: 'feat/feature', repairChildren: [host],
+          routedRepair: { child: host, roundId: 'r1' as import('../../src/engine/routing/route-types.js').RoundId },
+        }),
+      }) as never)).resolves.toEqual(['feature']);
+
+      expect((await readKickbackLedger(worktree, leaf)).gates.restack.resumeAuthorization?.consumed).toBe(true);
+      expect((await readKickbackLedger(worktree, host)).gates.restack.resumeAuthorization?.consumed).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -843,6 +902,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       mechanical: 'retry',
       'kickback-cap': 'retain',
       'over-scope': 'retain',
+      'stack-tip-diverged': 'retain',
       legacy: 'retry',
     } satisfies Record<HaltDisposition, 'retain' | 'retry'>;
 
@@ -2874,7 +2934,6 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
 
     expect(res).toBe('rebased');
     expect(invalidated).toEqual([
-      { type: 'rebase_gate_invalidated', gate: 'coverage_binding', matchedPaths: [] },
       { type: 'rebase_gate_invalidated', gate: 'build_review', matchedPaths: [] },
       { type: 'rebase_gate_invalidated', gate: 'test_suite', matchedPaths: ['src/sibling.ts'] },
       { type: 'rebase_gate_invalidated', gate: 'manual_test', matchedPaths: ['src/sibling.ts'] },
@@ -3007,9 +3066,34 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     });
 
     expect(result).toBe('halted');
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      'completed BUILD evidence is unavailable after rebase: unreadable completed evidence',
-    );
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('completed BUILD evidence is unavailable after rebase: unreadable completed evidence');
+    expect(halt).toMatch(/^rebase completed — parked for human review/);
+    expect(halt).not.toContain('Conflicted files');
+  });
+
+  it('keeps a completed BUILD with an unspent unverified Done-when nudge after rebase instead of halting', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    await writeFile(statePath, JSON.stringify({ ...state, build: 'done' }, null, 2));
+    const statusPath = join(dir, '.pipeline', 'task-status.json');
+    await writeFile(statusPath, JSON.stringify({
+      plan_ref: '.docs/plans/foo.md',
+      tasks: [
+        {
+          id: '1', name: 'Do thing 1', status: 'done',
+          doneWhen: [{ source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' }],
+        },
+        { id: '2', name: 'Do thing 2', status: 'done' },
+      ],
+    }, null, 2) + '\n');
+
+    const result = await resumeRebaseFirst({ worktreePath: dir, localBase: 'main', events, ranManualTest: false });
+
+    expect(result).toBe('rebased');
+    await expect(access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
   });
 
   it.each([
@@ -3054,9 +3138,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       log: (message) => { logs.push(message); },
     })).resolves.toBe('rebased');
     if (changeBase) {
-      await Promise.all(([
-        'coverage_binding',
-        'test_suite',
+      await Promise.all((['test_suite',
         'build_review',
         'prd_audit',
         'architecture_review_as_built',

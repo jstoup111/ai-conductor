@@ -5,7 +5,15 @@ import { tmpdir } from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-vi.mock('execa', () => ({ execa: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })) }));
+vi.mock('execa', () => ({
+  execa: vi.fn(async (_file: string, args?: string[]) => ({
+    exitCode: 0,
+    // The ADR-ledger gate needs a usable merge base when a fixture exercises
+    // architecture_review but is otherwise intentionally Git-free.
+    stdout: args?.[0] === 'merge-base' ? 'fixture-base\n' : '',
+    stderr: '',
+  })),
+}));
 
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -20,6 +28,7 @@ import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
@@ -40,7 +49,7 @@ const FRONT_DONE: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
-  coverage_binding: 'done',
+  plan_review: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -178,6 +187,22 @@ describe('integration/gate-loop', () => {
     } else if (step === 'coherence_check') {
       await mkdir(join(dir, '.docs/coherence'), { recursive: true });
       await writeFile(join(dir, '.docs/coherence/p.md'), '| Row |\n|---|\n| x |\n');
+    } else if (step === 'plan_review') {
+      // A plan re-opened by a kickback re-runs the DECIDE plan_review gate;
+      // satisfy it with a clean (no-finding) review for this feature.
+      await mkdir(join(dir, '.docs/plan-review'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plan-review/add foo.md'),
+        renderPlanReviewArtifact({
+          round: 1,
+          authoringHost: 'claude',
+          reviewerProvider: 'codex',
+          independence: 'cross-provider',
+          findings: [],
+          dispositions: [],
+          reviewedDigest: computeReviewedDigest({ planText: '', storiesText: '', adrTexts: {}, artifactTexts: {}, changedPaths: [] }),
+        }),
+      );
     }
     return { success: true };
   }
@@ -520,7 +545,7 @@ describe('integration/gate-loop', () => {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
         join(dir, '.docs/decisions/adr-1.md'),
-        '# ADR 1\n\nStatus: APPROVED\n',
+        '# ADR 1\n\nStatus: APPROVED\n\n## Assumptions\n\nNo load-bearing assumptions.\n',
       );
     }
 
@@ -564,6 +589,7 @@ describe('integration/gate-loop', () => {
       return kicks;
     }
 
+    // Covers: task:rem-prd-audit-9-R2
     it('emits a kickback event when conflict_check re-opens architecture_review, without invoking navigateBack', async () => {
       await seedStoriesAndPlan();
       await seedApprovedAdr();
@@ -610,9 +636,9 @@ describe('integration/gate-loop', () => {
       ]);
       // Linear advance unaffected at detection time: plan ran immediately
       // next (no navigateBack jump). The gate-driven tail's own selector
-      // — independently of the front-half detection — later re-opens
-      // architecture_review because its verdict is still unsatisfied on
-      // disk, exactly once, and the loop still converges.
+      // — independently of the front-half detection — later re-runs
+      // architecture_review and records its satisfied objective verdict
+      // before the loop converges.
       const conflictIdx = ran.indexOf('conflict_check');
       expect(ran[conflictIdx + 1]).toBe('plan');
       expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(1);
@@ -1994,7 +2020,7 @@ describe('integration/gate-loop', () => {
       mockExeca.mockImplementation(async (_command: string, args: readonly string[] = [], options?: import('execa').Options) => {
         if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '.docs/plans/p.md\0', stderr: '' } as never;
         if (args[0] === 'show') return { exitCode: 0, stdout: planText, stderr: '' } as never;
-        if (args[0] === 'cat-file' && args.includes('--batch')) {
+        if (args[0] === 'cat-file' && args.some((arg) => arg === '--batch' || arg === '--batch-check')) {
           const requestedPaths = String(options?.input ?? '')
             .trim()
             .split('\n')
@@ -2364,7 +2390,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     vi.resetModules();
   });
 
-  it('keeps a coverage-incomplete audit failed without routing it back through build', async () => {
+  it('rejects a stale legacy coverage report without routing it back through build', async () => {
     // This file normally mocks execa. Resetting before the dynamic import makes
     // the production tail use real git for protected-artifact sealing and PRD
     // resolution, rather than a hand-built artifact-resolution context.
@@ -2506,6 +2532,6 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
 
     expect(auditRuns).toBe(1);
     const finalState = await readRealState(realStatePath);
-    expect(finalState.ok && finalState.value.prd_audit).toBe('refused');
+    expect(finalState.ok && finalState.value.prd_audit).toBe('failed');
   });
 });

@@ -18,7 +18,9 @@ cp -r "$HARNESS_DIR/skills" "$CHECKOUT/skills"
 cp -r "$HARNESS_DIR/hooks" "$CHECKOUT/hooks"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
 mkdir -p "$CHECKOUT/src/conductor/dist"
-cp "$HARNESS_DIR/src/conductor/dist/index.js" "$CHECKOUT/src/conductor/dist/"
+# The repository does not track generated bundles. The installer only needs a
+# fixture-owned bundle marker to exercise its successful symlink path.
+: > "$CHECKOUT/src/conductor/dist/index.js"
 
 FAKE_HOME="$TMP_ROOT/home"
 STUBS="$TMP_ROOT/stubs"

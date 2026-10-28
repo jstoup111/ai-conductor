@@ -4,13 +4,15 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -43,14 +45,14 @@ beforeEach(async () => {
   await git(['add', '.ai-conductor/config.yml']);
   await git(['commit', '-qm', 'configure stack']);
   await writeFile(join(root, '.git', 'info', 'exclude'), '.pipeline/\n');
-  await writeCoverageBindingEnvelope(root, {
-    version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [],
+  await writeSliceTopologyFixture(root, {
+    version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [], materializeTopologyCommit: true,
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
-    feature_desc: 'demo', coverage_binding: 'done', acceptance_specs: 'pending',
+    feature_desc: 'demo', acceptance_specs: 'pending',
   }));
 });
 
@@ -59,6 +61,68 @@ afterEach(async () => {
 });
 
 describe('stacked BUILD region loop', () => {
+  it('halts an un-overlaid repair-pending cursor before --from build can enter a child region', async () => {
+    const run = vi.fn(async () => ({ success: true }));
+    const enterChildRegion = vi.fn(async () => ({ kind: 'completed' as const }));
+    const cursor = {
+      kind: 'repair-pending' as const,
+      child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [parseChildId(1)!],
+    };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'build',
+      config: { stacked_prs: { enabled: true, max_slices: 2 } },
+      events: new ConductorEventEmitter(),
+      stepRunner: { run },
+      childRegionLifecycle: { resolveActiveChild: async () => cursor, enterChildRegion },
+    });
+
+    await conductor.run();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(enterChildRegion).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8'))
+      .resolves.toContain('child stack repair is pending for closed child 1');
+  });
+
+  // Covers: task:48
+  it('allows a routed repair overlay to enter its host region from --from build', async () => {
+    const run = vi.fn(async () => { throw new Error('stop after routed BUILD dispatch'); });
+    const enterChildRegion = vi.fn(async () => ({ kind: 'completed' as const }));
+    const enterHostRegion = vi.fn(async () => ({ kind: 'resume' as const, pinnedBase: '0'.repeat(40) as never }));
+    const cursor = {
+      kind: 'repair-pending' as const,
+      child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [parseChildId(1)!],
+      routedRepair: { child: parseChildId(1)!, roundId: parseRoundId('r1')! },
+    };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'build',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(),
+      stepRunner: { run },
+      childRegionLifecycle: { resolveActiveChild: async () => cursor, enterHostRegion, enterChildRegion },
+    });
+
+    await conductor.run();
+
+    expect(enterChildRegion).toHaveBeenCalledWith(
+      root,
+      'demo',
+      expect.objectContaining({ child: 1, branch: 'feat/c1/demo' }),
+      expect.any(ConductorEventEmitter),
+      undefined,
+    );
+    expect(enterHostRegion).toHaveBeenCalledWith(expect.objectContaining({ slug: 'demo', roundId: parseRoundId('r1')!, host: parseChildId(1)! }));
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('creates and switches to child 1 before its first acceptance_specs dispatch', async () => {
     const dispatched: string[] = [];
     const events = new ConductorEventEmitter();
@@ -97,6 +161,9 @@ describe('stacked BUILD region loop', () => {
     await git(['switch', '-q', 'feat/c1/demo']);
     const childTip = await commit('child 1 complete');
     await git(['update-ref', 'refs/conductor/demo/closed/c1', childTip, '']);
+    await sealSliceTopologyPositions(root, {
+      slug: 'demo', sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
+    });
     await git(['switch', '-q', 'feat/daemon-demo']);
     await git(['update-ref', 'refs/remotes/origin/main', leafBefore]);
     await git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);

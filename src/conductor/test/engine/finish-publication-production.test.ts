@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:5, task:24, task:rem-as-built-rem-as-built-r17-5, task:rem-operator-5-r2, task:rem-as-built-rem-asbuilt-7242ec34-1
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -9,6 +9,7 @@ import {
   createProductionReleaseReadinessObserver,
   publishAcceptedBuildReviewRiskToRetainedPr,
 } from '../../src/engine/finish-publication-production.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -19,12 +20,199 @@ import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
+import type { GithubOperationName, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
+import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const commandResult = { stdout: '' };
+
+function githubOperationFailedEvent(input: {
+  repository?: string;
+  number?: number;
+  operation?: GithubOperationName;
+  error: string;
+}) {
+  return {
+    type: 'github_operation_failed',
+    operation: input.operation ?? 'pull-request.edit',
+    target: {
+      kind: 'pull-request',
+      repository: input.repository ?? 'owner/repo',
+      number: input.number ?? 7,
+    },
+    error: input.error,
+  } as const;
+}
+
+describe('authorProse pass-window publish failures', () => {
+  const pullRequestUrl = 'https://github.com/owner/repo/pull/7';
+
+  async function withRoot(run: (root: string) => Promise<void>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-pass-window-'));
+    try {
+      await run(root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  async function runAuthorProsePass(
+    root: string,
+    dispatchAuthoring: () => Promise<{ success: boolean }>,
+    flushSessionEvents?: () => Promise<void>,
+  ): Promise<void> {
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication: async (input: {
+        effects: { authorProse?: (request: { pullRequestUrl: string }) => Promise<void> };
+      }) => {
+        await input.effects.authorProse!({ pullRequestUrl });
+        return { kind: 'complete' as const };
+      },
+    }));
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+        acquireInteractiveIntent: async () => 'keep',
+        observeReleaseReadiness: async () => 'present',
+        events,
+        flushSessionEvents,
+      });
+      await coordinator.advance({
+        state: { feature_desc: 'feature' } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => dispatchAuthoring(),
+        emit: async () => {},
+      });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  }
+
+  const events = new ConductorEventEmitter();
+
+  it('throws the matching same-PR edit failure emitted by this pass flush', async () => {
+    await withRoot(async (root) => {
+      let flushes = 0;
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          if (++flushes === 2) await events.emit(githubOperationFailedEvent({ error: 'token lacks pull-request write scope' }));
+        },
+      )).rejects.toMatchObject({
+        name: 'PublicationOperationFailedError',
+        operation: 'pull-request.edit',
+        error: 'token lacks pull-request write scope',
+      });
+    });
+  });
+
+  it('ignores a pre-pass failure and failures for another PR, repository, operation, or event kind', async () => {
+    await events.emit(githubOperationFailedEvent({ error: 'pre-pass failure' }));
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          await events.emit(githubOperationFailedEvent({ number: 8, error: 'other number' }));
+          await events.emit(githubOperationFailedEvent({ repository: 'other/repo', error: 'other repository' }));
+          await events.emit(githubOperationFailedEvent({ operation: 'pull-request.comment.create', error: 'other operation' }));
+          await events.emit({ type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS' });
+        },
+      )).resolves.toBeUndefined();
+    });
+  });
+
+  it('uses the last matching failure from the pass and removes its handler after rejection', async () => {
+    await withRoot(async (root) => {
+      let flushes = 0;
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        async () => {
+          if (++flushes !== 2) return;
+          await events.emit(githubOperationFailedEvent({ error: 'first failure' }));
+          await events.emit(githubOperationFailedEvent({ error: 'last failure' }));
+        },
+      )).rejects.toMatchObject({ error: 'last failure' });
+      await events.emit(githubOperationFailedEvent({ error: 'after rejection' }));
+    });
+  });
+
+  it('ignores an unre-emitted sibling-ledger failure that predates the authorProse pass', async () => {
+    await withRoot(async (root) => {
+      appendCloseoutEvent(root, {
+        ...githubOperationFailedEvent({ error: 'failure from an earlier pass' }),
+        ts: '2026-10-24T00:00:00.000Z',
+      });
+      await expect(readFile(join(root, '.pipeline', 'pipeline-events.jsonl'), 'utf8'))
+        .resolves.toContain('failure from an earlier pass');
+
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: true }),
+        // This is the pre-subscribe drain. It deliberately does not re-emit
+        // the existing sibling-ledger record onto the event bus.
+        async () => undefined,
+      )).resolves.toBeUndefined();
+    });
+  });
+
+  it('does not attribute an older matching failure flushed after a rejected pre-pass drain', async () => {
+    await withRoot(async (root) => {
+      let flushes = 0;
+      const flush = async () => {
+        if (++flushes === 1) throw new Error('tail unavailable');
+        await events.emit(githubOperationFailedEvent({ error: 'failure from an earlier pass' }));
+      };
+      await expect(runAuthorProsePass(
+        root,
+        async () => {
+          // The next successful flush replays a record that predates this
+          // pass. A failed pre-pass drain must have left no observer active.
+          await flush();
+          return { success: true };
+        },
+        flush,
+      )).resolves.toBeUndefined();
+      expect(flushes).toBe(2);
+    });
+  });
+
+  it('does not attribute a bus failure when the session tail cannot be flushed', async () => {
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(root, async () => {
+        await events.emit(githubOperationFailedEvent({ error: 'unflushed failure' }));
+        return { success: true };
+      })).resolves.toBeUndefined();
+    });
+  });
+
+  it('keeps the unsuccessful-dispatch error ahead of a matching event', async () => {
+    await withRoot(async (root) => {
+      await expect(runAuthorProsePass(
+        root,
+        async () => ({ success: false }),
+        async () => events.emit(githubOperationFailedEvent({ error: 'token scope missing' })),
+      )).rejects.toThrow('PR prose authoring dispatch did not complete successfully');
+    });
+  });
+});
 
 async function observeImplementationEvidence(input: {
   root: string;
@@ -1781,6 +1969,7 @@ describe('production FINISH publication composition', () => {
         architecture_review_as_built: 'done',
       } as ConductState;
       const prUrl = 'https://github.com/acme/widget/pull/1275';
+      const remoteTip = 'a'.repeat(40);
       let created = false;
       const pushes: string[][] = [];
       const git = vi.fn(async (args: string[]) => {
@@ -1788,10 +1977,10 @@ describe('production FINISH publication composition', () => {
         if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'remote') return { stdout: 'origin\n' };
         if (args[0] === 'rev-list') return { stdout: '31\n' };
-        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        if (args[0] === 'rev-parse') return { stdout: `${remoteTip}\n` };
         if (args[0] === 'push') {
           pushes.push([...args]);
-          if (!args.includes('--force-with-lease')) {
+          if (!args.some((arg) => arg.startsWith('--force-with-lease='))) {
             throw new Error(
               '! [rejected] feat/feature -> feat/feature (non-fast-forward)',
             );
@@ -1842,7 +2031,7 @@ describe('production FINISH publication composition', () => {
       // Exactly one push, lease-protected — never a bare force.
       expect(pushes).toEqual([]);
       expect(remoteGit).toHaveBeenCalledWith(
-        ['push', '-u', 'origin', 'HEAD:refs/heads/feat/feature', '--force-with-lease'],
+        ['push', 'origin', 'HEAD:refs/heads/feat/feature', `--force-with-lease=refs/heads/feat/feature:${remoteTip}`],
         expect.anything(),
       );
       await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(
@@ -2083,8 +2272,30 @@ describe('production FINISH publication composition', () => {
       })!;
       const accepted: BuildReviewDispositionRecord = {
         version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
-        summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+        summary: 'DIRECT-SUMMARY-MUST-NOT-PUBLISH', rationale: 'DIRECT-RATIONALE-MUST-NOT-PUBLISH',
+        operator: 'DIRECT-OPERATOR-MUST-NOT-PUBLISH', acceptedAt: '2026-08-14T12:00:00.000Z',
       };
+      const carried = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+        anchor: { rubric: 'testQuality', locus: { path: 'test/carried.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'carried' } },
+      })!;
+      const caseState = {
+        version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+        cases: [{
+          id: 'case-carried', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'CARRIED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+          sources: [
+            { sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
+            { sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T11:00:00.000Z' },
+          ],
+          effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
+          operatorAcceptance: { origins: [{ sourceId: `testQuality:${finding.id}`, lapId: 'lap-7' }] },
+        }, {
+          id: 'case-operator-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
+          effect: { id: 'effect-resolved', kind: 'action', status: 'failed', diagnostic: 'resolved by operator' },
+          operatorResolution: { operator: 'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', rationale: 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH', resolvedAt: '2026-10-22T12:00:00.000Z' },
+        }],
+      } satisfies RemediationCaseStoreState;
       const coverage = {
         kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
         identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
@@ -2117,6 +2328,7 @@ describe('production FINISH publication composition', () => {
           list: async () => ({ ok: true, records: Object.freeze([accepted]) }),
           listReducedCoverage: async () => ({ ok: true as const, records: [coverage] }),
         }),
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
       });
       const state = {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
@@ -2142,11 +2354,146 @@ describe('production FINISH publication composition', () => {
       expect(publishedBody.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
       expect(publishedBody).toContain('Current diagnostic: provider unavailable');
       expect(publishedBody).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
+      expect(publishedBody).toContain(`- Carried finding: \`${carried.id}\` — rubric: testQuality; carried from: \`testQuality:${finding.id}\` (lap lap-7)`);
+      expect(publishedBody).toContain(`- Operator-resolved case: \`case-operator-resolved\` — source ids: \`testQuality:${finding.id}\``);
       expect(publishedBody).not.toContain('**Rationale:**');
-      expect(publishedBody).not.toContain('reason');
+      for (const privateValue of [
+        accepted.summary, accepted.rationale, accepted.operator, accepted.acceptedAt,
+        // Every case-source timestamp remains private, including the carried source.
+        ...caseState.cases.flatMap(({ sources }) => sources.map(({ recordedAt }) => recordedAt)),
+        'CARRIED-RATIONALE-MUST-NOT-PUBLISH', 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH',
+        'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+        '2026-10-22T12:00:00.000Z',
+      ]) expect(publishedBody).not.toContain(privateValue);
       expect(publishedBody).toContain('Operator: james');
       expect(publishedBody).toContain('Decision time: 2026-08-20T00:00:00.000Z');
       expect(maskProjectOwnedRegions(publishedBody).match(/## Reduced build-review coverage/g)).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:17, task:rem-prd-audit-r17-2, task:rem-prd-audit-r17-3, task:rem-as-built-rem-as-built-r17-5
+  it('replaces a forged advisory section with threshold and merged adjudicated findings while excluding carried and operator-resolved links', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-advisory-findings-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1175';
+      const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
+      const thresholdFinding = {
+        concernKind: 'test-insensitive', summary: 'The threshold advisory is still visible to reviewers.', severity: 'minor' as const,
+        evidenceLocations: ['test/threshold.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/threshold.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'threshold test' } },
+      };
+      const adjudicatedFinding = {
+        concernKind: 'test-insensitive', summary: 'The adjudicated advisory remains visible without its private rationale.', severity: 'major' as const,
+        evidenceLocations: ['test/adjudicated.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/adjudicated.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'adjudicated test' } },
+      };
+      const carriedFinding = {
+        concernKind: 'test-insensitive', summary: 'The carried source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        evidenceLocations: ['test/carried.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/carried.test.ts', contentHash: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', display: 'carried test' } },
+      };
+      const operatorResolvedFinding = {
+        concernKind: 'test-insensitive', summary: 'The operator-resolved source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        evidenceLocations: ['test/operator-resolved.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/operator-resolved.test.ts', contentHash: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', display: 'operator-resolved test' } },
+      };
+      const thresholdId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...thresholdFinding })!.id;
+      const adjudicatedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...adjudicatedFinding })!.id;
+      const carriedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...carriedFinding })!.id;
+      const operatorResolvedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...operatorResolvedFinding })!.id;
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+        results: {
+          testQuality: {
+            kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+            contractVersion: 'v4', findings: [thresholdFinding, adjudicatedFinding, carriedFinding, operatorResolvedFinding], verdict: 'FAIL',
+          },
+        },
+      });
+      await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(aggregate));
+      const caseState = {
+        version: 'v3', feature, prdWideningCases: [], outbox: [],
+        suppressions: [{
+          kind: 'severity' as const, findingId: thresholdId, rubric: 'testQuality', summary: thresholdFinding.summary,
+          severity: 'minor' as const, threshold: 'major' as const, lastSeenLap: 'lap-advisories',
+        }],
+        cases: [{
+          id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${adjudicatedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }, {
+          id: 'case-carried', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${carriedId}`, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }, {
+          id: 'case-operator-resolved', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${operatorResolvedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+          operatorResolution: { operator: 'operator', rationale: 'OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL', resolvedAt: '2026-10-23T00:00:00.000Z' },
+        }],
+      } satisfies RemediationCaseStoreState;
+      let body = [
+        'Reader-facing summary.',
+        '',
+        '## Advisory build-review findings',
+        '',
+        'FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH',
+      ].join('\n');
+      const edits: string[][] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        operations: guardedOperations(gh),
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => undefined,
+        resolveFeatureIdentity: async () => feature,
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true as const, records: [] }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+        }),
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+      const dispatchJudgment = async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never;
+      for (let index = 0; index < 6 && edits.length === 0; index++) {
+        await coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment, emit: async () => {} });
+      }
+
+      expect(edits).toHaveLength(1);
+      const publishedBody = edits[0]![edits[0]!.indexOf('--body') + 1]!;
+      expect(publishedBody).toContain('## Advisory build-review findings');
+      expect(publishedBody.match(/## Advisory build-review findings/g)).toHaveLength(1);
+      expect(publishedBody).toContain(`- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`);
+      expect(publishedBody).toContain(`- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`);
+      expect(publishedBody).not.toContain(`- Finding: \`${carriedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${carriedFinding.summary}`);
+      expect(publishedBody).not.toContain(`- Finding: \`${operatorResolvedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${operatorResolvedFinding.summary}`);
+      expect(publishedBody).not.toContain('ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

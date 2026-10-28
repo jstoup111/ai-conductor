@@ -94,7 +94,7 @@ describe('custom build-review compatibility routing', () => {
 
     const config = {
       llm_provider: 'codex', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: 'claude' } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: 'claude' }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'codex' } },
       },
     } as HarnessConfig;
@@ -104,7 +104,7 @@ describe('custom build-review compatibility routing', () => {
       invoke: vi.fn(async (options: { prompt: string; readOnlyReview?: boolean }) => {
         observationOrder.push('invoke');
         invocations.push(options);
-        const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
+        const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v2', findings: [] };
         return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
       }),
       supportsSessionResume: false,
@@ -143,8 +143,8 @@ describe('custom build-review compatibility routing', () => {
       testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
       sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
     } as never;
-    const result = await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(
-      inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } },
+    const result = await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', planPath: undefined, executionContext: undefined, capabilities: unknown) => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } },
     );
 
     await expect((await import('node:fs/promises')).readFile(probeLog, 'utf8')).resolves.toBe('--help\n');
@@ -164,13 +164,13 @@ describe('custom build-review compatibility routing', () => {
     await chmod(join(fixtureDir, 'claude'), 0o755);
     vi.stubEnv('PATH', `${fixtureDir}:${process.env.PATH}`);
 
-    const config = { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: 'claude' } }, custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'codex' } } } } as HarnessConfig;
+    const config = { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: 'claude' }, implementationQuality: { enabled: false } }, custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'codex' } } } } as HarnessConfig;
     const events = new ConductorEventEmitter();
     const failures: unknown[] = [];
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
-        const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+        const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
         return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
       }),
       supportsSessionResume: false,
@@ -189,13 +189,13 @@ describe('custom build-review compatibility routing', () => {
     });
     const inputs = { diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true, testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } } as never;
     const result = await (runner as unknown as {
-      runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{
+      runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', planPath: undefined, executionContext: undefined, capabilities: unknown) => Promise<{
         success: boolean;
         output: string;
         refusal?: { kind: string; reason: string };
         buildReviewReadOnlyReviewUnavailable?: true;
       }>;
-    }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, {
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, undefined, {
       codex: { provider: 'codex', platform: 'linux', status: 'available' },
     });
 
@@ -217,7 +217,7 @@ describe('custom build-review compatibility routing', () => {
     roots.push(root);
     const config = {
       llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review the frozen candidate.', source: 'project', llm_provider: 'claude' } },
       },
     } as HarnessConfig;
@@ -226,7 +226,7 @@ describe('custom build-review compatibility routing', () => {
       const prompt = typeof options.input === 'string' ? options.input : '';
       launches.push({ executable, args: [...args], cwd: options.cwd, prompt });
       const result = prompt.includes('portable-policy')
-        ? { kind: 'custom-findings', version: 'v1', findings: [] }
+        ? { kind: 'custom-findings', version: 'v2', findings: [] }
         : { findings: [] };
       return Promise.resolve({
         stdout: JSON.stringify({ type: 'result', result: JSON.stringify(result), structured_output: result }), stderr: '', exitCode: 0, failed: false,
@@ -277,7 +277,7 @@ describe('custom build-review compatibility routing', () => {
     roots.push(root);
     const config = {
       llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project',
@@ -286,7 +286,7 @@ describe('custom build-review compatibility routing', () => {
         },
       },
     } as HarnessConfig;
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
     const provider: LLMProvider = {
       invoke, supportsSessionResume: false,
@@ -316,8 +316,8 @@ describe('custom build-review compatibility routing', () => {
       testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
       sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
     } as never;
-    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
-      inputs, resolveBuildReviewConfig(config), 'M', undefined, {
+    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', planPath: undefined, executionContext: undefined, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, undefined, {
         codex: { provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox helper is unavailable' },
         claude: { provider: 'claude', platform: 'linux', status: 'available' },
       },
@@ -334,12 +334,12 @@ describe('custom build-review compatibility routing', () => {
     roots.push(root);
     const config = {
       llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: ['codex', 'claude'] } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: ['codex', 'claude'] }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'claude' } },
       },
     } as HarnessConfig;
     const invoke = vi.fn(async (options: { prompt: string }) => {
-      const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     });
     const provider: LLMProvider = {
@@ -381,8 +381,8 @@ describe('custom build-review compatibility routing', () => {
       testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
       sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
     } as never;
-    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
-      inputs, resolveBuildReviewConfig(config), 'M', undefined, {
+    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', planPath: undefined, executionContext: undefined, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, undefined, {
         codex: { provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox helper is unavailable' },
         claude: { provider: 'claude', platform: 'linux', status: 'available' },
       },

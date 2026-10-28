@@ -16,6 +16,7 @@ import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { Conductor } from '../test-conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import {
@@ -107,7 +108,7 @@ const FRONT_DONE: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
-  coverage_binding: 'done',
+  plan_review: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -212,6 +213,25 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     } else if (step === 'coherence_check') {
       await mkdir(join(dir, '.docs/coherence'), { recursive: true });
       await writeFile(join(dir, '.docs/coherence/p.md'), '| Row |\n|---|\n| x |\n');
+    } else if (step === 'plan_review') {
+      // A kickback re-opens plan_review with the rest of DECIDE; record a
+      // clean review round so its completion predicate (keyed on the feature
+      // identity) is satisfied.
+      const res = await readState(statePath);
+      const stem = (res.ok ? res.value.feature_desc : undefined) ?? 'p';
+      await mkdir(join(dir, '.docs/plan-review'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plan-review/${stem}.md`),
+        renderPlanReviewArtifact({
+          round: 1,
+          authoringHost: 'claude',
+          reviewerProvider: 'codex',
+          independence: 'cross-provider',
+          findings: [],
+          dispositions: [],
+          reviewedDigest: { digest: 'sha256:fixture', planTaskDigests: {}, storyDigests: {}, adrDecisionDigests: {}, artifactDigests: {} },
+        }),
+      );
     }
     return { success: true };
   }

@@ -96,18 +96,20 @@ function createFixtureAgentFake(
         lapId: string;
         snapshotDigest: string;
       };
+      const judgedPass = {
+        kind: 'judged',
+        rubric: projection.rubric,
+        lapId: projection.lapId,
+        snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3',
+        findings: [],
+        verdict: 'PASS',
+      };
       return {
         success: true,
-        output: JSON.stringify({
-          kind: 'judged',
-          rubric: projection.rubric,
-          lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v3',
-          findings: [],
-          verdict: 'PASS',
-        }),
+        output: JSON.stringify(judgedPass),
         exitCode: 0,
+        finalStructuredResult: judgedPass,
       };
     }
 
@@ -267,6 +269,7 @@ describe('daemon E2E fixture', () => {
     }
   });
 
+  // Covers: task:14
   it('claims the fixture and dispatches its build through the scripted provider', async () => {
     const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-dispatch-'));
     const slug = 'daemon-e2e-fixture';
@@ -360,12 +363,39 @@ describe('daemon E2E fixture', () => {
           sessionStore: new ProviderSessionStore(),
           // The fixture supplies current aggregate evidence, so it can exercise
           // the sole supported build-review branch without running a command.
-          config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: true } } } },
+          config: {
+            llm_provider: 'codex',
+            build_review: {
+              maxParallel: 1,
+              rubrics: { testQuality: { enabled: true }, security: { enabled: false } },
+            },
+          },
           buildReviewInputOptions: {
             inspectTestSuite: async () => ({
               status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
             } as never),
           },
+          // The fixture owns every external review boundary. The default-on
+          // implementation-quality reviewer resolves its policy from the
+          // candidate catalog, so do not let this E2E path depend on a Codex
+          // installation or the operator's catalog.
+          buildReviewPolicyCatalog: async ({ skill }) => [{
+            semanticName: skill,
+            source: 'project' as const,
+            installationOrigin: '/fixture/project',
+            canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`,
+            packageRoot: `/fixture/project/${skill}`,
+            declaredDependencies: [],
+            availability: 'available' as const,
+          }],
+          buildReviewPolicyCapture: async (policy) => ({
+            policy,
+            materialPath: '/runtime/policy',
+            definitionPath: '/runtime/policy/SKILL.md',
+            manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Fixture review policy\n') }],
+            metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+            digest: `sha256-v1:${'a'.repeat(64)}`,
+          }),
           buildReviewEffectiveResolver,
         },
       );
@@ -396,7 +426,8 @@ describe('daemon E2E fixture', () => {
               daemon: true,
               verifyArtifacts: false,
               config: {
-                build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+                llm_provider: 'codex',
+                build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false } } },
               },
               buildReviewEffectiveResolver,
               fullSuiteVerifier: {
@@ -447,7 +478,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 4,
+        providerCalls: 5,
         build: 'done',
         buildReview: 'done',
         prdAudit: 'done',

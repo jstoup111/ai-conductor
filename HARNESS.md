@@ -80,7 +80,7 @@ behavior that violates a story remains a blocking `FAIL` and follows the normal 
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
-| DECIDE | explore (track) → complexity → prd (product track only) → architecture-diagram → architecture-review → stories → conflict-check → plan → coherence-check (M/L only, skipped for S) | .docs/track/, .docs/specs/, .docs/complexity/, .docs/architecture/, .docs/decisions/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/coherence/ |
+| DECIDE | explore (track) → complexity → prd (product track only) → architecture-diagram → architecture-review → stories → conflict-check → plan → coherence-check → plan-review (M/L only, skipped for S) | .docs/track/, .docs/specs/, .docs/complexity/, .docs/architecture/, .docs/decisions/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/coherence/ |
 | BUILD | writing-system-tests → tdd/pipeline, debugging, code-review → engine-native configured-verifier gate | Acceptance specs, code, unit tests, aggregate verifier evidence, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
 | SHIP | manual-test, prd-audit, architecture-review --as-built, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/shipped/ |
@@ -135,14 +135,21 @@ narrow or broaden the requested outcome.
 ### DECIDE Artifact Amendment Ownership
 
 When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE corrects that artifact
-in place on the spec branch before the first BUILD entry. Story artifacts under `.docs/stories/` are the
+in place on the spec branch before the first BUILD entry. An accepted DECIDE artifact absent from the base
+branch — including one this spec branch already committed or landed — is a draft: revise it in place,
+remove superseded text so it states only the current approved scope, and add no amendment note or revision
+log; git history and the spec PR carry provenance. Story artifacts under `.docs/stories/` are the
 exception: replace superseded assertions in place and leave no amendment record. For all other accepted
-DECIDE artifacts, add the correction beside the original assertion in this additive form; never rewrite
-or delete the original text and never create a separate amendment record:
+DECIDE artifacts — non-story artifacts already on the base branch — add the correction beside the original assertion in this
+additive form; never rewrite or delete the original text and never create a separate amendment record:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
+
+The in-place draft rule applies only to artifacts absent from the base branch. At land,
+`draft-amendment-note` refuses a dated amendment note in a draft so the correction is folded into the
+artifact's current text.
 
 BUILD never receives that mutation as a task. A plan task must not name another feature's artifact
 under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
@@ -230,7 +237,7 @@ through `ai-conductor scoped-run <selectors...>`. The agent derives the selector
 hand-assemble or narrate a test command. Debugging and conduct progression use the same policy.
 Pipeline batch boundaries and parallel joins retain pipeline's named `BATCH_AFFECTED_TESTS`
 union and supplied results without routine reruns. A concrete interaction risk or changed behavior
-may justify a minimal targeted check through the same interface. Evaluators inspect the supplied results
+may justify a minimal targeted check through the same interface. `build_review` and `/code-review` reviewers inspect the supplied results
 without routine reruns; they run targeted tests only to reproduce a specific suspected defect.
 A known scoped failure blocks its current
 BUILD activity; it is never deferred to the aggregate gate.
@@ -264,7 +271,7 @@ Independent CI remains a separate authority.
   useful to them. No play-by-play of internal steps.
 - Between TDD phases, output ONLY the status line (PASS/FAIL + reason). No commentary.
 
-**Rules for subagents (generator, domain-reviewer, evaluator):**
+**Rules for subagents (generator, domain-reviewer):**
 - Follow your output format exactly. No preamble, no sign-off.
 - Test output: include ONLY the failure message and assertion diff, not the full test run.
   Truncate after the first relevant failure unless multiple unrelated failures exist.

@@ -1,4 +1,4 @@
-// Covers: task:1, task:10
+// Covers: task:1, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
@@ -9,12 +9,14 @@ import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
 import {
   DAEMON_SESSION_MARKER,
+  SESSION_SANCTIONED_SUBCOMMANDS,
   evaluateDaemonSessionCommandPolicy,
   guardDaemonSessionInvocation,
   withDaemonSessionMarker,
 } from '../../src/execution/daemon-session.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
+import { dispatchCliEntry } from '../../src/index.js';
 
 // Daemon-session boundary enforcement. Engine-dispatched maker sessions have
 // attempted to run ai-conductor themselves (including daemon park/unpark/
@@ -30,21 +32,33 @@ const markedEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
 });
 
 describe('guardDaemonSessionInvocation', () => {
+  it('exports exactly the sanctioned worker subcommands and permits each one', () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).toEqual([
+      'scoped-run', 'task', 'overlap-scan', 'plan-protected-targets', 'manual-test-record',
+      'derive-feedback', 'scope-check', 'task-membership-check', 'round-stamp', 'github-operation',
+    ]);
+    for (const subcommand of SESSION_SANCTIONED_SUBCOMMANDS) {
+      expect(guardDaemonSessionInvocation(argvFor(subcommand), markedEnv())).toEqual({ allowed: true });
+    }
+  });
+
   it.each([
     ['task', true],
     ['scoped-run', true],
     ['overlap-scan', true],
     ['plan-protected-targets', true],
     ['manual-test-record', true],
-    ['closeout-event', true],
+    ['closeout-event', false],
     ['derive-feedback', true],
     ['scope-check', true],
     ['task-membership-check', true],
+    ['round-stamp', true],
     ['github-operation', true],
     ['daemon', false],
     ['config', false],
     ['test-suite', false],
     ['build-review', false],
+    ['done-when', false],
     ['finish-record', false],
   ] as const)(
     'shares the production command policy with audit callers for %s',
@@ -108,7 +122,6 @@ describe('guardDaemonSessionInvocation', () => {
       argvFor('overlap-scan', '--files', 'a,b'),
       argvFor('plan-protected-targets', '.docs/plans/x.md'),
       argvFor('manual-test-record', '--skip', '--reason', 'r'),
-      argvFor('closeout-event', 'evaluator', '1', '2'),
       argvFor('derive-feedback', '--sha', 'abc'),
       // git-hook-assets.ts — commit-msg records containment from the same
       // daemon-managed maker session that authored the commit.
@@ -116,6 +129,8 @@ describe('guardDaemonSessionInvocation', () => {
       // The same hook rejects cross-child task attribution before allowing
       // the commit to complete.
       argvFor('task-membership-check', '/worktree/.git/COMMIT_EDITMSG'),
+      // prepare-commit-msg stamps the routed round onto the session's own commit.
+      argvFor('round-stamp', '/worktree/.git/COMMIT_EDITMSG'),
       // FINISH publication prompts submit PR prose through the guarded operation.
       argvFor('github-operation', '--request-file', '/tmp/pr-prose-request.json'),
     ]) {
@@ -136,6 +151,15 @@ describe('guardDaemonSessionInvocation', () => {
       expect(guardDaemonSessionInvocation(argv, markedEnv({ CONDUCT_CONFIG: 'daemon.yml' })))
         .toMatchObject({ allowed: false });
     }
+  });
+
+  it('refuses done-when at CLI entry with its bounded operator-only identity', async () => {
+    const dispatch = vi.fn(async () => 0);
+    await expect(dispatchCliEntry({
+      argv: argvFor('done-when', 'accept', '--feature', 'slug', '--task', '24', '--check', '3', '--reason', 'manual review'),
+      environment: markedEnv(), dispatch, diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('permits the generated commit-msg hook to invoke scope-check inside a daemon session', () => {
@@ -250,6 +274,7 @@ function piCapture() {
       isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
       isDirectory: () => false,
     }),
+    access: async () => {},
     env: {},
     homeDir: () => '/home/agent',
     cwd: () => '/workspace',

@@ -168,10 +168,17 @@ Operator decisions (2026-10-10):
      dropped a child's own re-applied commit in testing.
 
 3. **Replay is off the worktree, and acceptance is a path-ownership check.**
+
+   > **Amended 2026-10-11 by #3197:** Message preservation covers the subject and body. Replay may
+   > normalize trailing whitespace and append the daemon co-author trailer when it is absent; the
+   > operator does not treat trailer attribution on replayed commits as preserved content.
+
    - **Ordinary commits.** For each ordinary commit c in a child's first-parent range, the new tree
      is `git merge-tree --write-tree --merge-base c^1 <acc> c`. The commit is made with
      `commit-tree`.
-     - Kept from c: author name, email and date, and the message.
+     - Kept from c: author name, email and date, and the message. The message's subject and body
+       are preserved. Replay may normalize trailing whitespace and append the daemon co-author
+       trailer when it is absent; trailer attribution is not part of the preserved content.
      - Committer identity and date are fixed per operation and recorded in the journal.
      - Commits are signed with `-S` when the repository's `commit.gpgSign` is set.
    - **Empty commits.**
@@ -208,6 +215,10 @@ Operator decisions (2026-10-10):
        benign set-then-set histories.
    - **The next child** replays onto the actual new tip of the child below it.
    - **Not used:** `git replay` and `rebase --update-refs`.
+
+> **Amended 2026-10-12 by #2944:** Inherited rem-* plan blocks are excluded from a replayed child's
+> own contribution when its path ownership is checked (`adr-2026-10-12-routed-whole-feature-repair`
+> decision 9).
 
 4. **The restack journal is durable, ref-backed, and moves in the same transaction as the refs.**
    - **Storage.** The journal is a blob behind `refs/conductor/<slug>/restack/journal`.
@@ -306,6 +317,11 @@ Operator decisions (2026-10-10):
      carries no telemetry, so it is not a parallel event channel (event-spine skill, exception C).
      Every state transition is also emitted on the spine (decision 12).
 
+> **Amended 2026-10-12 by #2944:** A routed exit's journal also carries the old and new route-record
+> values, the marker's old value and the queue's old value. The `applied` transaction writes them,
+> in both the executor path and the recovery path. Rollback leaves them untouched
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 13).
+
 5. **One atomic move, then a worktree sync that never loses local work.**
    - **Checks at `ready`, before any ref moves.** The planner refuses with nothing moved, never
      autostashing, in any of these cases:
@@ -371,6 +387,10 @@ Operator decisions (2026-10-10):
      the conflicting commit and the paths. Both sides stay recoverable: the refs never moved, and the
      staging refs are kept until the halt clears.
 
+> **Amended 2026-10-12 by #2944:** Before the resolver, a deterministic merge unions appended rem-*
+> blocks in the plan by id. The same id with a different body halts
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
      1. journal recovery;
@@ -423,6 +443,19 @@ Operator decisions (2026-10-10):
    - **The re-kick sentinel.** The one-shot `REKICK` sentinel is consumed before a restack runs, so
      crash recovery depends only on the journal.
 
+> **Amended 2026-10-23 by #3212:** With routing on, a follow-on base refresh is deferred while the
+> re-validation queue holds an entry or any route record is not `closed`. This applies both in the
+> preflight and in the `applied` with a follow-on recovery row: the follow-on is suppressed,
+> `restack_refused` with reason `deferred-base-refresh` is emitted, and the repair journal becomes
+> terminal. The request survives in `REKICK` until the queue drains: the preflight defers before
+> consuming it, and recovery, which runs after it was consumed, re-arms it before deleting the
+> journal (`adr-2026-10-12-routed-whole-feature-repair` decisions 7 and 14).
+
+> **Amended 2026-10-12 by #2944:** After both journal recoveries and before the cursor, the
+> preflight reconciles any open routing round. It skips the automatic repair while a host is
+> `admitted` or `repairing`. It runs the routed exit restack when a host is `built`
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 7 and 13).
+
 8. **Verdicts: the active child and the whole feature go through existing transitions. Closed
    children are not re-opened.**
    - **The active child.** If it moved, it gets today's transition with its own tuple:
@@ -469,6 +502,11 @@ Operator decisions (2026-10-10):
        `leaf-moved` ref. If the leaf already contains the last closure tip's rewrite-map image, the
        cursor treats the move as done and writes `leaf-moved`.
 
+> **Amended 2026-10-12 by #2944:** Closed children's invalidation sets are carried in the journal.
+> They are written as a durable re-validation queue in the `applied` transaction, and a missing
+> verdict counts as invalidated. #2944's re-validation consumes that queue
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 14).
+
 9. **Triggers. Restacks happen only where rebases happen today, plus the automatic repair. A
    single-branch rebase is never the fallback.**
    - **FINISH `rebase` step (stacked):** it runs the stack preflight first (decision 7), then a
@@ -508,6 +546,19 @@ Operator decisions (2026-10-10):
      - For a stacked feature, autoresolve never replays. It escalates to a human as an unresolved
        conflict does, with `restack_refused` reason `published-stack`, naming #2945.
      - #2945 owns refreshing a published stack.
+
+> **Amended 2026-10-12 by #2944:** A routed exit is the third `feature-repair` producer. It
+> originates at the host, plus closed children with unstamped operator commits as co-origins. The
+> repaired child is now re-validated in its own region before exit
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 13).
+
+> **Amended 2026-10-12 by #2944:** The closed-child `rewind` refusal now names #3203, which owns
+> manual landing and closed-child rewind. While a routing marker exists, the automatic repair runs for
+> no closed child. While any route record is not `closed` or the re-validation queue is non-empty, a
+> due base refresh is deferred with `restack_refused` reason `deferred-base-refresh`
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+
+> **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that carries the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
@@ -560,6 +611,11 @@ Operator decisions (2026-10-10):
       the feature-lifetime `build_review` accounting that
       `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence` rejected.
 
+> **Amended 2026-10-12 by #2944:** Each origin of a routed exit, including co-origins, is charged
+> one cascade. A `feature-repair` restack still never refunds. A routed pass's `build_review`
+> allowance is the separate `routedRepairCredit` (`adr-2026-10-12-routed-whole-feature-repair`
+> decisions 12 and 13).
+
 11. **Force pushes lease against the remote tip the engine expects.**
     - **Recording.** `executeRemoteGit` is the single chokepoint for engine pushes. On every
       successful push to a feature branch, plain or forced, from the branch's creation onward, it
@@ -610,6 +666,10 @@ Operator decisions (2026-10-10):
     - **N=1 change.** This deliberately changes N=1 push behaviour: a force push is now refused
       only where it would overwrite remote work the engine never saw.
 
+> **Amended 2026-10-12 by #2944:** The cleanup list also deletes, by explicit name, each
+> `routes/<roundId>`, each `rejected/<roundId>/<n>` pin, `repairing`, `revalidate` and each `red/c<k>`
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 6).
+
 12. **Events ride the existing spine and carry `child`.**
     - **New `ConductorEvent` variants,** declared `persist: true` in `event-sinks.ts`:
       - `restack_planned` {opId, cause, children};
@@ -622,6 +682,14 @@ Operator decisions (2026-10-10):
         `verification-failed`, `replay-mismatch`, `range-not-ancestor`,
         `closed-child-rewritten`, `flatten_refused`, `restack-outstanding`,
         `published-stack` or `deferred-base-refresh`.
+
+        > **Amended 2026-10-27 by #3446:** The reason set also includes `journal-live-owner`. It
+        > is emitted when the stack preflight stops because journal recovery returns `live-owner`
+        > on either recovery pass, with `detail` naming the owner as
+        > `restack journal owned by live process <pid> on <host>`, or `journal owner unreadable`
+        > when no owner was read. The preflight then writes a `mechanical` HALT. It stays distinct
+        > from `restack-outstanding`, which a competing planner receives, because only this reason
+        > ends the run on a live owner (operator decision 2026-10-26).
       - `restack_recovered` {opId, fromState}, emitted only when recovery drives a journal out of
         `planned`, `ready`, `moved`, `rolling-back` or `synced`. Deleting a leftover `applied` or
         `aborted` journal emits nothing;

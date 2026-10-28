@@ -38,12 +38,39 @@ import {
   executeGithubOperation,
   type GithubOperationEventEmitter,
   type GithubOperationRunner,
+  type GithubOperationTarget,
 } from './github-operations.js';
 import { executeRemoteGit } from './remote-git-operations.js';
+import {
+  forcePushWithExpectedLease,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { runTrackerUrlRead } from './tracker-client.js';
+import { daemonOwnedSlugOfBranch } from './feature-branch-identity.js';
+import { haltStackTipDiverged } from './stack-publication.js';
+import type { PublicationMember } from './stack-publication-record.js';
+
+function leaseSlug(branch: string): string {
+  // All production callers use daemon feature branches. Retain a stable,
+  // ref-safe fallback for historical/custom branch names rather than letting a
+  // post-rebase refresh bypass the lease decision entirely.
+  const normalized = branch.replace(/^refs\/heads\//, '');
+  return daemonOwnedSlugOfBranch(normalized) ?? normalized.replaceAll('/', '-');
+}
+
+function leaseGit(git: GitRunner, cwd: string): PushLeaseGitRunner {
+  return async (args) => {
+    try {
+      const result = await git([...args], { cwd });
+      return { stdout: result.stdout, exitCode: 0 };
+    } catch (error) {
+      return { stdout: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
+  };
+}
 
 /**
  * Human-readable note stamped into the placeholder body so a reader who lands
@@ -212,6 +239,31 @@ export function bindMutationToPullRequest(
   return { ...mutation, provenance: { ...mutation.provenance, target } };
 }
 
+/** Rebind feature provenance to the exact resource a single write will use. */
+export function bindMutationToTarget(
+  mutation: GithubMutationExecutionContext,
+  target: GithubOperationTarget,
+): GithubMutationExecutionContext | undefined {
+  if (target.repository.toLowerCase() !== mutation.provenance.repository.toLowerCase()) return undefined;
+  return { ...mutation, provenance: { ...mutation.provenance, target } };
+}
+
+/** Build an independently authorized runner for one exact GitHub target. */
+export function createTargetBoundGithubOperationRunner(input: {
+  mutation: GithubMutationExecutionContext;
+  target: GithubOperationTarget;
+  gh: GhRunner;
+  cwd: string;
+  events?: GithubOperationEventEmitter;
+}): GithubOperationRunner | undefined {
+  const mutation = bindMutationToTarget(input.mutation, input.target);
+  return mutation === undefined ? undefined : createGuardedGithubOperationRunner(input.gh, {
+    cwd: input.cwd,
+    mutation,
+    events: input.events,
+  });
+}
+
 /**
  * Construct production-only authorization context from committed feature
  * evidence. The caller retains a typed absence when either remote identity or
@@ -288,6 +340,8 @@ export type OpenShipDraftPrResult =
    * would destroy that work.
    */
   | { outcome: 'lease-rejected'; reason: string }
+  /** A published stacked member moved; FINISH has recorded the terminal halt. */
+  | { outcome: 'stack-tip-diverged'; reason: string }
   /** A draft PR now exists for the branch (freshly created or already open). */
   | { outcome: 'published'; prUrl: string }
   /** gh could not publish — advisory failure, the build continues. */
@@ -393,16 +447,23 @@ export async function openShipDraftPr(
     // `pushMode: 'lease'`) publishes with a lease — and a lease, never a bare
     // force, so an actually-moved remote is still refused.
     const lease = deps.pushMode === 'lease';
-    const pushArgs = lease
-      ? ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`, '--force-with-lease']
-      : ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`];
-    const pushed = await (deps.remoteGit ?? executeRemoteGit)(pushArgs, {
+    const runRemote = (args: readonly string[]) => (deps.remoteGit ?? executeRemoteGit)(args, {
       cwd,
       config: (args) => git(args, { cwd }),
       runRemoteGit: git,
       mutation: deps.remoteMutation,
       events: deps.events,
     });
+    const pushed = lease
+      ? await forcePushWithExpectedLease({
+        cwd,
+        slug: leaseSlug(branch),
+        branch,
+        git: leaseGit(git, cwd),
+        remoteGit: runRemote,
+        events: deps.events === undefined ? undefined : { emit: (event) => deps.events!.emit(event as never) },
+      })
+      : await runRemote(['push', '-u', 'origin', `HEAD:refs/heads/${branch}`]);
     if (pushed.kind !== 'executed') {
       const reason = pushed.kind === 'failed'
         ? pushed.error
@@ -415,6 +476,14 @@ export async function openShipDraftPr(
             `no draft PR opened and nothing was overwritten: ${reason}`,
         );
         return { outcome: 'lease-rejected', reason };
+      }
+      if (pushed.kind === 'refused' && pushed.reason === 'stack-tip-mismatch') {
+        const members: readonly PublicationMember[] = 'members' in pushed && Array.isArray(pushed.members)
+          ? pushed.members as readonly PublicationMember[]
+          : [];
+        await haltStackTipDiverged(cwd, members, deps.events as Parameters<typeof haltStackTipDiverged>[2],
+          'published stack tip diverged before draft publication');
+        return { outcome: 'stack-tip-diverged', reason };
       }
       log(
         `[ship-draft-pr] push of ${branch} failed — no draft PR opened (advisory, build continues): ${reason}`,

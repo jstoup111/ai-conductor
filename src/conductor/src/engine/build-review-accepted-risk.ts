@@ -2,20 +2,24 @@ import {
   rehydrateBuildReviewAcceptedRiskFinding,
   type BuildReviewDispositionRecord,
 } from './build-review-dispositions.js';
+import type { RemediationCaseRecord, RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
 import {
   HALT_PR_BANNER_SENTINEL,
   NEEDS_REMEDIATION_BODY_MARKER,
   PR_BODY_FLOOR_MARKER,
 } from './pr-body-engine-markers.js';
+import type { BuildReviewSeverity } from './build-review-domain.js';
 
 export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk:start -->';
 export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
 export const REDUCED_BUILD_REVIEW_COVERAGE_HEADING = '## Reduced build-review coverage';
 export const BUILD_REVIEW_ACCEPTED_RISK_HEADING = '## Accepted build-review risk';
+export const BUILD_REVIEW_ADVISORY_HEADING = '## Advisory build-review findings';
 export const ENGINE_OWNED_PR_BODY_TEXTS = [
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_HEADING,
+  BUILD_REVIEW_ADVISORY_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_START,
   BUILD_REVIEW_ACCEPTED_RISK_END,
   PR_BODY_FLOOR_MARKER,
@@ -33,6 +37,15 @@ export type BuildReviewAcceptedRiskUpsertResult =
   | { readonly ok: true; readonly body: string; readonly changed: boolean }
   | { readonly ok: false; readonly message: string };
 
+/** The public PR-body projection of a non-blocking build-review finding. */
+export interface BuildReviewAdvisoryFinding {
+  readonly id: string;
+  readonly rubric: string;
+  readonly severity: BuildReviewSeverity;
+  readonly origin: 'threshold' | 'adjudicated';
+  readonly reviewerSummary: string;
+}
+
 function validRecord(value: BuildReviewDispositionRecord): boolean {
   const identity = rehydrateBuildReviewAcceptedRiskFinding(value.finding.canonicalPayload);
   return identity !== undefined && identity.id === value.finding.id && identity.canonicalJson === value.finding.canonicalJson &&
@@ -48,11 +61,53 @@ function validRecord(value: BuildReviewDispositionRecord): boolean {
  * operator identity, and timestamps stay in the local disposition store and MUST NOT be
  * rendered here.
  */
-export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskRenderResult {
+function carriedRiskRows(cases: readonly RemediationCaseRecord[]): readonly string[] {
+  return cases.flatMap((caseRecord) => caseRecord.sources
+    .filter((source) => source.outcome === 'carried')
+    .flatMap((source) => (caseRecord.operatorAcceptance?.origins ?? []).map((origin) => {
+      const separator = source.sourceId.indexOf(':');
+      const rubric = separator < 0 ? 'unknown' : source.sourceId.slice(0, separator);
+      const findingId = separator < 0 ? source.sourceId : source.sourceId.slice(separator + 1);
+      return `- Carried finding: \`${findingId}\` — rubric: ${rubric}; carried from: \`${origin.sourceId}\` (lap ${origin.lapId})`;
+    })));
+}
+
+function operatorResolvedRiskRows(cases: readonly RemediationCaseRecord[]): readonly string[] {
+  return cases.flatMap((caseRecord) => caseRecord.operatorResolution === undefined
+    ? []
+    : [`- Operator-resolved case: \`${caseRecord.id}\` — source ids: ${caseRecord.sources.map((source) => `\`${source.sourceId}\``).join(', ') || 'none'}`]);
+}
+
+function caseRiskRows(caseRead: RemediationCaseStoreReadResult | undefined): readonly string[] {
+  if (caseRead === undefined) return [];
+  if (!caseRead.ok) return ['- Remediation case store: unreadable.'];
+  return [...carriedRiskRows(caseRead.state.cases), ...operatorResolvedRiskRows(caseRead.state.cases)];
+}
+
+/** Renders only publication-safe reviewer evidence; adjudicator rationale stays local. */
+export function renderBuildReviewAdvisoryRegion(
+  findings: readonly BuildReviewAdvisoryFinding[],
+): readonly string[] {
+  if (findings.length === 0) return [];
+  return [
+    BUILD_REVIEW_ADVISORY_HEADING,
+    '',
+    ...[...findings]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((finding) => `- Finding: \`${finding.id}\` — rubric: ${finding.rubric}; severity: ${finding.severity}; origin: ${finding.origin}; reviewer summary: ${finding.reviewerSummary}`),
+  ];
+}
+
+export function renderBuildReviewAcceptedRisk(
+  records: readonly BuildReviewDispositionRecord[],
+  caseRead?: RemediationCaseStoreReadResult,
+  advisoryFindings: readonly BuildReviewAdvisoryFinding[] = [],
+): BuildReviewAcceptedRiskRenderResult {
   if (records.some((record) => !validRecord(record))) {
     return { ok: false, message: 'accepted build-review risk contains an unrenderable record' };
   }
   const entries = [...records].sort((left, right) => left.finding.id.localeCompare(right.finding.id));
+  const caseRows = caseRiskRows(caseRead);
   const lines = [
     BUILD_REVIEW_ACCEPTED_RISK_START,
     SECTION,
@@ -60,8 +115,10 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
     `Accepted findings: ${entries.length}`,
     '',
     ...entries.map((record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`),
+    ...(caseRows.length === 0 ? [] : ['', ...caseRows]),
     '',
     POINTER,
+    ...(advisoryFindings.length === 0 ? [] : ['', ...renderBuildReviewAdvisoryRegion(advisoryFindings)]),
     BUILD_REVIEW_ACCEPTED_RISK_END,
   ];
   return { ok: true, section: lines.join('\n') };
@@ -77,6 +134,29 @@ function existingSectionBounds(body: string): { readonly start: number; readonly
   return { start, after: end + BUILD_REVIEW_ACCEPTED_RISK_END.length };
 }
 
+/** Remove an unmarked worker forgery while leaving opaque project-owned regions intact. */
+function stripForgedAdvisorySection(
+  body: string,
+  acceptedRiskBounds: { readonly start: number; readonly after: number } | null,
+): string {
+  const searchable = maskProjectOwnedRegions(body);
+  let start = searchable.indexOf(BUILD_REVIEW_ADVISORY_HEADING);
+  while (start !== -1 && acceptedRiskBounds !== null && start >= acceptedRiskBounds.start && start < acceptedRiskBounds.after) {
+    start = searchable.indexOf(BUILD_REVIEW_ADVISORY_HEADING, start + BUILD_REVIEW_ADVISORY_HEADING.length);
+  }
+  if (start === -1) return body;
+  const afterHeading = start + BUILD_REVIEW_ADVISORY_HEADING.length;
+  const boundaries = [
+    searchable.indexOf('\n## ', afterHeading),
+    searchable.indexOf(`\n${BUILD_REVIEW_ACCEPTED_RISK_START}`, afterHeading),
+    body.indexOf('\n<!-- ai-conductor:step ', afterHeading),
+  ].filter((index) => index !== -1);
+  const after = boundaries.length === 0 ? body.length : Math.min(...boundaries) + 1;
+  const before = body.slice(0, start).trimEnd();
+  const remainder = body.slice(after).trimStart();
+  return before.length > 0 && remainder.length > 0 ? `${before}\n\n${remainder}` : before || remainder;
+}
+
 /**
  * Idempotently inserts, replaces, or removes the marked accepted-risk PR section.
  *
@@ -86,18 +166,36 @@ function existingSectionBounds(body: string): { readonly start: number; readonly
  * that body, so record_outcome's upsert staled the judgment the coordinator had
  * just accepted, re-selected judge_pr_prose, and halted FINISH as non-advancing.
  */
-export function upsertBuildReviewAcceptedRisk(body: string, records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskUpsertResult {
-  const bounds = existingSectionBounds(body);
+export function upsertBuildReviewAcceptedRisk(
+  body: string,
+  records: readonly BuildReviewDispositionRecord[],
+  caseRead?: RemediationCaseStoreReadResult,
+  advisoryFindings: readonly BuildReviewAdvisoryFinding[] = [],
+): BuildReviewAcceptedRiskUpsertResult {
+  const initialBounds = existingSectionBounds(body);
+  if (initialBounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
+  let sanitizedBody = body;
+  let bounds = initialBounds;
+  while (true) {
+    const withoutForgery = stripForgedAdvisorySection(sanitizedBody, bounds);
+    if (withoutForgery === sanitizedBody) break;
+    sanitizedBody = withoutForgery;
+    const refreshedBounds = existingSectionBounds(sanitizedBody);
+    if (refreshedBounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
+    bounds = refreshedBounds;
+  }
+
   if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
-  if (records.length === 0) {
-    if (bounds === null) return { ok: true, body, changed: false };
-    const next = `${body.slice(0, bounds.start).trimEnd()}${body.slice(bounds.after).trimStart() ? '\n\n' : ''}${body.slice(bounds.after).trimStart()}`.trimEnd();
+  const caseRows = caseRiskRows(caseRead);
+  if (records.length === 0 && caseRows.length === 0 && advisoryFindings.length === 0) {
+    if (bounds === null) return { ok: true, body: sanitizedBody, changed: sanitizedBody !== body };
+    const next = `${sanitizedBody.slice(0, bounds.start).trimEnd()}${sanitizedBody.slice(bounds.after).trimStart() ? '\n\n' : ''}${sanitizedBody.slice(bounds.after).trimStart()}`.trimEnd();
     return { ok: true, body: next, changed: next !== body };
   }
-  const rendered = renderBuildReviewAcceptedRisk(records);
+  const rendered = renderBuildReviewAcceptedRisk(records, caseRead, advisoryFindings);
   if (!rendered.ok) return rendered;
   const next = bounds !== null
-    ? `${body.slice(0, bounds.start)}${rendered.section}${body.slice(bounds.after)}`
-    : body.trim().length === 0 ? rendered.section : `${body}\n\n${rendered.section}`;
+    ? `${sanitizedBody.slice(0, bounds.start)}${rendered.section}${sanitizedBody.slice(bounds.after)}`
+    : sanitizedBody.trim().length === 0 ? rendered.section : `${sanitizedBody}\n\n${rendered.section}`;
   return { ok: true, body: next, changed: next !== body };
 }

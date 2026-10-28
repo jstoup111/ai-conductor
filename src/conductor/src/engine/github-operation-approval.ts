@@ -69,6 +69,7 @@ function boundTarget(target: GithubOperationTarget): GithubOperationTarget {
   switch (target.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return Object.freeze({ repository: target.repository, kind: target.kind, number: target.number });
     case 'label-definition':
       return Object.freeze({ repository: target.repository, kind: target.kind, name: target.name });
@@ -84,6 +85,7 @@ function targetsMatch(left: GithubOperationTarget, right: GithubOperationTarget)
   switch (left.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return right.kind === left.kind && right.number === left.number;
     case 'label-definition':
       return right.kind === 'label-definition' && right.name === left.name;
@@ -139,7 +141,7 @@ function interactiveConfirmation(value: unknown): value is InteractiveGithubOper
 }
 
 /**
- * Only pre-spec intake, shared-resource, and initial-publication writes may
+ * Only pre-spec intake, shared-resource, and docs-prune publication writes may
  * obtain this authority. A remote-ref push reaches this path only when the
  * CLI could not resolve owned feature provenance; the remote adapter checks
  * the same opaque, exact-request capability again before transport.
@@ -147,7 +149,9 @@ function interactiveConfirmation(value: unknown): value is InteractiveGithubOper
 function requiresExplicitApproval(request: GithubOperationRequest): boolean {
   return request.access === 'intake-write'
     || request.access === 'shared-write'
-    || (request.access === 'remote-ref-write' && request.operation === 'remote-ref.push');
+    || (request.access === 'remote-ref-write' && request.operation === 'remote-ref.push')
+    || request.operation === 'pull-request.create'
+    || request.operation === 'pull-request.edit';
 }
 
 /**

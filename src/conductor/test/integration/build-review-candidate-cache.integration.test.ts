@@ -103,6 +103,7 @@ describe('build-review candidate cache runner ordering', () => {
       branches: [
         { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'cache-write-failed', detail: 'rename denied' },
         { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+        { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' },
       ],
     });
     expect(events).toEqual(['cache-write-failed']);
@@ -112,7 +113,7 @@ describe('build-review candidate cache runner ordering', () => {
     const root = await fixture();
     const preparedHome = join(root, 'prepared-codex-home');
     const catalogHomes: string[] = [];
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async (options: { model?: string }) => options.model === 'gpt-5.6-sol'
       ? { success: false, exitCode: 1, output: 'model unavailable', modelUnavailable: true }
       : { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload });
@@ -129,7 +130,7 @@ describe('build-review candidate cache runner ordering', () => {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
         llm_provider: 'codex',
-        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: 'codex',
             model: 'gpt-5.6-sol', model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 1,
@@ -203,7 +204,7 @@ describe('build-review candidate cache runner ordering', () => {
   ])('reports failed policy coverage when the fallback provider %s instead of borrowing the preferred policy', async (_label, fallbackSources, code) => {
     const root = await fixture();
     const codexInvoke = vi.fn(async () => ({ success: false, exitCode: 127, output: 'codex unavailable', providerUnavailable: true, providerUnavailableScope: 'run' as const, providerUnavailableReason: 'codex unavailable' }));
-    const claudeInvoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
+    const claudeInvoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }) }));
     const codex: LLMProvider = {
       invoke: codexInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
       nativeSchemaCapability: { nativeOutputSchema: true },
@@ -227,7 +228,7 @@ describe('build-review candidate cache runner ordering', () => {
       : fallbackSources.map((source) => installed(source)));
     const runner = new DefaultStepRunner(codex, 'candidate-fallback-coverage', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: ['codex', 'claude'] },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
@@ -255,7 +256,7 @@ describe('build-review candidate cache runner ordering', () => {
 
   it('publishes one discard when an actual candidate reloads the policy under a new bundle digest', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
     const provider: LLMProvider = {
       invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -268,7 +269,7 @@ describe('build-review candidate cache runner ordering', () => {
     let digest = `sha256-v1:${'a'.repeat(64)}`;
     const runner = new DefaultStepRunner(provider, 'candidate-cache-discard', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'codex' },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
@@ -309,7 +310,7 @@ describe('build-review candidate cache runner ordering', () => {
 
     await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
       { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', timeout_seconds: 0.05, model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
-      { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-deadline', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
+      { rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4', lapId: 'lap-deadline', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
       'M', {}, builtInInputs(), { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
     );
 
@@ -336,7 +337,7 @@ describe('build-review candidate cache runner ordering', () => {
 
     const settled = await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
       { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
-      { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-local-policy', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
+      { rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4', lapId: 'lap-local-policy', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
       'M', {}, builtInInputs(), { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
     );
 

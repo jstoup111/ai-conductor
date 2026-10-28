@@ -9,7 +9,9 @@ import {
   type BuildReviewLapId,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { isRegisteredRubric } from './build-review-registry.js';
 import { MAX_POLICY_BUNDLE_BYTES } from './build-review-policy-bundle.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 const ARTIFACT_VERSION = 2 as const;
 const ARTIFACT_DIRECTORY = '.pipeline/build-review';
@@ -18,6 +20,38 @@ export const BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY = `${ARTIFACT_DIRECTORY}/pol
 
 type BuildReviewArtifactVersion = 1 | typeof ARTIFACT_VERSION;
 export type BuildReviewArtifactRubric = BuildReviewRubricId | string;
+
+export interface ReviewedHunk {
+  readonly path: string;
+  readonly contentHash: string;
+}
+
+export type BuildReviewReviewScopeReason =
+  | 'first-lap'
+  | 'merge-base-changed'
+  | 'version-changed'
+  | 'record-unreadable'
+  | 'open-source-unmapped'
+  | 'delta';
+
+/** Durable branch-local authority for deciding a rubric's next review scope. */
+export interface BuildReviewReviewScope {
+  readonly mode: 'full' | 'delta';
+  readonly reason: BuildReviewReviewScopeReason;
+  readonly sequence: number;
+  readonly unreadableLapIds: readonly BuildReviewLapId[];
+  readonly mergeBase: string;
+  readonly headSha: string;
+  readonly policyIdentity: string;
+  readonly predecessorLapId?: BuildReviewLapId;
+  readonly reviewedHunks: readonly ReviewedHunk[];
+  readonly deltaHunks: readonly ReviewedHunk[];
+  readonly outOfDeltaSourceIds: readonly string[];
+}
+
+export type BuildReviewArtifactReviewScope =
+  | BuildReviewReviewScope
+  | { readonly kind: 'unreadable' };
 
 /**
  * Durable, self-describing provenance for a custom policy judgement.  It is
@@ -69,6 +103,7 @@ export function isBuildReviewCustomInfrastructureFailureReason(
 
 export type BuildReviewCustomArtifactResult =
   | { readonly kind: 'judged'; readonly contractVersion: 'custom-v1'; readonly rubric: string; readonly lapId: string; readonly declaration: BuildReviewCustomEvidenceDescriptor['declaration']; readonly policy: BuildReviewCustomEvidenceDescriptor['effectivePolicy']; readonly candidate: BuildReviewCustomEvidenceDescriptor['producer']; readonly reviewedInput: BuildReviewCustomEvidenceDescriptor['reviewedInput']; readonly findings: readonly unknown[]; readonly verdict: 'PASS' | 'FAIL'; readonly identity: { readonly id: string; readonly canonicalPayload: unknown; readonly canonicalJson: string } }
+  | { readonly kind: 'scope-empty'; readonly rubric: string }
   | { readonly kind: 'unsupported-policy'; readonly rubric: string; readonly requirement: string }
   | { readonly kind: 'infrastructure-failure'; readonly rubric: string; readonly reason: BuildReviewCustomInfrastructureFailureReason; readonly detail: string };
 
@@ -104,6 +139,8 @@ export interface BuildReviewBranchArtifact {
   readonly descriptor?: BuildReviewCustomEvidenceDescriptor;
   /** Validated declared obligation for a custom failure with unavailable content. */
   readonly declaration?: BuildReviewCustomDeclaration;
+  /** Absent on legacy or infrastructure-failure artifacts. */
+  readonly reviewScope?: BuildReviewArtifactReviewScope;
 }
 
 /** Injected so branch-artifact tests never write to the host filesystem. */
@@ -115,7 +152,7 @@ export interface BuildReviewArtifactFilesystem {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === 'testQuality' || value === 'security';
+  return typeof value === 'string' && isRegisteredRubric(value);
 }
 
 function isCustomRubric(value: unknown): value is string {
@@ -137,6 +174,8 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
     ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.scopeResolutions === undefined ? [] : ['scopeResolutions']), ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), ...(candidate.counterfactualSensitivity === undefined ? [] : ['counterfactualSensitivity']), 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
+      : candidate.kind === 'scope-empty'
+        ? ['kind', 'rubric']
       : candidate.kind === 'infrastructure-failure'
         ? ['kind', 'rubric', 'reason', 'detail']
         : [];
@@ -145,6 +184,55 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
 
 function stringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isNonEmptyString) && new Set(value).size === value.length;
+}
+
+function parseReviewedHunks(value: unknown): readonly ReviewedHunk[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hunks = value.map((hunk) => {
+    if (typeof hunk !== 'object' || hunk === null || Array.isArray(hunk)) return undefined;
+    const candidate = hunk as Record<string, unknown>;
+    return exactKeys(candidate, ['path', 'contentHash']) && isNonEmptyString(candidate.path) && isNonEmptyString(candidate.contentHash)
+      ? { path: candidate.path, contentHash: candidate.contentHash }
+      : undefined;
+  });
+  if (hunks.some((hunk) => hunk === undefined)) return undefined;
+  const reviewedHunks = hunks as ReviewedHunk[];
+  return new Set(reviewedHunks.map((hunk) => `${hunk.path}\u0000${hunk.contentHash}`)).size === reviewedHunks.length
+    ? reviewedHunks
+    : undefined;
+}
+
+function parseBuildReviewReviewScope(value: unknown): BuildReviewReviewScope | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const keys = candidate.predecessorLapId === undefined
+    ? ['mode', 'reason', 'sequence', 'unreadableLapIds', 'mergeBase', 'headSha', 'policyIdentity', 'reviewedHunks', 'deltaHunks', 'outOfDeltaSourceIds']
+    : ['mode', 'reason', 'sequence', 'unreadableLapIds', 'mergeBase', 'headSha', 'policyIdentity', 'predecessorLapId', 'reviewedHunks', 'deltaHunks', 'outOfDeltaSourceIds'];
+  if (!exactKeys(candidate, keys) || (candidate.mode !== 'full' && candidate.mode !== 'delta') ||
+    !['first-lap', 'merge-base-changed', 'version-changed', 'record-unreadable', 'open-source-unmapped', 'delta'].includes(candidate.reason as string) ||
+    !Number.isInteger(candidate.sequence) || (candidate.sequence as number) < 1 ||
+    !isNonEmptyString(candidate.mergeBase) || !isNonEmptyString(candidate.headSha) || !isNonEmptyString(candidate.policyIdentity) ||
+    (candidate.predecessorLapId !== undefined && !parseBuildReviewLapId(candidate.predecessorLapId))) return undefined;
+  const unreadableLapIds = Array.isArray(candidate.unreadableLapIds)
+    ? candidate.unreadableLapIds.map(parseBuildReviewLapId)
+    : undefined;
+  const reviewedHunks = parseReviewedHunks(candidate.reviewedHunks);
+  const deltaHunks = parseReviewedHunks(candidate.deltaHunks);
+  if (!unreadableLapIds || unreadableLapIds.some((lapId) => lapId === undefined) ||
+    new Set(unreadableLapIds).size !== unreadableLapIds.length || !reviewedHunks || !deltaHunks || !stringArray(candidate.outOfDeltaSourceIds)) return undefined;
+  return {
+    mode: candidate.mode,
+    reason: candidate.reason as BuildReviewReviewScopeReason,
+    sequence: candidate.sequence as number,
+    unreadableLapIds: unreadableLapIds as BuildReviewLapId[],
+    mergeBase: candidate.mergeBase,
+    headSha: candidate.headSha,
+    policyIdentity: candidate.policyIdentity,
+    ...(candidate.predecessorLapId === undefined ? {} : { predecessorLapId: candidate.predecessorLapId as BuildReviewLapId }),
+    reviewedHunks,
+    deltaHunks,
+    outOfDeltaSourceIds: candidate.outOfDeltaSourceIds,
+  };
 }
 
 export function parseBuildReviewCustomDeclaration(value: unknown): BuildReviewCustomDeclaration | undefined {
@@ -192,6 +280,12 @@ export function parseBuildReviewCustomArtifactMember(value: unknown): BuildRevie
       result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'infrastructure-failure' }>,
     };
   }
+  if (result.kind === 'scope-empty') {
+    const declaration = source.declaration === undefined ? undefined : parseBuildReviewCustomDeclaration(source.declaration);
+    if (!exactKeys(source, declaration === undefined ? ['result'] : ['declaration', 'result']) || !exactKeys(result, ['kind', 'rubric']) ||
+      !isCustomRubric(result.rubric) || (declaration !== undefined && declaration.rubricId !== result.rubric)) return undefined;
+    return { ...(declaration === undefined ? {} : { declaration }), result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'scope-empty' }> };
+  }
   if (result.kind === 'unsupported-policy') {
     const declaration = source.declaration === undefined ? undefined : parseBuildReviewCustomDeclaration(source.declaration);
     if (!exactKeys(source, declaration === undefined ? ['result'] : ['declaration', 'result']) || !exactKeys(result, ['kind', 'rubric', 'requirement']) ||
@@ -229,8 +323,9 @@ export function buildReviewBranchArtifactPath(
   projectRoot: string,
   lapId: BuildReviewLapId,
   rubric: BuildReviewArtifactRubric,
+  child?: ChildId,
 ): string {
-  return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.json`);
+  return pipelinePathFor(projectRoot, join('build-review', lapId, `${rubric}.json`), child);
 }
 
 /**
@@ -242,12 +337,13 @@ export function buildReviewRubricPromptPath(
   projectRoot: string,
   lapId: BuildReviewLapId,
   rubric: BuildReviewArtifactRubric,
+  child?: ChildId,
 ): string {
-  return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.prompt.txt`);
+  return pipelinePathFor(projectRoot, join('build-review', lapId, `${rubric}.prompt.txt`), child);
 }
 
-function artifactDirectory(projectRoot: string, lapId: BuildReviewLapId): string {
-  return join(projectRoot, ARTIFACT_DIRECTORY, lapId);
+function artifactDirectory(projectRoot: string, lapId: BuildReviewLapId, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, join('build-review', lapId), child);
 }
 
 /** Strictly parses an envelope and verifies provider output against engine identity. */
@@ -258,7 +354,7 @@ export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranc
   const isV2 = candidate.version === ARTIFACT_VERSION;
   const expected = isV1
     ? ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance']
-    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.declaration === undefined ? [] : ['declaration']), ...(candidate.reuse === undefined ? [] : ['reuse'])];
+    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.declaration === undefined ? [] : ['declaration']), ...(candidate.reuse === undefined ? [] : ['reuse']), ...(candidate.reviewScope === undefined ? [] : ['reviewScope'])];
   if (!exactKeys(candidate, expected) || (!isV1 && !isV2) || !isNonEmptyString(candidate.snapshotDigest)) return undefined;
   const lapId = parseBuildReviewLapId(candidate.lapId);
   const provenance = parseProvenance(candidate.provenance);
@@ -275,12 +371,14 @@ export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranc
   if (custom && custom.result.kind === 'judged' && custom.result.lapId !== lapId) return undefined;
   const reuse = candidate.reuse as Record<string, unknown> | undefined;
   if (reuse !== undefined && (!custom || custom.result.kind !== 'judged' || !exactKeys(reuse, ['sourceLapId', 'sourceSnapshotDigest']) || !parseBuildReviewLapId(reuse.sourceLapId) || !isNonEmptyString(reuse.sourceSnapshotDigest))) return undefined;
+  const reviewScope = candidate.reviewScope === undefined ? undefined : parseBuildReviewReviewScope(candidate.reviewScope) ?? { kind: 'unreadable' as const };
   return {
     version: candidate.version as BuildReviewArtifactVersion, rubric: candidate.rubric as BuildReviewArtifactRubric, lapId, snapshotDigest: candidate.snapshotDigest,
     result, provenance,
     ...(custom?.descriptor === undefined ? {} : { descriptor: custom.descriptor }),
     ...(custom?.declaration === undefined ? {} : { declaration: custom.declaration }),
     ...(reuse === undefined ? {} : { reuse: { sourceLapId: reuse.sourceLapId as BuildReviewLapId, sourceSnapshotDigest: reuse.sourceSnapshotDigest as string } }),
+    ...(reviewScope === undefined ? {} : { reviewScope }),
   };
 }
 
@@ -289,11 +387,15 @@ export async function writeBuildReviewBranchArtifact(
   projectRoot: string,
   artifact: Omit<BuildReviewBranchArtifact, 'version'>,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<BuildReviewBranchArtifact> {
+  if (artifact.reviewScope && 'kind' in artifact.reviewScope) {
+    throw new Error('build-review branch artifact cannot write an unreadable review scope');
+  }
   const validated = parseBuildReviewBranchArtifact({ version: ARTIFACT_VERSION, ...artifact });
   if (!validated) throw new Error('build-review branch artifact must carry matching engine identity');
-  const path = buildReviewBranchArtifactPath(projectRoot, validated.lapId, validated.rubric);
-  await fs.mkdir(artifactDirectory(projectRoot, validated.lapId));
+  const path = buildReviewBranchArtifactPath(projectRoot, validated.lapId, validated.rubric, child);
+  await fs.mkdir(artifactDirectory(projectRoot, validated.lapId, child));
   await fs.writeFile(`${path}.tmp`, JSON.stringify(validated));
   await fs.rename(`${path}.tmp`, path);
   return validated;
@@ -306,6 +408,7 @@ export function readBuildReviewBranchArtifact(
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<(BuildReviewBranchArtifact & { readonly rubric: BuildReviewRubricId; readonly result: BuildReviewRubricResult }) | undefined>;
 export function readBuildReviewBranchArtifact(
   projectRoot: string,
@@ -313,6 +416,7 @@ export function readBuildReviewBranchArtifact(
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<BuildReviewBranchArtifact | undefined>;
 export async function readBuildReviewBranchArtifact(
   projectRoot: string,
@@ -320,9 +424,10 @@ export async function readBuildReviewBranchArtifact(
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,
+  child?: ChildId,
 ): Promise<BuildReviewBranchArtifact | undefined> {
   try {
-    const artifact = parseBuildReviewBranchArtifact(JSON.parse(await fs.readFile(buildReviewBranchArtifactPath(projectRoot, lapId, rubric))));
+    const artifact = parseBuildReviewBranchArtifact(JSON.parse(await fs.readFile(buildReviewBranchArtifactPath(projectRoot, lapId, rubric, child))));
     return artifact && artifact.rubric === rubric && artifact.lapId === lapId && artifact.snapshotDigest === snapshotDigest
       ? artifact
       : undefined;

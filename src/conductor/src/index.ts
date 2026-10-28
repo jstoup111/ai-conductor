@@ -1,6 +1,6 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectBuildReviewResolveCaseCommand, detectDoneWhenAcceptCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
 import type { RunMode } from './types/index.js';
@@ -38,10 +38,11 @@ import {
 } from './engine/finish-publication-production.js';
 import { makeProductionGit } from './engine/pr-labels.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { resolveHarnessRoot } from './engine/install-freshness.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
-import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { prepareManagedSessionContext } from './execution/managed-session-context.js';
 import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
@@ -80,7 +81,9 @@ import {
   detectInline,
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
+  detectBuildReviewResolveCaseCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectDoneWhenAcceptCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectHaltClearCommand,
@@ -96,9 +99,11 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
+import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
+import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
 import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -145,6 +150,7 @@ import type {
 import type { HarnessConfig } from './types/config.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { defaultPaneLabelRunner } from './engine/engineer/pane-label.js';
 import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
 import { detectBrainCommand, dispatchBrain } from './engine/brain-supervisor-cli.js';
 import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
@@ -164,10 +170,12 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
+import { detectTranscriptsCommand, dispatchTranscripts } from './engine/transcripts-cli.js';
 import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
 } from './engine/shipment-evidence-cli.js';
+import { detectDocsPruneCommand, dispatchDocsPrune } from './engine/docs-prune-cli.js';
 
 import {
   detectFinishRecordCommand,
@@ -207,6 +215,10 @@ import {
   runTaskMembershipCheck,
 } from './engine/task-membership-check-cli.js';
 import {
+  detectRoundStampCommand,
+  runRoundStamp,
+} from './engine/round-stamp-cli.js';
+import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
 } from './engine/test-suite-cli.js';
@@ -223,10 +235,6 @@ import {
 } from './engine/reseal-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import {
-  detectCloseoutEventCommand,
-  dispatchCloseoutEventCommand,
-} from './engine/closeout-cli.js';
-import {
   detectBuildTailCommand,
   dispatchBuildTailCommand,
 } from './engine/build-tail-cli.js';
@@ -237,6 +245,7 @@ import {
 } from './engine/halt-issues/halt-issues-cli.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
+import { createOrderingSource } from './engine/ordering-source.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { buildDaemonExitWitnessCommand, hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
@@ -730,7 +739,7 @@ export function detectOverlapScanCommand(argv: string[]): OverlapScanDispatch | 
 
 /**
  * Run the overlap scan with real production runners: `makeGitRunner(cwd)` for
- * git, and `createBlockerResolver({ run: (args) => gh(args, { cwd }) })` for
+ * git, and `createBlockerResolver({ source: createOrderingSource(...) })` for
  * the blocker sweep — the exact construction `engineer-cli.ts` uses for its
  * own per-call blocker resolver. Prints `renderReport` and ALWAYS exits 0:
  * this is an advisory primitive that must never block authoring, even when
@@ -745,7 +754,9 @@ export async function overlapScanCommand(
 
   const git = makeGitRunner(cwd);
   const gh = makeProductionGh();
-  const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd }) });
+  const resolver = createBlockerResolver({
+    source: createOrderingSource({ run: (args) => gh(args, { cwd }), cwd }),
+  });
 
   const localBase = cmd.base ?? (await originDefaultBranch(git)) ?? 'main';
 
@@ -832,7 +843,50 @@ export async function dispatchCliEntry(input: {
 // --- Main ---
 
 async function dispatchCliCommand(): Promise<void> {
-
+  // Private child entrypoint. It intentionally is not registered in the
+  // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
+  // argv can never satisfy the daemon supervisor process matcher.
+  if (process.argv[2] === 'executor-child') {
+    const [
+      { runExecutorChild, withExecutorBrokerProxies },
+      { makeExecutorChildRun },
+      { createWorkOrderGitRunner },
+      { makeFeatureRunnerDeps },
+      { defaultSelfHostDetector },
+    ] = await Promise.all([
+      import('./engine/executor-child.js'),
+      import('./engine/executor-child-runtime.js'),
+      import('./daemon-cli.js'),
+      import('./engine/daemon-deps.js'),
+      import('./engine/self-host/detector.js'),
+    ]);
+    const projectRoot = process.cwd();
+    await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      // Reuse the daemon seam, which verifies the WorkOrder before its first
+      // worktree side effect and performs the pinned-base create under the
+      // brokered lifecycle lock.
+      createWorktree: async (order, worktreeLifecycle) => {
+        const runnerDeps = makeFeatureRunnerDeps({
+          projectRoot,
+          worktreeBase: join(projectRoot, '.worktrees'),
+          baseBranch: 'main',
+          runConductorInWorktree: async () => {},
+          workOrderGit: createWorkOrderGitRunner(projectRoot),
+          worktreeLifecycle: worktreeLifecycle as never,
+        });
+        return runnerDeps.createWorktree(order.slug, order);
+      },
+      run: makeExecutorChildRun({ projectRoot }),
+      // The WorkOrder is the supervisor's authority for self-host mode.  The
+      // detector is only a compatibility fallback for pre-field orders.
+      liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
+      log: (line) => { process.send?.({ kind: 'log', level: 'info', message: line }); },
+      exit: (code) => { process.exitCode = code; },
+    }));
+    return;
+  }
+  // Per-command help is answered by `main()` before the daemon-session guard,
+  // so it never reaches this dispatcher.
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
     process.argv,
     process.cwd(),
@@ -862,6 +916,18 @@ async function dispatchCliCommand(): Promise<void> {
     return;
   }
 
+  const buildReviewResolveCaseCmd = detectBuildReviewResolveCaseCommand(process.argv);
+  if (buildReviewResolveCaseCmd) {
+    process.exitCode = await dispatchBuildReviewResolveCase(buildReviewResolveCaseCmd);
+    return;
+  }
+
+  const doneWhenAcceptCmd = detectDoneWhenAcceptCommand(process.argv);
+  if (doneWhenAcceptCmd) {
+    process.exitCode = await dispatchDoneWhenAccept(doneWhenAcceptCmd);
+    return;
+  }
+
   const buildReviewRecordReducedCoverageCmd = detectBuildReviewRecordReducedCoverageCommand(process.argv);
   if (buildReviewRecordReducedCoverageCmd) {
     process.exitCode = await dispatchBuildReviewRecordReducedCoverage(buildReviewRecordReducedCoverageCmd);
@@ -877,12 +943,6 @@ async function dispatchCliCommand(): Promise<void> {
   const buildTailCmd = detectBuildTailCommand(process.argv);
   if (buildTailCmd) {
     process.exitCode = await dispatchBuildTailCommand(buildTailCmd);
-    return;
-  }
-
-  const closeoutEventCmd = detectCloseoutEventCommand(process.argv);
-  if (closeoutEventCmd) {
-    process.exitCode = await dispatchCloseoutEventCommand(closeoutEventCmd);
     return;
   }
 
@@ -999,6 +1059,7 @@ async function dispatchCliCommand(): Promise<void> {
     try {
       code = await dispatchEngineer(engineerCmd, {
         events: spine.events,
+        paneLabelRunner: defaultPaneLabelRunner,
       });
     } finally {
       spine.stop();
@@ -1041,6 +1102,21 @@ async function dispatchCliCommand(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  const docsPruneCmd = detectDocsPruneCommand(process.argv);
+  if (docsPruneCmd) {
+    const repoRoot = makeProductionGit()(['rev-parse', '--show-toplevel'], { cwd: process.cwd() });
+    const code = await dispatchDocsPrune(docsPruneCmd, (await repoRoot).stdout.trim());
+    process.exit(code);
+  }
+
+  // Transcript inspection is deliberately read-only: it reconstructs the
+  // retained capture set from the event ledger and never creates pipeline state.
+  const transcriptsCmd = detectTranscriptsCommand(process.argv);
+  if (transcriptsCmd) {
+    const code = await dispatchTranscripts(transcriptsCmd, process.cwd());
     process.exit(code);
   }
 
@@ -1147,6 +1223,15 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(await runTaskMembershipCheck({
       projectRoot,
       commitMessagePath: taskMembershipCheckCmd.commitMessagePath,
+    }));
+  }
+
+  const roundStampCmd = detectRoundStampCommand(process.argv);
+  if (roundStampCmd) {
+    const projectRoot = process.env.CONDUCT_ROUND_STAMP_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runRoundStamp({
+      projectRoot,
+      commitMessagePath: roundStampCmd.commitMessagePath,
     }));
   }
 
@@ -1319,12 +1404,13 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(0);
   }
 
+  // Per-command help is answered by routeSubcommandHelp in main(), before the
+  // daemon-session guard. engineer, halt-issues, daemon, and update own their help.
   // Top-level `--help` / `-h`: print the FULL command surface — every subcommand
   // (register/create/engineer/daemon) included — not just the bare-pipeline
   // flags. parseArgs uses the base program (no subcommands, so a bare feature
   // description is never mistaken for an unknown command); the discoverable
-  // surface lives in createProgram(). Subcommand-specific help is already handled
-  // by the dispatchers above, so any `--help` reaching here is top-level.
+  // surface lives in createProgram(). Any `--help` reaching here is top-level.
   if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
     process.stdout.write(renderCanonicalFullHelp());
     process.exit(0);
@@ -1710,12 +1796,7 @@ async function dispatchCliCommand(): Promise<void> {
     // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
     // Conductor composes self-host authority around it when applicable.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, { executionContext, ...attempt }) =>
-      events.emit({
-        type: 'provider_attempt', step, ...attempt,
-        ...(executionContext ? { executionContext } : {}),
-      }),
-    warn: (_message, transition) => events.emit(transition),
+    ...providerExecutionEventCallbacks(events),
   };
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],
@@ -1795,6 +1876,7 @@ async function dispatchCliCommand(): Promise<void> {
     mode,
     providerExecution: preludeProviderExecution,
     events,
+    skillNameRoot: await resolveHarnessRoot(),
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and
@@ -1882,6 +1964,7 @@ async function dispatchCliCommand(): Promise<void> {
       git: finishPublicationGit,
       gh: finishPublicationGh,
       events,
+      flushSessionEvents: sessionTail.flush,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot,
         git: finishPublicationGit,
@@ -1924,6 +2007,16 @@ async function dispatchCliCommand(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Declared pre-dispatch help is read-only and must remain available even to
+  // a daemon-managed session. Handle it before the session guard, so neither
+  // command parsing nor a command handler can touch state just to show help.
+  const subcommandHelp = routeSubcommandHelp(process.argv);
+  if (subcommandHelp !== null) {
+    process.stdout.write(subcommandHelp);
+    process.exitCode = 0;
+    return;
+  }
+
   const outcome = await dispatchCliEntry({
     argv: process.argv,
     environment: process.env,

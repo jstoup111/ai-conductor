@@ -18,8 +18,12 @@ const MAX_REFUTATION_EVIDENCE = 8;
  * build-review disposition vocabulary.
  */
 export type RemediationCaseDomain = 'build_review' | 'prd_widening';
-export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged' | 'escalate';
-export type RemediationCaseDisposition = 'act' | 'defer' | 'reject' | 'refute' | 'escalate';
+/**
+ * `carried` is persisted case-store history only. Provider judgements retain
+ * their closed source-outcome grammar in `parseSourceRow` below.
+ */
+export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'advisory' | 'merged' | 'escalate' | 'carried';
+export type RemediationCaseDisposition = 'act' | 'defer' | 'reject' | 'refute' | 'advisory' | 'escalate';
 export type RemediationCasePriority = 'critical' | 'high' | 'medium' | 'low';
 export type RemediationCaseConfidence = 'high' | 'medium' | 'low';
 export type RemediationCaseEscalationOwner = 'product' | 'plan' | 'architecture';
@@ -82,12 +86,14 @@ export interface RemediationCaseRefutation {
 export interface RemediationCaseRow {
   readonly caseRef: string;
   readonly existingCaseId?: string;
+  readonly distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
   readonly disposition: RemediationCaseDisposition;
   readonly priority: RemediationCasePriority;
   readonly rationale: string;
   readonly confidence: RemediationCaseConfidence;
   readonly effect: RemediationCaseEffect;
   readonly refutation?: RemediationCaseRefutation;
+  readonly adjudicatedSeverity?: import('./build-review-domain.js').BuildReviewSeverity;
   readonly escalation?: { readonly owner: RemediationCaseEscalationOwner };
 }
 
@@ -123,8 +129,11 @@ export type RemediationCaseArtifactRejection =
   | 'unknown-domain'
   | 'invalid-source-keys'
   | 'invalid-source-outcome'
+  | 'operator-owned-carried-source-outcome'
   | 'invalid-consistency'
   | 'invalid-case-keys'
+  | 'operator-owned-acceptance'
+  | 'operator-owned-resolution'
   | 'invalid-case-disposition'
   | 'invalid-case-priority'
   | 'invalid-case-confidence'
@@ -168,9 +177,12 @@ function parseSourceRow(value: unknown, mode: RemediationCaseJudgement['mode']):
   if (!isBoundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH)) {
     return { ok: false, reason: 'invalid-source-keys' };
   }
+  if (value.outcome === 'carried') {
+    return { ok: false, reason: 'operator-owned-carried-source-outcome' };
+  }
   if (!oneOf(value.outcome, mode === 'case-v2'
-    ? ['acted', 'deferred', 'rejected', 'refuted', 'merged', 'escalate'] as const
-    : ['acted', 'deferred', 'rejected', 'refuted', 'merged'] as const)) {
+    ? ['acted', 'deferred', 'rejected', 'refuted', 'advisory', 'merged', 'escalate'] as const
+    : ['acted', 'deferred', 'rejected', 'refuted', 'advisory', 'merged'] as const)) {
     return { ok: false, reason: 'invalid-source-outcome' };
   }
   return { ok: true, value: { sourceId: value.sourceId, outcome: value.outcome, caseRef: value.caseRef } };
@@ -207,7 +219,7 @@ function parseEffect(
       ? { kind: 'action', route: 'build', tasks: tasks as { title: string; admittedTaskIds: string[]; admissionRationale: string }[] }
       : { kind: 'action', route: 'build', tasks: tasks as { title: string }[] } };
   }
-  if (disposition === 'escalate') {
+  if (disposition === 'escalate' || disposition === 'advisory') {
     return hasExactKeys(value, ['kind']) && value.kind === 'none'
       ? { ok: true, value: { kind: 'none' } }
       : { ok: false, reason: 'invalid-escalate-effect' };
@@ -259,11 +271,28 @@ function parseRefutation(value: unknown): ParseResult<RemediationCaseRefutation>
   return { ok: true, value: { claim: value.claim, assertions } };
 }
 
+function parseDistinctFrom(value: unknown): ParseResult<readonly { readonly caseId: string; readonly reason: string }[]> {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CASE_ROWS) {
+    return { ok: false, reason: 'invalid-case-keys' };
+  }
+  const distinctFrom: { caseId: string; reason: string }[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || !hasExactKeys(entry, ['caseId', 'reason']) ||
+      !isBoundedString(entry.caseId, MAX_REFERENCE_LENGTH) || !isBoundedString(entry.reason)) {
+      return { ok: false, reason: 'invalid-case-keys' };
+    }
+    distinctFrom.push({ caseId: entry.caseId, reason: entry.reason });
+  }
+  return { ok: true, value: distinctFrom };
+}
+
 function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): ParseResult<RemediationCaseRow> {
   if (!isRecord(value)) return { ok: false, reason: 'invalid-case-keys' };
+  if (Object.hasOwn(value, 'operatorAcceptance')) return { ok: false, reason: 'operator-owned-acceptance' };
+  if (Object.hasOwn(value, 'operatorResolution')) return { ok: false, reason: 'operator-owned-resolution' };
   if (!oneOf(value.disposition, mode === 'case-v2'
-    ? ['act', 'defer', 'reject', 'refute', 'escalate'] as const
-    : ['act', 'defer', 'reject', 'refute'] as const)) {
+    ? ['act', 'defer', 'reject', 'refute', 'advisory', 'escalate'] as const
+    : ['act', 'defer', 'reject', 'refute', 'advisory'] as const)) {
     return { ok: false, reason: 'invalid-case-disposition' };
   }
   if (value.disposition === 'refute' && value.refutation === undefined) {
@@ -277,12 +306,19 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
     ? value.existingCaseId === undefined
       ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
       : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
+    : value.disposition === 'advisory'
+    ? value.existingCaseId === undefined
+      ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'adjudicatedSeverity']
+      : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'adjudicatedSeverity']
     : value.existingCaseId === undefined
     ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect']
     : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect'];
-  if (!hasExactKeys(value, baseKeys) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) || (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
+  const expectedKeys = value.distinctFrom === undefined ? baseKeys : [...baseKeys, 'distinctFrom'];
+  if (!hasExactKeys(value, expectedKeys) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) || (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
     return { ok: false, reason: 'invalid-case-keys' };
   }
+  const distinctFrom = value.distinctFrom === undefined ? undefined : parseDistinctFrom(value.distinctFrom);
+  if (distinctFrom !== undefined && !distinctFrom.ok) return distinctFrom;
   if (!oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const)) {
     return { ok: false, reason: 'invalid-case-priority' };
   }
@@ -299,11 +335,16 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
   const escalation = value.disposition === 'escalate'
     ? value.escalation as { readonly owner: RemediationCaseEscalationOwner }
     : undefined;
+  const adjudicatedSeverity = value.disposition === 'advisory'
+    ? (value.adjudicatedSeverity === 'critical' || value.adjudicatedSeverity === 'major' || value.adjudicatedSeverity === 'minor' || value.adjudicatedSeverity === 'nit' ? value.adjudicatedSeverity : undefined)
+    : undefined;
+  if (value.disposition === 'advisory' && adjudicatedSeverity === undefined) return { ok: false, reason: 'invalid-case-keys' };
   return {
     ok: true,
     value: {
       caseRef: value.caseRef,
       ...(value.existingCaseId === undefined ? {} : { existingCaseId: value.existingCaseId }),
+      ...(distinctFrom === undefined ? {} : { distinctFrom: distinctFrom.value }),
       disposition: value.disposition,
       priority: value.priority,
       rationale: value.rationale,
@@ -311,6 +352,7 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
       effect: effect.value,
       ...(refutation === undefined ? {} : { refutation: refutation.value }),
       ...(escalation === undefined ? {} : { escalation }),
+      ...(adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity }),
     },
   };
 }

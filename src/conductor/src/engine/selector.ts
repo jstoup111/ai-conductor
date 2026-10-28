@@ -4,8 +4,14 @@ import type {
   StepName,
 } from '../types/index.js';
 import type { GateVerdict } from './gate-verdicts.js';
+import { CHILD_REGION_STEPS } from './child-context.js';
 import { getStepStatus } from './state.js';
 import { shouldSkipForBootstrapMode, shouldSkipForUpstreamSkip } from './steps.js';
+
+export type RoutedParking =
+  | { kind: 'child'; child: number }
+  | { kind: 'leaf-host' }
+  | { kind: 'queue' };
 
 /**
  * The gate-driven loop's next-step selector. Given the resolved step list,
@@ -31,10 +37,14 @@ export interface SelectorInput {
    * satisfied and the selector lands on `build`.
    */
   regionStart: StepName;
+  /** Restricts selection while a routed host or revalidation queue is active. */
+  routedParking?: RoutedParking;
 }
 
 export type SelectorDecision =
   | { kind: 'run'; step: StepName; reason: string }
+  /** Routing has durable work, but no gate is currently runnable until preflight consumes it. */
+  | { kind: 'parked'; reason: string }
   | { kind: 'done'; reason: string };
 
 /**
@@ -75,16 +85,22 @@ function isSkipped(step: StepDefinition, state: ConductState): boolean {
  * satisfied.
  */
 function findNextGateInRegion(input: SelectorInput): number {
-  const { steps, state, verdicts, regionStart } = input;
+  const { steps, state, verdicts, regionStart, routedParking } = input;
   const startIdx = steps.findIndex((s) => s.name === regionStart);
   if (startIdx === -1) {
     throw new Error(
       `findNextGateInRegion: regionStart "${regionStart}" is not in the resolved step list`,
     );
   }
+  const buildReviewIdx = steps.findIndex((step) => step.name === 'build_review');
 
   for (let i = startIdx; i < steps.length; i++) {
     const step = steps[i];
+    if (
+      (routedParking?.kind === 'child' || routedParking?.kind === 'leaf-host') &&
+      !(CHILD_REGION_STEPS as readonly string[]).includes(step.name)
+    ) continue;
+    if (routedParking?.kind === 'queue' && i > buildReviewIdx) continue;
     if (isSkipped(step, state)) continue;
     if (gateSatisfied(step.name, state, verdicts)) continue;
     return i;
@@ -100,6 +116,9 @@ function findNextGateInRegion(input: SelectorInput): number {
 export function selectNextGate(input: SelectorInput): SelectorDecision {
   const idx = findNextGateInRegion(input);
   if (idx === -1) {
+    if (input.routedParking !== undefined) {
+      return { kind: 'parked', reason: `routed ${input.routedParking.kind} work is awaiting admission` };
+    }
     return { kind: 'done', reason: 'all gates in the looped region are satisfied' };
   }
 

@@ -135,16 +135,19 @@ describe('remote Git write credentials', () => {
 
   it('forwards the write credential hint through autoresolve’s inline remote runner', async () => {
     const calls: Array<{ args: string[]; options: unknown }> = [];
+    const remoteTip = 'a'.repeat(40);
     const git = vi.fn(async (args: string[], options?: unknown) => {
       calls.push({ args, options });
       if (args.join(' ') === 'remote get-url --push origin') return { exitCode: 0, stdout: 'https://github.com/acme/repo.git\n', stderr: '' };
+      if (args[0] === 'rev-parse' && args.includes('refs/remotes/origin/feature/topic')) return { exitCode: 0, stdout: `${remoteTip}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD^{commit}') return { exitCode: 0, stdout: `${remoteTip}\n`, stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     });
 
     await expect(pushRefreshedBranch(git, 'feature/topic', undefined, { mutation: mutation() }))
       .resolves.toEqual({ pushed: true });
     expect(calls.find((call) => call.args[0] === 'push')).toEqual({
-      args: ['push', 'origin', 'HEAD:refs/heads/feature/topic', '--force-with-lease'],
+      args: ['push', 'origin', 'HEAD:refs/heads/feature/topic', `--force-with-lease=refs/heads/feature/topic:${remoteTip}`],
       options: { cwd: '.', credential: 'write', endpoint: 'https' },
     });
   });

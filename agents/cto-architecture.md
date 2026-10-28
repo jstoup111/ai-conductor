@@ -23,7 +23,7 @@ You will NOT need to:
 - Read files not included in your prompt context
 - Produce user stories or implementation plans
 - Review test quality (that is cto-testing's responsibility)
-- Flag code style issues (that is the evaluator's responsibility)
+- Flag code style issues (that is build_review's or `/code-review`'s responsibility)
 
 Output destination: `.pipeline/assessment/cto-architecture.md`
 

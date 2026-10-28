@@ -23,8 +23,8 @@ whether the step can be skipped and whether it can be disabled by config.
 
 | Level | Can be skipped | Can be config-disabled | Used by |
 | --- | --- | --- | --- |
-| `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, `architecture_review`, and all four out-of-band steps |
-| `gating` | No | Only with `configDisableAllowed` | `prd`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
+| `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, and all four out-of-band steps |
+| `gating` | No | Only with `configDisableAllowed` | `prd`, `architecture_review`, `stories`, `conflict_check`, `plan`, `coherence_check`, `plan_review`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
 | `structural` | No | Never — the flag is ignored entirely | `worktree`, `build`, `rebase` |
 | `mechanical` | — | — | Nothing. The level is declared in the type union but no step definition uses it. |
 
@@ -34,7 +34,7 @@ mechanism and apply to gating steps too. For what a gate *is* and why it fails c
 
 ## Sequential steps
 
-The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
+The 21 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
 [Tier skips](#tier-skips) and [Track skips](#track-skips).
 
 | # | Step | Phase | Enforcement | Prerequisites | Skips | Dispatches |
@@ -45,25 +45,33 @@ The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 3 | `complexity` | DECIDE | advisory | `explore` | — | `/conduct complexity` |
 | 4 | `prd` | DECIDE | gating | `explore` | track `technical` | `/prd` |
 | 5 | `architecture_diagram` | DECIDE | advisory | `complexity` | tier S | `/architecture-diagram` |
-| 6 | `architecture_review` | DECIDE | advisory | `architecture_diagram` | tier S | `/architecture-review` |
+| 6 | `architecture_review` | DECIDE | gating | `architecture_diagram` | tier S | `/architecture-review` |
 | 7 | `stories` | DECIDE | gating | `architecture_review` | — | `/stories` |
 | 8 | `conflict_check` | DECIDE | gating | `stories` | tier S | `/conflict-check` |
 | 9 | `plan` | DECIDE | gating | `conflict_check` | — | `/plan` |
 | 10 | `coherence_check` | DECIDE | gating | `plan` | tier S | `/coherence-check` |
-| 11 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
-| 12 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
-| 13 | `test_suite` | BUILD | gating | `build` | — | engine-native |
-| 14 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
-| 15 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
-| 16 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
-| 17 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
-| 18 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
-| 19 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
+| 11 | `plan_review` | DECIDE | gating | `coherence_check` | tier S | `/plan-review`, through an engine-owned read-only reviewer session |
+| 12 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
+| 13 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
+| 14 | `test_suite` | BUILD | gating | `build` | — | engine-native |
+| 15 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
+| 16 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
+| 17 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
+| 18 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
+| 19 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
+| 20 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
 
-Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 4, SHIP 5.
+Per phase: SETUP 1, UNDERSTAND 1, DECIDE 10, BUILD 4, SHIP 5.
+
+`plan_review` is skipped for landed specs. When a daemon run reaches it without an operator grant and
+this feature's `.docs/plan-review/<plan-stem>.md` is absent, the engine records the step `skipped` and
+writes `landed-before-plan-review` under `step_reasons` in `conduct-state.json` instead of authoring a
+review. This is the normal path for a composer-landed spec: land verifies the record in the authoring
+worktree but never commits it.
 
 `test_suite` is the sole engine-native BUILD verifier. Static wiring reachability is retired.
-`build_review` currently runs only its optional `testQuality` rubric. The engine freezes the base/HEAD
+`build_review` runs the default-on `implementationQuality` rubric plus any enabled `testQuality`,
+`security`, or custom rubric. For `testQuality`, the engine freezes the base/HEAD
 source and active feature artifacts, then derives established test regions and concrete uncertain
 candidates from changed declarations, current-feature-owned `Covers` bindings introduced or updated
 after the review base, and relevant shared setup or helper evidence. An unchanged bare marker remains
@@ -80,8 +88,8 @@ reviewed. `build_review` fails before dispatch, and the conductor routes it to B
 mechanical-fault allowance and halts `needs-human` once the kickback cap is spent.
 
 Enabled `testQuality` with no established targets or concrete candidates is a valid empty-scope PASS: it does
-not dispatch its reviewer or counterfactual preflight. An enabled `security` rubric still reviews the diff
-and participates in the joined verdict. This preserves production-only refactors and pure
+not dispatch its reviewer or counterfactual preflight. Enabled `security` and `implementationQuality` rubrics still review the diff
+and participate in the joined verdict. This preserves production-only refactors and pure
 moves/renames as non-coverage work; the aggregate suite and CI remain responsible for broad regression
 execution. An admitted non-convention marker file that cannot be reviewed is named with its reason on the persisted `build_review_scope_summary` event. For each concrete candidate, the normal reviewer returns one source-bound scope resolution:
 `resolved`, `out-of-scope`, or `indeterminate`. An indeterminate candidate preserves any otherwise valid
@@ -100,7 +108,7 @@ deprecation notice. See `adr-2026-08-11-deprecated-no-op-step-retirement`.
 Two steps are checkpoints (`isCheckpoint: true`) — the engine pauses for the operator after them in
 default and interactive mode: `build` and `manual_test`.
 
-`build` is the first `loopGate` step, which makes index 12 the boundary between the front (DECIDE-ish,
+`build` is the first `loopGate` step, which makes index 14 the boundary between the front (DECIDE-ish,
 one-way) region and the gate loop. Everything from `build` to `finish` is a loop gate and can be
 re-entered when a downstream gate kicks back. The kickback targets — the steps a blocking gate can send
 work back to — are `prd`, `architecture_review`, `stories`, and `plan`.
@@ -167,6 +175,13 @@ three-member group in a single wave; see
 [configuration](configuration.md)). Branches never write `conduct-state.json` or `.pipeline/gates/*` —
 only the loop thread does, after every branch settles.
 
+A member dispatch that succeeds but leaves no current, complete verdict for its own run — missing,
+stale from an earlier attempt, or a rejected structured result — counts as a failed attempt. The
+branch re-dispatches within the member's ordinary retry budget, and the `step_retry` event's
+`reason` carries the handshake failure (for example `prd_audit dispatch <run-id> produced no
+verdict; …`). A branch that exhausts its budget this way halts naming the branch, the attempt count,
+and the missing verdict; it is not routed to `remediate`.
+
 ## The build verification group
 
 `test_suite` is the sole BUILD verifier. It runs after `build` and before `build_review`. After a
@@ -175,15 +190,15 @@ not consume retry or kickback budget.
 
 ## Tier skips
 
-Tier S skips 6 steps. Tiers M and L skip none.
+Tier S skips 7 steps. Tiers M and L skip none.
 
 | Tier | Steps skipped |
 | --- | --- |
-| S | `architecture_diagram`, `architecture_review`, `conflict_check`, `coherence_check`, `acceptance_specs`, `manual_test` |
+| S | `architecture_diagram`, `architecture_review`, `conflict_check`, `coherence_check`, `plan_review`, `acceptance_specs`, `manual_test` |
 | M | none |
 | L | none |
 
-Tier S additionally disengages the land-time coherence gate entirely.
+Tier S additionally disengages the land-time coherence and plan-review gates entirely.
 
 Steps that are **not** tier-skippable at any tier include the whole BUILD spine — `build`,
 `build_review`, `test_suite` — plus `plan`, `stories`, `prd`, `rebase`, `finish`,
@@ -218,7 +233,7 @@ The track split touches exactly one step plus one land-gate layer.
 | Difference | `product` | `technical` |
 | --- | --- | --- |
 | `prd` (index 4) | Runs | Skipped — no product requirements to spec |
-| `prd_audit` (index 17) | Runs — stories' acceptance criteria are the audit key on both tracks; PRD FRs are context only when a PRD exists | Runs |
+| `prd_audit` (index 18) | Runs — stories' acceptance criteria are the audit key on both tracks; PRD FRs are context only when a PRD exists | Runs |
 | Land-time coherence `fr` layer | Required | Not required; the layer degrades away |
 
 Everything else is identical on both tracks. The track is decided in `explore` and recorded in
@@ -300,9 +315,10 @@ detail.
 | `conflict_check` | `.docs/conflicts/*.md` | yes | At least one matching file |
 | `plan` | `.docs/plans/*.md` | yes | At least one matching file. The verdict layer additionally requires every story unit in this feature's plan to be covered by at least one task, and fails when the feature's plan cannot be resolved among several |
 | `coherence_check` | `.docs/coherence/*.md` | yes | At least one matching file, named with the plan's filename stem |
+| `plan_review` | `.docs/plan-review/<plan-stem>.md` | yes | This feature's artifact parses, its integrity line matches, and every `blocking` finding carries an `accepted` or `resolved` disposition |
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker, every task completed or skipped, **and** a clean working tree whenever the status probe establishes one. The post-rebase closure applies the same conjunct: a reapplied autostash blocks BUILD until the named paths are committed or discarded. An absent or failed probe fails open to the legacy behavior. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
-| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid effective `PASS` from the enabled rubric set (currently only `testQuality`, off by default — an empty enabled set is a vacuous `PASS`). An enabled test-quality rubric with a valid empty typed scope also passes without a reviewer or counterfactual dispatch. Missing, prior-session, malformed, unresolved findings, or uncovered `scope-incomplete`/infrastructure faults all block. Raw outcomes and valid findings remain recorded; effective dispositions control routing. |
+| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid effective `PASS` from the enabled rubric set (`implementationQuality` by default; `testQuality` and `security` opt in — an empty enabled set is a vacuous `PASS`). An enabled test-quality rubric with a valid empty typed scope also passes without a reviewer or counterfactual dispatch. Missing, prior-session, malformed, unresolved findings, or uncovered `scope-incomplete`/infrastructure faults all block. Raw outcomes and valid findings remain recorded; effective dispositions control routing. |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. `WARN` rows record unavailable browser capability without blocking. After a recorded FAIL, HEAD must have moved before a later FAIL-free attempt is accepted |
 | `prd_audit` | `.pipeline/prd-audit.json` | no | A typed, engine-persisted judgment from the current dispatch (or one whose reviewed code stamp `gate_code_validity` still preserves), with a non-null code stamp and `complete: true`. Completeness requires exactly one judgment per active story criterion — `PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE` — each resolving its criterion, cited tasks, and requirement associations against the projection; a `FIXABLE` names exactly one active owner task and an `OVER_SCOPE` carries an intent relation. Every supplied PRD requirement needs a criterion association or `PLAN_GAP` evidence, except one the feature's coherence waiver discharges ([waived requirements](../explanation/gates.md#waived-prd-requirements)). Any non-`PASS` judgment or no-owner observation blocks unless it is an `OVER_SCOPE` that is `within` intent, `outside-harmless`, or operator-accepted. Missing, unreadable, unsupported-version, incomplete, stale, or unstamped evidence blocks. `.pipeline/prd-audit.md` is a rendered view and is never read as a verdict |
@@ -346,21 +362,17 @@ Dispatch reads a single map keyed by step name. That map is the authority for wh
 `skillName` field on the step definition is not consulted at dispatch time.
 
 Three steps dispatch no skill at all and run entirely in the engine: `build_review`, `test_suite`,
-and `attribution_verify`. Of these, `build_review` dispatches its registered rubric set (currently
-only `testQuality`) and `attribution_verify` dispatches its own attribution-audit logic, both from
+and `attribution_verify`. Of these, `build_review` dispatches its enabled rubric set (by default
+only `implementationQuality`) and `attribution_verify` dispatches its own attribution-audit logic, both from
 engine code; `test_suite` is a deterministic aggregate verifier.
 
 Two steps dispatch the `conduct` skill with an argument rather than a skill of their own name:
 `worktree` runs `/conduct worktree` and `complexity` runs `/conduct complexity`.
 
-> **Known limitation.** Two step definitions carry a `skillName` naming a skill directory that does not
-> exist: `worktree` declares `skillName: 'worktree'` and `attribution_verify` declares
-> `skillName: 'attribution-verify'`. Neither `skills/worktree/` nor `skills/attribution-verify/` is on
-> disk. Nothing breaks, because dispatch uses the invocation map and the model table uses its own
-> skill-to-step map, but the field misleads anyone reading the step definition. The repository's
-> integrity suite validates `/skill-name` references inside SKILL.md files, not `skillName` fields in
-> TypeScript, so these are unguarded. Tracked in
-> [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
+Every `skillName` on a built-in step must name an existing `skills/<name>/` directory, and that
+skill's `enforcement:` frontmatter must match the strictest step mapped to it.
+`src/conductor/test/skill-frontmatter-engine-drift.test.ts` fails on either drift. Neither `worktree`
+nor `attribution_verify` carries a `skillName`.
 
 ## Related pages
 

@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:23
+// Covers: task:2, task:3, task:4, task:6, task:23
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
@@ -8,11 +8,12 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 
 const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_operation_failed', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
   'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
+  'provider_attempt_started',
   'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
   'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached',
-  'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'pipeline_closeout',
+  'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall',
   'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
   'renderer_error', 'pipeline_tail_diagnostic',
   'session_command_refused', 'github_bypass_attempt', 'github_bypass_result',
@@ -89,6 +90,18 @@ describe('TerminalRenderer', () => {
     expect(output).toContain('FEATURE COMPLETE');
   });
 
+  it('prints no closeout obligation line for a completed build review stream', async () => {
+    await renderer.handle({ type: 'step_started', step: 'build', index: 0 });
+    await renderer.handle({ type: 'gate_verdict', step: 'build', satisfied: true });
+    await renderer.handle({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    });
+    await renderer.handle({ type: 'step_completed', step: 'build', status: 'done' });
+    await renderer.handle({ type: 'feature_complete' });
+
+    expect(stream.output()).not.toMatch(/\bcloseout\s+\w+/i);
+  });
+
   it('feature_complete banner includes feature description and PR url when provided', async () => {
     await renderer.handle({
       type: 'feature_complete',
@@ -150,6 +163,88 @@ describe('TerminalRenderer', () => {
     expect(stream.output()).toContain(
       '⚠ PROVIDER FALLBACK: plan — codex unavailable (executable not found); trying claude',
     );
+  });
+
+  it('renders provider starts before completion, once, for lifecycle and configured-member subjects', async () => {
+    await renderer.handle({ type: 'step_started', step: 'stories', index: 0 });
+    await renderer.handle({
+      type: 'provider_attempt_started',
+      step: 'stories',
+      provider: { kind: 'known', id: 'claude' },
+      model: 'opus',
+    });
+    await renderer.handle({ type: 'step_completed', step: 'stories', status: 'done' });
+
+    await renderer.handle({
+      type: 'provider_attempt_started',
+      step: 'plan_review',
+      provider: { kind: 'known', id: 'codex' },
+      executionContext: {
+        executionId: 'review-security',
+        subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' },
+      },
+    });
+
+    const output = stream.output();
+    expect(output).toContain('stories on claude');
+    expect(output).toContain('opus');
+    expect(output.indexOf('stories on claude')).toBeLessThan(output.lastIndexOf('Conductor: Add login'));
+    expect(output.match(/stories on claude/g)).toHaveLength(1);
+    expect(output).toContain('review / security on codex');
+    expect(output).not.toContain('provider_attempt_started');
+  });
+
+  it('logs a provider start plainly while suspended and redraws the running indicator on resume', async () => {
+    const ttyStream = new CaptureStream();
+    const ttyRenderer = new TerminalRenderer({
+      stateFilePath: '/tmp/test-state.json',
+      featureDesc: 'Add login',
+      steps: ALL_STEPS,
+      readStateFn: readStateMock,
+      liveRegion: createLiveRegion({ stream: ttyStream, forceTTY: true }),
+    });
+
+    await ttyRenderer.handle({ type: 'step_started', step: 'stories', index: 0 });
+    await ttyRenderer.handle({ type: 'dashboard_refresh' });
+    ttyStream.reset();
+    await ttyRenderer.handle({
+      type: 'provider_attempt_started',
+      step: 'stories',
+      provider: { kind: 'known', id: 'claude' },
+    });
+    await ttyRenderer.handle({ type: 'step_completed', step: 'stories', status: 'done' });
+
+    const output = ttyStream.output();
+    expect(output).toContain('▸ stories on claude\n');
+    expect(output).toContain('Stories');
+  });
+
+  it('renders provider models only when present and preserves an explicit unknown provider', async () => {
+    await renderer.handle({
+      type: 'provider_attempt_started',
+      step: 'stories',
+      provider: { kind: 'known', id: 'claude' },
+      model: 'opus',
+    });
+    await renderer.handle({
+      type: 'provider_attempt_started',
+      step: 'stories',
+      provider: { kind: 'known', id: 'codex' },
+    });
+    await renderer.handle({
+      type: 'provider_attempt_started',
+      step: 'stories',
+      provider: { kind: 'unknown' },
+    });
+
+    const output = stream.output();
+    expect(output).toContain('claude (opus)');
+    expect(output).toContain('stories on codex');
+    expect(output).not.toContain('undefined');
+    expect(output).not.toContain('null');
+    expect(output).not.toContain('()');
+    expect(output).toContain('stories provider unknown');
+    expect(output.slice(output.lastIndexOf('stories provider unknown'))).not.toContain('claude');
   });
 
   it('does not render satisfied gate verdicts', async () => {
@@ -311,17 +406,9 @@ describe('TerminalRenderer', () => {
   });
 
   it('does not summarize non-renderable branchless events', async () => {
-    await renderer.handle({ type: 'coverage_binding_judged' } as ConductorEvent);
+    await renderer.handle({ type: 'otel_spool_drop' } as ConductorEvent);
 
-    expect(stream.output()).not.toContain('coverage_binding_judged');
-  });
-
-  it('writes pipeline closeout details to the live region', async () => {
-    await renderer.handle({
-      type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 140, ts: 140,
-    });
-
-    expect(stream.output()).toContain('closeout evaluator (40ms)');
+    expect(stream.output()).not.toContain('otel_spool_drop');
   });
 
   it('renders active build stalls with their elapsed time and selected action', async () => {

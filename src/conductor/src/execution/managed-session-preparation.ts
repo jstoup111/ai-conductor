@@ -137,6 +137,8 @@ export interface ObservationDestinationProbeInput {
   readonly protectedPaths: readonly string[];
   /** Selected prepared executable when the provider is self-hosted. */
   readonly executable?: string;
+  /** Prepared invocation args that precede the provider subcommand (self-host launcher and child args). */
+  readonly executableArgs?: readonly string[];
 }
 
 export type ObservationDestinationProbe = (
@@ -148,6 +150,7 @@ export interface PrepareManagedSessionObservationDestinationInput {
   readonly context: ManagedSessionContext;
   readonly readOnlyReview: boolean;
   readonly executable?: string;
+  readonly executableArgs?: readonly string[];
   readonly probe: ObservationDestinationProbe;
 }
 
@@ -176,6 +179,7 @@ export async function prepareManagedSessionObservationDestination(
     producerRoot: input.context.producerRoot,
     protectedPaths: protectedPaths(input.context),
     ...(input.executable ? { executable: input.executable } : {}),
+    ...(input.executableArgs ? { executableArgs: input.executableArgs } : {}),
   });
   if (result.producerWrite !== 'allowed' || result.protectedWrites !== 'refused') {
     throw unavailable(input.provider, 'the selected read-only policy cannot prove narrow observation access');

@@ -390,3 +390,47 @@ Task 3, Task 5 ──► Task 8 ──► Task 9
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-refusal-7c10a767-f289-4d69-a726-5c1817437dc6: mergeable-sweep.ts: restore the per-entry maybeClearConflictLabel call; mergeable-sweep-label-clear.test.ts: drop the sticky-conflict pin and restore the conflict-label clear assertion
+**Gate:** prd-audit
+**Rationale:** Removal/rework only. The operator refused the deletion of the per-entry maybeClearConflictLabel call. Verified: maybeClearConflictLabel is still exported at mergeable-sweep.ts:99 and has no production caller. The rework restores the pre-change behavior and adds nothing new. Restore the per-entry `survivors[idx] = await maybeClearConflictLabel(entry, state, entryGh, log)` clear in the sweep, keeping Task 7's maybeClearReadinessLabel beside it, since their causes are disjoint. In mergeable-sweep-label-clear.test.ts, remove the conflict-resolution case from 'leaves human, CI-exhaustion, and conflict labels sticky', keep the human and CI-exhaustion stickiness assertions, and restore the assertion that a conflict-resolution-attributed label on a now-MERGEABLE PR is cleared. Task 7's clause 'conflict escalation keeps the label' must not survive as a test pin.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 7c10a767-f289-4d69-a726-5c1817437dc6 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 7c10a767-f289-4d69-a726-5c1817437dc6 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-7c10a767-f289-4d69-a726-5c1817437dc6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1: mergeable-sweep.ts: run the OPEN-PR ci-failed removal only after the indeterminate guard; mergeable-sweep.test.ts: give the indeterminate fixtures a ci-failed label and assert no removeLabel call
+**Gate:** prd-audit
+**Rationale:** Verified (100%): mergeable-sweep.ts:664-665 removes ci-failed for every readable OPEN PR before the `if (indeterminate) continue;` guard at :685, so indeterminate observations mutate GitHub. This is a conforming implementation-ordering defect inside Task 5's route table, and ADR D3 stays authoritative. Fix: move the OPEN-PR ci-failed removal after the indeterminate guard, or gate it on a non-indeterminate verdict. Extend the Task 5 indeterminate fixtures (pull/57 UNKNOWN/UNKNOWN, pull/58 undocumented status, re-read failure) to carry `ci-failed` and assert zero GitHub operations.
+**Criterion:** S1.8
+**Parent task:** 5
+**Done when:**
+- [test] S1.8 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: event-sinks.ts: mark ci_failed persist:true; daemon ledger test: run the production sweep binding and assert shipped_pr_readiness and ci_failed lines in .daemon/events.jsonl, and that labels and dispatch still happen when the ledger write fails
+**Gate:** prd-audit
+**Rationale:** Verified (100%): event-sinks.ts:220 declares `ci_failed: { render: true, persist: false, ... }`. startDaemonEventPersistence subscribes only to persistedEventTypes(), so the sweep's ci_failed emission is never written to .daemon/events.jsonl. Task 9's doneWhen requires that ledger write. The fix is to set persist:true for ci_failed and replace the source-string test with a behavioral test. That test runs the production sweepMergeableLabels binding and asserts that .daemon/events.jsonl contains both the shipped_pr_readiness and ci_failed events. It also asserts that a failing ledger write does not block the label add or the ci-fix offer.
+**Criterion:** S5.3
+**Parent task:** 9
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: mergeable-sweep.ts: route a MERGED/CLOSED/NOTFOUND result from the UNKNOWN re-read through the existing lifecycle handlers; mergeable-sweep.test.ts: re-read-to-terminal cases
+**Gate:** as-built
+**Rationale:** Verified (99%): the UNKNOWN re-read at mergeable-sweep.ts:543-545 replaces `state` after the MERGED/CLOSED/NOTFOUND lifecycle handlers have already run. A re-read that returns a terminal state therefore skips those handlers and reaches classification. Tasks 4 and 5 admit the fix: after the re-read, route a non-OPEN state back through the existing lifecycle handling (shipped-record gate for MERGED/CLOSED, prune for NOTFOUND) instead of classifying it. Add tests in which the re-read returns MERGED, CLOSED, and NOTFOUND.
+**Governing clause:** adr-2026-10-09-shipped-pr-readiness-verdict decision 1
+**Done when:**
+- adr-2026-10-09-shipped-pr-readiness-verdict decision 1 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: mergeable-sweep.ts: treat a re-read returning readFailure/UNKNOWN as a failed re-read and classify it indeterminate; mergeable-sweep.test.ts: re-read returns the production readFailure sentinel
+**Gate:** as-built
+**Rationale:** Verified (100%): production readPullRequestMergeState returns state UNKNOWN with readFailure instead of throwing (pr-labels.ts:612-623). The re-read therefore marks itself 'completed', and the `state.state === 'UNKNOWN'` skip at :558 bypasses classification. The 'failed' branch is reachable only through the catch, which production never hits. Task 5 requires a failed re-read to be classified indeterminate. Fix: treat a re-read result carrying readFailure, or state UNKNOWN, as mergeabilityReread='failed', classify it indeterminate on the preserved OPEN state, and keep it read-only. Add a test whose re-read stub returns the production-shaped readFailure sentinel rather than throwing.
+**Governing clause:** adr-2026-10-09-shipped-pr-readiness-verdict decision 2
+**Done when:**
+- adr-2026-10-09-shipped-pr-readiness-verdict decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.

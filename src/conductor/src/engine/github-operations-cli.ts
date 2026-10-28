@@ -5,7 +5,9 @@ import {
   executeGithubOperation,
   type GithubOperationEventEmitter,
   type GithubOperationResult,
+  type GithubOperationRefusalReason,
   type GithubOperationRunner,
+  type GithubOperationRequest,
   type GithubOperationTarget,
 } from './github-operations.js';
 import {
@@ -18,6 +20,11 @@ import { executeRemoteGit, resolveFeatureRemoteMutation, type RemoteGitCommandRu
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch, LEAF_PREFIX, SPEC_PREFIX } from './feature-branch-identity.js';
 import { leafRefExists } from './daemon-halt-pr-operations.js';
+import { readPublicationRecord } from './stack-publication-record.js';
+import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import { pushedTipRef } from './push-lease.js';
+import { validateStackPayload } from './stack-publication-payload-validation.js';
+import { appendCloseoutEvent, type ExternalPipelineEvent } from './closeout-events.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   createGuardedGithubOperationRunner,
@@ -27,9 +34,13 @@ import {
 } from './tracker-client.js';
 
 type FeatureMutationResolution =
-  | { readonly kind: 'resolved'; readonly mutation: GithubMutationExecutionContext }
+  | {
+    readonly kind: 'resolved';
+    readonly mutation: GithubMutationExecutionContext;
+    readonly stackPublication?: Parameters<typeof createGuardedGithubOperationRunner>[1]['stackPublication'];
+  }
   | { readonly kind: 'unavailable' }
-  | { readonly kind: 'refused'; readonly reason: 'invalid-target' };
+  | { readonly kind: 'refused'; readonly reason: GithubOperationRefusalReason | 'unrecorded-stack-child' };
 
 export interface GithubOperationCliCommand {
   readonly requestFile: string;
@@ -68,11 +79,28 @@ export interface GithubOperationCliInput {
   readonly confirmation?: InteractiveGithubOperationConfirmation;
   /** Existing event spine when this command runs inside a conductor process. */
   readonly events?: GithubOperationEventEmitter;
+  /** Sibling-ledger writer; failures here must not change the operation result. */
+  readonly appendExternalEvent?: (projectRoot: string, event: ExternalPipelineEvent) => void;
   readonly write?: (line: string) => void;
 }
 
+/** Remove request prose from a transport failure before it can enter a persisted event. */
+export function boundGithubOperationFailureText(error: string, request: GithubOperationRequest): string {
+  let text = error;
+  for (const value of Object.values(request.payload ?? {})) {
+    if (typeof value === 'string' && value.length > 0) {
+      text = text.split(value).join('«payload»');
+    }
+  }
+  if (text.startsWith('Command failed:')) {
+    const firstNewline = text.indexOf('\n');
+    text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+  }
+  return text.trim().slice(0, 1000);
+}
+
 async function featureMutationForRequest(
-  request: import('./github-operations.js').GithubOperationRequest,
+  request: GithubOperationRequest,
   input: GithubOperationCliInput,
   gh: ReturnType<typeof makeProductionGh>,
   git: GitRunner,
@@ -85,6 +113,28 @@ async function featureMutationForRequest(
   if (!branch) return { kind: 'unavailable' };
   const identity = parseFeatureBranch(branch);
   let slug: string;
+  let publication: Awaited<ReturnType<typeof readPublicationRecord>> | undefined;
+  const isStackPublicationOperation = request.operation === 'stack.read'
+    || request.operation === 'stack.create'
+    || request.operation === 'stack.add'
+    || request.operation === 'pull-request.retarget';
+  const readPublication = async (featureSlug: string) => {
+    publication ??= await readPublicationRecord(input.cwd, featureSlug, {
+      git: async (args) => {
+        try {
+          const result = await git(args, { cwd: input.cwd });
+          return { exitCode: 0, stdout: result.stdout, stderr: '' };
+        } catch (error) {
+          return {
+            exitCode: typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 1 ? 1 : 128,
+            stdout: '',
+            stderr: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+    });
+    return publication;
+  };
   if (identity.kind === 'child') {
     // `leafRefExists` reads the probe's exit code, which the CLI's pr-labels
     // `GitRunner` does not surface (it returns only `stdout` and throws on a
@@ -106,11 +156,32 @@ async function featureMutationForRequest(
       return { kind: 'refused', reason: 'invalid-target' };
     }
     slug = identity.slug;
+    if (request.context.feature !== undefined && request.context.feature !== slug) {
+      return { kind: 'refused', reason: 'invalid-target' };
+    }
+    const published = await readPublication(identity.slug);
+    if (published.kind !== 'record' || published.record.tornDown === true || !published.record.members.some(
+      (member) => member.position === identity.child && member.branch === branch,
+    )) {
+      return { kind: 'refused', reason: 'unrecorded-stack-child' };
+    }
   } else {
     slug = branch.startsWith(LEAF_PREFIX) ? branch.slice(LEAF_PREFIX.length) : branch.startsWith(SPEC_PREFIX) ? branch.slice(SPEC_PREFIX.length) : branch;
   }
   if (request.context.feature !== undefined && request.context.feature !== slug) {
     return { kind: 'refused', reason: 'invalid-target' };
+  }
+  if (isStackPublicationOperation) {
+    const published = await readPublication(slug);
+    if (published.kind !== 'record' || published.record.tornDown === true) {
+      return { kind: 'refused', reason: identity.kind === 'child' ? 'unrecorded-stack-child' : 'invalid-target' };
+    }
+    const payload = validateStackPayload(published.record, request);
+    if (payload.kind === 'refused') return payload;
+    if (request.operation === 'stack.read' && request.target.kind === 'stack'
+      && (published.record.stack === undefined || request.target.number !== published.record.stack.number)) {
+      return { kind: 'refused', reason: 'invalid-target' };
+    }
   }
   const resolved = await resolveFeatureRemoteMutation({
     cwd: input.cwd,
@@ -120,7 +191,7 @@ async function featureMutationForRequest(
     gh,
   });
   if (!resolved) return { kind: 'unavailable' };
-  if (request.target.kind === 'pull-request') {
+  if (request.target.kind === 'pull-request' && !isStackPublicationOperation) {
     try {
       const stdout = await runTrackerRead(
         gh,
@@ -143,7 +214,7 @@ async function featureMutationForRequest(
       // The resolved feature branch is the only remote-ref capability this CLI
       // composition can supply. The mutation policy compares it to the
       // requested destination before the remote transport is invoked.
-      provenance: request.target.kind === 'pull-request'
+      provenance: request.target.kind === 'pull-request' || request.target.kind === 'repository' || request.target.kind === 'stack'
         // The branch-to-PR lookup above independently resolved this exact PR.
         // Preserve that binding for the policy instead of letting a ref grant
         // repository-wide PR authority.
@@ -154,6 +225,50 @@ async function featureMutationForRequest(
         ...(input.resolveMachineOwner === undefined ? {} : { resolveMachineOwner: input.resolveMachineOwner }),
       },
     },
+    ...(isStackPublicationOperation && publication?.kind === 'record' && publication.record.tornDown !== true
+      ? {
+        stackPublication: {
+          record: publication.record,
+          guardTips: async () => {
+            // Native-stack operations and a retarget change the retained leaf's
+            // publication shape even when an agent invokes the CLI from a
+            // child checkout.  Fence them against that one daemon-owned ref.
+            const leafBranch = `${LEAF_PREFIX}${slug}`;
+            let source: string;
+            try {
+              const tip = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, leafBranch)], { cwd: input.cwd });
+              source = tip.stdout.trim();
+            } catch {
+              return { kind: 'refused' as const, reason: 'stack-tip-mismatch' as const };
+            }
+            if (source === '') return { kind: 'refused' as const, reason: 'stack-tip-mismatch' as const };
+            const guard = await guardPublishedStackWrite({
+              cwd: input.cwd,
+              remote: 'origin',
+              slug,
+              destination: `refs/heads/${leafBranch}`,
+              source,
+              durableChildState: true,
+              git: async (args, inputText) => {
+                try {
+                  const result = await git([...args], inputText === undefined ? { cwd: input.cwd } : { cwd: input.cwd, input: inputText });
+                  return { stdout: result.stdout, exitCode: 0 };
+                } catch (error) {
+                  return { stdout: '', exitCode: typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 1 ? 1 : 128 };
+                }
+              },
+              lsRemote: async (args) => {
+                const result = await git([...args], { cwd: input.cwd });
+                return { stdout: result.stdout };
+              },
+            });
+            return guard.kind === 'refuse'
+              ? { kind: 'refused' as const, reason: 'stack-tip-mismatch' as const }
+              : undefined;
+          },
+        },
+      }
+      : {}),
   };
 }
 
@@ -163,6 +278,25 @@ function canonicalCliResult(result: GithubOperationResult, target: GithubOperati
     case 'refused': return { ...result, target };
     case 'failed': return { ...result, target };
     case 'partial': return { ...result, target: result.created };
+  }
+}
+
+function recordFailedOperation(
+  request: GithubOperationRequest,
+  result: GithubOperationCliResult,
+  input: GithubOperationCliInput,
+): void {
+  if (result.kind !== 'failed') return;
+  try {
+    (input.appendExternalEvent ?? appendCloseoutEvent)(input.cwd, {
+      type: 'github_operation_failed',
+      operation: request.operation,
+      target: request.target,
+      error: boundGithubOperationFailureText(result.error, request),
+      ts: new Date().toISOString(),
+    });
+  } catch {
+    // A best-effort external diagnostic must not replace the operation failure.
   }
 }
 
@@ -193,6 +327,7 @@ export async function dispatchGithubOperationCommand(
       { cwd: input.cwd, confirmation: input.confirmation, events: input.events },
     );
     const output = canonicalCliResult(result as GithubOperationResult, decoded.request.target);
+    recordFailedOperation(decoded.request, output, input);
     write(`${JSON.stringify(output)}\n`);
     return result.kind === 'executed' ? 0 : 1;
   }
@@ -236,9 +371,12 @@ export async function dispatchGithubOperationCommand(
     );
     const output: GithubOperationCliResult = result.kind === 'executed'
       ? { kind: 'executed', operation: decoded.request.operation, target: decoded.request.target }
+      : result.kind === 'failed' && result.error === 'published stack tip mismatch'
+        ? { kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: 'stack-tip-mismatch' }
       : result.kind === 'refused'
         ? { kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: result.reason }
         : { kind: 'failed', operation: decoded.request.operation, target: decoded.request.target, error: result.kind === 'failed' ? result.error : 'not a remote write' };
+    recordFailedOperation(decoded.request, output, input);
     write(`${JSON.stringify(output)}\n`);
     return result.kind === 'executed' ? 0 : 1;
   }
@@ -251,6 +389,9 @@ export async function dispatchGithubOperationCommand(
   const runner = input.runner ?? createGuardedGithubOperationRunner(gh, {
     cwd: input.cwd,
     ...(featureMutation.kind === 'resolved' ? { mutation: featureMutation.mutation } : {}),
+    ...(featureMutation.kind === 'resolved' && featureMutation.stackPublication !== undefined
+      ? { stackPublication: featureMutation.stackPublication }
+      : {}),
     intake: createGithubIntakeAuthorization({
       gh,
       cwd: input.cwd,
@@ -265,6 +406,7 @@ export async function dispatchGithubOperationCommand(
     { events: input.events },
   );
   const output = canonicalCliResult(result as GithubOperationResult, decoded.request.target);
+  recordFailedOperation(decoded.request, output, input);
   write(`${JSON.stringify(output)}\n`);
   return result.kind === 'executed' ? 0 : 1;
 }

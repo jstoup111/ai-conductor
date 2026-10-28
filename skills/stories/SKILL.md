@@ -118,7 +118,7 @@ not derive is unkeyable and halts `prd_audit`.
 ```
 
 > **"Done When" is the primary success gate.** Acceptance criteria describe *behavior*; "Done When"
-> defines the measurable outputs the evaluator checks to confirm the story is complete. Every story
+> defines the measurable outputs `build_review`, `prd_audit`, or `/code-review` checks to confirm the story is complete. Every story
 > MUST have a "Done When" section. Checkboxes must be concrete and independently verifiable — not
 > restatements of acceptance criteria.
 

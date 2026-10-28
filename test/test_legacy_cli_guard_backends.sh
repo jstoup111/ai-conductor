@@ -83,7 +83,11 @@ make_fixture() {
 }
 
 make_clean_fixture() {
-  make_fixture "$1"
+  local fixture
+  fixture=$(make_fixture "$1")
+  mkdir -p "$fixture/docs/guides"
+  printf 'Run ai-conductor daemon start.\n' > "$fixture/docs/guides/clean.md"
+  printf '%s\n' "$fixture"
 }
 
 run_guard() {
@@ -110,7 +114,9 @@ for planted_path in \
   'README.md' \
   'HARNESS.md' \
   'docs/reference/cli.md' \
-  'docs/reference/skills.md'; do
+  'docs/reference/skills.md' \
+  'docs/guides/planted.md' \
+  'docs/runbooks/planted.md'; do
   fixture=$(make_fixture "$(tr '/' '-' <<<"$planted_path")" "$planted_path")
 
   run_guard "$RG_PATH" "$fixture"
@@ -167,6 +173,29 @@ assert 'grep fallback rejects a non-contract bin/conduct reference in an allowli
   [ "$grep_exit" -ne 0 ] && [[ "$grep_output" == *"$expected_hit"* ]] && echo 0 || echo 1
 )"
 assert 'both backends reject the planted self-host bin/conduct reference identically' "$(
+  [ "$rg_exit" -eq "$grep_exit" ] && [ "$rg_output" = "$grep_output" ] && echo 0 || echo 1
+)"
+
+fixture=$(make_fixture docs-same-file 'docs/quickstart.md')
+printf '%s\n' '`--uninstall` removes harness-owned skill and reference links, the `conduct`, `conduct-ts`, and' > "$fixture/docs/quickstart.md"
+printf '%s\n' 'run conduct-ts daemon start' >> "$fixture/docs/quickstart.md"
+
+run_guard "$RG_PATH" "$fixture"
+rg_exit=$GUARD_EXIT
+rg_output=$GUARD_OUTPUT
+
+run_guard "$GREP_PATH" "$fixture"
+grep_exit=$GUARD_EXIT
+grep_output=$GUARD_OUTPUT
+
+expected_hit='non-allowlisted conduct-ts reference: docs/quickstart.md:2:run conduct-ts daemon start'
+assert 'grep fallback rejects a non-allowlisted conduct-ts line in an allowlisted docs file' "$(
+  [ "$grep_exit" -ne 0 ] && [[ "$grep_output" == *"$expected_hit"* ]] && echo 0 || echo 1
+)"
+assert 'the allowlisted docs line in the same file is still accepted' "$(
+  [[ "$grep_output" != *'docs/quickstart.md:1:'* ]] && echo 0 || echo 1
+)"
+assert 'both backends agree for the same-file docs case' "$(
   [ "$rg_exit" -eq "$grep_exit" ] && [ "$rg_output" = "$grep_output" ] && echo 0 || echo 1
 )"
 

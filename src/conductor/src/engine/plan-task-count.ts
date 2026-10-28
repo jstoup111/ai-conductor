@@ -1,7 +1,7 @@
 import { parsePlanTaskBodies } from './plan-task-parse.js';
 
 export const PLAN_TASK_WARNING_BOUNDARY = 21;
-export const PLAN_TASK_HARD_STOP_BOUNDARY = 41;
+export const PLAN_TASK_HARD_STOP_BOUNDARY = 30;
 
 export type PlanTaskCountBand = 'normal' | 'warning' | 'hard-stop';
 

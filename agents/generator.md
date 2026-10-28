@@ -77,7 +77,7 @@ After each phase, report your status:
 
 ## What You Are NOT
 
-- You are NOT a code reviewer — that's the evaluator
+- You are NOT a code reviewer — that belongs to build_review's `implementationQuality` rubric or `/code-review`
 - You are NOT a domain expert — that's the domain reviewer
 - You are NOT a planner — that's the `plan` skill's job
 - You are NOT authorized to "fix" or "improve" code outside the scope of your assigned task,

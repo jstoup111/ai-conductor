@@ -1,6 +1,5 @@
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import type { MalformedCoversMarker } from './build-review-test-scope.js';
-import type { CoverageBindingPayloadError } from './step-runners.js';
 import type { AuthenticationReadiness, CodexProbeFailure, ProviderExitFacts, TokenUsage } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
@@ -14,6 +13,18 @@ import type { AcceptedWideningDecision } from './accepted-widenings.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { RemediationProjection } from './remediation-projection.js';
 import type { CiFailureContext, CiFailureAttempt, GitRunner as RebaseGitRunner, ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
+import type { CitationJudgementInput, CitationJudgementResult } from './done-when-citation-judgement.js';
+import type { RemediationClosureInput, RemediationClosureVerdictResult } from './remediation-closure-judgement.js';
+
+/** Terminal result of the bounded Done-when citation judgement dispatch. */
+export type CitationJudgementDispatchResult =
+  | { readonly kind: 'valid'; readonly verdicts: readonly CitationJudgementResult[] }
+  | { readonly kind: 'unavailable'; readonly cause: string };
+
+/** Terminal result of the bounded remediation-closure judgement dispatch. */
+export type RemediationClosureJudgementDispatchResult =
+  | { readonly kind: 'valid'; readonly verdicts: readonly RemediationClosureVerdictResult[]; readonly attempts: number }
+  | { readonly kind: 'unavailable'; readonly cause: string; readonly attempts: number };
 
 export interface StepRunResult {
   success: boolean;
@@ -26,6 +37,8 @@ export interface StepRunResult {
   output?: string;
   /** Bounded facts from an unclassified provider exit, forwarded to close events. */
   exitFacts?: ProviderExitFacts;
+  /** Provider that produced the bounded exit facts, when a provider was selected. */
+  provider?: string;
   /** Native-schema terminal value, retained verbatim for engine validation. */
   finalStructuredResult?: unknown;
   /** A typed refusal is an entry/environment outcome, never provider text. */
@@ -33,8 +46,6 @@ export interface StepRunResult {
     kind: 'seal' | 'needs-human' | 'validation-verdict';
     reason: string;
   };
-  /** Retryable typed infrastructure failure from the coverage-binding judge. */
-  infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /** A custom review had no provider with an available read-only review mode. */
@@ -231,6 +242,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** A routed BUILD host alone requests the closed prerequisite-claim result. */
+  routedPrerequisiteClaim?: true;
   /** Per-dispatch cancellation authority for the provider invocation. */
   abortSignal?: AbortSignal;
   /** Configured skill path for a concurrent-group branch dispatch. */
@@ -315,6 +328,12 @@ export interface StepRunOptions {
    * rung without deriving retry state from invocation/session counters.
    */
   attempt?: number;
+  /**
+   * Self-host transcript capture identity for this dispatch. This is distinct
+   * from `attempt`: retries retain their own capture directories without
+   * changing the provider model/effort escalation input.
+   */
+  captureAttempt?: number;
   /**
    * Whether the current step's retry ladder is enabled. Forwarded with
    * `attempt` so fallback providers preserve `escalate:false`.
@@ -405,6 +424,19 @@ export interface StepRunner {
    * Optional: a runner without it makes a changed replay fail closed.
    */
   dispatchRebaseRegradeJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
+  /** Dispatch the engine-owned, bounded residue-routing judgement. */
+  dispatchResidueRoutingJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
+  /**
+   * Dispatch the engine-owned citation judgement in a fresh, read-only,
+   * native-schema-constrained provider session.
+   */
+  dispatchDoneWhenCitationJudgement?(
+    input: CitationJudgementInput,
+  ): Promise<CitationJudgementDispatchResult>;
+  /** Dispatch the engine-owned remediation-closure judgement under BUILD supervision. */
+  dispatchRemediationClosureJudgement?(
+    input: RemediationClosureInput,
+  ): Promise<RemediationClosureJudgementDispatchResult>;
   /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes

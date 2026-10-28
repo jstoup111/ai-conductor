@@ -116,8 +116,19 @@ ordinary_done_when_close_contract_holds() {
   grep -qF 'normal BUILD task-close path' "$skill_file" \
     && grep -qF 'conduct task done <id> --done-when <n>=<evidence>' "$skill_file" \
     && grep -qF 'conduct task done <id> --plan-gap <n> --reason <text>' "$skill_file" \
-    && grep -qF 'const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);' <<<"$run_task_done" \
+    && grep -qF 'const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen, unverified);' <<<"$run_task_done" \
     && grep -qF "if (completion.kind === 'refused')" <<<"$run_task_done"
+}
+
+pending_and_refused_citation_contract_holds() {
+  local skill_file="$1"
+
+  grep -qF 'pending-judgement' "$skill_file" \
+    && grep -qF 'judges it when the BUILD session ends' "$skill_file" \
+    && grep -qF 'retry hint naming the check and the judge' "$skill_file" \
+    && grep -qF 'writing or citing a test that asserts the check' "$skill_file" \
+    && grep -qF -- '--unverified <n>=<reason>' "$skill_file" \
+    && ! grep -qiE 'done-when[[:space:]]+accept' "$skill_file"
 }
 
 ship_verdict_artifacts_read_only_contract_holds() {
@@ -282,6 +293,7 @@ else
 fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|(conduct-ts|ai-conductor)[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
+  | grep -vF 'stepTierOverrides.coherence_check.L' \
   | grep -vF "${CONDUCT_SKILL_FILE}:" \
   | grep -vF "${BOOTSTRAP_SKILL_FILE}:" >/tmp/pipeline_contract_genericity_hits.$$; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2
@@ -351,7 +363,7 @@ else
     pass "ordinary Done when close predicate rejects missing BUILD-close guidance"
   fi
 
-  sed '/const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);/d' "$TASK_CLI_FILE" >"$ordinary_close_cli_mutation"
+  sed '/const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen, unverified);/d' "$TASK_CLI_FILE" >"$ordinary_close_cli_mutation"
   if ordinary_done_when_close_contract_holds "$SKILL_FILE" "$ordinary_close_cli_mutation"; then
     fail "ordinary Done when close predicate rejects a CLI path that bypasses completeTaskDoneWhen"
   else
@@ -367,6 +379,25 @@ else
   rm -f "$ordinary_close_skill_mutation" "$ordinary_close_cli_mutation"
 fi
 
+# A citation not added during the task remains pending until the conductor's
+# BUILD-boundary judgement. The pipeline agent repairs a refusal through test
+# evidence or ordinary unverified closure; the operator-only override command
+# must not leak into this session-facing contract.
+citation_skill_mutation="$(mktemp "${TMPDIR:-/tmp}/pending-refused-citation-skill.XXXXXX")"
+sed '/judges it when the BUILD session ends/d' "$SKILL_FILE" >"$citation_skill_mutation"
+if pending_and_refused_citation_contract_holds "$citation_skill_mutation"; then
+  fail "pending/refused citation predicate rejects missing BUILD-boundary judgement guidance"
+else
+  pass "pending/refused citation predicate rejects missing BUILD-boundary judgement guidance"
+fi
+
+if pending_and_refused_citation_contract_holds "$SKILL_FILE"; then
+  pass "pipeline explains pending/refused citations without leaking the operator override command"
+else
+  fail "pipeline must explain pending/refused citations, their repair, and omit the operator override command"
+fi
+rm -f "$citation_skill_mutation"
+
 # Must reference the session-hook ADR or PreToolUse/PostToolUse hooks
 if grep -qE 'PreToolUse|PostToolUse|session-hook-task-stamping' "$SKILL_FILE"; then
   pass "references session-hook machinery"
@@ -374,22 +405,40 @@ else
   fail "missing reference to session-hook machinery"
 fi
 
-# Batch verification and its evaluator must share one named affected-test union. Indeterminate
-# scope defers aggregate proof to the engine's test_suite gate; build sessions never run the
-# full suite (#2232).
+# Batch boundaries retain their affected-test, simplify, lint, and orphaned-caller
+# safeguards without dispatching an evaluator or writing closeout telemetry.
 pipeline_text="$(tr '\n' ' ' < "$SKILL_FILE" | tr -s ' ')"
 code_review_text="$(tr '\n' ' ' < "$CODE_REVIEW_SKILL" 2>/dev/null | tr -s ' ')"
 if [ -f "$CODE_REVIEW_SKILL" ] \
-  && grep -qF 'compute one named `BATCH_AFFECTED_TESTS` union' <<<"$pipeline_text" \
-  && grep -qF 'The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.' <<<"$pipeline_text" \
+  && grep -qF '`BATCH_AFFECTED_TESTS` union' <<<"$pipeline_text" \
   && grep -qF 'When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof' <<<"$pipeline_text" \
   && grep -qF 'the build session never runs the full test suite.' <<<"$pipeline_text" \
-  && grep -qF 'For batch reviews, inspect the provided `BATCH_AFFECTED_TESTS` result set' <<<"$code_review_text" \
-  && grep -qF 'Never require or launch an intermediate full-suite run.' <<<"$code_review_text"; then
-  pass "batch verification and evaluator use affected-test union and defer aggregate proof to test_suite"
+  && grep -qF 'orphaned' <<<"$pipeline_text" \
+  && ! grep -qiE 'HARD GATE: Evaluator dispatch|closeout-event|batches_with_evaluator' <<<"$pipeline_text"; then
+  pass "batch boundary retains verification without evaluator dispatch"
 else
-  fail "batch verification and evaluator must use affected-test union and defer aggregate proof to test_suite"
+  fail "batch boundary must retain verification without evaluator dispatch"
 fi
+
+# Batch boundaries retain their own verification discipline; an evaluator is
+# neither a required dispatch nor a gate-satisfaction record.
+batch_boundary_contract_holds() {
+  local skill_file="$1"
+  grep -qF '`BATCH_AFFECTED_TESTS`' "$skill_file" \
+    && grep -qi 'simplify' "$skill_file" \
+    && grep -qi 'linter' "$skill_file" \
+    && grep -qi 'orphaned' "$skill_file" \
+    && ! grep -qiE 'HARD GATE: Evaluator dispatch|closeout-event|batches_with_evaluator' "$skill_file"
+}
+batch_boundary_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-batch-boundary.XXXXXX")"
+cp "$SKILL_FILE" "$batch_boundary_fixture"
+printf '\nHARD GATE: Evaluator dispatch is mandatory at required batch boundaries.\n' >>"$batch_boundary_fixture"
+if batch_boundary_contract_holds "$SKILL_FILE" && ! batch_boundary_contract_holds "$batch_boundary_fixture"; then
+  pass "batch boundary retains verification without evaluator dispatch"
+else
+  fail "batch boundary must reject evaluator dispatch"
+fi
+rm -f "$batch_boundary_fixture"
 
 # Code review keeps routing batches touching security boundaries to the higher
 # capability evaluator, while its quality review scope remains non-security.

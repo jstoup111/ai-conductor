@@ -71,6 +71,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 | Prefix | Representative files |
 | --- | --- |
 | `daemon-*`, `daemon.ts` | `daemon.ts`, `daemon-runner.ts`, `daemon-backlog.ts`, `daemon-lock.ts`, `daemon-log.ts`, `daemon-tmux.ts`, `daemon-command.ts`, `daemon-fleet.ts`, `daemon-auto-park.ts` |
+| `executor-*`, engine pinning | `child-feature-executor.ts`, `executor-protocol.ts`, `executor-child.ts`, `executor-child-runtime.ts`, `executor-broker.ts`, `executor-proxies.ts`, `executor-records.ts`, `engine-pin.ts`, `supervisor-staleness.ts` |
 | step/pipeline core | `steps.ts`, `step-runners.ts`, `conductor.ts`, `selector.ts`, `state.ts`, `artifacts.ts`, `skill-invocation.ts`, `skill-resolver.ts`, `complete-verifier.ts` |
 | `gate*` | `gates.ts`, `gate-verdicts.ts`, `gate-code-validity.ts`, `gate-invalidation.ts`, `gate-writeback.ts`, `gated-snapshot.ts` |
 | `build-review-*` | `build-review-prompt.ts`, `build-review-inputs.ts`, `build-review-disposition.ts` |
@@ -92,7 +93,10 @@ Two lookups that are easy to get wrong:
   `engine/artifacts.ts:1122-1219`.
 - The daemon's ship-eligibility guard has no module of its own. It is inline in
   `engine/daemon-runner.ts` — `isVerifiedShip` at `:219` and `failureReasonForFalseShip` at `:228`.
-- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:123`.
+- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:114`.
+- Priority, size, and blocker facts come from the backend-neutral `createOrderingSource` in
+  `engine/ordering-source.ts`; the daemon shares one source per run via
+  `engine/daemon-ordering-readers.ts`. Do not add direct `gh` priority or blocker reads elsewhere.
 - The daemon pidfile lock is `engine/daemon-lock.ts`, not under `engine/engineer/`.
 
 #### The `conductor.ts` facade
@@ -187,36 +191,33 @@ appropriate CLI or integration test instead of adding a `wiring.entry_points` co
 
 ## Dependency direction
 
-Intended layering is `types ← execution ← engine ← ui ← entry points`. Measured by import grep over
-`src/conductor/src/`:
+Intended layering is `types ← execution ← engine ← ui ← entry points`: a file may import its
+own layer or any layer to its left. `tools/` may import only `tools/`, `engine/`, and `types/`, and
+nothing outside `tools/` may import `tools/`.
 
-| Edge | Imports | Notes |
+`test/structural/layer-ratchet.test.ts` enforces this in the default tier (see
+[layer ratchet](testing.md#layer-ratchet)). It fails on any value import that points the wrong way,
+any value-import cycle, and any such edge missing from the allowlist. Type-only imports, type-only
+re-exports, and dynamic `import()` are not edges.
+
+Existing violations are frozen in `test/structural/layer-allowlist.txt`, one sorted
+`<from> -> <to>` line per (importing file, imported file) pair. The allowlist can only shrink: an
+entry whose edge disappears or stops violating fails the test as stale.
+
+| Allowlisted edge | Entries | Example |
 | --- | --- | --- |
-| engine → types | 74 | The dominant edge. |
-| engine → execution | 17 | Includes concrete `ClaudeProvider` / `CodexProvider` in `engine/plugin-loader.ts`. |
-| ui → types | 11 | |
-| engine → ui | 14 | 11 are `import type`. |
-| ui → engine | 10 | 5 are `import type`. |
-| types → execution | 1 | `types/events.ts:3-9`. |
-| execution → anything internal | 0 | A clean leaf — `execution/` imports nothing from `engine/`, `types/`, or `ui/`. |
-| anything → entry points | 0 | No layer file imports `index.js`, `cli.js`, or `daemon-cli.js`. |
-| tools → engine, types | — | Generators read engine metadata; the reverse never happens. |
+| engine → engine (cycle) | 228 | `engine/slice-topology.ts` → `engine/plan-slices.ts` |
+| engine → ui | 19 | `ConductorEventEmitter` from `ui/events.ts`; `engine/plugin-loader.ts` → `ui/subscriber.ts`, `ui/terminal-renderer.ts` |
+| execution → execution (cycle) | 13 | `execution/provider-catalog.ts` ↔ provider adapters |
+| execution → engine | 11 | `execution/daemon-session.ts` → `engine/worktree.ts` |
+| engine → execution (cycle) | 3 | `engine/self-host/provider-scratch.ts` → `execution/provider-catalog.ts` |
+| engine → entry points | 2 | `engine/kickback-budget-cli.ts` → `cli.ts`; `engine/daemon-command.ts` → `cli-defaults.ts` |
+| tools → execution | 1 | `tools/generate-model-table.ts` → `execution/provider-catalog.ts` |
 
-> **Known limitation.** `engine/` and `ui/` import each other, so the layering above is not enforceable
-> as a one-way rule. Engine-side value imports: `engine/conductor.ts:132` and `engine/event-persister.ts:13`
-> (`ConductorEventEmitter`), `engine/plugin-loader.ts:8-9` (`TerminalSubscriber`, `TerminalRenderer`).
-> UI-side value imports: `ui/terminal-renderer.ts:11,12,15`
-> (`getArtifactStatus`, `STEP_ARTIFACT_GLOBS`, `formatProgressDelta`), `ui/terminal/prompt-host.ts:15`
-> (`getRecoveryOptions`). Moving a symbol between the two layers can therefore create a runtime
-> initialization cycle that the type checker will not flag. Tracked in
-> [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
-
-> **Known limitation.** `types/events.ts:3-9` imports `AuthenticationReadinessState`,
-> `AuthenticationSource`, `CodexProbeFailureKind`, `CodexProbeParserRejection`, and `TokenUsage` from
-> `../execution/llm-provider.js` — the only outbound edge from `types/`, and it inverts
-> `types ← execution`. It is a type-only import, so it has no runtime
-> effect, but `types/` is not the dependency-free leaf the layering implies. Tracked in
-> [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
+> **Known limitation.** `types/events.ts` imports from `execution/` (`llm-provider.js`,
+> `provider-catalog.js`, `observed-interval.js`). The imports are type-only, so the ratchet ignores
+> them and they have no runtime effect, but `types/` is not the dependency-free leaf the layering
+> implies. Tracked in [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
 
 ## Build output
 

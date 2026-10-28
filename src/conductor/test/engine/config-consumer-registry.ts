@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, pi-per-step-model-selection-via-wrapped-providers:task:5
+// Covers: task:1, task:2, task:4, task:8, pi-per-step-model-selection-via-wrapped-providers:task:5
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -38,6 +38,7 @@ const FULL_SUITE_VERIFIER = 'src/conductor/src/engine/full-suite-verifier.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
 const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
 const MONITOR_CLI = 'src/conductor/src/engine/monitor-cli.ts';
+const ROUTE_TYPES = 'src/conductor/src/engine/routing/route-types.ts';
 
 /**
  * Every documented config key maps to its OWN production consumer declaration
@@ -84,6 +85,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   model_fallback_ladder: consumer('src/conductor/src/engine/provider-execution.ts'),
   auto_restart_on_stale_engine: consumer('src/conductor/src/engine/stale-engine-init.ts'),
   engine_refresh_min_interval_seconds: consumer(DAEMON_CLI),
+  executor_isolation: consumer(DAEMON_CLI),
+  supervisor_max_stale_hours: consumer(DAEMON_CLI),
   codex_doctor_timeout_seconds: consumer('src/conductor/src/engine/plugin-loader.ts'),
   mergeable_autoresolve: consumer(AUTORESOLVE),
   stacked_prs: consumer([
@@ -91,12 +94,15 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
   ]),
   build_review: consumer(RESOLVED_CONFIG),
-  coverage_binding: consumer(RESOLVED_CONFIG),
   feature_applicability: consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
   ]),
   prd_audit: consumer([REMEDIATION_CAPS, PRD_AUDIT_ROUTING]),
+  plan_review: consumer([
+    'src/conductor/src/engine/engineer-cli.ts',
+    STEP_RUNNERS,
+  ]),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
   ci_watch: consumer(DAEMON_CLI),
   build_progress_halt: consumer(DAEMON_CLI),
@@ -222,12 +228,13 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'stacked_prs.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     STEP_RUNNERS,
-    'src/conductor/src/engine/child-cursor.ts',
+    'src/conductor/src/engine/slice-topology.ts',
   ]),
   'stacked_prs.max_slices': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     STEP_RUNNERS,
   ]),
+  'stacked_prs.route_whole_feature_fixes': consumer(ROUTE_TYPES),
 
   // ── build_review ──────────────────────────────────────────────────────────
   // `resolveBuildReviewConfig` is the only reader of the raw block and of every
@@ -266,6 +273,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.min_severity': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.timeout_seconds': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.skill': consumer(RESOLVED_CONFIG),
@@ -280,13 +288,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.min_severity': consumer(RESOLVED_CONFIG),
 
-  // ── coverage_binding ────────────────────────────────────────────────────
-  // The step runner consumes the resolved boolean; resolution is the sole
-  // reader of the raw nested configuration.
-  'coverage_binding.judge': consumer(RESOLVED_CONFIG),
-  'coverage_binding.judge.enabled': consumer(RESOLVED_CONFIG),
-  'coverage_binding.judge.batch_size': consumer(RESOLVED_CONFIG),
   'feature_applicability.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
@@ -305,6 +308,12 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'prd_audit.max_appended_tasks': consumer(REMEDIATION_CAPS),
   'prd_audit.max_appended_ratio': consumer(REMEDIATION_CAPS),
   'prd_audit.halt_on_any_plan_gap': consumer(PRD_AUDIT_ROUTING),
+
+  // ── plan_review ──────────────────────────────────────────────────────────
+  'plan_review.max_prompt_chars': consumer([
+    'src/conductor/src/engine/engineer-cli.ts',
+    STEP_RUNNERS,
+  ]),
 
   // ── architecture_review_as_built ──────────────────────────────────────────
   // `checks.<check>.tiers` is the as-built policy's own input; the remediation

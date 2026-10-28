@@ -88,11 +88,12 @@ describe('managed observation destination preparation', () => {
       order.push('invoke');
       return { success: true, output: 'reviewed', exitCode: 0 };
     });
-    const prepareManagedSessionObservation = vi.fn(async ({ provider, context: candidateContext, readOnlyReview, executable }) => {
+    const launcher = ['--dev-bind', '/', '/', '--', '/isolated/codex'];
+    const prepareManagedSessionObservation = vi.fn(async ({ provider, context: candidateContext, readOnlyReview, executable, executableArgs }) => {
       order.push('prepare-observation');
-      expect({ provider, candidateContext, readOnlyReview, executable }).toEqual({
+      expect({ provider, candidateContext, readOnlyReview, executable, executableArgs }).toEqual({
         provider: 'codex', candidateContext: { ...managed, provider: 'codex' }, readOnlyReview: true,
-        executable: '/isolated/codex',
+        executable: 'bwrap', executableArgs: launcher,
       });
       return { producerRoot: managed.producerRoot };
     });
@@ -101,7 +102,7 @@ describe('managed observation destination preparation', () => {
       step: 'build_review', configuredProviders: ['codex'], preferredProvider: 'codex',
       runtimes: new ProviderRuntimeSet([{ key: 'codex', provider: { invoke }, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]),
       sessions: new ProviderSessionScope(vi.fn()),
-      prepareCandidateSelfHost: async () => ({ executable: '/isolated/codex', env: {}, args: [], teardown: async () => {} }),
+      prepareCandidateSelfHost: async () => ({ executable: 'bwrap', env: {}, args: launcher, launcherArgCount: launcher.length, teardown: async () => {} }),
       prepareManagedSessionObservation,
       options: { prompt: 'review', cwd: managed.worktreeRoot, readOnlyReview: true, managedSessionContext: managed },
     });

@@ -2,6 +2,7 @@
 name: architecture-review
 implicit_invocation: required
 description: "Use only within an active harness lifecycle when pre-stories feasibility review, a pipeline batch drift check, or the SHIP as-built review is current. Do not invoke for ordinary implementation, code review, or general architecture questions."
+model: opus
 enforcement: gating
 phase: decide
 standalone: true
@@ -50,16 +51,20 @@ story-phrasing nit or a coverage gap. The conductor caps re-openings and HALTs f
 
 **Accepted-artifact amendment:** When this review concludes that an accepted DECIDE assertion is
 falsified, amend that non-story artifact during the DECIDE pass; do not instruct a later phase to
-make the change. Add this note beside the original assertion:
+make the change. If it is already on the base branch, add this note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-For every non-story artifact, the note is additive: the original assertion remains preserved; never
-rewrite or delete it, and create no separate record. Story artifacts under `.docs/stories/` are the
-exception: replace superseded assertions in place without an amendment record. The amended artifact is
-then part of the spec-branch baseline before BUILD begins.
+For every non-story artifact, the note is additive only when the artifact is already on the base
+branch: add the note; the original assertion remains preserved; never rewrite or delete it, and
+create no separate record. Story artifacts under `.docs/stories/` are the exception: replace
+superseded assertions in place without an amendment record. The amended artifact is then part of
+the spec-branch baseline before BUILD begins.
+
+An accepted DECIDE artifact absent from the base branch is a draft: revise it in place, remove
+superseded text, and add no amendment note or revision log.
 
 ### Lightweight Mode (Medium Complexity Tier)
 
@@ -124,7 +129,8 @@ precedent affects the approach.
 
 ### 2. Technical Feasibility
 
-For each story in the plan, assess:
+For each PRD functional requirement (product track) or each part of the explore output's technical
+intent (technical track), assess the proposed design:
 
 | Check | Question | Flag If |
 |---|---|---|
@@ -144,12 +150,38 @@ For each story in the plan, assess:
 | **High** | 4+ models, external APIs, complex state machines | Consider splitting |
 | **Spike** | Unknown tech, unclear requirements, novel patterns | Time-box spike before planning |
 
+### 3a. Split a Large Design Before Stories
+
+Estimate the plan's task count here, from the approved design, before `/stories` runs. When the
+estimate approaches the plan's scope ceiling (20+ tasks; `/plan` §6 refuses 30+ at land without a
+scope exception), propose splitting the design into sequential specs and get the operator's
+decision now. Splitting after stories and plan exist forces a full restructuring pass: stories,
+plan, coverage, coherence mapping, and waivers all have to be re-cut.
+
+A proposed split states:
+
+- **The specs, in order.** The first ships the foundation; each later spec is blocked by the one
+  before it, and every spec inherits the original intake's blocking edges.
+- **A default-off flag** that keeps the partially delivered behavior dark. Only the last spec turns
+  it on, so no intermediate merge changes production behavior.
+- **Reachability per spec.** Each spec ships only primitives that have a production caller inside
+  that same spec; otherwise the as-built review (§12) blocks them as unreachable. Move a
+  constructor, writer, or helper to the spec that first calls it.
+- **Where deferred outcomes live.** Outcomes delivered by a later spec are waived in the coherence
+  mapping, each naming the later spec as its home. Leave the counterpart empty; do not invent a
+  placeholder id such as `none`. The draft stories and plan slices for later specs travel with
+  their follow-up intakes.
+
+The ADR records the whole design once, with the split and the flag among its decisions; each spec
+then plans only its own slice. If the operator declines the split, record that decision. A plan
+above the ceiling then needs a `**Scope-exception:**` with that decision as its rationale.
+
 ### 4. Architectural Alignment
 
-Check stories and plan against documented architecture:
+Check the proposed design against documented architecture:
 
 **Domain boundaries:**
-- Does the story respect existing module/domain boundaries?
+- Does the design respect existing module/domain boundaries?
 - Does it introduce coupling between domains that should be independent?
 - Are database queries staying within their domain, or reaching across to other domains' tables?
 
@@ -187,12 +219,12 @@ Check stories and plan against documented architecture:
 
 ### 5. Domain Integrity Pre-Check
 
-Before implementation begins, check the plan for domain modeling issues:
+Before stories and the plan are written, check the proposed design for domain modeling issues:
 
 | Principle | Check | Veto If |
 |---|---|---|
-| **No primitive obsession** | Plan uses domain types, not raw strings/ints | IDs, statuses, money, or email stored as primitives |
-| **Parse, don't validate** | Validation at construction, trusted types throughout | Plan validates same field in multiple places |
+| **No primitive obsession** | Design uses domain types, not raw strings/ints | IDs, statuses, money, or email stored as primitives |
+| **Parse, don't validate** | Validation at construction, trusted types throughout | Design validates same field in multiple places |
 | **Invalid states unrepresentable** | Type system prevents impossible combinations | Booleans where enums should exist, nullable fields that must be present |
 | **Semantic types** | Types answer "what IS this?" not "what is this LIKE?" | `NonEmptyString` instead of `UserName` |
 | **Exhaustive matching** | No catch-all defaults for domain states | `else` / `default` on status/type switches |
@@ -245,6 +277,10 @@ reject number-named ADRs is tracked in intake #705.)
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
 must cite specific evidence (documentation, tested behavior, or source code).
 
+The template's `## Assumptions` ledger table is required in every new ADR. This requirement is
+enforced at land and by the `architecture_review` gate. For each load-bearing assumption whose
+Basis is not `verified`, record the approval exactly as `APPROVED by operator YYYY-MM-DD`.
+
 **Lightweight mode (Medium tier):** Apply the same structural prerequisite and reuse check. Do not
 skip an ADR merely because the feature is medium-sized, but do not create one merely because a
 category label, feature size, or importance is present.
@@ -261,7 +297,7 @@ Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by 
 **Phase 1: DRAFT**
 - Architecture-review creates the ADR with `Status: DRAFT` in the frontmatter
 - DRAFT ADRs are written to `.docs/decisions/` as `adr-YYYY-MM-DD-<kebab-slug>.md` (see §7)
-- DRAFT ADRs cannot be cited as justification in code review, evaluator verdicts, or
+- DRAFT ADRs cannot be cited as justification in `build_review`, as-built review, or
   implementation decisions — they are proposals, not decisions
 
 **Phase 2: REVIEW**
@@ -276,13 +312,13 @@ Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by 
 
 **Phase 3: AUTHORITATIVE**
 - Only `Status: APPROVED` ADRs are binding on downstream work
-- Pipeline evaluators, code review, and `/finish` gates may cite APPROVED ADRs
+- `build_review`, the as-built review, and `/finish` may cite APPROVED ADRs
 - If a subsequent feature conflicts with an APPROVED ADR, the conflict must be resolved by
   either superseding the ADR (new ADR with `Supersedes: <old>`) or changing the implementation
 - Superseded ADRs get `Status: SUPERSEDED` and a `Superseded by:` reference
 
 **HARD GATE: No feature proceeds past architecture-review with DRAFT ADRs. All ADRs created
-during the review must reach APPROVED status before `/writing-system-tests` can begin.**
+during the review must reach APPROVED status before `/stories` can begin.**
 
 ### 8. Output
 
@@ -291,7 +327,7 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 ```markdown
 # Architecture Review: [Feature Name]
 **Date:** YYYY-MM-DD
-**Stories reviewed:** [list]
+**Inputs reviewed:** [PRD functional requirements, or explore output for the technical track]
 **Verdict:** APPROVED | APPROVED WITH CONDITIONS | BLOCKED
 
 ## Feasibility
@@ -331,9 +367,9 @@ with it.
 
 ### 9. Verdict Enforcement
 
-**APPROVED** — Proceed to `/writing-system-tests`.
+**APPROVED** — Proceed to `/stories`.
 
-**APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. Evaluator checks at code review. Unmet conditions at `/finish` are blocking.
+**APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. `build_review` and as-built review check conditions. Unmet conditions at `/finish` are blocking.
 
 **BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR only when resolving it makes or changes a structural decision; resolve non-structural blockers without an ADR. Re-run the review.
 
@@ -563,8 +599,8 @@ Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Tas
 
 ## Verification
 
-- [ ] All stories assessed for feasibility
-- [ ] Complexity rated per story
+- [ ] Every PRD functional requirement (product) or technical-intent item (technical) assessed for feasibility
+- [ ] Complexity rated for the proposed design
 - [ ] Alignment checked against .docs/decisions/ and CLAUDE.md
 - [ ] Domain integrity pre-checked
 - [ ] Risk register populated

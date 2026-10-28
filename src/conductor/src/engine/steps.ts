@@ -10,7 +10,6 @@ export const ALL_STEPS: StepDefinition[] = [
     prerequisites: [],
     skippableForTiers: [],
     isCheckpoint: false,
-    skillName: 'worktree',
   },
   {
     name: 'memory',
@@ -77,7 +76,7 @@ export const ALL_STEPS: StepDefinition[] = [
     name: 'architecture_review',
     label: 'Architecture Review',
     phase: 'DECIDE',
-    enforcement: 'advisory',
+    enforcement: 'gating',
     prerequisites: ['architecture_diagram'],
     skippableForTiers: ['S'],
     isCheckpoint: false,
@@ -130,18 +129,16 @@ export const ALL_STEPS: StepDefinition[] = [
     skillName: 'coherence-check',
   },
   {
-    // Engine-native BUILD gate: judges whether each criterion coverage claim
-    // is actually asserted by its cited task's Done when checks (ADR D4).
-    name: 'coverage_binding',
-    label: 'Coverage Binding',
-    phase: 'BUILD',
+    name: 'plan_review',
+    label: 'Plan Review',
+    phase: 'DECIDE',
     enforcement: 'gating',
-    prerequisites: ['plan'],
-    skippableForTiers: [],
+    prerequisites: ['coherence_check'],
+    skippableForTiers: ['S'],
     isCheckpoint: false,
-    // A changed rebase invalidates this feature/runtime-derived judgement, so
-    // it must participate in the shared verdict and kickback topology.
-    kickbackTarget: true,
+    skillName: 'plan-review',
+    absentArtifactDisposition: 'skipped',
+    absentArtifactReason: 'landed-before-plan-review',
   },
   {
     name: 'acceptance_specs',
@@ -334,7 +331,6 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
     prerequisites: [],
     skippableForTiers: [],
     isCheckpoint: false,
-    skillName: 'attribution-verify',
   },
 };
 

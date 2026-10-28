@@ -21,4 +21,5 @@ export const RECOVERABLE_CAP_HALT_CLASS_BY_GATE: Readonly<Record<string, string>
   build_review: 'needs-human',
   prd_audit: KICKBACK_CAP_HALT_CLASS,
   architecture_review_as_built: KICKBACK_CAP_HALT_CLASS,
+  restack: 'needs-human',
 });

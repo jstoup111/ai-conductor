@@ -1,0 +1,91 @@
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import type { RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { createSweepRepository, removeAll, sealStack, stackRefs } from './restack-sweepG2-fixture.js';
+
+const cleanup: string[] = [];
+
+afterEach(async () => {
+  await removeAll(cleanup);
+});
+
+/**
+ * Child 1 is repaired by appending a halt record; child 2's own range already
+ * holds a different halt record for the same slug, so replaying child 2 onto
+ * the repaired child 1 meets an add/add conflict on `.docs/halted/demo.md`.
+ */
+async function haltRecordStack(mixed: boolean) {
+  const subject = await createSweepRepository('restack-halt-record-sweep-', cleanup);
+  await subject.commit('base', 'src/c.ts', 'base\n');
+  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+  const c1 = await subject.commit('C1', 'c1.txt', 'c1\n');
+  await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
+  await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+  await subject.write('.docs/halted/demo.md', 'upper child record\n');
+  if (mixed) await subject.write('src/c.ts', 'upper child source\n');
+  await subject.git(['add', '-A']);
+  await subject.git(['commit', '-qm', 'upper child halt record']);
+  const c2 = await subject.commit('C2', 'c2.txt', 'c2\n');
+  await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await subject.commit('L1', 'leaf.txt', 'leaf\n');
+  await subject.git(['checkout', '-q', 'feat/c1/demo']);
+  await subject.write('.docs/halted/demo.md', 'lower child record\n');
+  if (mixed) await subject.write('src/c.ts', 'lower child source\n');
+  await subject.git(['add', '-A']);
+  await subject.git(['commit', '-qm', 'lower child halt record']);
+  // Appended work makes child 1 a repair origin (Task 5): a halt record alone
+  // keeps a moved child out of every replay range.
+  await subject.commit('C1 appended', 'c1-appended.txt', 'appended\n');
+  await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+  await sealStack(subject.repo);
+  return subject;
+}
+
+describe('restack halt-record conflicts sweep (real local Git)', () => {
+  // Covers: S6.4, task:16
+  it("keeps child 2's halt record and dispatches no resolver when child 1's and child 2's ranges conflict only on the halt record", async () => {
+    const subject = await haltRecordStack(false);
+    let dispatched = 0;
+    const resolver: RestackResolver = async () => { dispatched += 1; return { resolved: false, reason: 'must not be dispatched' }; };
+    const events = new ConductorEventEmitter();
+    const conflicts: unknown[] = [];
+    events.on('restack_conflict', (event) => { conflicts.push(event); });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, resolver, resolverCap: 1, git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    expect({ dispatched, conflicts }).toEqual({ dispatched: 0, conflicts: [] });
+    expect((await subject.git(['show', 'feat/c1/demo:.docs/halted/demo.md'])).stdout).toBe('lower child record\n');
+    expect((await subject.git(['show', 'feat/c2/demo:.docs/halted/demo.md'])).stdout).toBe('upper child record\n');
+    expect((await subject.git(['show', 'feat/daemon-demo:.docs/halted/demo.md'])).stdout).toBe('upper child record\n');
+    expect((await subject.git(['merge-base', '--is-ancestor', 'feat/c1/demo', 'feat/c2/demo'])).stdout).toBe('');
+  });
+
+  // Covers: S6.9, task:16
+  it('hands a conflict on the halt record and src/c.ts together to resolveRestackConflict instead of resolving it mechanically', async () => {
+    const subject = await haltRecordStack(true);
+    const before = await stackRefs(subject);
+    const dispatched: string[][] = [];
+    const resolver: RestackResolver = async (context) => {
+      dispatched.push([...context.conflicts].sort());
+      return { resolved: false, reason: 'mixed conflict left for the operator' };
+    };
+    const events = new ConductorEventEmitter();
+    const conflicts: Array<{ paths: string[] }> = [];
+    events.on('restack_conflict', (event) => { conflicts.push(event as unknown as { paths: string[] }); });
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, resolver, resolverCap: 1, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    expect(dispatched).toEqual([['.docs/halted/demo.md', 'src/c.ts']]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]!.paths).toEqual(expect.arrayContaining(['.docs/halted/demo.md', 'src/c.ts']));
+    expect(await stackRefs(subject)).toBe(before);
+  });
+});

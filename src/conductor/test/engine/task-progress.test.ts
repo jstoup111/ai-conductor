@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:5, task:6, task:rem-prd-audit-2
+// Covers: task:2, task:3, task:4, task:5, task:6, task:54, task:rem-prd-audit-2
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
+  resolveChildTaskScope,
   openRepairForTask,
   completeTaskDoneWhen,
   haltMarkerExists,
@@ -28,6 +29,7 @@ import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { createRepairObligationStore, taskObligationStanding } from '../../src/engine/repair-obligations.js';
 import { makeGitRunner, performRebase } from '../../src/engine/rebase.js';
 import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -38,6 +40,103 @@ describe('task-progress', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('resolveChildTaskScope remediation membership', () => {
+    async function writeMembershipFixture(childLine?: number, cachedChild?: unknown): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'demo.md'),
+        [
+          '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+          '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | T1 |', '| 2 | Two | T2 |', '',
+          '### Task T1: One', '**Story:** Story 1', '**Dependencies:** none', '',
+          '### Task T2: Two', '**Story:** Story 2', '**Dependencies:** T1', '',
+          `### Task rem-prd-audit-T1: repair\n${childLine === undefined ? '' : `\n**Child:** ${childLine}\n`}`,
+        ].join('\n'),
+      );
+      await writeFile(join(dir, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n');
+      if (cachedChild !== undefined) {
+        await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+          appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+          appendedRemediationTaskChildren: { 'rem-prd-audit-T1': cachedChild },
+        }));
+      }
+    }
+
+    it('uses the committed Child line when engine state is absent after worktree recreation', async () => {
+      await writeMembershipFixture(1);
+
+      await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+      });
+    });
+
+    it('uses the committed Child line before a disagreeing remediation cache', async () => {
+      await writeMembershipFixture(1, 2);
+
+      await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+      });
+    });
+
+    it.each([2, '2'] as const)('uses canonical cached remediation child %j when the Child line is absent', async (cachedChild) => {
+      await writeMembershipFixture(undefined, cachedChild);
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['T2', 'rem-prd-audit-T1'],
+      });
+    });
+
+    it('refuses a malformed cached remediation child when the Child line is absent', async () => {
+      await writeMembershipFixture(undefined, 'x');
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toMatchObject({
+        kind: 'refused',
+        reason: expect.stringContaining('remediation task rem-prd-audit-T1 has no recorded child'),
+      });
+    });
+
+    it('refuses rem task scope when both committed Child line and cache are absent', async () => {
+      await writeMembershipFixture();
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+      }));
+
+      await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toMatchObject({
+        kind: 'refused',
+        reason: expect.stringContaining('remediation task rem-prd-audit-T1 has no recorded child'),
+      });
+    });
+
+    it('derives child two task scope from the plan with no envelope', async () => {
+      await writeMembershipFixture();
+      await writeFile(join(dir, '.docs', 'plans', 'demo.md'), [
+        '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 1, 2, 3 |', '| 2 | Delivery | 4, 5, 6 |', '',
+        '### Task 1: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+        '### Task 2: Foundation', '**Story:** Story 1', '**Dependencies:** 1', '',
+        '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** 2', '',
+        '### Task 4: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
+        '### Task 5: Delivery', '**Story:** Story 2', '**Dependencies:** 4', '',
+        '### Task 6: Delivery', '**Story:** Story 2', '**Dependencies:** 5', '',
+      ].join('\n'));
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['4', '5', '6'],
+      });
+    });
+
+    it('refuses malformed plan slices instead of returning an unscoped child', async () => {
+      await writeMembershipFixture();
+      await writeFile(join(dir, '.docs', 'plans', 'demo.md'), '# Plan\n\n## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | broken |\n');
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toMatchObject({
+        kind: 'refused', reason: expect.stringContaining('plan-invalid'),
+      });
+    });
   });
 
   describe('countResolvedTasks', () => {
@@ -929,7 +1028,7 @@ describe('task-progress', () => {
       });
     });
 
-    it('closes a mixed task with verified tagged evidence and reported untagged evidence', async () => {
+    it('closes a mixed task with pending tagged evidence and reported untagged evidence', async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
@@ -960,7 +1059,7 @@ describe('task-progress', () => {
           {
             check: '[test] tagged observable outcome',
             evidence: 'test:test/mixed-close.test.ts::closes the tagged outcome',
-            source: 'verified',
+            source: 'pending-judgement',
           },
           {
             check: 'untagged configuration outcome',
@@ -1079,6 +1178,18 @@ describe('task-progress', () => {
       expect(await taskRow()).not.toHaveProperty('doneWhen');
     });
 
+    it('refuses to replace a close record with an unknown source by name', async () => {
+      await prepareTaskClose(`### Task 1: typed close
+
+**Done when:**
+- observable outcome`);
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+        id: '1', status: 'completed', doneWhen: [{ check: 'observable outcome', source: 'bogus' }],
+      }] }));
+      await expect(completeTaskDoneWhen(dir, '1', [{ index: 1, evidence: 'new evidence' }]))
+        .resolves.toMatchObject({ kind: 'refused', message: expect.stringContaining('unknown done-when close source: bogus') });
+    });
+
     it('closes a verify-only task through prove-closed evidence', async () => {
       await prepareTaskClose(`### Task 1: prove the current behavior is already closed
 
@@ -1099,7 +1210,7 @@ describe('task-progress', () => {
       ]);
     });
 
-    it('requires tagged verify-only checks to be verified or explicitly unverified while prove-closing untagged checks', async () => {
+    it('requires tagged verify-only checks to be cited or explicitly unverified while prove-closing untagged checks', async () => {
       await prepareTaskClose(`### Task 1: verify existing behavior with a test
 
 **Verify-only:** yes
@@ -1137,7 +1248,7 @@ describe('task-progress', () => {
           {
             check: '[test] tagged behavior remains covered',
             evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
-            source: 'verified',
+            source: 'pending-judgement',
           },
           {
             check: 'untagged behavior remains closed',

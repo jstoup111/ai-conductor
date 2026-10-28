@@ -145,6 +145,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
      - **Teardown, worktree creation and the shipped-record probe** use `leafBranchFor`.
    - Leak triage, the dashboard and `ensureWorktree` need no change.
 
+> **Amended 2026-10-17 by #2945:** `finish-record`'s child refusal is kept, not lifted. Child PRs are recorded in the publication record, and only the leaf PR is the feature's `pr_url` and ship. Stack teardown is defined by `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12. Park still never deletes a child branch.
+
 3. **Attribution is not authority.**
    - A structural parse only attributes a branch to a feature.
    - A side effect still needs that consumer's existing gate: the committed owner check
@@ -185,6 +187,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > flag-on stack-eligibility verdict at land and `coverage_binding`, and `MAX_PLAN_SLICES` is replaced
 > by the `MAX_CHILD_ID` ceiling in the flag-independent grammar rung.
 
+> **Amended 2026-10-23 by #3365:** The source of a feature's children is the sealed plan's slice manifest, read through the slice-topology loader (adr-2026-10-23-slice-topology-from-sealed-plan decision 2). The `coverage_binding` envelope is removed.
+
 6. **The leaf is a branch kind, not the absence of a child.**
    - When a feature has children, the leaf is the child with the highest declared position. Its
      region state lives under that child's directory, and its branch stays `feat/daemon-<slug>`.
@@ -197,6 +201,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
    - A reseal that would move, add or remove a position halts needs-human instead of silently
      re-attributing state. The guard belongs in `coverage_binding` and is implemented by the ticket
      that first creates children (#2942).
+
+> **Amended 2026-10-23 by #3365:** The position guard belongs to `reseal` and the slice-topology loader, not `coverage_binding`, which is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 3).
 
 8. **Per-child state lives under `.pipeline/children/<k>/`, mirroring the flat layout.**
    - One seam, `pipelinePathFor(root, relative, child?)`, forms every per-child path.
@@ -218,6 +224,14 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
      delete (`adr-2026-07-11-pipeline-state-durability` D2).
 
 > **Amended 2026-10-07 by #2942:** The region stores also hold acceptance evidence (RED marker, run contract, disposition record), and a child gate's convergence-credit receipt is written in that child's ledger atomically with the credit; growth, `pendingRepair` and `effectiveGrowthCap` stay flat and child ledgers refuse them (`adr-2026-10-07-per-child-build-region` decisions 4 and 10).
+
+> **Amended 2026-10-12 by #2944:** Routing authority for whole-feature repairs is ref-backed under
+> `refs/conductor/<slug>/`, so it survives worktree recreation. That covers the route records with
+> their round receipts, the repairing marker, the re-validation queue and `red/c<k>`. The flat
+> ledger becomes a reconciled cache of the receipts (`adr-2026-10-12-routed-whole-feature-repair`
+> decisions 6, 9 and 10).
+
+> **Amended 2026-10-23 by #3365:** `coverage_binding` is removed from the whole-feature state set (adr-2026-10-23-slice-topology-from-sealed-plan decision 1).
 
 9. **Region caps apply per child.**
    - Because region gate entries, including `build_review`'s cumulative count, live in the child's
@@ -242,6 +256,13 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 
 > **Amended 2026-10-07 by #2942:** The active child is derived independently of the checkout: positions from the sealed envelope, closure from monotone compare-and-swap refs `refs/conductor/<slug>/closed/c<k>`, active = lowest unclosed position; ancestry is only a divergence detector. Ancestry-based or checkout-based derivation was falsified by adversarial review (child 1 closed on creation; closed children reopened by rebase). The engine switches the worktree to the active child before any region dispatch (`adr-2026-10-07-per-child-build-region` decisions 1–2).
 
+> **Amended 2026-10-12 by #2944:** The cursor reports `routedRepair` and `revalidating` fields on
+> the existing kinds. One execution-child resolver (the routed host, else the re-validating child,
+> else the cursor child) is what region consumers read (`adr-2026-10-12-routed-whole-feature-repair`
+> decision 8).
+
+> **Amended 2026-10-23 by #3365:** The active child's positions come from the sealed plan through the slice-topology loader, not the sealed envelope (adr-2026-10-23-slice-topology-from-sealed-plan decisions 2 and 4).
+
 11. **The base-override contract is implemented by #2942.**
     - One producer, `resolveChildBase(worktree, child)`, returns one of three results:
       - nothing, for no child or the first declared position, so today's per-site ladder runs;
@@ -260,6 +281,12 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
     - `BuildReviewInputs.baseKind` gains `child-parent`, which suppresses the degraded-fetch warning.
 
 > **Amended 2026-10-07 by #2942:** `resolveChildBase` gains a typed `parent-not-ancestor` result (and translates the leaf's parent tip through the persisted rewrite map after its FINISH rebase), and acceptance spec attribution is a seventh consuming site that refuses disposition-only when the parent is unresolvable (`adr-2026-10-07-per-child-build-region` decision 8). The follow-up "write halt records to the leaf" is re-decided: halt records commit to the active child's branch with a `Child:` field and reach the leaf by ancestry; no child branch is pushed (decision 11).
+
+> **Amended 2026-10-12 by #2944:** Two bases are added. `routed-repair` is the host's closure at
+> region entry, pinned in the route record. A re-validation pass grades the replayed contribution
+> against its new parent (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
+
+> **Amended 2026-10-23 by #3365:** `resolveChildBase` takes its positions from the slice-topology loader; the base-override contract is otherwise unchanged (adr-2026-10-23-slice-topology-from-sealed-plan decision 4).
 
 12. **Events carry an optional `child`.**
     - `ConductorEvent` becomes `(existing union) & { child?: ChildId }`.
@@ -289,6 +316,12 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > **Amended 2026-10-07 by #2942:** Without `--child`, `rewind`, `task` and `kickback-budget` now default to the active child of a feature with children; byte-identity without the flag holds for features with no children. `kickback-budget raise|reset --child` are offered. `rewind --child k` for a closed child is refused naming #2943, and the downstream cascade over children above k applies only to children that are not closed (`adr-2026-10-07-per-child-build-region` decisions 10–11).
 
 > **Amended 2026-10-10 by #2943:** `kickback-budget raise|reset --gate restack --child <k>` is the one exception: it validates `<k>` against `refs/conductor/<slug>/cascades`, not `.pipeline/children/<k>/`, so cascade-cap recovery survives worktree recreation (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
+
+> **Amended 2026-10-12 by #2944:** The recovery CLIs default `--child` to the execution child. The
+> exception is whole-feature gate budgets, which stay flat
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 8 and 10).
+
+    > **Amended 2026-10-24 by #3203:** For a closed `k`, `rewind --child k` is no longer refused. It is validated against `k`'s closure ref rather than `.pipeline/children/<k>/`, opens a declared operator round, and demotes only `k`'s region from the target; children above and the whole-feature steps are not demoted (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
 
 14. **The N=1 contract is structural and proven by golden tests.**
     - With no child there is no `children/` directory, no new key, and no event field.
@@ -360,6 +393,7 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 - [ ] #2942: offer `kickback-budget raise`/`reset --child`.
 - [ ] #2945: lift finish-record's child refusal, add the child→PR map, and remove child branches at
       teardown and reclaim only after the leaf merges.
+  > **Amended 2026-10-17 by #2945:** `finish-record`'s child refusal is kept, not lifted (decision 2 note). The child-to-PR map lives in the publication record, and child teardown is defined by `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12.
 - [ ] #2943/#2944: amend the remaining ADRs listed in the #2940 design §6 when their behavior lands.
 
 > **Amended 2026-10-10 by #2943:** The #2943 follow-up (restack) is delivered by a journaled off-worktree replay. Re-validating closed children moved by a restack, re-validating a repaired closed child, and the closed-child rewind move to #2944 (`adr-2026-10-10-stacked-restack-journaled-replay`).

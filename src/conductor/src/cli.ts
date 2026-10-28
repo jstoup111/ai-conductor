@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+export { detectDoneWhenAcceptCommand } from './engine/done-when-accept-cli.js';
 import { CLAUDE_DISPLAY_NAME } from './execution/provider-catalog.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -14,6 +15,7 @@ import { loadMergedConfigForRead, projectConfigPath, validateConfig } from './en
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 import { grantStorePath } from './engine/decide-entry-policy.js';
 import { resolveMainRepoRootStrict } from './engine/park-marker.js';
+import { DEFAULT_IDLE_POLL_SECONDS } from './cli-defaults.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -71,7 +73,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .argument('[feature]', 'Feature description')
     .option('--resume', 'Resume from last state')
     .option('--fresh', 'Start a new feature; skip auto-resume even if a worktree for this feature description already exists')
-    .option('--auto', 'Deprecated: use `ai-conductor daemon start` instead')
+    .option('--auto', 'Deprecated and rejected: use `ai-conductor daemon start` instead; cannot be combined with --interactive')
     .option('--status', 'Show dashboard only')
     .option('--from <step>', 'Start from specific step')
     .option('--cleanup', 'Clean up worktrees')
@@ -81,7 +83,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .option('--effort <level>', 'Override effort for every step: low | medium | high | xhigh | max')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
-    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag)`)
+    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag); cannot be combined with --auto`)
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
 }
@@ -143,6 +145,7 @@ export interface UserConfigSetDispatch {
 export type BuildReviewFindingsDispatch = {
   readonly kind: 'findings';
   readonly feature: string;
+  readonly child?: string;
   readonly format: 'human' | 'json';
 };
 
@@ -154,6 +157,14 @@ export type BuildReviewAcceptDispatch = {
   readonly rationale: string;
 };
 
+export type BuildReviewResolveCaseDispatch = {
+  readonly kind: 'resolve-case';
+  readonly feature: string;
+  readonly caseId: string;
+  readonly rationale: string;
+  readonly child?: string;
+};
+
 export type BuildReviewRecordReducedCoverageDispatch = {
   readonly kind: 'record-reduced-coverage';
   readonly feature: string;
@@ -162,15 +173,18 @@ export type BuildReviewRecordReducedCoverageDispatch = {
   readonly rationale: string;
 };
 
-/** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
+/** Detect the read-only `build-review findings --feature <slug> [--child <id>] [--json]` command. */
 export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
   if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
   const args = argv.slice(4);
   const featureIndex = args.indexOf('--feature');
   const feature = featureIndex >= 0 ? args[featureIndex + 1] : undefined;
-  const recognized = args.length === 3 && featureIndex >= 0 && args.includes('--json') || args.length === 2 && featureIndex >= 0;
+  const childIndex = args.indexOf('--child');
+  const child = childIndex >= 0 ? args[childIndex + 1] : undefined;
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), ...(args.includes('--json') ? ['--json'] : [])];
+  const recognized = args.length === expected.length && expected.every((value, index) => args[index] === value);
   if (!feature || !recognized || !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
-  return { kind: 'findings', feature, format: args.includes('--json') ? 'json' : 'human' };
+  return { kind: 'findings', feature, ...(child === undefined ? {} : { child }), format: args.includes('--json') ? 'json' : 'human' };
 }
 
 /** Detect only the fully bound, operator-only acceptance grammar. */
@@ -189,6 +203,24 @@ export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAccep
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
   return { kind: 'accept', feature, lapId, findingId, rationale };
+}
+
+/** Detect only the fully bound, operator-only case-resolution grammar. */
+export function detectBuildReviewResolveCaseCommand(argv: string[]): BuildReviewResolveCaseDispatch | null {
+  if (argv[2] !== 'build-review' || argv[3] !== 'resolve-case') return null;
+  const args = argv.slice(4);
+  const read = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const feature = read('--feature');
+  const child = read('--child');
+  const caseId = read('--case');
+  const rationale = read('--rationale');
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), '--case', caseId, '--rationale', rationale];
+  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !caseId || !rationale ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
+  return { kind: 'resolve-case', feature, caseId, rationale, ...(child === undefined ? {} : { child }) };
 }
 
 /** Detect only the fully bound, operator-only reduced-coverage grammar. */
@@ -397,6 +429,9 @@ export interface DecideGrantDispatch {
   step: string;
   reason: string;
 }
+
+/** Gates accepted by `kickback-budget raise|reset --gate`. */
+export const KICKBACK_BUDGET_GATES = ['build_review', 'prd_audit', 'architecture_review_as_built', 'restack'] as const;
 
 export interface KickbackBudgetDispatch {
   kind: 'kickback-budget';
@@ -721,16 +756,17 @@ export function createProgram(): Command {
     .option('--confirm', 'Apply the migration (default: dry-run only, zero writes)');
 
   // Task subcommand (Task 7). NON-INTERACTIVE: dispatched by index.ts
-  // (detectTaskCommand) before the pipeline boots. Routes to task start/done
+  // (detectTaskCommand) before the pipeline boots. Routes to task start/done/status
   // operations. Declared here so `--help` lists it.
   program
-    .command('task <command> <id>')
-    .description('Manage task execution: task start <id> | task done <id>')
+    .command('task <command> [id]')
+    .description('Manage task execution: task start <id> | task done <id> | task status [--child <n>]')
     .addHelpText(
       'after',
       '\nExamples:\n' +
         '  conduct task start 7               Start task 7 (flip status to in_progress)\n' +
         '  conduct task done 7                Mark task 7 done (clear stamp file)\n' +
+        '  conduct task status                Show rows for the execution child\n' +
         '  conduct task start rem-fr10-1      Start task with alphanumeric id\n',
     );
 
@@ -743,16 +779,99 @@ export function createProgram(): Command {
     .command('evidence')
     .description('Semantic attribution evidence gate (judge command removed — see spot-audit telemetry)');
 
-  // Pipeline-owned closeout telemetry is emitted by the standalone pipeline
-  // process, so this command writes directly to its sibling ledger without
-  // starting a conductor or daemon. Dispatch lives in index.ts.
-  program
-    .command('closeout-event <obligation> <started-at> <ended-at>')
-    .description('Record one pipeline closeout timing event');
-
   program
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
+
+  // These commands are invoked by the engine and its hooks before normal CLI
+  // bootstrapping. They remain declared so Commander can provide their own
+  // help, but stay out of the operator-facing command reference.
+  for (const command of [
+    'scoped-run',
+    'halt-clear',
+    'missing-reseal-reason',
+    'test-suite',
+    'finish-record',
+    'manual-test-record',
+    'derive-feedback',
+    'github-boundary-audit',
+    'github-operation',
+    'scope-check',
+    'task-membership-check',
+    'round-stamp',
+  ]) {
+    program.command(command, { hidden: true });
+  }
+
+  // Operator-directed commands dispatch before normal CLI bootstrapping in
+  // index.ts. They are declarations only: Commander owns their help surface,
+  // while the existing pre-dispatch detectors retain runtime ownership.
+  program
+    .command('shipped-record')
+    .description('Write the shipped record that prevents a completed feature from being re-dispatched')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--pr <url>', 'Implementation pull request URL, or local');
+  program
+    .command('docs-prune')
+    .description('Open a reviewed PR that prunes transient DECIDE artifacts for shipped features');
+  program
+    .command('transcripts <slug>')
+    .description('Inspect retained self-host provider transcripts for a feature')
+    .option('--show <capture>', 'Print the final assistant message from one retained capture');
+  program
+    .command('kpi')
+    .description('Report delivery metrics from committed shipped records');
+  const memory = program
+    .command('memory')
+    .description('Set up or migrate the project memory store');
+  memory
+    .command('setup [dir]')
+    .description('Create or migrate the memory store for this project directory');
+  const brain = program
+    .command('brain')
+    .description('Manage the background intake supervisor');
+  brain.command('start').description('Start the background intake supervisor');
+  brain.command('stop').description('Stop the background intake supervisor');
+  brain.command('status').description('Show background intake supervisor status');
+  program
+    .command('intake-loop')
+    .description('Run one intake pass or continuously poll configured intake sources')
+    .option('--continuous', 'Poll continuously')
+    .option('--once', 'Run one intake pass')
+    .option('--interval-ms <milliseconds>', 'Polling interval in milliseconds');
+  program
+    .command('render-diagrams [files...]')
+    .description('Render Mermaid diagrams in Markdown artifacts')
+    .option('--check', 'Parse-check diagrams without rendering');
+  program
+    .command('build-auth-status')
+    .description('Report the daemon build-auth mode and token health');
+  const shipmentEvidence = program
+    .command('shipment-evidence')
+    .description('Check or reconcile shipped-record evidence for implementation pull requests')
+    .requiredOption('--pr <url>', 'Implementation pull request URL')
+    .option('--event <path>', 'Pull-request event metadata path');
+  shipmentEvidence
+    .command('reconcile')
+    .description('Publish a missing shipped record for an implementation pull request')
+    .requiredOption('--pr <url>', 'Implementation pull request URL')
+    .requiredOption('--shipped <date>', 'Shipment date in YYYY-MM-DD format');
+  shipmentEvidence
+    .command('audit')
+    .description('Audit shipped-record evidence for every pull request')
+    .option('--report <path>', 'Audit report output path');
+
+  // Operator budget recovery. Dispatch lives in index.ts
+  // (detectKickbackBudgetCommand); declared here so `--help` documents it.
+  program
+    .command('kickback-budget <action>')
+    .description('Inspect, raise or reset a halted feature\'s kickback budget (action: inspect | raise | reset)')
+    .option('--feature <slug>', 'Feature worktree slug')
+    .option('--gate <gate>', `Gate to adjust: ${KICKBACK_BUDGET_GATES.join(' | ')} (restack requires --child)`)
+    .option('--child <k>', 'Child id; for restack, the originating child named by the cascade-cap halt')
+    .option('--by <n>', 'Positive amount to raise the limit by (raise only)')
+    .option('--rationale <text>', 'Operator rationale (raise and reset)')
+    .option('--format <format>', 'Output format: human | json');
 
   const buildReview = program
     .command('build-review')
@@ -761,6 +880,7 @@ export function createProgram(): Command {
     .command('findings')
     .description('Render current findings for a feature worktree')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Child case-store scope')
     .option('--json', 'Render machine-readable JSON');
   buildReview
     .command('accept')
@@ -770,12 +890,26 @@ export function createProgram(): Command {
     .requiredOption('--finding <id>', 'Exact canonical finding identifier')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
   buildReview
+    .command('resolve-case')
+    .description('Resolve one open remediation case from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Child case-store scope')
+    .requiredOption('--case <id>', 'Open remediation case identifier')
+    .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+  buildReview
     .command('record-reduced-coverage')
     .description('Record an operator reduced-coverage decision from an interactive terminal')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+
+  // ai-conductor:session-command-context=operator-only
+  const doneWhen = program.command('done-when').description('Operator-only done-when citation decisions');
+  doneWhen.command('accept').description('Accept one refused citation after operator review')
+    .requiredOption('--feature <slug>', 'Feature worktree slug').requiredOption('--task <id>', 'Task identifier')
+    .requiredOption('--check <n>', 'Done-when check number').requiredOption('--reason <text>', 'Non-empty operator reason');
+  // /ai-conductor:session-command-context
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
@@ -843,8 +977,11 @@ export function createProgram(): Command {
     .option('--continuous', 'Keep idle-polling for new features instead of draining once and exiting (honors --max-* ceilings)')
     .option('--max-cost <tokens>', 'Ceiling: stop starting features after this many total output tokens')
     .option('--max-runtime <seconds>', 'Ceiling: stop starting features after this much wall-clock time')
-    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
-    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
+    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', String(DEFAULT_IDLE_POLL_SECONDS))
+    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls')
+    .option('--no-watch', 'Disable filesystem watching for new features')
+    .option('--completed', 'Show completed features in daemon status output')
+    .option('--all', 'Show all features, including completed features, in daemon status output');
   // Read-only observability sub-subcommands.
   daemon
     .command('status')
@@ -852,8 +989,9 @@ export function createProgram(): Command {
   daemon
     .command('logs')
     .description('Print or follow a repo\'s .daemon/daemon.log')
-    .option('--repo <path>', 'Target repo (default: current directory)')
-    .option('--follow', 'Stream new log lines (tail -f); single repo only')
+    .option('--repo <path>', 'Target repo (default: current directory; also accepts --repo=<path>)')
+    .option('-f, --follow', 'Stream new log lines (tail -f); single repo only')
+    .option('-n, --lines <n>', 'Show the last n log lines')
     .option('--all', 'Show logs for every registered repo');
   // Filesystem-direct, pre-boot park/unpark verbs (detectDaemonParkCommand) —
   // no daemon/supervisor startup required. Declared here ONLY so `--help`
@@ -889,14 +1027,17 @@ export function createProgram(): Command {
     .command('stop')
     .description('Stop this repo\'s tmux-supervised daemon');
   daemon
-    .command('restart')
-    .description('Restart this repo\'s tmux-supervised daemon');
+    .command('restart [repos...]')
+    .description('Restart this repo\'s tmux-supervised daemon; bare repo names select a named subset')
+    .option('--all', 'Act on every registered repo');
   daemon
-    .command('pause')
-    .description('Pause dispatch by writing the pause marker; running work finishes');
+    .command('pause [repos...]')
+    .description('Pause dispatch by writing the pause marker; bare repo names select a named subset; running work finishes')
+    .option('--all', 'Act on every registered repo');
   daemon
-    .command('resume')
-    .description('Resume dispatch by clearing the pause marker');
+    .command('resume [repos...]')
+    .description('Resume dispatch by clearing the pause marker; bare repo names select a named subset')
+    .option('--all', 'Act on every registered repo');
   daemon
     .command('connect')
     .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)')
@@ -908,6 +1049,11 @@ export function createProgram(): Command {
     .option('--attach-into <target>', 'Deliver the attach into an already-open tmux pane elsewhere (session, session:window, or session:window.pane) instead of this process\'s own terminal');
 
   return program;
+}
+
+/** Commander stores its `{ hidden: true }` declaration on this runtime field. */
+function isHiddenCommand(command: Command): boolean {
+  return (command as Command & { _hidden?: boolean })._hidden === true;
 }
 
 /**
@@ -923,7 +1069,7 @@ export function renderFullHelp(program: Command = createProgram()): string {
 
   const walk = (cmd: Command, path: string[]): void => {
     for (const sub of cmd.commands) {
-      if (sub.name() === 'help') continue; // commander's auto `help [command]`
+      if (sub.name() === 'help' || isHiddenCommand(sub)) continue; // commander's auto `help [command]`
       const fullPath = ['ai-conductor', ...path, sub.name()].join(' ');
       sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
       walk(sub, [...path, sub.name()]);
@@ -946,7 +1092,7 @@ export function renderDaemonHelp(program: Command = createProgram()): string {
   const rule = '─'.repeat(72);
   const sections = [daemon.helpInformation().trimEnd()];
   for (const sub of daemon.commands) {
-    if (sub.name() === 'help') continue; // commander's auto `help [command]`
+    if (sub.name() === 'help' || isHiddenCommand(sub)) continue; // commander's auto `help [command]`
     sections.push(
       `${rule}\nai-conductor daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
     );

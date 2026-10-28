@@ -1,0 +1,15 @@
+import { expectTypeOf, it } from 'vitest';
+import type { ConductorEvent } from '../../src/types/events.js';
+
+const event: ConductorEvent = { type: 'decide_artifacts_pruned', removed: [], deferred: [{ stem: 'alpha', paths: [], reason: 'open-pr-modifies', pullRequests: [] }], skipped: [{ stem: 'beta', reason: 'no-shipped-record' }], excluded: [] };
+void event;
+// @ts-expect-error closed deferred reason
+const invalid: ConductorEvent = { type: 'decide_artifacts_pruned', removed: [], deferred: [{ stem: 'alpha', paths: [], reason: 'other', pullRequests: [] }], skipped: [], excluded: [] };
+void invalid;
+// @ts-expect-error closed skipped reason
+const invalidSkipped: ConductorEvent = { type: 'decide_artifacts_pruned', removed: [], deferred: [], skipped: [{ stem: 'beta', reason: 'other' }], excluded: [] };
+void invalidSkipped;
+
+it('allows only the closed docs-prune event reason unions', () => {
+  expectTypeOf(event).toMatchTypeOf<ConductorEvent>();
+});

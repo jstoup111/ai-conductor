@@ -56,11 +56,21 @@ Constraints:
    checks FAILED → ensure a `ci-failed` label, emit a halt-monitor-visible `ci_failed` event,
    and collect the entry as a CI-fix candidate. A later sweep seeing the rollup green removes
    the `ci-failed` label.
+   > **Amended 2026-10-17 by #2945:** A watched PR whose feature has published stack members (a publication record that is not torn down) is never collected as a CI-fix candidate. Its red checks escalate as autoresolve's `published-stack` path does, and red CI on a stack is a human decision until #3268 and #3270 (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
+
 3. **Bounded dispatch.** A `CiFixDispatchOpts` seam with the same injected shape as
    `AutoresolveDispatchOpts` (`enabled`, `isEligible`, `dispatch`); at most one dispatch per
    tick, shared serial in-flight guard with conflict autoresolve. `ciFixAttempts` is bumped on
    the watch entry BEFORE git work (crash-safe bounding), reset on a later green observation.
    `MAX_CI_FIX_ATTEMPTS = 2` (mirrors `MAX_KICKBACKS_PER_GATE`).
+
+   > **Amended 2026-10-14 by #1174:** The per-tick limit of one dispatch and the shared serial
+   > in-flight guard are replaced. The sweep queues every eligible CI-fix and autoresolve repair
+   > as a pooled repair request. The dispatcher runs these requests in free `daemon_concurrency`
+   > slots ahead of new feature claims, at most one per pull request at a time. The bump of
+   > `ciFixAttempts` before git work, `MAX_CI_FIX_ATTEMPTS`, the isolated worktree, the guards, the
+   > suite gate, and the push are unchanged. Pause and rate-limit episodes block repair claims.
+   > See adr-2026-10-14-dispatch-first-daemon-maintenance D5.
 4. **Remediation run.** Dispatch re-creates an isolated worktree from the PR branch tip
    (`withResolveWorktree` pattern), gathers the failing checks' identity + a failing-job log
    excerpt as the `RETRY:` hint, drives a fix run, then applies the existing acceptance

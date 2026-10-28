@@ -16,11 +16,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { writeIntakeMarker } from '../../../src/engine/engineer/intake-marker.js';
 import { parseIntakeSourceRef } from '../../../src/engine/artifacts.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 
@@ -76,6 +77,24 @@ afterEach(async () => {
 
 function target() {
   return { name: 'alpha', canonicalPath: repoPath };
+}
+
+async function seedPlanReview(worktreePath: string, stem: string, planText: string, storiesText: string): Promise<void> {
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${stem}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', `${stem}.md`),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
+  );
 }
 
 /** Read a committed file from a branch tree, or null if absent. */
@@ -271,9 +290,11 @@ describe('landSpec intake marker (FR-1)', () => {
     await writeFile(join(wt.worktreePath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedPlanReview(wt.worktreePath, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     const result = await landSpec(target(), 'dep bump', wt.worktreePath, 'acme/app#7', {
       ownerConfig: { spec_owner: 'alice' },
+      skipDependencyCheck: 'marker coverage does not exercise dependency proposals',
     });
 
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
@@ -292,6 +313,7 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
     await writeFile(join(wt.worktreePath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedPlanReview(wt.worktreePath, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
     return wt.worktreePath;
   }
 
@@ -299,6 +321,7 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
     const worktree = await seedWorktree();
     const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', {
       ownerConfig: { spec_owner: 'Alice' },
+      skipDependencyCheck: 'owner marker coverage does not exercise dependency proposals',
     });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: alice'); // normalized
@@ -318,7 +341,10 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
   it('resolves via gh login when spec_owner is unconfigured', async () => {
     const worktree = await seedWorktree();
     const gh: GhRunner = async () => ({ stdout: 'bob\n' });
-    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', { gh });
+    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', {
+      gh,
+      skipDependencyCheck: 'owner marker coverage does not exercise dependency proposals',
+    });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: bob');
   });

@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:1, task:2, task:3, task:16, task:37
 /**
  * Tests for ci-fix.ts (Task 15–16: RETRY hint builder).
  *
@@ -8,8 +8,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   buildCiFixHint,
+  buildCiLogExcerpt,
   enrichCiFixHint,
   CI_FIX_HINT_MAX_BYTES,
+  CI_FIX_LOG_EXCERPT_MAX_BYTES,
   CI_FIX_METADATA_MAX_BYTES,
   isEligibleForCiFix,
   nonTerminalCheckNames,
@@ -34,7 +36,99 @@ const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function failedWorkflowLog(): string {
+  const fetch = Array.from({ length: 520 }, (_, index) =>
+    `conductor\tUNKNOWN STEP\t2026-09-21T19:43:43Z  * [new branch]        feat/x-${index} -> origin/feat/x-${index}`,
+  );
+  const prefix = [...fetch, [
+    ' RUN  v4.1.11 /worktree',
+    ' FAIL  test/engine/foo.test.ts > foo > bar',
+    'AssertionError: expected 1 to be 2',
+  ]].flat().join('\n');
+  const lastLine = '##[error]Process completed with exit code 1.';
+  const padding = 'p'.repeat(127_189 - Buffer.byteLength(`${prefix}\n\n${lastLine}`, 'utf8'));
+  return `${prefix}\n${padding}\n${lastLine}`;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe('ci-fix: buildCiLogExcerpt tail fallback', () => {
+  it('passes an in-budget log through unchanged and returns empty logs unchanged', () => {
+    const log = `FAIL small test\n${'x'.repeat(CI_FIX_LOG_EXCERPT_MAX_BYTES - 16)}`;
+
+    expect(buildCiLogExcerpt(log)).toBe(log);
+    expect(buildCiLogExcerpt('')).toBe('');
+  });
+
+  it('uses a contiguous tail when a long log has no failure lines', () => {
+    const lines = Array.from({ length: 4_000 }, (_, index) => `ordinary output line ${index}`);
+    const excerpt = buildCiLogExcerpt(lines.join('\n'));
+
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES);
+    expect(excerpt.startsWith('[log tail: earlier lines omitted]\n')).toBe(true);
+    expect(excerpt).not.toContain('[failure lines]');
+    const tail = excerpt.split('\n').slice(1);
+    expect(tail).toEqual(lines.slice(lines.length - tail.length));
+    expect(tail.at(-1)).toBe(lines.at(-1));
+  });
+
+  it('retains the valid UTF-8 end of a final line that alone exceeds the budget', () => {
+    const excerpt = buildCiLogExcerpt('😀'.repeat(20_000));
+
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES);
+    expect(excerpt).toContain('[line truncated]');
+    expect(excerpt.endsWith('😀')).toBe(true);
+    expect(excerpt).not.toContain('�');
+  });
+});
+
+describe('ci-fix: buildCiLogExcerpt failure lines', () => {
+  it('puts matching failure lines ahead of the final log lines without setup noise', () => {
+    const excerpt = buildCiLogExcerpt(failedWorkflowLog());
+
+    expect(Buffer.byteLength(failedWorkflowLog(), 'utf8')).toBe(127_189);
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES);
+    expect(excerpt).toMatch(/^\[failure lines\]/);
+    expect(excerpt).toContain('FAIL  test/engine/foo.test.ts > foo > bar');
+    expect(excerpt).toContain('AssertionError: expected 1 to be 2');
+    expect(excerpt.indexOf('[failure lines]')).toBeLessThan(excerpt.indexOf('[log tail: earlier lines omitted]'));
+    expect(excerpt).toContain('##[error]Process completed with exit code 1.');
+    expect(excerpt).not.toContain('* [new branch]');
+  });
+
+  it('recognizes only the declared failure markers', () => {
+    const markers = [
+      '##[error] step failed', 'FAIL suite', '✗ assertion', '× assertion', 'Error: boom',
+      '[ci-progress] failed test: x', '[ci-progress] stalled waiting',
+      '[ci-progress] still running at run end: x', '[ci-progress] process exiting',
+      '[ci-progress] done test/a failed 1s',
+    ];
+    const excerpt = buildCiLogExcerpt([...markers, '* [new branch] feat/fail-fast -> origin/feat/fail-fast', 'lowercase error'].join('\n') + '\n' + 'padding\n'.repeat(3_000));
+
+    for (const marker of markers) expect(excerpt).toContain(marker);
+    expect(excerpt).not.toContain('* [new branch] feat/fail-fast');
+    expect(excerpt).not.toContain('lowercase error');
+  });
+
+  it('caps and accounts for many failure lines without splitting UTF-8', () => {
+    const lines = Array.from({ length: 400 }, (_, index) => `FAIL ${index} ${'😀'.repeat(200)}`);
+    const excerpt = buildCiLogExcerpt([...lines, 'ordinary tail', '##[error]last'].join('\n'));
+    const [failureSection] = excerpt.split('[log tail: earlier lines omitted]');
+
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES);
+    expect(Buffer.byteLength(failureSection, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES / 2 + 1);
+    expect(failureSection).toMatch(/\[\d+ failure lines omitted\]/);
+    expect(excerpt).not.toContain('�');
+  });
+
+  it('limits an oversized failure line to 512 bytes with its marker', () => {
+    const excerpt = buildCiLogExcerpt(`FAIL ${'x'.repeat(2_000)}\n${'padding\n'.repeat(3_000)}last`);
+    const failureLine = excerpt.split('\n')[1];
+
+    expect(Buffer.byteLength(failureLine, 'utf8')).toBeLessThanOrEqual(512);
+    expect(failureLine.endsWith('[line truncated]')).toBe(true);
+  });
+});
 
 describe('ci-fix: buildCiFixHint', () => {
   const selectedState = (rollup: NonNullable<PrMergeState['statusCheckRollup']>): PrMergeState => ({
@@ -145,6 +239,23 @@ describe('ci-fix: optional bounded log enrichment', () => {
     ],
   };
 
+  it('uses the failure-and-tail excerpt for a long read log and omits empty logs', async () => {
+    const oneRun: PrMergeState = { ...state, statusCheckRollup: [state.statusCheckRollup![0]] };
+    const required = buildCiFixHint(oneRun);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+
+    const enriched = await enrichCiFixHint(required.hint, oneRun, {
+      viewWorkflowRunFailedLog: async () => failedWorkflowLog(),
+    } as any, '/repo');
+    expect(enriched.hint).toContain(`Workflow run 7 log excerpt:\n${buildCiLogExcerpt(failedWorkflowLog())}`);
+    expect(enriched.degradations).not.toContain('log-unavailable');
+
+    const empty = await enrichCiFixHint(required.hint, oneRun, {
+      viewWorkflowRunFailedLog: async () => '',
+    } as any, '/repo');
+    expect(empty).toEqual({ hint: required.hint, degradations: [] });
+  });
+
   it('deduplicates workflow runs, forwards bounded runner options, and degrades without dropping required context', async () => {
     const calls: Array<{ args: string[]; opts: any }> = [];
     const tracker = { viewWorkflowRunFailedLog: vi.fn(async (repo: string, run: string, _cwd: string, opts: any) => {
@@ -156,7 +267,7 @@ describe('ci-fix: optional bounded log enrichment', () => {
     if (required.kind !== 'ready') throw new Error('expected required hint');
     const result = await enrichCiFixHint(required.hint, state, tracker, '/repo');
     expect(calls).toHaveLength(2);
-    expect(calls[0].opts).toMatchObject({ timeout: 10_000, maxBuffer: 65_536 });
+    expect(calls[0].opts).toMatchObject({ timeout: 10_000, maxBuffer: 8_388_608 });
     expect(result.hint).toContain('one');
     expect(result.hint).toContain('https://github.com/acme/repo/actions/runs/7/jobs/1');
     expect(result.degradations).toContain('log-unavailable');
@@ -989,7 +1100,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     }
   }, REAL_GIT_TIMEOUT_MS);
 
-  it('suite gate fails -> no push, outcome logged, attempt stays consumed (Task 19)', async () => {
+  it('suite gate fails -> lease push is not called and records the inline verification outcome (Task 16)', async () => {
     const { repoPath, originPath, cleanup } = await createFixtureRepo();
     try {
       const logs: string[] = [];
@@ -1010,16 +1121,19 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
+      const leasePush = vi.fn(permittedRemoteGit);
       const result = await runCiFix(
         entry,
         branch,
         hint,
-        { fixRunner, verify: async () => 1 },
+        { fixRunner, verify: async () => 1, remoteGit: leasePush },
         logger,
       );
 
-      // Attempt stays consumed, but the failed verifier is explicit.
+      // The pooled repair invokes this same adapter; its failure result is the
+      // inline path's terminal outcome and must stop before lease publication.
       expect(result).toEqual({ kind: 'failed', stage: 'verification' });
+      expect(leasePush).not.toHaveBeenCalled();
 
       const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
       expect(afterSha).toBe(beforeSha);

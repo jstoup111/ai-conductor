@@ -42,6 +42,20 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders executor protocol mismatches with the restart disposition', () => {
+    expect(lines({
+      type: 'executor_protocol_mismatch',
+      slug: 'feature-a',
+      engineVersionId: '20261019T120000Z-abcdef123456',
+      expectedProtocolVersion: 2,
+      actualProtocolVersion: 1,
+      reason: 'executor protocol mismatch: expected 2, received 1',
+      restartRequested: true,
+    })).toEqual([
+      '· executor feature-a protocol mismatch: executor protocol mismatch: expected 2, received 1 (restart requested)',
+    ]);
+  });
+
   it('renders build tree witnesses without changing legacy or non-build lines', () => {
     expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456', treeAfter: 'abc123456' }))
       .toEqual(['·   build ✓ done (tree abc1234 unchanged)']);
@@ -55,9 +69,27 @@ describe('renderDaemonEvent', () => {
       .toEqual(['·   build ✓ done']);
   });
 
+  it('bounds a failed test_suite to its summary line and points at the full output (#3337)', () => {
+    const error = [
+      'Excerpt only. The complete suite output (122348 bytes, every failure) is in .pipeline/test-suite-output.log; read it and fix every failure it lists before rerunning.',
+      'Suite #2/3 (index 1) failed: command npm test; directory /repo; duration 10ms; exit code 1; 1 unexecuted.',
+      'warning: core.fsyncObjectFiles is deprecated; use core.fsync instead',
+      "error: unknown option '--step'",
+    ].join('\n');
+    expect(lines({ type: 'step_failed', step: 'test_suite', error, retryCount: 1 })).toEqual([
+      '· ✗ test_suite failed (try 1): Excerpt only. The complete suite output (122348 bytes, every failure) is in .pipeline/test-suite-output.log; read it and fix every failure it lists before rerunning. (+3 more lines omitted; full output in test-suite-output.log)',
+    ]);
+    expect(lines({ type: 'step_failed', step: 'test_suite', error: 'Full test suite failed', retryCount: 1 })).toEqual([
+      '· ✗ test_suite failed (try 1): Full test suite failed',
+    ]);
+  });
+
   it('renders failures', () => {
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 })).toEqual([
       '· ✗ build failed (try 2): boom',
+    ]);
+    expect(lines({ type: 'step_failed', step: 'build', error: 'boom\nat frame', retryCount: 2 })).toEqual([
+      '· ✗ build failed (try 2): boom\nat frame',
     ]);
     expect(lines({
       type: 'step_refused',
@@ -617,6 +649,18 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     chalk.level = 0;
   });
 
+  it('renders an executor start with its pinned and supervisor engine versions', () => {
+    expect(lines({
+      type: 'executor_started',
+      slug: 'pinned-feature',
+      engineVersionId: 'engine-v2',
+      protocolVersion: 1,
+      supervisorEngineVersionId: 'engine-v1',
+    })).toEqual([
+      '· executor pinned-feature started on engine-v2 (protocol 1; supervisor engine-v1)',
+    ]);
+  });
+
   it('keeps kickback and navigation_back (BACK) lines textually distinct', () => {
     const [kickbackLine] = lines({
       type: 'kickback',
@@ -760,6 +804,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     // guard fails loudly if a new/other type starts unexpectedly rendering.
     const samples: ConductorEvent[] = [
       { type: 'step_started', step: 'build', index: 0 },
+      { type: 'provider_attempt_started', step: 'build', provider: { kind: 'known', id: 'claude' } },
       { type: 'step_completed', step: 'build', status: 'done' },
       { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
       { type: 'step_refused', step: 'build', kind: 'seal', reason: 'protected artifact changed' },
@@ -852,6 +897,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
 
     const previousRenderingTypes = new Set([
       'step_started',
+      'provider_attempt_started',
       'step_completed',
       'step_failed',
       'step_refused',

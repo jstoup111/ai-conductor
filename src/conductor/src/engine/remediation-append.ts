@@ -23,8 +23,18 @@
 //                                     completed and evidenced) is NEVER
 //                                     mutated; the new content gets an ordinal
 //                                     suffix (`…-2`, `…-3`, …) instead.
+//   Identity is judged against the plan as it stood BEFORE the round: several
+//   dispositions restating one id within a round resolve to one task.
+
+import { readFile, writeFile } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 
 import type { RemediationGap } from './artifacts.js';
+import { parseChildId, type ChildId } from './child-context.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
+import { parsePlanTaskBlocks } from './plan-task-parse.js';
+import type { GitRunner } from './rebase.js';
+import type { FrozenAllocation, FrozenHostAllocation } from './routing/route-types.js';
 
 /** Canonical source label for remediation admitted by the PRD-audit gate. */
 export const PRD_AUDIT_REMEDIATION_GATE_SOURCE = 'prd-audit';
@@ -81,6 +91,46 @@ export interface AppendRemediationResult {
   /** One resolved plan-task id per input gap task (existing or newly appended). */
   ids: string[];
 }
+
+/** One admitted remediation gap, ready to render into a routed host's frozen allocation. */
+export interface FrozenRemediationItem {
+  readonly gap: CriterionBoundRemediationGap;
+  readonly gateSource: string;
+}
+
+/** A host plan is read from its branch; allocation never checks it out or writes it. */
+export interface FrozenHostPlan {
+  readonly branch: string;
+  readonly planPath: string;
+}
+
+export interface AllocateFrozenBlocksInput {
+  readonly itemsByHost: Readonly<Record<number, readonly FrozenRemediationItem[]>>;
+  /** The already-read leaf plan at admission. */
+  readonly leafPlan: string;
+  /** Every non-leaf host plan that can contribute an existing rem-* id. */
+  readonly hostPlans: readonly FrozenHostPlan[];
+  readonly roundId: string;
+  /** Read-only Git seam used only for `git show <branch>:<planPath>`. */
+  readonly git: GitRunner;
+}
+
+export interface WriteFrozenBlocksInput {
+  readonly worktree: string;
+  readonly planPath: string;
+  readonly roundId: string;
+  readonly host: ChildId;
+  readonly allocation: FrozenHostAllocation;
+  readonly slug: string;
+  readonly git: GitRunner;
+}
+
+export type WriteFrozenBlocksResult =
+  | { readonly kind: 'written' }
+  | { readonly kind: 'noop' }
+  /** A persisted/committable allocation cannot be safely reconciled automatically. */
+  | { readonly kind: 'halted'; readonly detail: string }
+  | { readonly kind: 'refused'; readonly detail: string };
 
 /** Sanitize a raw segment into the H9 grammar; empty result is a caller error. */
 function sanitizeSegment(raw: string, what: string): string {
@@ -187,6 +237,153 @@ function renderTaskBlock(
   ].join('\n');
 }
 
+function remediationIds(planText: string): Set<string> {
+  return new Set([...existingTaskTitles(planText).keys()].filter(isEngineAppendedRemediationTaskId));
+}
+
+function nextFrozenId(canonical: string, used: Set<string>): string {
+  if (!used.has(canonical)) return canonical;
+  let ordinal = 2;
+  while (used.has(`${canonical}-${ordinal}`)) ordinal += 1;
+  return `${canonical}-${ordinal}`;
+}
+
+function appendRouteLines(block: string, host: number, roundId: string): string {
+  return `${block.replace(/\n$/, '')}\n**Child:** ${host}\n**Round:** ${roundId}\n`;
+}
+
+function canonicalFrozenBlock(block: string): string {
+  return block.replace(/\r\n/g, '\n').replace(/\n+$/, '\n');
+}
+
+function planTaskBlocks(planText: string): Map<string, string> {
+  return new Map([...parsePlanTaskBlocks(planText)].map(([id, block]) => [
+    id,
+    canonicalFrozenBlock(`${block.heading}\n${block.body}`),
+  ]));
+}
+
+/**
+ * Append a routed host's admission-time frozen blocks without regenerating
+ * their body.  A retry accepts only the allocation's exact canonical block;
+ * ordinary remediation appends retain their separate title-drift semantics.
+ */
+export async function writeFrozenBlocks(input: WriteFrozenBlocksInput): Promise<WriteFrozenBlocksResult> {
+  const bodies = new Map<string, string>();
+  for (const body of input.allocation.blockBodies) {
+    const parsed = parsePlanTaskBlocks(body);
+    const [[id, block]] = [...parsed];
+    if (parsed.size !== 1 || !id || !input.allocation.remTaskIds.includes(id) || bodies.has(id)) {
+      return { kind: 'refused', detail: `frozen remediation block ${id ?? '(unreadable)'} is absent from host ${input.host}'s allocation` };
+    }
+    bodies.set(id, canonicalFrozenBlock(`${block.heading}\n${block.body}`));
+  }
+  if (bodies.size !== input.allocation.remTaskIds.length || input.allocation.remTaskIds.some((id) => !bodies.has(id))) {
+    return { kind: 'refused', detail: `frozen remediation allocation for host ${input.host} has unreadable task ids` };
+  }
+
+  const absolutePlanPath = isAbsolute(input.planPath) ? input.planPath : join(input.worktree, input.planPath);
+  let planText: string;
+  try {
+    planText = await readFile(absolutePlanPath, 'utf8');
+  } catch {
+    return { kind: 'refused', detail: `cannot read routed host plan ${input.planPath}` };
+  }
+  const existing = planTaskBlocks(planText);
+  const missing: string[] = [];
+  for (const [id, body] of bodies) {
+    const present = existing.get(id);
+    if (present === undefined) {
+      missing.push(body);
+    } else if (present !== canonicalFrozenBlock(body)) {
+      return { kind: 'halted', detail: `frozen remediation block ${id} differs from its stored allocation` };
+    }
+  }
+  if (missing.length === 0) return { kind: 'noop' };
+
+  const separator = planText.endsWith('\n') ? '\n' : '\n\n';
+  const next = planText + separator + missing.join('');
+  await writeFile(absolutePlanPath, next, 'utf8');
+  const committed = await commitEngineChangeWhenStacked({
+    worktree: input.worktree,
+    slug: input.slug,
+    pathspec: [input.planPath],
+    message: `chore(plan): append routed remediation for ${input.roundId}\n\nRound: ${input.roundId}`,
+  });
+  if (committed?.kind === 'written' || committed?.kind === 'noop') return { kind: 'written' };
+
+  await writeFile(absolutePlanPath, planText, 'utf8');
+  return {
+    // A journal or durable-state refusal can clear on a later preflight;
+    // only a failed commit (including a rejected hook) needs human action.
+    kind: committed?.kind === 'failed' ? 'halted' : 'refused',
+    detail: committed === undefined
+      ? 'routed frozen remediation requires durable child state'
+      : `cannot commit routed frozen remediation: ${committed.reason}`,
+  };
+}
+
+/**
+ * Produce the exact remediation blocks a routed host will later append.
+ *
+ * This admission-time renderer reads other branch plans with `git show` only;
+ * it neither checks out nor writes any plan.  IDs reserve every existing rem-*
+ * heading across the leaf and host plans, then every ID allocated in this
+ * round, so the durable bodies can be replayed verbatim at region entry.
+ */
+export async function allocateFrozenBlocks({
+  itemsByHost,
+  leafPlan,
+  hostPlans,
+  roundId,
+  git,
+}: AllocateFrozenBlocksInput): Promise<FrozenAllocation> {
+  const used = remediationIds(leafPlan);
+  for (const { branch, planPath } of hostPlans) {
+    const shown = await git(['show', `${branch}:${planPath}`]);
+    if (shown.exitCode !== 0) {
+      throw new Error(`remediation-append: could not read host plan ${branch}:${planPath}: ${shown.stderr}`);
+    }
+    for (const id of remediationIds(shown.stdout)) used.add(id);
+  }
+
+  const allocation: Record<ChildId, FrozenHostAllocation> = {} as Record<ChildId, FrozenHostAllocation>;
+  for (const [rawHost, items] of Object.entries(itemsByHost)) {
+    const host = parseChildId(Number(rawHost));
+    if (host === undefined) throw new Error(`remediation-append: invalid frozen allocation host ${rawHost}`);
+    const remTaskIds: string[] = [];
+    const blockBodies: string[] = [];
+    const allocatedThisRound = new Set<string>();
+    for (const { gap, gateSource } of items) {
+      const source = sanitizeSegment(gateSource, 'gate source');
+      const gapTasks = gap.tasks.length > 0 ? gap.tasks : [{ id: gap.id, title: gap.rationale }];
+      const refusalIds = refusalTaskIds(gap);
+      for (const [taskIndex, task] of gapTasks.entries()) {
+        const base = refusalIds?.[taskIndex]
+          ?? sanitizeSegment(task.id !== '' ? task.id : gap.id, 'gap task id');
+        const canonical = `rem-${source}-${base}`;
+        if (allocatedThisRound.has(canonical)) continue;
+        allocatedThisRound.add(canonical);
+        const id = nextFrozenId(canonical, used);
+        const title = collapseToOneLine(task.title) ?? collapseToOneLine(gap.rationale) ?? '';
+        remTaskIds.push(id);
+        blockBodies.push(appendRouteLines(renderTaskBlock(
+          id,
+          title,
+          source,
+          gap.rationale,
+          gap.criterion,
+          gap.parentTask,
+          gap.governingClause,
+        ), host, roundId));
+        used.add(id);
+      }
+    }
+    allocation[host] = { remTaskIds, blockBodies };
+  }
+  return allocation;
+}
+
 /**
  * Append remediation gap tasks to the plan text with deterministic H9 ids.
  * Pure: never touches disk. Throws on an empty/unsanitizable gap-task id or
@@ -200,6 +397,8 @@ export function appendRemediationTasks(
 ): AppendRemediationResult {
   const defaultSource = sanitizeSegment(gateSource, 'gate source');
   const existing = existingTaskTitles(planText);
+  // canonical → id it resolved to earlier in THIS round.
+  const resolvedThisRound = new Map<string, string>();
 
   const ids: string[] = [];
   const blocks: string[] = [];
@@ -222,17 +421,28 @@ export function appendRemediationTasks(
       const canonical = `rem-${source}-${base}`;
       const title = collapseToOneLine(t.title) ?? collapseToOneLine(gap.rationale) ?? '';
 
+      const resolved = resolvedThisRound.get(canonical);
+      if (resolved !== undefined) {
+        // A restatement within one round is the same task, not drift.
+        ids.push(resolved);
+        continue;
+      }
+      const resolve = (id: string): void => {
+        resolvedThisRound.set(canonical, id);
+        ids.push(id);
+      };
+
       const existingTitle = existing.get(canonical);
       if (refusalIds !== undefined && existingTitle !== undefined) {
         // A refusal task is keyed by the durable refusal decision, not its
         // presentation wording. Later rounds may rename the finding or the
         // planner's title, but must still reopen the one canonical task.
-        ids.push(canonical);
+        resolve(canonical);
         continue;
       }
       if (existingTitle !== undefined && existingTitle === title) {
         // Idempotent re-round: exactly one task per logical gap.
-        ids.push(canonical);
+        resolve(canonical);
         continue;
       }
 
@@ -248,7 +458,7 @@ export function appendRemediationTasks(
         }
         id = `${canonical}-${ordinal}`;
         if (existing.get(id) === title) {
-          ids.push(id);
+          resolve(id);
           continue;
         }
       }
@@ -263,7 +473,7 @@ export function appendRemediationTasks(
         gap.governingClause,
       ));
       existing.set(id, title);
-      ids.push(id);
+      resolve(id);
     }
   }
 

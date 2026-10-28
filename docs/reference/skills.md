@@ -23,7 +23,7 @@ matches on when deciding to invoke the skill.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `name` | yes | Skill identifier; must match the directory name |
+| `name` | yes | Host-visible skill name. `bin/install` links each catalog entry, the self-host provider home and sandbox list each skill, and the engine renders every harness-skill invocation and operator-only `skillOverrides` key under this name, read from the skill tree being served (the feature worktree for self-host builds, the engine's harness checkout otherwise). The directory stays the internal id for step mappings, rubric paths, and `OPERATOR_ONLY_SKILLS`. A missing key falls back to the directory name; an unclosed frontmatter block fails dispatch and makes `bin/install` exit 1. Every shipped skill currently sets it equal to its directory |
 | `description` | yes | Model-facing trigger text — when to invoke this skill |
 | `enforcement` | yes for `skills/*` | Declared strictness: `advisory`, `gating`, or `structural`. **Advisory only.** The engine's step definition decides real skippability — see [Known limitations](#known-limitations) |
 | `phase` | yes for `skills/*` | `understand`, `decide`, `build`, `ship`, or `all` |
@@ -58,8 +58,8 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
-`daemon-triage`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
+The 19 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
+`daemon-triage`, `finish`, `manual-test`, `memory`, `pipeline`, `plan-review`, `prd-audit`, `rebase`,
 `remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
 `write-tests`.
@@ -95,33 +95,34 @@ policy across both catalogs and both host metadata formats.
 | Skill | `enforcement` | `phase` | `model` | Engine step | Gate role |
 | --- | --- | --- | --- | --- | --- |
 | `bootstrap` | advisory | understand | — | `bootstrap` (out-of-band) | Advisory |
-| `memory` | gating | understand | — | `memory` (1) | Advisory |
-| `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
+| `memory` | advisory | understand | — | `memory` (1) | Advisory |
+| `assess` | advisory | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
 | `code-removal` | advisory | all | — | none | Advisory |
 | `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
-| `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
+| `architecture-diagram` | advisory | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
-| `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (18) | Advisory at 6, blocking at 18 |
+| `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (19) | Blocking |
 | `stories` | gating | decide | — | `stories` (7) | Blocking |
 | `conflict-check` | gating | decide | — | `conflict_check` (8) | Blocking |
 | `plan` | gating | decide | — | `plan` (9) | Blocking |
 | `coherence-check` | gating | decide | — | `coherence_check` (10) | Blocking |
+| `plan-review` | gating | decide | — | `plan_review` (11) | Blocking |
 | `intake` | gating | decide | — | none — operator-invoked | Neither |
 | `composer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
-| `writing-system-tests` | gating | build | — | `acceptance_specs` (11) | Blocking |
-| `pipeline` | structural | build | — | `build` (12) | Blocking; cannot be disabled |
+| `writing-system-tests` | gating | build | — | `acceptance_specs` (13) | Blocking |
+| `pipeline` | structural | build | — | `build` (14) | Blocking; cannot be disabled |
 | `tdd` | structural | build | — | none — runs inside `build` | Neither |
 | `code-review` | gating | build | opus | none — pipeline batch boundary | Blocking in place |
 | `simplify` | gating | build | sonnet | none — pipeline batch boundary | Blocking in place |
 | `debugging` | gating | build | opus | none — on demand | Neither |
-| `manual-test` | gating | ship | — | `manual_test` (16) | Blocking |
-| `prd-audit` | gating | ship | opus | `prd_audit` (17) | Blocking |
-| `remediate` | gating | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
-| `rebase` | advisory | ship | — | `rebase` (19) — on conflict only | Blocking via the structural step |
-| `finish` | gating | ship | — | `finish` (20) | Blocking |
+| `manual-test` | gating | ship | — | `manual_test` (17) | Blocking |
+| `prd-audit` | gating | ship | opus | `prd_audit` (18) | Blocking |
+| `remediate` | advisory | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
+| `rebase` | advisory | ship | — | `rebase` (20) — on conflict only | Blocking via the structural step |
+| `finish` | gating | ship | — | `finish` (21) | Blocking |
 | `pr` | advisory | ship | — | none — operator-invoked; `/finish` inlines it rather than calling it | Neither |
 | `maintain-documentation` | (none) | (none) | — | custom step after `rebase` | Blocking, this repository only |
 | `release-disposition` | (none) | (none) | — | custom step after `maintain-documentation` | Blocking, this repository only |
@@ -195,7 +196,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 > Use only within an active harness lifecycle when its architecture-diagram step is current. Generates and maintains C4 Mermaid diagrams; do not invoke for ordinary code changes or general architecture questions.
 
-- **Frontmatter** — `enforcement: gating`, `phase: all`, `standalone: true`, `requires: []`, `model: sonnet`.
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `requires: []`, `model: sonnet`.
 - **Engine step** — `architecture_diagram` (index 5, DECIDE, skipped at tier S). Engine enforcement is
   `advisory`.
 - **Inputs** — codebase structure (Procfile, `docker-compose.yml`, `database.yml`, routes, model
@@ -229,7 +230,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 > Use when the operator requests project recall, when the harness dispatches its memory step, or when an active harness workflow requires a memory checkpoint. Recall-before-act protocol with categorized persistence and staleness detection.
 
-- **Frontmatter** — `enforcement: gating`, `phase: understand`, `standalone: true`, `requires: []`, no model pin.
+- **Frontmatter** — `enforcement: advisory`, `phase: understand`, `standalone: true`, `requires: []`, no model pin.
 - **Engine step** — `memory` (index 1, UNDERSTAND). Engine enforcement is `advisory`.
 - **Inputs** — `.memory/index.md`; entries under `.memory/decisions/`, `patterns/`, `gotchas/`, and
   `context/`, read in full; referenced file paths, checked for drift.
@@ -242,7 +243,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 > Use for codebase health assessment. Dispatches 9 specialist agents + CTO orchestrator to evaluate security, data integrity, dependencies, architecture, duplication, testing, infrastructure, observability, and developer experience.
 
-- **Frontmatter** — `enforcement: gating`, `phase: understand`, `standalone: true`,
+- **Frontmatter** — `enforcement: advisory`, `phase: understand`, `standalone: true`,
   `requires: [verify-claims]`, `model: sonnet`.
 - **Engine step** — `assess` (out-of-band, UNDERSTAND prelude). Auto-skipped with a `mode_skip` event
   when `bootstrap_mode` is `new`.
@@ -302,8 +303,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
-- **Engine step** — two: `architecture_review` (index 6, DECIDE, engine enforcement `advisory`) and
-  `architecture_review_as_built` (index 18, SHIP, engine enforcement `gating`), the latter invoked as
+- **Engine step** — two: `architecture_review` (index 6, DECIDE, engine enforcement `gating`) and
+  `architecture_review_as_built` (index 19, SHIP, engine enforcement `gating`), the latter invoked as
   `/architecture-review --as-built`. The DECIDE-time step skips at tier S; the as-built step runs at
   every tier.
 - **Inputs** — `.docs/decisions/`, `.docs/architecture/`, `CLAUDE.md`, `.memory/decisions/`, existing
@@ -356,7 +357,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   is resolved in `stories`. In an unattended run a blocking conflict HALTs for a human — never a silent
   pass.
 - **Layer ownership** — story↔story pairs only. Cross-layer and task↔task pairs belong to
-  `coherence-check`, because this step runs before `plan` creates tasks.
+  `plan-review` at tiers M and L and to the plan's §7b contradiction pass at tier S, because this step
+  runs before `plan` creates tasks.
 
 ### plan
 
@@ -417,30 +419,49 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   for binding constraints. An established inability to deliver is `fail`, explained with
   `CANNOT-DELIVER:` prose below the table identifying the criterion, task, quoted check, and any
   binding ADR decision. Criterion rows retain six cells; no Notes cell or new gap-id vocabulary is added.
-  The review also checks preserved/default-mode observables against new side effects across tasks,
-  and verifies that closed state/result/reason sets can truthfully represent required negative paths.
-  Checks over normalized inputs or exported subsets must establish the source boundary as well as
-  the helper behavior; agreement within an incomplete subset does not establish complete coverage.
+  The review also verifies that closed state/result/reason sets can truthfully represent required
+  negative paths. Checks over normalized inputs or exported subsets must establish the source boundary
+  as well as the helper behavior; agreement within an incomplete subset does not establish complete
+  coverage.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived
-  mechanically by the land-time gate from the real PRD and stories files, so the skill spends its judgement
-  on whether a cited FR is actually *delivered* by that story's scenarios — a correct citation the
-  acceptance criteria contradict is `fail`, not `covered`. Story-versus-story contradictions stay with
-  `conflict-check`; this skill compares each story against the PRD.
-- **Task-versus-task sweep** — owns task↔task and cross-layer oscillation; story↔story pairs belong
-  to `conflict-check`, which runs before tasks exist. For each task pair sharing a behavior, entity,
-  file, or fixture, it asks whether completing one task leaves the other's `Done when` true, in both
-  directions; an acyclic dependency graph is not evidence of compatibility. An invalidation grounded in
-  quoted text from both tasks sets the affected `task` row to `fail` (never a new verdict word);
-  ungrounded suspicions are raised as assumptions, and pairs sharing nothing add no rows.
+  mechanically by the land-time gate from the real PRD and stories files.
+- **Layer ownership** — mapping and achievability only. Story↔story pairs belong to `conflict-check`;
+  cross-layer and task↔task contradiction, oscillation, and preserved-behavior conflicts belong to
+  [`plan-review`](#plan-review) at tiers M and L and to the plan's §7b contradiction pass at tier S.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
-  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it
-  or whose cited task checks cannot deliver the criterion under approved architecture,
+  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose cited task checks cannot deliver the
+  criterion under approved architecture, or whose required ADR decision mapping is semantically wrong,
   which coverage alone cannot express. Criterion rows enforce that vocabulary mechanically; unknown
   values are malformed. The five legacy row classes retain affirmative-by-default parsing for backward
   compatibility. In an autonomous run an ambiguous row is marked `gap` and left for the fail-closed land
   gate — never silently passed. At tier S it does not run and must not author a stub.
+
+### plan-review
+
+> Use only within active engineer/conduct DECIDE after coherence-check for Medium or Large work to adversarially review the final plan against the real source. Reports source-grounded findings; does not author or amend plan artifacts.
+
+- **Frontmatter** — `enforcement: gating`, `phase: decide`, `disable-model-invocation: true`, no
+  model pin. Codex metadata sets `allow_implicit_invocation: false`.
+- **Engine step** — `plan_review` (index 11, DECIDE, prerequisite `coherence_check`, skipped at tier S).
+  The engine dispatches the skill in a fresh read-only reviewer session; outside the daemon, run it with
+  [`compose plan-review`](cli.md#compose-subcommands).
+- **Inputs** — the plan, stories, in-scope ADR `## Decision` sections, the coherence artifact, the target
+  worktree source, and engine-computed candidate rows for the `test-impact`, `reachability`, and
+  `dependency-order` lenses. Round 2 receives only the plan tasks, stories, and ADR decisions whose
+  digests changed since round 1, plus round 1's blocking and significant findings.
+- **Outputs** — `.docs/plan-review/<plan-stem>.md`, rendered by the engine from the reviewer's
+  schema-validated structured result. The reviewer writes nothing.
+- **Reviewer choice** — the engine tries configured providers in order, with
+  `steps.plan_review.llm_provider` first when set. Unless that setting names the authoring host, the
+  authoring host moves to the end of the list. A reviewer that is not provably a different provider
+  prints an `independence` notice (`same-provider` or `unknown-host`).
+- **Gate role** — blocking. Findings are `blocking`, `significant`, or `advisory`. Every unresolved
+  `blocking` finding blocks both step completion and land. Review is bounded to two rounds: after round
+  2, the operator either accepts each standing finding with a reason, or acknowledges later plan edits
+  with a reason so the recorded digest matches again. Land also rejects a review whose digest no longer
+  matches the plan, stories, in-scope ADR decisions, or coherence artifact.
 
 ### intake
 
@@ -479,7 +500,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `requires: [verify-claims]`, no model pin.
   It is the only `skills/*` entry with no `standalone` key, so it defaults to non-standalone.
-- **Engine step** — `acceptance_specs` (index 11, BUILD, prerequisite `plan`, skipped at tier S).
+- **Engine step** — `acceptance_specs` (index 13, BUILD, prerequisite `plan`, skipped at tier S).
 - **Inputs** — happy and negative acceptance criteria from `.docs/stories/*.md`; the existing test suite
   and tech-context for framework and layout detection; the approved PRD FR list on the product track.
 - **Outputs** — committed acceptance spec files in the project's test directories, plus gitignored run
@@ -500,32 +521,29 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### pipeline
 
-> Use when executing an implementation plan with multiple tasks. Factory orchestration with three autonomy levels, quality gates, rework budgets, and audit trails.
+> Use when executing an implementation plan with multiple tasks. Factory orchestration with ready-frontier parallelism, quality gates, rework budgets, and audit trails.
 
 - **Frontmatter** — `enforcement: structural`, `phase: build`, `standalone: false`,
   `requires: [".docs/plans/ with implementation plan"]`, no model pin.
-- **Engine step** — `build` (index 12, BUILD, prerequisite `plan`). Checkpoint, loop gate, structural,
+- **Engine step** — `build` (index 14, BUILD, prerequisite `plan`). Checkpoint, loop gate, structural,
   never tier-skipped, never disableable.
 - **Inputs** — the plan's task dependency graph, file sets, and dependency lines;
   `.pipeline/task-status.json`; story acceptance criteria; prior batch reviews; ADRs and the approved
   PRD for the design-conformance check.
-- **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch simplification
-  records; `.pipeline/progress.log`; `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and
-  `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch; a `pipeline_closeout` record in
-  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `ai-conductor
-  closeout-event`. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
+- **Outputs** — the batch simplification records; `.pipeline/progress.log`;
+  `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and `.pipeline/HALT` on a stall; at
+  least one `.memory/` entry per batch. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
   hooks and must not be hand-edited.
 - **Read-only SHIP verdicts** — BUILD sessions, including remediation retries and every implementer
   dispatch, may read but never write, delete, rename, or recreate the SHIP validator verdict artifacts
   (`prd-audit.md`/`.json`, `architecture-review-as-built.md`/`.json`) or their code-stamp sidecars. Only the
   validator's next dispatch produces a new verdict; a fixed finding is proven through
   [`ai-conductor task done <id> --done-when <n>=<evidence>`](cli.md#ai-conductor-task).
-- **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
-  `review.json` halts and re-dispatches. A missing, malformed, or non-matching `evaluator`
-  `pipeline_closeout` record is an independent second hard gate (waived for a batch already in flight
-  before the closeout-event emitter shipped) — see [`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event).
-  `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework against a three-cycle budget. Two
-  consecutive zero-completion attempts trip a circuit breaker.
+- **Gate role** — blocking. Each batch boundary requires the supplied `BATCH_AFFECTED_TESTS` results
+  with no unexpected failure, the linter, a `simplify` pass, and a `.memory/` entry; it dispatches no
+  evaluator. A failing gate triggers rework against a three-cycle budget, then escalates. Two
+  consecutive zero-completion attempts trip a circuit breaker. Post-build review belongs to the
+  engine's `build_review` step.
 - **Declared replication copy task** — on a plan with a resolved `**Pattern-source:**` /
   `**Rename-map:**` declaration, exactly one task is the mechanical, zero-LLM copy: it writes only the
   targets its `**Files:**` declaration lists, fails closed naming an undeclared target or an unreadable
@@ -539,7 +557,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   Codex uses multiple `collaboration.spawn_agent` calls in one response. Conservative, dependent
   tasks, and overlapping-file tasks stay sequential. A selected host without native fan-out stops
   with an actionable capability diagnostic instead of silently serializing Standard or Full.
-- **Dispatches** — `agents/evaluator.md`, `agents/generator.md`, `agents/worktree-manager.md`.
+- **Dispatches** — `agents/generator.md`, `agents/worktree-manager.md`.
 
 ### tdd
 
@@ -590,8 +608,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
-- **Engine step** — none. The pipeline evaluator satisfies this gate at batch boundaries. The engine's
-  `build_review` step is a separate, engine-native grader, not this skill.
+- **Engine step** — none. The engine's `build_review` step is a separate, engine-native post-build
+  grader, not this skill.
 - **Inputs** — `git diff <batch-start-commit>..HEAD`, scoped to the batch rather than the full branch;
   the story and acceptance criterion; the plan task; affected-test results; the tech-context review
   checklist.
@@ -603,14 +621,14 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### simplify
 
-> Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, and over-engineering; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
+> Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: false`, `requires: []`,
   `model: sonnet`.
 - **Engine step** — none. It runs inside `pipeline`'s post-batch checks and from `tdd`'s batch-boundary
   refactor rule.
 - **Inputs** — the batch diff by name; the batch-start commit; existing tests at the same production
-  seam; ADRs that justify an abstraction; linter output.
+  seam; ADRs that justify an abstraction; linter output; earlier batches' simplification records.
 - **Outputs** — `.pipeline/audit-trail/batch-N-simplification.md`.
 - **Gate role** — blocking within the batch. `CLEAN` proceeds; `SIMPLIFY_REQUIRED` must be fixed before
   the next batch and counts against pipeline's three-cycle rework budget.
@@ -618,6 +636,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   pair alone is not flagged as an extract-with-parameters finding. Undeclared duplication, and
   similarity outside the declared target set, is still flagged, and the skill retains authority to
   propose extraction on a declared pair when rationale beyond the replication itself merits it.
+- **Domain-modelling pre-check** — applies the five non-duplication, non-complexity kinds of the
+  `build_review` `implementationQuality` vocabulary (representable invalid state, non-exhaustive
+  domain match, primitive obsession, obscured intent, non-semantic name) to batch-changed code. It is
+  the build's good-faith first pass, not the authority: `build_review` still enforces the rubric over
+  the whole feature diff. Findings an earlier batch fixed or recorded as advisory are not re-raised
+  unless their code changed again.
 
 ### debugging
 
@@ -662,11 +686,11 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 ### manual-test
 
-> Use after /finish to validate stories via curl (API) or browser (full-stack). Bugs found loop back through /tdd.
+> Use to validate stories via curl (API) or browser (full-stack) after the test suite and before /finish. Browser capability gaps warn; observed bugs loop back through /tdd.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: false`,
-  `requires: [finish, verify-claims]`, no model pin.
-- **Engine step** — `manual_test` (index 16, SHIP, prerequisite `test_suite`, skipped at tier S).
+  `requires: [verify-claims]`, no model pin.
+- **Engine step** — `manual_test` (index 17, SHIP, prerequisite `test_suite`, skipped at tier S).
   Checkpoint and loop gate, and the only step that opts into `configDisableAllowed`.
 - **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
   path supplied in the step's system prompt.
@@ -688,7 +712,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
-- **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; runs on every
+- **Engine step** — `prd_audit` (index 18, SHIP, prerequisite `manual_test`). Loop gate; runs on every
   feature, at every tier and on both tracks — the skill does not infer a skip from tier, track, or the
   absence of a PRD.
 - **Inputs** — in a managed run, an engine-built, versioned, size-bounded evidence projection: the
@@ -720,7 +744,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 > Use when a SHIP gate blocks — a prd-audit FIXABLE finding, an all-`REMEDIABLE` as-built architecture-review BLOCKED verdict, or finish verification — or on a build stall. Guides remediation toward the owning step and HALTs only for gaps that need a human.
 
-- **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
+- **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
@@ -769,7 +793,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
-- **Engine step** — `rebase` (index 19, SHIP, prerequisite `architecture_review_as_built`). Engine enforcement is
+- **Engine step** — `rebase` (index 20, SHIP, prerequisite `architecture_review_as_built`). Engine enforcement is
   `structural`. The engine rebases natively and dispatches this skill **only on conflict**.
 - **Inputs** — live git state only: status, the rebase-merge or rebase-apply path, the unmerged file
   list, and the conflicted files.
@@ -958,38 +982,18 @@ The frontmatter is not always the truth. Where a skill's declared `enforcement` 
 engine step definition, **the engine wins** — `isGatingStep` and `canSkipStep` read the step
 definition, never the SKILL.md.
 
-> **Known limitation.** Six skills' `enforcement:` frontmatter disagrees with the engine's step
-> definition. A reader who trusts the frontmatter will predict the wrong skippability.
->
-> | Skill | SKILL.md `enforcement` | Engine step enforcement |
-> | --- | --- | --- |
-> | `memory` | `gating` | `advisory` |
-> | `assess` | `gating` | `advisory` |
-> | `architecture-diagram` | `gating` | `advisory` |
-> | `architecture-review` | `gating` | `advisory` (the DECIDE step) |
-> | `remediate` | `gating` | `advisory` |
-> | `rebase` | `advisory` | `structural` |
->
-> The sharpest case is `architecture-review`: the SKILL.md declares a HARD GATE — no feature proceeds
-> past it with DRAFT ADRs — but the DECIDE-phase step is `advisory`, so `canSkipStep('architecture_review')`
-> returns `true`. The real enforcement for that half lives in the land-time spec gate and in `conduct`'s
-> DRAFT-ADR block, not in the step's enforcement level. The as-built half at index 18 is genuinely
-> `gating` and fail-closed. Tracked in
-> [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
+`src/conductor/test/skill-frontmatter-engine-drift.test.ts` fails when a step-mapped skill's
+`enforcement:` differs from its strictest mapped step, or when it `requires:` a skill whose step runs
+later. Skills with no step `skillName` are outside that check.
 
-> **Known limitation.** `manual-test/SKILL.md` declares `requires: [finish, verify-claims]` and its
-> description says "Use after /finish". The engine runs `manual_test` at index 16 with prerequisite
-> `test_suite`, and `finish` at index 21 with prerequisite `rebase`. `finish` is not a prerequisite of
-> `manual_test` in any code path — the declared dependency is inverted relative to execution order.
-> Follow the engine order. Tracked in
+> **Known limitation.** `rebase/SKILL.md` declares `enforcement: advisory`; the engine's `rebase` step
+> is `structural`. The step carries no `skillName`, so the drift test does not cover it. Tracked in
 > [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 
 > **Known limitation.** `conduct/SKILL.md`'s tier table claims that tier S skips `pipeline` ("use direct
-> /tdd") and `code-review` ("domain review in TDD suffices"). Neither is implemented. `build` declares
-> `skippableForTiers: []` and is `structural`, so it can be neither tier-skipped nor config-disabled;
-> `code-review` is not an engine step at all, and the engine's separate `build_review` step is likewise
-> never tier-skipped. The same file's "Small flow" summary also omits `complexity`, `worktree`,
-> `build_review`, `test_suite`, and `rebase`, all of which run at tier S. The
+> /tdd"). This is not implemented: `build` declares `skippableForTiers: []` and is `structural`, so it
+> can be neither tier-skipped nor config-disabled. The same file's "Small flow" summary also omits
+> `complexity`, `worktree`, `build_review`, `test_suite`, and `rebase`, all of which run at tier S. The
 > authoritative tier-S skip set is the 8 steps listed in [steps](steps.md). Tracked in
 > [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 

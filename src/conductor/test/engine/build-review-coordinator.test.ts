@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:7, task:15, task:29
+// Covers: task:2, task:4, task:5, task:7, task:15, task:29, task:rem-prd-audit-4-4, task:rem-prd-audit-5
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -30,6 +30,8 @@ import type {
   ResolvedBuildReviewConfig,
   ResolvedBuildReviewRubricPolicy,
 } from "../../src/engine/resolved-config.js";
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { EventPersister } from "../../src/engine/event-persister.js";
 import { ConductorEventEmitter } from "../../src/ui/events.js";
 
@@ -56,6 +58,10 @@ function config(testQualityEnabled: boolean, securityEnabled = false, maxProject
     rubrics: {
       testQuality: { ...policy, enabled: testQualityEnabled, max_projection_bytes: maxProjectionBytes },
       security: { ...policy, enabled: securityEnabled, effort: 'high' },
+      // These coordinator fixtures exercise the older branches explicitly;
+      // implementation quality is default-on in production and must not
+      // create an unsolicited third dispatch here.
+      implementationQuality: { ...policy, enabled: false },
     },
   } as unknown as ResolvedBuildReviewConfig;
 }
@@ -69,6 +75,7 @@ function configWithSecurityModel(model: string): ResolvedBuildReviewConfig {
 }
 
 const disabledSecurityBranch = { kind: 'skipped', rubric: 'security', reason: 'disabled' } as const;
+const disabledImplementationQualityBranch = { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' } as const;
 
 function projectionWithCanonicalByteLength(byteLength: number): BuildReviewCoordinationInput["projections"] {
   const lapId = parseBuildReviewLapId("lap-current")!;
@@ -133,6 +140,58 @@ function coordinationInput(
 }
 
 describe("build-review coordinator: registered dispatch", () => {
+  // Covers: task:11
+  it('records an empty delta as scope-empty without preflight, cache, or provider dispatch', async () => {
+    const reviewScope = {
+      mode: 'delta' as const,
+      reason: 'delta' as const,
+      sequence: 2,
+      unreadableLapIds: [],
+      mergeBase: 'base',
+      headSha: 'head',
+      policyIdentity: 'policy',
+      predecessorLapId: parseBuildReviewLapId('lap-prior')!,
+      reviewedHunks: [],
+      deltaHunks: [],
+      outOfDeltaSourceIds: [],
+    };
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput['emit']>>[0]) => undefined);
+    const input = coordinationInput(true, {
+      projections: {
+        testQuality: {
+          rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4', lapId: parseBuildReviewLapId('lap-current')!,
+          snapshotDigest: 'sha256:snapshot', digest: 'sha256:scope-empty', reviewScope: { mode: 'delta', deltaHunks: [] },
+        },
+      } as never,
+      reviewScopes: { testQuality: reviewScope },
+      preflight: vi.fn(),
+      emit,
+      writeArtifact: vi.fn(async (artifact) => ({ version: 2, ...artifact })),
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(result).toEqual({
+      kind: 'ready',
+      branches: [
+        { kind: 'scope-empty', rubric: 'testQuality' },
+        disabledSecurityBranch,
+        disabledImplementationQualityBranch,
+      ],
+    });
+    expect(input.preflight).not.toHaveBeenCalled();
+    expect(input.readCache).not.toHaveBeenCalled();
+    expect(input.dispatchModel).not.toHaveBeenCalled();
+    expect(input.writeCache).not.toHaveBeenCalled();
+    expect(input.writeArtifact).toHaveBeenCalledWith({
+      rubric: 'testQuality', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
+      result: { kind: 'scope-empty', rubric: 'testQuality' }, provenance: { kind: 'fresh' }, reviewScope,
+    });
+    expect(emit).toHaveBeenCalledWith({
+      type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-current', reason: 'scope-empty',
+    });
+  });
+
   it('skips enabled security at a non-leaf child without dispatching it', async () => {
     const dispatchModel = vi.fn(async () => ({ findings: [] }));
 
@@ -148,8 +207,47 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { kind: 'skipped', rubric: 'security', reason: 'leaf-only' },
+        disabledImplementationQualityBranch,
       ],
     });
+  });
+
+  it('matches explicit security enablement: default security skips non-leaf children and judges the whole-feature snapshot once at the leaf', async () => {
+    const defaultConfig = resolveBuildReviewConfig({} as HarnessConfig);
+    const explicitConfig = resolveBuildReviewConfig({
+      build_review: { rubrics: { security: { enabled: true } } },
+    } as HarnessConfig);
+    const runChildren = async (resolved: ResolvedBuildReviewConfig) => {
+      const dispatchModel = vi.fn(async (_branch, _projection) => ({ findings: [] }));
+      const nonLeaf = await coordinateBuildReviewRubrics(coordinationInput(false, {
+        config: resolved, securityLeafOnly: true, dispatchModel,
+        engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: {
+          security: { kind: 'resolved', digest: 'sha256:security-skill' },
+          implementationQuality: { kind: 'resolved', digest: 'sha256:implementation-quality-skill' },
+        } },
+      }));
+      const leaf = await coordinateBuildReviewRubrics(coordinationInput(false, {
+        config: resolved, securityLeafOnly: false, dispatchModel,
+        engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: {
+          security: { kind: 'resolved', digest: 'sha256:security-skill' },
+          implementationQuality: { kind: 'resolved', digest: 'sha256:implementation-quality-skill' },
+        } },
+      }));
+      return { nonLeaf, leaf, dispatchModel };
+    };
+
+    const defaults = await runChildren(defaultConfig);
+    const explicit = await runChildren(explicitConfig);
+
+    expect(securityBranch(defaults.nonLeaf)).toEqual({ kind: 'skipped', rubric: 'security', reason: 'leaf-only' });
+    const defaultSecurityCalls = defaults.dispatchModel.mock.calls.filter(([branch]) => branch.rubric === 'security');
+    expect(defaultSecurityCalls).toHaveLength(1);
+    expect(defaultSecurityCalls[0]?.[1]).toMatchObject({
+      rubric: 'security', snapshotDigest: inputs().sourceSnapshot.digest,
+    });
+    expect(securityBranch(defaults.leaf)).toMatchObject({ kind: 'dispatched', rubric: 'security', result: { verdict: 'PASS' } });
+    expect(defaults.nonLeaf).toEqual(explicit.nonLeaf);
+    expect(defaults.leaf).toEqual(explicit.leaf);
   });
 
   it('keeps setup-only provider exhaustion as infrastructure without accepting findings or retrying', async () => {
@@ -167,7 +265,7 @@ describe("build-review coordinator: registered dispatch", () => {
         kind: 'infrastructure-failure',
         reason: 'invalid-structured-result',
         providerSetupExhaustion: { candidates: [{ provider: 'codex' }] },
-      }, disabledSecurityBranch],
+      }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(testQualityBranch(result)).not.toHaveProperty('findings');
   });
@@ -232,7 +330,7 @@ describe("build-review coordinator: registered dispatch", () => {
     }).testQuality as BuildReviewRubricProjection;
     const finding = testQualityFinding();
     const claudeTerminalEnvelope = { structuredOutput: { findings: [finding] } };
-    const codexTerminalItem = { findings: [{ anchor: finding.anchor, evidenceLocations: finding.evidenceLocations, summary: finding.summary, concernKind: finding.concernKind }] };
+    const codexTerminalItem = { findings: [{ anchor: finding.anchor, evidenceLocations: finding.evidenceLocations, summary: finding.summary, severity: finding.severity, concernKind: finding.concernKind }] };
     const claudeStamped = stampBuildReviewDispatchedCandidate(claudeTerminalEnvelope.structuredOutput, 'testQuality', projection);
     const codexStamped = stampBuildReviewDispatchedCandidate(codexTerminalItem, 'testQuality', projection);
     const claudeResult = validateBuildReviewDispatchedResult(claudeStamped, 'testQuality', projection)!;
@@ -345,12 +443,51 @@ describe("build-review coordinator: registered dispatch", () => {
       reason: "disabled",
     });
     expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_skipped",
+      rubric: "implementationQuality",
+      lapId: "lap-current",
+      reason: "disabled",
+    });
+    expect(emit).toHaveBeenCalledWith({
       type: "build_review_outer_verdict",
       lapId: "lap-current",
       rawVerdict: "PASS",
       effectiveVerdict: "PASS",
       reason: "build_review_no_rubrics",
     });
+  });
+
+  it.each([
+    ['missing', { kind: 'unavailable', path: 'skills/build-review-implementation-quality/SKILL.md' }],
+    ['unreadable', { kind: 'unavailable', path: 'skills/build-review-implementation-quality/SKILL.md' }],
+  ] as const)('keeps implementation-quality %s SKILL.md unavailable as infrastructure and never records PASS', async (_case, skillDigest) => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: implementationQualityConfig(),
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: skillDigest } } as never,
+      dispatchModel,
+    }));
+
+    expect(implementationQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure', rubric: 'implementationQuality',
+      detail: expect.stringContaining('skills/build-review-implementation-quality/SKILL.md'),
+    });
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(result).not.toMatchObject({ kind: 'passed', verdict: 'PASS' });
+  });
+
+  it('settles a double-invalid implementation-quality payload in the mechanical-fault lane without a content finding', async () => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: implementationQualityConfig(),
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:iq' } } },
+      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'not-an-implementation-quality-kind' }] })),
+    }));
+
+    expect(implementationQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure', rubric: 'implementationQuality', reason: 'invalid-structured-result',
+    });
+    expect(implementationQualityBranch(result)).not.toHaveProperty('findings');
+    expect(result).not.toMatchObject({ kind: 'passed', verdict: 'PASS' });
   });
 
   it.each([
@@ -420,6 +557,7 @@ describe("build-review coordinator: registered dispatch", () => {
     const dispatchModel = vi.fn(async () => ({
       findings: [{
         concernKind: "test-insensitive",
+        severity: 'minor',
         summary: "The relocated preservation test is insensitive.",
         evidenceLocations: [`${relocatedTest}:12`],
         anchor: {
@@ -466,7 +604,7 @@ describe("build-review coordinator: registered dispatch", () => {
     );
     expect(result).toMatchObject({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result" }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result" }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
   });
 
@@ -530,7 +668,7 @@ describe("build-review coordinator: registered dispatch", () => {
 
     expect(classifyBuildReviewRubricBranches(config(true), [])).toMatchObject({
       kind: "ready",
-      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }, disabledSecurityBranch],
+      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(dispatchModel).toHaveBeenCalledTimes(1);
     expect(dispatchModel).toHaveBeenCalledWith(
@@ -546,6 +684,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { rubric: 'security', skillName: 'build-review-security', policy: expect.objectContaining({ enabled: true, effort: 'high' }) },
+        disabledImplementationQualityBranch,
       ],
     });
 
@@ -556,6 +695,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         disabledSecurityBranch,
+        disabledImplementationQualityBranch,
       ],
     });
   });
@@ -581,6 +721,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { kind: 'dispatched', rubric: 'security', result: { verdict: 'PASS' } },
+        disabledImplementationQualityBranch,
       ],
     });
   });
@@ -621,6 +762,7 @@ function titledInputs(): BuildReviewFrozenInputs {
 function testQualityFinding(summary = "The changed test passes against the reverted production code.") {
   return {
     concernKind: "test-insensitive",
+    severity: 'minor',
     summary,
     evidenceLocations: [`${IN_SCOPE_TEST}:1`],
     anchor: { rubric: "testQuality", locus: { path: IN_SCOPE_TEST, contentHash: IN_SCOPE_HASH, display: IN_SCOPE_TITLE } },
@@ -633,6 +775,21 @@ function testQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildRevi
 
 function securityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
   return result.kind === "ready" ? result.branches.find((branch) => branch.rubric === "security") : undefined;
+}
+
+function implementationQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
+  return result.kind === 'ready' ? result.branches.find((branch) => branch.rubric === 'implementationQuality') : undefined;
+}
+
+function implementationQualityConfig(): ResolvedBuildReviewConfig {
+  const resolved = config(false);
+  return {
+    ...resolved,
+    rubrics: {
+      ...resolved.rubrics,
+      implementationQuality: { ...policy, enabled: true },
+    },
+  } as ResolvedBuildReviewConfig;
 }
 
 describe("build-review coordinator: security envelope", () => {
@@ -652,10 +809,10 @@ describe("build-review coordinator: security envelope", () => {
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
       // Candidate-partitioned (v2) entry: a hit requires the lookup's semantic identity.
       readCache: vi.fn(async (_branch, currentProjection, policyFingerprint, semanticIdentity) => ({
-        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
+        version: 2, rubric: "security", contractVersion: "v4", projectionVersion: "v4",
         projectionDigest: currentProjection.digest, policyFingerprint, semanticIdentity,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
-        result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
+        result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
       }) as never),
       dispatchModel,
       emit,
@@ -682,7 +839,7 @@ describe("build-review coordinator: security envelope", () => {
         version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest, semanticIdentity,
         policyFingerprint: cachedPolicyFingerprint ?? policyFingerprint,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
-        result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
+        result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
       }) as never),
       dispatchModel,
     });
@@ -710,7 +867,7 @@ describe("build-review coordinator: security envelope", () => {
   });
 
   it("defers an unavailable harness-root digest to candidate-local production resolution", async () => {
-    const dispatchModel = vi.fn(async () => ({ kind: "judged", rubric: "security", lapId: "lap-current", snapshotDigest: "sha256:snapshot", contractVersion: "v3", findings: [], verdict: "PASS" }));
+    const dispatchModel = vi.fn(async () => ({ kind: "judged", rubric: "security", lapId: "lap-current", snapshotDigest: "sha256:snapshot", contractVersion: "v4", findings: [], verdict: "PASS" }));
     const input = coordinationInput(false, {
       config: config(false, true), useCandidateCache: true,
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "unavailable", path: "skills/build-review-security/SKILL.md" } } },
@@ -733,6 +890,7 @@ describe("build-review coordinator: security envelope", () => {
         verdict: "PASS", rubric: "testQuality", lapId: "reviewer", snapshotDigest: "reviewer", contractVersion: "invalid", kind: "invalid",
         findings: [{
         concernKind: "injection",
+        severity: 'major',
         summary: "Request input reaches a shell command.",
         evidenceLocations: ["src/a.ts:1"],
         anchor: { rubric: "security", locus: { path: "src/a.ts", contentHash: securityHash, display: "request-derived command" } },
@@ -742,7 +900,7 @@ describe("build-review coordinator: security envelope", () => {
 
     expect(securityBranch(result)).toMatchObject({
       kind: "dispatched", rubric: "security", result: {
-        kind: "judged", rubric: "security", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "FAIL",
+        kind: "judged", rubric: "security", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "FAIL",
       },
     });
   });
@@ -762,7 +920,7 @@ describe("build-review coordinator: security envelope", () => {
     }));
 
     expect(securityBranch(result)).toMatchObject({
-      kind: "dispatched", rubric: "security", result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "PASS" },
+      kind: "dispatched", rubric: "security", result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "PASS" },
     });
   });
 
@@ -781,13 +939,13 @@ describe("build-review coordinator: security envelope", () => {
       config: config(true, true),
       inputs: { ...frozen, sourceSnapshot: { ...frozen.sourceSnapshot, testQuality: { inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [], excludedMarkerFiles: [] } } },
       engineIdentity: { engineStamp: "engine", skillDigests: { security: { kind: "resolved", digest: "security" } } },
-      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'injection', summary: 'Untrusted shell input', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: `sha256:${createHash('sha256').update('const command = request.input').digest('hex')}`, display: 'command' } } }] })),
+      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'injection', severity: 'major', summary: 'Untrusted shell input', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: `sha256:${createHash('sha256').update('const command = request.input').digest('hex')}`, display: 'command' } } }] })),
     });
     const result = await coordinateBuildReviewRubrics(input);
     expect(input.preflight).not.toHaveBeenCalled();
     expect(input.dispatchModel).toHaveBeenCalledTimes(1);
     expect(securityBranch(result)).toMatchObject({ kind: 'dispatched', result: { verdict: 'FAIL' } });
-    expect(result).toMatchObject({ kind: 'ready', branches: [ { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' }, { rubric: 'security' } ] });
+    expect(result).toMatchObject({ kind: 'ready', branches: [ { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' }, { rubric: 'security' }, disabledImplementationQualityBranch ] });
   });
 
   it("maps a security-review refusal to infrastructure rather than an empty pass", async () => {
@@ -922,11 +1080,12 @@ describe("build-review coordinator: frozen fan-out", () => {
       emit,
     }));
 
-    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }, disabledSecurityBranch] });
+    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }, disabledSecurityBranch, disabledImplementationQualityBranch] });
     // Disabled rubrics settle before cache, preflight, or provider work.
     expect(emit.mock.calls.map(([event]) => event)).toEqual([
       { type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current" },
       { type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled" },
+      { type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled" },
       { type: "build_review_rubric_result", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" },
       {
         type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
@@ -943,11 +1102,11 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).toHaveBeenCalledTimes(1);
     expect(input.writeArtifact).toHaveBeenCalledWith({
       rubric: "testQuality", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-      result: { kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [], verdict: "PASS" },
+      result: { kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [], verdict: "PASS" },
     });
     expect(input.writeCache).toHaveBeenCalledTimes(1);
     expect(input.writeCache).toHaveBeenCalledWith(expect.objectContaining({
-      version: 2, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
+      version: 2, rubric: "testQuality", contractVersion: "v4", projectionVersion: expect.any(String),
       projectionDigest: expect.stringMatching(/^sha256:/), policyFingerprint: expect.any(String),
       semanticIdentity: expect.objectContaining({
         semanticInputDigest: expect.stringMatching(/^sha256:/),
@@ -1011,13 +1170,15 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
       reason, excerpt: detail,
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled",
     }]);
   });
 
@@ -1119,6 +1280,8 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
     }, {
+      type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled",
+    }, {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
       cause: "malformed-artifact",
       excerpt: '"findings" must be an array (empty when no concern was found)',
@@ -1211,7 +1374,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     const result = await coordinateBuildReviewRubrics(input);
 
     const expected = {
-      kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+      kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
       findings: [...findings], verdict,
     };
     expect(input.writeArtifact).toHaveBeenCalledWith({
@@ -1236,7 +1399,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     expect(testQualityBranch(result)).toEqual({
       kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
         verdict, findings: [...findings],
       },
     });
@@ -1527,7 +1690,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       obligationReferences: ["criterion:S5.1"], associationReason: "The changed fallback assertion covers the criterion.",
     };
     const finding = {
-      concernKind: "test-insensitive", summary: "The fallback assertion can pass without persistence.", evidenceLocations: ["test/widget.test.ts:1"],
+      concernKind: "test-insensitive", severity: 'minor', summary: "The fallback assertion can pass without persistence.", evidenceLocations: ["test/widget.test.ts:1"],
       anchor: { rubric: "testQuality", locus: { path: scopeRegion.path, contentHash: scopeRegion.contentHash, display: scopeRegion.display } },
     };
     const dispatchModel = vi.fn(async () => ({ findings: [finding], scopeResolutions: [resolution], lapId: "provider-lap" }));
@@ -1538,12 +1701,12 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     expect(dispatchModel).toHaveBeenCalledTimes(1);
     expect(testQualityBranch(result)).toMatchObject({
       kind: "dispatched", result: {
-        contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
+        contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
       },
     });
     expect(input.writeArtifact).toHaveBeenCalledWith(expect.objectContaining({
       rubric: 'testQuality', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
-      result: expect.objectContaining({ contractVersion: 'v3', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', scopeResolutions: [resolution] }),
+      result: expect.objectContaining({ contractVersion: 'v4', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', scopeResolutions: [resolution] }),
     }));
   });
 
@@ -1666,7 +1829,7 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
     expect(testQualityBranch(result)).toEqual({
       kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
         findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
       },
     });
@@ -1686,7 +1849,7 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
     expect(laps).toEqual(["lap-one", "lap-two"].map((lapId) => ({
       kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId, snapshotDigest: "sha256:snapshot",
+        kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId, snapshotDigest: "sha256:snapshot",
         findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
       },
     })));
@@ -1711,7 +1874,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
         rubric: "testQuality",
         reason: "projection-oversized",
         detail: "measured=1346093 bytes limit=1048576 bytes",
-      }, disabledSecurityBranch],
+      }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(dispatchModel).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith({
@@ -1768,6 +1931,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
       branches: [
         { kind: "infrastructure-failure", reason: "projection-oversized", detail: `measured=${measured} bytes limit=${measured - 1} bytes` },
         disabledSecurityBranch,
+        disabledImplementationQualityBranch,
       ],
     });
     expect(dispatchModel).toHaveBeenCalledTimes(1);
@@ -1792,7 +1956,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
 
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(input.readCache).not.toHaveBeenCalled();
     expect(input.dispatchModel).not.toHaveBeenCalled();
@@ -1801,6 +1965,8 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "projection-rubric-mismatch",
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled",
     }]);
   });
 });

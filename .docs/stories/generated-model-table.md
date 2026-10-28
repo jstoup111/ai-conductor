@@ -165,24 +165,26 @@ engine default for its step so that the interactive and autonomous paths cannot 
 - Given a skill in `PIN_EXEMPT_SKILLS` (e.g. `code-review`, which has no engine step), when
   check 5b runs, then it passes that skill as exempt — and the exemption does NOT suppress the
   duplicate/unmapped failure from TS-1 for other skills.
-- Given a SKILL.md whose frontmatter has no `model:` line, when check 5b runs, then that skill
-  is skipped (inheriting from session/engine is legal) — absence of a pin is never an error.
+- Given a SKILL.md whose frontmatter has no `model:` line and whose skill is exempt or has no
+  `--pins` entry, when check 5b runs, then that skill passes without comparison; given a skill
+  with a non-exempt `--pins` expected model and no `model:` line, check 5b FAILS naming the skill
+  and the expected model.
 - Given malformed JSON from `--pins` (simulated by a corrupted fixture), when check 5b consumes
   it, then the check FAILS with a parse error rather than passing vacuously on empty data.
 
 ### Done When
 - [ ] `--pins` JSON schema covered by a unit test (mapped, exempt, and unmapped-fail cases)
-- [ ] Suite-level test (bash) demonstrates: agreeing pin passes, disagreeing pin fails with names, pin-less skill skipped, malformed JSON fails closed
+- [ ] Suite-level test (bash) demonstrates: agreeing pin passes, disagreeing pin fails with names, pin-less unmapped or exempt skill passes, pin-less skill with a non-exempt expected model fails, malformed JSON fails closed
 
 ---
 
-## Story: Integrity suite integrates drift + pin checks with warn-and-skip degradation
+## Story: Integrity suite integrates drift + pin checks and fails on missing prerequisites
 
 **Requirement:** TS-5 (ADR §4)
 
-As a harness consumer running `test/test_harness_integrity.sh` in a checkout without
-`npm install`, I want the new checks to degrade to a warning so that I never see a false
-integrity failure — while CI (with node_modules) enforces them hard.
+As a harness maintainer running `test/test_harness_integrity.sh`, I want the drift and pin
+checks to report into the suite's counters and to fail when their prerequisites are missing, so
+that a green run always means both checks executed.
 
 ### Acceptance Criteria
 
@@ -190,24 +192,22 @@ integrity failure — while CI (with node_modules) enforces them hard.
 - Given `src/conductor/node_modules` exists, when the suite runs, then section 5a invokes
   `bin/generate-model-table --check` and section 5b runs the pin comparison, and both report
   pass/fail into the suite's PASS/FAIL counters.
-- Given `src/conductor/node_modules` is absent, when the suite runs, then sections 5a/5b emit a
-  WARN line ("model-table checks skipped — run npm install in src/conductor") via the suite's
-  existing `warn_check` mechanism, the suite's exit code is unaffected by the skip, and the
-  presence-only check 5 still runs.
+- Given `src/conductor/node_modules` is absent, when the suite runs, then sections 5a/5b FAIL
+  with a message naming the missing directory and the `npm ci` remedy in `src/conductor`, the
+  suite exits non-zero, and check 5 still runs.
 
 #### Negative Paths
 - Given node_modules exists and the table has drift, when the suite runs, then the suite FAILS
   (non-zero exit) — degradation must not trigger when the environment is healthy.
 - Given node_modules exists but the generator exits with the environment-error code (e.g. tsx
   binary missing due to a partial install), when the suite runs, then the suite FAILS with the
-  environment message — a broken toolchain in a supposedly-installed checkout is a real failure,
-  not a skip (only the *absence of node_modules* degrades).
+  environment message — a broken toolchain in a supposedly-installed checkout is a real failure.
 - Given the drift check fails, when the suite completes, then the remaining checks (6, 7, …)
   still ran — one section's failure doesn't abort the suite (matches existing suite behavior).
 
 ### Done When
 - [ ] `test/test_harness_integrity.sh` gains sections 5a/5b; `bash -n` passes
-- [ ] A suite self-test (or documented manual verification in the PR) demonstrates all four paths: healthy-pass, drift-fail, env-error-fail, no-node_modules-warn-skip
+- [ ] A suite self-test (or documented manual verification in the PR) demonstrates all four paths: healthy-pass, drift-fail, env-error-fail, no-node_modules-fail
 - [ ] Existing checks 1–7 unchanged and still green
 
 ---

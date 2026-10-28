@@ -1,11 +1,11 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:11
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import ts from 'typescript';
-import type { ConductState, HarnessConfig } from '../../src/types/index.js';
+import type { ConductState, HarnessConfig, StepName } from '../../src/types/index.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -116,6 +116,19 @@ describe('rewindState', () => {
 
     await expect(rewindState({ state: completeState, config, target: 'not-a-step', store, readCurrentState: async () => completeState }))
       .rejects.toThrow(/not-a-step.*Valid steps:.*lint/s);
+    expect(store.batches).toEqual([]);
+  });
+
+  it('refuses the retired coverage_binding target without mutating state', async () => {
+    const store = new RecordingStateStore();
+
+    await expect(rewindState({
+      state: completeState,
+      config: {},
+      target: 'coverage_binding' as StepName,
+      store,
+      readCurrentState: async () => completeState,
+    })).rejects.toThrow(/Invalid rewind target "coverage_binding"\. Valid steps:.*acceptance_specs.*build/s);
     expect(store.batches).toEqual([]);
   });
 

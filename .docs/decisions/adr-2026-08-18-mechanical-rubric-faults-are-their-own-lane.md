@@ -138,6 +138,13 @@ cleared were unreachable.
 
 Amended 2026-08-18, before implementation, on operator decision recorded in that ADR's D6.
 
+> **Amended 2026-10-16:** A lap whose infrastructure failure sits beside a sibling's judged finding
+> still publishes (so BUILD can act on the finding), but it now also counts against this allowance.
+> Exempting it left no termination proof: BUILD cannot repair a reviewer's malformed output, so the
+> same failure re-dispatched `build_review` on an unchanged lap until an adjudication happened to
+> halt it (`preserve-self-build-provider-transcripts-on-failed`, four laps). Exhaustion for the
+> D5 reasons halts `needs-human` whether or not a sibling finding is present.
+
 > **Amended 2026-10-07 by #2942:** In a stacked feature the mechanical allowance counter lives on the active child's ledger entry, so it is per child (N×3 across N children) (`adr-2026-10-07-per-child-build-region` decision 10).
 
 ### D5 — Exhaustion is a `needs-human` HALT, not a park (OQ-4)

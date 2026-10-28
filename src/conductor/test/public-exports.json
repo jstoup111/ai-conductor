@@ -1,5 +1,6 @@
 [
   "CLI_PROVIDER_DISPATCHING_COMMANDS",
+  "LEGACY_TRANSCRIPT_OWNER_STEP",
   "PluginLoadError",
   "PluginManifestError",
   "PluginNotFoundError",
@@ -18,6 +19,8 @@
   "detectBuildReviewAcceptCommand",
   "detectBuildReviewFindingsCommand",
   "detectBuildReviewRecordReducedCoverageCommand",
+  "detectBuildReviewResolveCaseCommand",
+  "detectDoneWhenAcceptCommand",
   "detectHaltClearCommand",
   "detectKickbackBudgetCommand",
   "detectOverlapScanCommand",

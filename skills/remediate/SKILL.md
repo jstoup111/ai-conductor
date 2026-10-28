@@ -2,7 +2,8 @@
 name: remediate
 disable-model-invocation: true
 description: "Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Guides remediation toward the owning step and HALTs only for gaps that need a human."
-enforcement: gating
+model: opus
+enforcement: advisory
 phase: ship
 standalone: true
 requires: [verify-claims]
@@ -88,6 +89,11 @@ are:
   stable finding id, anchor, summary, and evidence locations.
 - `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
   resolution evidence.
+  - A prior source may carry `finding`, a bounded digest of the earlier finding: `rubric`,
+    `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`.
+  - Treat a supplied `finding` digest as binding context when deciding whether a current finding is
+    an equivalent re-raise of that prior source. It is never report text: do not copy, quote, or
+    treat it as a new finding; use it only to bind or distinguish the current source and case.
 - `planContract`: the active approved-plan contract that determines whether work is admitted.
 - `taskStatus`: the engine-supplied task-status evidence.
 - `effectPointers`: the engine-supplied prior effect and BUILD-attempt pointers.
@@ -121,17 +127,26 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
   the engine in `priorCases`, may bind that existing case only.
-- `disposition` is closed: `act` | `defer` | `reject` | `refute`.
+- `disposition` is closed: `act` | `defer` | `reject` | `refute` | `advisory` when the context declares severity thresholds.
 - `priority` is closed: `critical` | `high` | `medium` | `low`.
 - `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
   closed: `high` | `medium` | `low`.
 - An `act` effect is exactly `{ "kind": "action", "route": "build", "tasks": [{ "title": "..." }] }`.
   It contains one or more concrete, ordered, file-scoped task titles.
+- An unbound `act` row (one without `existingCaseId`) may add `distinctFrom`: one or more
+  `{ "caseId": "...", "reason": "..." }` entries declaring it distinct from resolved action
+  owners of its sources. A reason must be non-empty. A re-raise over a resolved action case is
+  a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
+  A malformed `distinctFrom` shape rejects the artifact. An entry may name either a provenance
+  candidate of the row or a resolved act owner of a row source; an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.
 - A `reject` effect is exactly `{ "kind": "none" }` and its rationale explains why the raw finding
   is non-actionable under the supplied rubric and plan contract.
+- An `advisory` row adds `adjudicatedSeverity`. It is allowed only when its source rubric declares a
+  threshold, its severity is strictly below that threshold and never above the reviewer severity,
+  it has a rationale grounded in the plan or prior cases, and its effect is exactly `{ "kind": "none" }`.
 - A `refute` row MUST bind an `existingCaseId` for an already attempted `act` case, use confidence
   `high`, and use either `{ "kind": "none" }` or a complete deferral effect. Its `refutation` is
   exactly `{ "claim": "...", "assertions": [...] }`; every assertion has `assertion`, a `refuted` or
@@ -146,9 +161,10 @@ The engine stamps durable ids, reconciles history, reserves and applies effects,
 order, charges the kickback, and derives the effective route.
 
 Never omit, duplicate, or replace a supplied source outcome. A `merged` source is a trace outcome,
-not a case disposition; it still names its canonical `caseRef`. Never assert or create operator
-acceptance, and never treat an autonomous case outcome as accepted risk. Do not apply an effect,
-file an intake issue, navigate BUILD, charge a budget, or mutate durable state. Do not append to the
+not a case disposition; it still names its canonical `caseRef`. A same-substance finding may be bound
+by `existingCaseId` to a prior case marked `operatorAccepted`. Never assert or create operator
+acceptance, and never treat an autonomous case outcome as accepted risk. Do not apply an effect, file
+an intake issue, navigate BUILD, charge a budget, or mutate durable state. Do not append to the
 approved plan. In this mode the only write is the schema-constrained `.pipeline/remediation.json`
 artifact.
 
@@ -166,6 +182,10 @@ For a v2 `act`, every effect task is exactly `{ "title": "...", "admittedTaskIds
 "admissionRationale": "..." }`. `admittedTaskIds` names the existing active-plan tasks that admit
 that repair, and `admissionRationale` explains the approved-scope fit. Never invent a task id or
 append a plan task.
+
+`planContract.index` lists every active-plan task without its body. `admittedTaskIds` must name supplied task bodies.
+An index-only task admission triggers at most one engine-run
+expansion round; after that round, an unsupplied admission halts.
 
 v2 adds `escalate` as both a source outcome and a case disposition. An escalation case has exactly
 the ordinary case fields plus `"escalation": { "owner": "product" | "plan" | "architecture" }`

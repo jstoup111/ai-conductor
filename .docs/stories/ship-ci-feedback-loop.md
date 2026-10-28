@@ -78,18 +78,19 @@ halt-monitor-visible event so that a broken ship is observable without reading C
 
 **Requirement:** TR-3, TR-6 (ADR Decisions 3, 6)
 
-As the daemon, I want at most one bounded CI-fix dispatch per sweep tick, gated by config, so
-that remediation cannot loop, stampede, or run when disabled.
+As the daemon, I want CI-fix to run as bounded pooled repairs that share the daemon concurrency
+budget, gated by config, so that remediation cannot loop, stampede, or run when disabled.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given `ci_watch.enabled` true (the default when the key is absent) and a failed entry with
-  `ciFixAttempts < 2` and no resolution in flight, when the sweep's post-label pass runs, then
-  the entry's `ciFixAttempts` is incremented and `lastCiFixAt` stamped in the rewritten registry
-  BEFORE any git work, and the injected dispatch callback is invoked with the updated entry.
-- Given two failed eligible entries in one tick, when the pass runs, then only the first is
-  dispatched and the second logs a defer (one-per-tick, mirrors autoresolve AC2).
+  `ciFixAttempts < 2` and no repair running for that PR, when the sweep's post-label pass runs,
+  then a repair request is queued; when the dispatcher claims it, the entry's `ciFixAttempts` is
+  incremented and `lastCiFixAt` stamped in the rewritten registry BEFORE any git work, and the
+  injected dispatch callback is invoked with the updated entry.
+- Given two failed eligible entries in one tick, when the pass runs, then both are queued as
+  repair requests and each runs when a pool slot is free (adr-2026-10-14-dispatch-first-daemon-maintenance D5).
 - Given a legacy watch entry with no `ciFixAttempts` field, when read, then it normalizes to 0
   (same pattern as `resolveAttempts`).
 
@@ -99,9 +100,9 @@ that remediation cannot loop, stampede, or run when disabled.
   `ci-failed` label/event handling — no dispatch is invoked.
 - Given `ciFixAttempts` already at 2, when the pass runs, then no dispatch occurs and the
   exhaustion path (TR-5 story) triggers instead.
-- Given any resolution already in flight (conflict autoresolve OR another CI fix — shared serial
-  guard), when the pass runs, then the entry is deferred with a logged reason, and its attempt
-  counter is NOT consumed.
+- Given a repair already running for the same PR (conflict autoresolve OR another CI fix), when
+  the pass runs, then no second request for that PR is queued, the skip is logged, and its
+  attempt counter is NOT consumed.
 - Given the dispatch callback throws, when the pass runs, then the sweep logs and continues
   (non-throwing), and the pre-bumped counter persists — a crash mid-dispatch can never yield an
   uncounted attempt.
@@ -117,8 +118,8 @@ that remediation cannot loop, stampede, or run when disabled.
 ### Done When
 - [ ] `CiFixDispatchOpts` seam exists with injected `enabled`/`isEligible`/`dispatch` (no direct
       import of the resolution pipeline from mergeable-sweep.ts)
-- [ ] Tests cover: bump-before-dispatch persistence, one-per-tick defer, legacy normalization,
-      disabled-config inertness, cap reached, shared serial guard defer without counter burn,
+- [ ] Tests cover: bump-at-claim-before-git-work persistence, one-repair-per-PR skip, legacy normalization,
+      disabled-config inertness, cap reached, same-PR skip without counter burn,
       dispatch-throw resilience
 - [ ] README + src/conductor/README document `ci_watch.enabled`
 

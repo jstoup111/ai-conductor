@@ -63,6 +63,8 @@ describe('retired build-review state compatibility', () => {
     await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), {
       resolveMainRoot: async () => root,
       realpath: async (path) => path,
+      child: undefined,
+      adjudicationEnabled: true,
     })).resolves.toMatchObject({ ok: true });
   });
 

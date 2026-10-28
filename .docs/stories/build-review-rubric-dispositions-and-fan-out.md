@@ -344,17 +344,21 @@ a new defect under the same rubric.
 #### Happy Path
 
 - Given one finding is accepted and another finding has a different concern kind or logical anchor,
-  when the same or a later lap is evaluated, then only the exact accepted identity is non-blocking.
+  when the same or a later lap is evaluated, then only the exact accepted identity is non-blocking,
+  apart from a later-lap finding the `remediate` adjudicator binds by `existingCaseId` to a case
+  holding that acceptance, which settles as carried (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
 #### Negative Paths
 
 - Given a proposed match shares only a rubric, file, summary fragment, or hash without the same full
-  canonical identity payload, when dispositions are applied, then it remains unresolved and blocks.
+  canonical identity payload, when dispositions are applied, then it is not accepted risk and it
+  remains unresolved and blocks, unless the engine classifies it out of delta, which is scope
+  bookkeeping and never accepted risk.
 
 ### Done When
 
 - [ ] Same-rubric fixtures cover different paths, obligations, concern kinds, and canonical payloads.
-- [ ] No rubric-wide, path-wide, feature-wide, or future-finding wildcard is accepted.
+- [ ] No rubric-wide, path-wide, feature-wide, or future-finding wildcard is accepted; out-of-delta classification is never recorded as accepted risk.
 
 ## Story 14: Refuse invalid disposition requests atomically
 
@@ -507,14 +511,17 @@ artifacts so that shipping evidence includes the operator's explicit decisions.
 #### Happy Path
 
 - Given one or more valid accepted dispositions, when finish updates the retained implementation PR
-  and writes the final shipped record, then both contain every finding identifier, rubric, rationale,
-  operator, and acceptance time from one deterministic rendering contract.
+  and writes the final shipped record, then both contain every accepted finding identifier and rubric,
+  every carried finding with its carried-from origin id and lap, and every operator-resolved case with
+  its case id and source ids, from one deterministic rendering contract, with no rationale, operator,
+  summary, or time (#1614, adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
 
 #### Negative Paths
 
 - Given a known accepted record is malformed, unreadable, or cannot be rendered into either required
   destination, when publication is attempted, then finish blocks rather than silently omitting or
-  fabricating accepted risk.
+  fabricating accepted risk; an unreadable remediation case store instead renders every direct row,
+  fabricates no carried row, and reports the unreadable state (adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
 - Given publication is retried, when the accepted-risk section already exists, then it is updated
   idempotently rather than duplicated.
 
@@ -686,7 +693,7 @@ re-dispatches and disposition-only laps do not repeatedly spend tokens.
   that rubric, then the engine makes no provider call, emits a cache-hit event, and materializes a
   current-lap rubric result before the normal join.
 - Given an operator accepts one finding without changing code or rubric policy, when the gate is
-  rejoined, then unchanged raw rubric results are reused and the disposition changes only the
+  rejoined at the same head, then unchanged raw rubric results are reused and the disposition changes only the
   effective verdict.
 
 #### Negative Paths

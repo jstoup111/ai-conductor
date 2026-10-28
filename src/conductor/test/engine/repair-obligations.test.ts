@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:2, task:3
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,8 @@ function sectionForStanding(): RepairObligationSection {
     },
     currentByPlan: { 'current-plan': { '2': 'current' } },
     admissionsByPlan: {},
+    citationRefusals: {},
+    citationRefusalAdmissions: {},
   };
 }
 
@@ -332,6 +334,81 @@ describe('repair obligations', () => {
       planPath: '.docs/plans/current.md', taskId: '1', obligationId: amendmentB.obligation.id,
       evidence: { kind: 'current-done-when', value: 'amendment proof' },
     })).resolves.toMatchObject({ ok: true, obligation: { tasks: { '1': { status: 'resolved' } } } });
+  });
+
+  it('supersedes only an earlier remediation-closure obligation for the same task', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const first = await repairs.admitOrReplay('remediation-closure:rem-as-built-R11:close-a', admission({
+      id: 'remediation-closure:rem-as-built-R11:close-a', taskIds: ['rem-as-built-R11'],
+      source: { findingId: 'close-a', authority: 'remediation-closure', instruction: 'Repair the first close.' },
+    }));
+    const second = await repairs.admitOrReplay('remediation-closure:rem-as-built-R11:close-b', admission({
+      id: 'remediation-closure:rem-as-built-R11:close-b', taskIds: ['rem-as-built-R11'],
+      source: { findingId: 'close-b', authority: 'remediation-closure', instruction: 'Repair the later close.' },
+    }));
+    if (!first.ok || !second.ok) throw new Error('expected admissions');
+
+    const state = await repairs.read();
+    expect(state).toMatchObject({ ok: true, value: { records: {
+      [first.obligation.id]: { tasks: { 'rem-as-built-R11': {
+        status: 'resolved', evidence: {
+          kind: 'superseded-by-remediation-closure', value: second.obligation.id,
+        },
+      } } },
+      [second.obligation.id]: { tasks: { 'rem-as-built-R11': { status: 'open' } } },
+    } } });
+    if (state.ok) {
+      expect(Object.values(state.value.records).filter((record) =>
+        record.source.authority === 'remediation-closure' && record.tasks['rem-as-built-R11']?.status === 'open',
+      )).toHaveLength(1);
+    }
+  });
+
+  it.each([
+    ['plan amendment first', 'plan_amendment', 'remediation-closure'],
+    ['remediation closure first', 'remediation-closure', 'plan_amendment'],
+  ])('keeps plan-amendment and remediation-closure obligations live when admitted %s', async (_name, firstAuthority, secondAuthority) => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const first = await repairs.admitOrReplay(`first:${firstAuthority}`, admission({
+      id: `first:${firstAuthority}`, taskIds: ['rem-as-built-R11'],
+      source: { findingId: 'first', authority: firstAuthority, instruction: 'Repair the first authority.' },
+    }));
+    const second = await repairs.admitOrReplay(`second:${secondAuthority}`, admission({
+      id: `second:${secondAuthority}`, taskIds: ['rem-as-built-R11'],
+      source: { findingId: 'second', authority: secondAuthority, instruction: 'Repair the second authority.' },
+    }));
+    if (!first.ok || !second.ok) throw new Error('expected admissions');
+
+    const state = await repairs.read();
+    expect(state).toMatchObject({ ok: true, value: { records: {
+      [first.obligation.id]: { tasks: { 'rem-as-built-R11': { status: 'open' } } },
+      [second.obligation.id]: { tasks: { 'rem-as-built-R11': { status: 'open' } } },
+    } } });
+  });
+
+  it('supersedes an earlier citation obligation through the admission transition', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const first = await repairs.admitOrReplay('citation:first', admission({
+      id: 'citation:first', taskIds: ['24'],
+      source: { findingId: 'first', authority: 'done-when-citation', instruction: 'Repair first refusal.' },
+    }));
+    const later = await repairs.admitOrReplay('citation:later', admission({
+      id: 'citation:later', taskIds: ['24'],
+      source: { findingId: 'later', authority: 'done-when-citation', instruction: 'Repair all open refusals.' },
+    }));
+    if (!first.ok || !later.ok) throw new Error('expected citation admissions');
+
+    await expect(repairs.read()).resolves.toMatchObject({ ok: true, value: { records: {
+      'citation:first': { tasks: { '24': { status: 'resolved', evidence: { kind: 'superseded-by-citation-refusal', value: 'citation:later' } } } },
+      'citation:later': { tasks: { '24': { status: 'open' } } },
+    } } });
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '24', obligationId: first.obligation.id,
+      evidence: { kind: 'citation-settled', value: 'stale' },
+    })).resolves.toMatchObject({ ok: false, kind: 'stale' });
   });
 
   it('refuses to close an obligation through a different plan that reuses its task id', async () => {

@@ -471,6 +471,10 @@ describe('planRemediation implementation-only authority routing', () => {
       source: 'build-stall',
       evidenceFile: '.pipeline/halt-user-input-required',
     },
+    {
+      source: 'build_stall_zero_work',
+      evidenceFile: '.pipeline/build-stall-question.md',
+    },
   ])('preserves a taskless BUILD answer to an admitted $source build-stall question', async ({ source, evidenceFile }) => {
     const runner: StepRunner = {
       run: async (_step, _state, options) => {
@@ -521,6 +525,47 @@ describe('planRemediation implementation-only authority routing', () => {
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+  });
+
+  it.each([
+    { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
+    { source: 'build_stall_zero_work', evidenceFile: '.pipeline/build-stall-question.md' },
+    { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+  ])('routes a $source answer with concrete BUILD tasks back to build as a hint without growing the plan', async ({ source, evidenceFile }) => {
+    const runner: StepRunner = {
+      run: async (_step, _state, options) => {
+        await persistFixtureRemediationPlan(projectRoot, options, {
+          version: 'v1',
+          dispositions: [{
+            reference: { kind: 'stall', id: 'stall:feature' },
+            disposition: 'build', category: null,
+            rationale: 'Every task is complete; only task-owned test files are left uncommitted.',
+            tasks: [{ id: 'R1', title: 'Commit the 9 untracked task-owned test files' }],
+            boundTaskIds: ['11'],
+          }],
+        });
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+    });
+    const planBefore = await readFile(planPath, 'utf8');
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string; hint?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'Remediate build stall: 9 uncommitted paths',
+      { source, evidence: [{ gate: 'build' as StepName, evidenceFile }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(outcome.hint).toContain('Commit the 9 untracked task-owned test files');
+    expect(await readFile(planPath, 'utf8')).toBe(planBefore);
   });
 
   it('halts an unadmitted taskless build_stall_zero_work remediation instead of routing raw fixes', async () => {
@@ -602,13 +647,6 @@ describe('planRemediation implementation-only authority routing', () => {
       hintSource: {
         source: 'build_stall',
         evidence: [{ gate: 'architecture_review_as_built' as StepName, evidenceFile: '.pipeline/build-stall-question.md' }],
-      },
-    },
-    {
-      caseName: 'when build_stall_zero_work carries canonical build provenance',
-      hintSource: {
-        source: 'build_stall_zero_work',
-        evidence: [{ gate: 'build' as StepName, evidenceFile: '.pipeline/build-stall-question.md' }],
       },
     },
   ])('halts an unadmitted taskless build-stall remediation $caseName', async ({ hintSource }) => {

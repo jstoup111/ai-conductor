@@ -1,12 +1,18 @@
-// Covers: task:3, task:4, task:28
+// Covers: task:3, task:4, task:5, task:14, task:23, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   assembleBuildReviewAdjudicationContext,
   BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS,
+  buildReviewAdjudicationSourceId,
   describeBuildReviewAdjudicationContextStop,
 } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { readBuildReviewAdjudicationArtifactFacts } from '../../src/engine/build-review-adjudication-artifact-facts.js';
+import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -19,6 +25,7 @@ const POLICY_DIGEST = `sha256:${'c'.repeat(64)}`;
 function finding(name: string): BuildReviewFinding {
   return {
     concernKind: 'test-insensitive',
+    severity: 'minor',
     summary: `The ${name} assertion passes against reverted production.`,
     evidenceLocations: [`test/${name}.test.ts:8`],
     anchor: {
@@ -35,7 +42,7 @@ function aggregate(...findings: readonly BuildReviewFinding[]) {
     results: {
       security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v4',
         findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
       },
     },
@@ -49,13 +56,27 @@ function securityAggregate() {
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       security: {
-        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
+        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
         findings: [{
           concernKind: 'injection',
+          severity: 'minor',
           summary: 'The new request handler interpolates untrusted input into a query.',
           evidenceLocations: ['src/http/search.ts:42'],
           anchor: { rubric: 'security', locus: { path: 'src/http/search.ts', contentHash: HASH, display: 'new search handler' } },
         }],
+      },
+    },
+  });
+}
+
+function implementationQualityAggregate() {
+  return joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest,
+    results: {
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
+        findings: [{ concernKind: 'primitive-obsession', severity: 'minor', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
       },
     },
   });
@@ -77,10 +98,10 @@ function customAggregate(criteria?: readonly string[]) {
   };
   const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
   const result = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1',
+    kind: 'custom-findings', version: 'v2',
     findings: [{
       concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
-      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
     }],
   }, {
     rubric: 'security', lapId, declaration, policy: descriptor.effectivePolicy,
@@ -149,7 +170,349 @@ function priorDecisionStop(id: string): RemediationCaseRecord {
   };
 }
 
+function priorAdvisoryCase(id: string): RemediationCaseRecord {
+  return {
+    ...priorCase(id),
+    disposition: 'advisory',
+    priority: 'low',
+    rationale: `Case ${id} is a minor concern below the declared severity threshold.`,
+    resolution: 'resolved',
+    sources: [{ sourceId: `testQuality:${id}`, outcome: 'advisory', recordedAt: '2026-10-23T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    adjudicatedSeverity: 'minor',
+  };
+}
+
 describe('build-review adjudication context', () => {
+  it('reads bounded finding digests from only a prior case’s four most recent source-lap branch artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-prior-digests-'));
+    try {
+      const filesystem = {
+        readFile: (path: string) => readFile(path, 'utf8'),
+        mkdir: async (path: string) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      };
+      const evidenceLocations = Array.from({ length: 10 }, (_value, index) => `src/prior.ts:${index + 1}`);
+      const historical = Array.from({ length: 5 }, (_value, index) => {
+        const number = index + 1;
+        const sourceLapId = parseBuildReviewLapId(`lap-prior-${number}`)!;
+        const sourceFinding: BuildReviewFinding = {
+          concernKind: 'test-insensitive', severity: 'minor',
+          summary: `artifact-${number}:${'s'.repeat(1_000)}`,
+          evidenceLocations,
+          anchor: {
+            rubric: 'testQuality',
+            locus: { path: `test/prior-${number}.test.ts`, contentHash: `sha256:${number.toString().repeat(64)}`, display: `prior ${number}` },
+          },
+        };
+        const sourceAggregate = joinBuildReviewRubricOutcomes({
+          lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+          results: {
+            security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+            testQuality: {
+              kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+              contractVersion: 'v4', findings: [sourceFinding], verdict: 'FAIL',
+            },
+          },
+        });
+        const [source] = projectBuildReviewAggregateSources(sourceAggregate)!;
+        return { number, sourceLapId, sourceFinding, source };
+      });
+      for (const { sourceLapId, sourceFinding, number } of historical) {
+        await writeBuildReviewBranchArtifact(root, {
+          rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+          result: {
+            kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: `sha256:prior-${number}`,
+            contractVersion: 'v4', findings: [sourceFinding], verdict: 'FAIL',
+          },
+          provenance: { kind: 'fresh' },
+        }, filesystem);
+      }
+      const recordedAts = [
+        'September 30, 2026 12:00:00 UTC',
+        '2026-10-21T12:00:00.000Z',
+        '2026-10-22T12:00:00.000Z',
+        '2026-10-23T12:00:00.000Z',
+        '2026-10-24T12:00:00.000Z',
+      ];
+      const sources = historical.map(({ number, source }) => ({
+        sourceId: buildReviewAdjudicationSourceId(source!),
+        outcome: 'acted' as const,
+        recordedAt: recordedAts[number - 1]!,
+      }));
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
+      const result = assembleBuildReviewAdjudicationContext({
+        aggregate: aggregate(finding('current')), priorCases: [{ ...priorCase('case-digests'), sources }],
+        priorFindingDigests: facts.priorFindingDigests,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(result.context.priorDigestsOmitted).toBe(0);
+      expect(result.context.priorCases[0]!.sources).toEqual([
+        sources[0],
+        expect.objectContaining({
+          ...sources[1],
+          finding: {
+            rubric: 'testQuality', concernKind: 'test-insensitive',
+            summary: `artifact-2:${'s'.repeat(989)}`,
+            evidenceLocations: evidenceLocations.slice(0, 8), lapId: 'lap-prior-2',
+          },
+        }),
+        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-3:${'s'.repeat(989)}`, lapId: 'lap-prior-3' }) }),
+        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-4:${'s'.repeat(989)}`, lapId: 'lap-prior-4' }) }),
+        expect.objectContaining({ finding: expect.objectContaining({ summary: `artifact-5:${'s'.repeat(989)}`, lapId: 'lap-prior-5' }) }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drops oldest digest candidates first within the base-context headroom and recomputes for added plan bodies', () => {
+    const priorCases = Array.from({ length: 30 }, (_value, caseIndex) => ({
+      ...priorCase(`case-${caseIndex.toString().padStart(3, '0')}`),
+      sources: Array.from({ length: 4 }, (_source, sourceIndex) => ({
+        sourceId: `testQuality:case-${caseIndex.toString().padStart(3, '0')}-${sourceIndex}`,
+        outcome: 'acted' as const,
+        recordedAt: `2026-10-24T12:00:0${sourceIndex}.000Z`,
+      })),
+    }));
+    const priorFindingDigests = new Map(priorCases.flatMap((prior) => prior.sources.map((source) => [source.sourceId, {
+      rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
+      evidenceLocations: ['src/prior.ts:1'], lapId: 'lap-prior',
+    }] as const)));
+    const input = { aggregate: aggregate(finding('current')), priorCases, priorFindingDigests };
+    const ordinary = assembleBuildReviewAdjudicationContext(input);
+    const expanded = assembleBuildReviewAdjudicationContext({
+      ...input,
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p'.repeat(1_500) })),
+      },
+    });
+
+    expect(ordinary).toMatchObject({ ok: true });
+    expect(expanded).toMatchObject({ ok: true });
+    if (!ordinary.ok || !expanded.ok) return;
+    const countDigests = (context: typeof ordinary.context) => context.priorCases
+      .flatMap((prior) => prior.sources).filter((source) => source.finding !== undefined).length;
+    expect(ordinary.context.priorDigestsOmitted).toBe(120 - countDigests(ordinary.context));
+    expect(expanded.context.priorDigestsOmitted).toBe(120 - countDigests(expanded.context));
+    expect(expanded.context.priorDigestsOmitted).toBeGreaterThan(ordinary.context.priorDigestsOmitted);
+    expect(expanded.context.priorCases[0]!.sources[0]).not.toHaveProperty('finding');
+    expect(Buffer.byteLength(JSON.stringify(expanded.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+  });
+
+  it('reserves multi-digit omission-counter headroom while dropping every digest', () => {
+    const priorCases = Array.from({ length: 128 }, (_value, index) => priorCase(`case-${index.toString().padStart(3, '0')}`));
+    const minimumContracts = Array.from({ length: 128 }, (_value, index) => ({ id: String(index), contract: 'p' }));
+    const input = {
+      aggregate: aggregate(finding('current')), priorCases,
+      planContract: { path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: minimumContracts },
+    };
+    const minimum = assembleBuildReviewAdjudicationContext({ ...input, priorFindingDigests: new Map() });
+
+    expect(minimum).toMatchObject({ ok: true });
+    if (!minimum.ok) return;
+    // 128 omitted candidates serialize as three digits. Reserve that width
+    // before adding digest content, rather than letting the final omission
+    // counter overflow an otherwise valid context.
+    let remainingPadding = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3 - Buffer.byteLength(JSON.stringify(minimum.context));
+    expect(remainingPadding).toBeGreaterThan(0);
+    const admittedTaskContracts = minimumContracts.map((task) => {
+      const padding = Math.min(7_999, remainingPadding);
+      remainingPadding -= padding;
+      return { ...task, contract: task.contract + 'p'.repeat(padding) };
+    });
+    expect(remainingPadding).toBe(0);
+    const nearCeiling = { ...input, planContract: { ...input.planContract, admittedTaskContracts } };
+    const base = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests: new Map() });
+    expect(base).toMatchObject({ ok: true });
+    if (!base.ok) return;
+    expect(Buffer.byteLength(JSON.stringify(base.context))).toBe(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes - 3);
+
+    const priorFindingDigests = new Map(priorCases.map((prior) => [prior.sources[0]!.sourceId, {
+      rubric: 'testQuality', concernKind: 'test-insensitive', summary: 'd'.repeat(1_000),
+      evidenceLocations: ['src/prior.ts:1'], lapId: 'lap-prior',
+    }] as const));
+    const result = assembleBuildReviewAdjudicationContext({ ...nearCeiling, priorFindingDigests });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorDigestsOmitted).toBe(128);
+    expect(Buffer.byteLength(JSON.stringify(result.context))).toBeLessThanOrEqual(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes);
+  });
+
+  it('keeps a prior source whose lap artifact is unreadable without a digest and does not count it as budget-omitted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-unreadable-prior-artifact-'));
+    try {
+      const sourceLapId = parseBuildReviewLapId('lap-prior-unreadable')!;
+      const sourceAggregate = joinBuildReviewRubricOutcomes({
+        lapId: sourceLapId, snapshotDigest: 'sha256:prior-unreadable',
+        results: {
+          security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+          testQuality: {
+            kind: 'judged', rubric: 'testQuality', lapId: sourceLapId, snapshotDigest: 'sha256:prior-unreadable',
+            contractVersion: 'v4', findings: [finding('prior-unreadable')], verdict: 'FAIL',
+          },
+        },
+      });
+      const [source] = projectBuildReviewAggregateSources(sourceAggregate)!;
+      const prior = {
+        ...priorCase('case-missing-artifact'),
+        sources: [{ sourceId: buildReviewAdjudicationSourceId(source!), outcome: 'acted' as const, recordedAt: '2026-10-24T12:00:00.000Z' }],
+      };
+      await mkdir(join(root, '.pipeline', 'build-review', sourceLapId), { recursive: true });
+      await writeFile(join(root, '.pipeline', 'build-review', sourceLapId, 'testQuality.json'), '{ unreadable');
+
+      const facts = await readBuildReviewAdjudicationArtifactFacts(root, aggregate(finding('current')));
+      expect(facts.priorFindingDigests.has(prior.sources[0]!.sourceId)).toBe(false);
+      const result = assembleBuildReviewAdjudicationContext({
+        aggregate: aggregate(finding('current')), priorCases: [prior], priorFindingDigests: facts.priorFindingDigests,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(result.context.priorDigestsOmitted).toBe(0);
+      expect(result.context.priorCases[0]!.sources[0]).toEqual(prior.sources[0]);
+      expect(result.context.priorCases[0]!.sources[0]).not.toHaveProperty('finding');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('admits a prior advisory case with no effect as non-blocking history', () => {
+    const advisory = priorAdvisoryCase('case-advisory');
+
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [advisory],
+      suppressions: [{
+        kind: 'severity', findingId: 'threshold-advisory', rubric: 'testQuality',
+        summary: 'A separate finding is below the severity threshold.', severity: 'minor', threshold: 'major', lastSeenLap: 'lap-prior',
+      }],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      context: expect.objectContaining({
+        priorCases: [expect.objectContaining({
+          id: 'case-advisory', disposition: 'advisory', effect: { kind: 'none' }, adjudicatedSeverity: 'minor',
+        })],
+        suppressionHistory: [expect.objectContaining({
+          kind: 'severity', findingId: 'threshold-advisory', severity: 'minor', threshold: 'major',
+        })],
+      }),
+    });
+  });
+
+  it('marks only carry-eligible prior cases with their acceptance origins', () => {
+    const accepted = {
+      ...priorCase('case-accepted'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: {
+        origins: [
+          { sourceId: 'testQuality:accepted-first', lapId: 'lap-first' },
+          { sourceId: 'security:accepted-second', lapId: 'lap-second' },
+        ],
+      },
+    };
+    const withdrawn = {
+      ...priorCase('case-withdrawn'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:withdrawn', lapId: 'lap-prior' }] },
+    };
+    const noLongerMatches = {
+      ...priorCase('case-no-longer-matches'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:invalidated', lapId: 'lap-prior' }] },
+    };
+    const currentLap = {
+      ...priorCase('case-current-lap'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:current', lapId: 'lap-current' }] },
+    };
+
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [accepted, withdrawn, noLongerMatches, currentLap],
+      carryInput: {
+        currentLapId: lapId,
+        effectiveAcceptedSourceIds: new Set(['testQuality:accepted-first', 'security:accepted-second', 'testQuality:current']),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'case-accepted',
+        operatorAccepted: {
+          originSourceIds: ['testQuality:accepted-first', 'security:accepted-second'],
+          originLapIds: ['lap-first', 'lap-second'],
+        },
+      }),
+      expect.not.objectContaining({ id: 'case-withdrawn', operatorAccepted: expect.anything() }),
+      expect.not.objectContaining({ id: 'case-no-longer-matches', operatorAccepted: expect.anything() }),
+      expect.not.objectContaining({ id: 'case-current-lap', operatorAccepted: expect.anything() }),
+    ]));
+  });
+
+  it('does not expose operator details and preserves the prior-case overflow rule for marked cases', () => {
+    const resolvedByOperator = {
+      ...priorCase('case-operator-resolved'),
+      resolution: 'resolved' as const,
+      operatorResolution: {
+        operator: 'operator@example.test',
+        rationale: 'The operator accepted this bounded risk.',
+        resolvedAt: '2026-10-22T12:00:00.000Z',
+      },
+    };
+    const marked = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [resolvedByOperator],
+      carryInput: { currentLapId: lapId, effectiveAcceptedSourceIds: new Set() },
+    });
+
+    expect(marked).toMatchObject({ ok: true });
+    if (!marked.ok) return;
+    expect(marked.context.priorCases[0]).toMatchObject({
+      operatorAccepted: { originSourceIds: [], originLapIds: [] },
+    });
+    expect(JSON.stringify(marked.context)).not.toContain('operator@example.test');
+    expect(JSON.stringify(marked.context)).not.toContain('The operator accepted this bounded risk.');
+
+    const atCeiling = Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxPriorCases }, (_value, index) => ({
+      ...priorCase(`case-${index.toString().padStart(3, '0')}`),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: `testQuality:case-${index}`, lapId: 'lap-prior' }] },
+      rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes),
+    }));
+    const unmarked = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: atCeiling });
+    const overflowingMarked = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: atCeiling,
+      carryInput: {
+        currentLapId: lapId,
+        effectiveAcceptedSourceIds: new Set(atCeiling.flatMap((record) => record.operatorAcceptance!.origins.map((origin) => origin.sourceId))),
+      },
+    });
+
+    expect(unmarked).toMatchObject({ ok: false, stop: { code: 'serialized-byte-overflow' } });
+    expect(overflowingMarked).toMatchObject({ ok: false, stop: { code: 'serialized-byte-overflow' } });
+  });
+
+  it('requires case-v2 admission for implementation-quality and exposes its raw source question', () => {
+    const missing = assembleBuildReviewAdjudicationContext({ aggregate: implementationQualityAggregate(), priorCases: [] });
+    expect(missing).toEqual({ ok: false, stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' } });
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: implementationQualityAggregate(), priorCases: [],
+      planContract: { path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '28', contract: 'Model the changed state.' }] },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    });
+    expect(result).toMatchObject({ ok: true, context: { mode: 'case-v2', currentFindings: [expect.objectContaining({ rubric: 'implementationQuality' })], policyContext: [expect.objectContaining({ rubric: 'implementationQuality', question: 'Does the changed code introduce a concrete code-quality or domain-modelling defect?' })] } });
+  });
   it('projects a persisted decision stop with its owner and consistency evidence intact', () => {
     const stop = priorDecisionStop('stop-a');
     const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [stop] });
@@ -166,6 +529,34 @@ describe('build-review adjudication context', () => {
     expect(JSON.parse(JSON.stringify(result.context)).priorCases[0]).toMatchObject({
       escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
     });
+  });
+
+  it('projects frozen recurrence lineage and omits it when absent', () => {
+    const recurring = {
+      ...priorCase('case-recurring'),
+      recurrenceOf: ['case-resolved'],
+      distinctFrom: [{ caseId: 'case-distinct', reason: 'The changed source is independently owned.' }],
+    };
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')),
+      priorCases: [recurring, priorCase('case-without-lineage')],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        priorCases: expect.arrayContaining([expect.objectContaining({
+          id: 'case-recurring',
+          recurrenceOf: ['case-resolved'],
+          distinctFrom: [{ caseId: 'case-distinct', reason: 'The changed source is independently owned.' }],
+        })]),
+      },
+    });
+    if (!result.ok) return;
+    expect(Object.isFrozen(result.context.priorCases[0]!.recurrenceOf)).toBe(true);
+    expect(Object.isFrozen(result.context.priorCases[0]!.distinctFrom)).toBe(true);
+    expect(result.context.priorCases[1]).not.toHaveProperty('recurrenceOf');
+    expect(result.context.priorCases[1]).not.toHaveProperty('distinctFrom');
   });
 
   it('projects an owner-only and a consistency-only decision stop without inventing the absent evidence', () => {
@@ -272,7 +663,7 @@ describe('build-review adjudication context', () => {
   it('carries suppression history separately from current findings', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('current')), priorCases: [],
-      suppressions: [{ findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
+      suppressions: [{ kind: 'confidence', findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
     });
     expect(result).toMatchObject({ ok: true, context: {
       currentFindings: [expect.objectContaining({ summary: finding('current').summary })],
@@ -378,6 +769,69 @@ describe('build-review adjudication context', () => {
       }),
     });
   });
+
+  it('admits the full task contracts of a ninety-one task plan without a byte-overflow stop', () => {
+    // A landed 40-task plan grown by remediation to 91 tasks serialized to
+    // 143,451 bytes and halted under the former 128 KiB ceiling.
+    const admittedTaskContracts = Array.from({ length: 91 }, (_value, index) => ({
+      id: String(index + 1),
+      contract: `### Task ${index + 1}: restack step\n${'c'.repeat(1_550)}`,
+    }));
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      planContract: { path: '.docs/plans/large.md', pointers: [], admittedTaskContracts },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && Buffer.byteLength(JSON.stringify(result.context))).toBeGreaterThan(128 * 1024);
+  });
+
+  it('serializes the complete bounded task index independently of supplied bodies', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
+        index: [{ id: '3', title: 'Repair finding', dependencies: ['2'] }, { id: '4', title: 'Independent check', dependencies: [] }],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      planContract: {
+        admittedTaskContracts: [{ id: '3', contract: 'Repair the current finding.' }],
+        index: [{ id: '3', title: 'Repair finding', dependencies: ['2'] }, { id: '4', title: 'Independent check', dependencies: [] }],
+      },
+    } });
+    expect(result.ok && JSON.parse(JSON.stringify(result.context)).planContract.index).toEqual([
+      { id: '3', title: 'Repair finding', dependencies: ['2'] },
+      { id: '4', title: 'Independent check', dependencies: [] },
+    ]);
+  });
+
+  it('stops when the plan index exceeds its bounded entry count', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        index: Array.from({ length: 1_025 }, (_value, index) => ({ id: String(index), title: `Task ${index}`, dependencies: [] })),
+      },
+    });
+
+    expect(result).toEqual({ ok: false, stop: {
+      code: 'field-overflow', subject: 'plan-index', field: 'index', limit: 1_024, actual: 1_025,
+    } });
+  });
+
+  it('keeps both plan task projections empty when no plan is bound', () => {
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: [] });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      planContract: { path: null, admittedTaskContracts: [], index: [] },
+    } });
+  });
   it('declares the case-v1 discriminator and every input field the skill is told to read', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('alpha')),
@@ -393,8 +847,8 @@ describe('build-review adjudication context', () => {
     // names exactly these input fields. A context missing any of them routes a
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
-      'currentFindings', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
-      'planContract', 'policyContext', 'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
+      'admittedDispositions', 'currentFindings', 'declaredSeverityThresholds', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
+      'planContract', 'policyContext', 'priorCases', 'priorDigestsOmitted', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({
       mode: 'case-v1',

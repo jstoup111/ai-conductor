@@ -100,15 +100,18 @@ describe('engine/daemon — background root refresh (#2275)', () => {
   it('dispatches a halt-cleared feature into the free slot while the refresh is held by a sibling window', async () => {
     let halted = true;
     const heldRefresh = deferred<BacklogItem[]>();
+    let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }, { slug: 'cleared' }],
-      refresh: () => heldRefresh.promise,
+      refresh: () => ++refreshCall === 1
+        ? Promise.resolve([{ slug: 'sibling' }, { slug: 'cleared' }])
+        : heldRefresh.promise,
       isHalted: async (slug) => slug === 'cleared' && halted,
     });
 
     const daemon = runDaemon(h.deps, { concurrency: 2, once: false, idlePollMs: 0 });
     try {
-      expect(await eventually(() => h.refreshCalls() === 1)).toBe(true);
+      expect(await eventually(() => h.refreshCalls() === 2)).toBe(true);
       const ticksAtHold = h.ticks.length;
       // The operator removes .pipeline/HALT while the refresh is still held.
       halted = false;
@@ -117,7 +120,7 @@ describe('engine/daemon — background root refresh (#2275)', () => {
       // Telemetry kept flowing and the held refresh was never duplicated.
       expect(h.ticks.length).toBeGreaterThan(ticksAtHold);
       expect(h.ticks.at(-1)?.rootRefreshPending).toBe(true);
-      expect(h.refreshCalls()).toBe(1);
+      expect(h.refreshCalls()).toBe(2);
     } finally {
       h.stop();
       h.sibling.resolve({ slug: 'sibling', status: 'done' });
@@ -129,16 +132,19 @@ describe('engine/daemon — background root refresh (#2275)', () => {
 
   it('keeps a feature with a live HALT, or an operator park, out of the free slot', async () => {
     const heldRefresh = deferred<BacklogItem[]>();
+    let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }, { slug: 'still-halted' }, { slug: 'parked' }],
-      refresh: () => heldRefresh.promise,
+      refresh: () => ++refreshCall === 1
+        ? Promise.resolve([{ slug: 'sibling' }, { slug: 'still-halted' }, { slug: 'parked' }])
+        : heldRefresh.promise,
       isHalted: async (slug) => slug === 'still-halted',
       isParked: async (slug) => slug === 'parked',
     });
 
     const daemon = runDaemon(h.deps, { concurrency: 3, once: false, idlePollMs: 0 });
     try {
-      expect(await eventually(() => h.refreshCalls() === 1)).toBe(true);
+      expect(await eventually(() => h.refreshCalls() === 2)).toBe(true);
       const ticksAtHold = h.ticks.length;
       // Many passes run while the refresh is held; none admits either feature.
       expect(await eventually(() => h.ticks.length > ticksAtHold + 20)).toBe(true);
@@ -157,12 +163,17 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     let calls = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }],
-      refresh: () => (++calls === 1 ? Promise.reject(new Error('fetch failed')) : second.promise),
+      refresh: () => {
+        calls++;
+        if (calls === 1) return Promise.resolve([{ slug: 'sibling' }]);
+        if (calls === 2) return Promise.reject(new Error('fetch failed'));
+        return second.promise;
+      },
     });
 
     const daemon = runDaemon(h.deps, { concurrency: 2, once: false, idlePollMs: 0 });
     try {
-      expect(await eventually(() => h.refreshCalls() === 2)).toBe(true);
+      expect(await eventually(() => h.refreshCalls() === 3)).toBe(true);
       expect(h.logs.some((line) => line.includes('background root refresh failed (fetch failed)'))).toBe(true);
     } finally {
       h.stop();
@@ -176,10 +187,13 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     const heldRefresh = deferred<BacklogItem[]>();
     const swept: string[] = [];
     let originFetched = false;
+    let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }],
-      refresh: () => heldRefresh.promise.then((items) => {
-        originFetched = true;
+      refresh: () => (++refreshCall === 1
+        ? Promise.resolve([{ slug: 'sibling' }])
+        : heldRefresh.promise).then((items) => {
+        if (refreshCall > 1) originFetched = true;
         return items;
       }),
       extra: {
@@ -193,30 +207,75 @@ describe('engine/daemon — background root refresh (#2275)', () => {
 
     const daemon = runDaemon(h.deps, { concurrency: 2, once: false, idlePollMs: 0 });
     try {
-      expect(await eventually(() => h.refreshCalls() === 1)).toBe(true);
+      expect(await eventually(() => h.refreshCalls() === 2)).toBe(true);
       expect(swept).toEqual([]);
       heldRefresh.resolve([{ slug: 'sibling' }, { slug: 'merged-on-origin' }]);
       expect(await eventually(() => h.dispatched.includes('merged-on-origin'))).toBe(true);
     } finally {
       h.stop();
       h.sibling.resolve({ slug: 'sibling', status: 'done' });
+      heldRefresh.resolve([]);
       await daemon;
     }
     expect(swept).toEqual(['bbb']);
   });
 
+  it('still discovers origin backlog when the engine source refresh is skipped, but never rebuilds', async () => {
+    let rebuilds = 0;
+    let localDiscoveries = 0;
+    const h = harness({
+      local: () => {
+        localDiscoveries++;
+        return [{ slug: 'sibling' }, { slug: 'merged-on-origin' }];
+      },
+      refresh: async () => [{ slug: 'sibling' }, { slug: 'merged-on-origin' }],
+      extra: {
+        refreshEngineSource: async () => ({ status: 'skipped', cause: 'dirty' }),
+        rebuildEngine: async () => {
+          rebuilds++;
+        },
+        staleEngineChecker: { check: () => 'current' },
+      },
+    });
+
+    const daemon = runDaemon(h.deps, {
+      concurrency: 2,
+      once: false,
+      idlePollMs: 0,
+      isSelfHost: true,
+      autoRestartOnStaleEngine: true,
+    });
+    try {
+      expect(await eventually(() => h.dispatched.includes('merged-on-origin'))).toBe(true);
+    } finally {
+      h.stop();
+      h.sibling.resolve({ slug: 'sibling', status: 'done' });
+      await daemon;
+    }
+    // A throttled source refresh must not be bypassed by discovery.  The
+    // local scan still proceeds and admits already-visible backlog changes.
+    // The one startup refresh predates the throttled busy pass; no additional
+    // origin fetch is allowed inside the interval.
+    expect(h.refreshCalls()).toBe(1);
+    expect(localDiscoveries).toBeGreaterThan(1);
+    expect(rebuilds).toBe(0);
+  });
+
   it('awaits a refresh still in flight at shutdown instead of orphaning it', async () => {
     const heldRefresh = deferred<BacklogItem[]>();
     let refreshSettled = false;
+    let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }],
-      refresh: () => heldRefresh.promise.finally(() => {
+      refresh: () => (++refreshCall === 1
+        ? Promise.resolve([{ slug: 'sibling' }])
+        : heldRefresh.promise).finally(() => {
         refreshSettled = true;
       }),
     });
 
     const daemon = runDaemon(h.deps, { concurrency: 2, once: false, idlePollMs: 0 });
-    expect(await eventually(() => h.refreshCalls() === 1)).toBe(true);
+    expect(await eventually(() => h.refreshCalls() === 2)).toBe(true);
     h.stop();
     h.sibling.resolve({ slug: 'sibling', status: 'done' });
     let returned = false;

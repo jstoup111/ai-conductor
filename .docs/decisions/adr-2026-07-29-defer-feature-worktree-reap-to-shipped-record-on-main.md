@@ -57,6 +57,8 @@ pass a gate."
    `WatchEntry` carries `{prUrl, slug, repoCwd}`, which is everything the reap needs to resolve
    `.worktrees/<slug>` — no new registry field.
 
+   > **Amended 2026-10-17 by #2945:** For a stacked feature, the sweep watches the leaf PR only. After the unchanged gate passes, the reap removes the worktree as today, then checks member reachability and deletes each sealed child branch by explicit name. Any member that fails the stack-member proof is kept, and while one is kept, so is the publication record (marked `tornDown`). A failure keeps the watch entry (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 9, 12).
+
 3. **The reap gate is file presence at path on `origin/main`, never ancestry, never `mergedAt`.**
    After an explicit fetch, `git cat-file -e origin/main:.docs/shipped/<slug>.md` decides. Verified
    empirically on 2026-07-29 against squash-merged PR #1138: the `cat-file` probe finds the record,
@@ -65,6 +67,8 @@ pass a gate."
    style (this is exactly the trap #1114 records). `mergedAt` was rejected as the primary gate
    because it asserts GitHub PR state rather than the content of the tree the daemon will build
    from; being *in that tree* is the property that actually matters.
+
+   > **Amended 2026-10-17 by #2945:** The gate is unchanged for stacked features. Member reachability, which checks `merge_commit_sha` ancestry, runs only after the gate passes, and it governs only child-branch and ref deletion, never the reap (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 9, 12).
 
 4. **MERGED and CLOSED-unmerged are separated.** `mergeable-sweep.ts` currently prunes both
    identically (FR-13). Under this decision only `MERGED` enters the reap gate. `CLOSED` (unmerged)
@@ -84,9 +88,13 @@ pass a gate."
    worktrees today — retention for in-flight PRs is bounded additional pressure on a pre-existing
    leak, so a cap would be treating the wrong cause.
 
+   > **Amended 2026-10-17 by #2945:** For a stacked feature, the verb deletes child branches only when the shipped-record gate and the reachability check pass. Otherwise it removes only the worktree and keeps every child branch and the publication record (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12).
+
 7. **The reap is idempotent and fail-open toward retention.** `teardownWorktree` is unchanged and
    already best-effort/non-throwing; the sweep re-evaluates the gate every pass, so a transient
    fetch or `gh` failure defers a reap rather than losing one, and never deletes on unknown state.
+
+   > **Amended 2026-10-17 by #2945:** For a stacked feature, teardown's child-branch and ref steps report failure. A failed step stops the steps after it and keeps the watch entry, so the next sweep retries (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12).
 
 > **Amended 2026-09-14 by jstoup111/ai-conductor#1510 (spec `reclaim-merged-feature-worktrees-without-depending`):** the registry-driven reap in Decision 2
 > stopped reclaiming once the watch registry stopped covering worktrees (never enrolled, trimmed

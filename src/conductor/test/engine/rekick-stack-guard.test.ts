@@ -1,17 +1,17 @@
-// Covers: task:35
+// Covers: task:33, task:35
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { REKICK_SENTINEL, resumeRebaseFirst } from '../../src/engine/daemon-rekick.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -25,7 +25,7 @@ async function git(...args: string[]): Promise<string> {
 }
 
 async function seal(positions: readonly number[]): Promise<void> {
-  await writeCoverageBindingEnvelope(repository, {
+  await writeSliceTopologyFixture(repository, {
     version: 1,
     slug: 'demo',
     runId: 'stack-guard',
@@ -55,7 +55,7 @@ async function initializeStack(activeChild: 2 | 3): Promise<void> {
   await mkdir(join(repository, '.ai-conductor'), { recursive: true });
   await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
   await seal([1, 2, 3]);
-  await git('add', '.ai-conductor/config.yml', '.pipeline/coverage-binding.json');
+  await git('add', '.ai-conductor/config.yml');
   await git('commit', '-qm', 'seal stacked region');
 
   const tip = await git('rev-parse', 'HEAD');
@@ -74,11 +74,9 @@ afterEach(async () => {
 });
 
 describe('resumeRebaseFirst stacked-region guard', () => {
-  it('consumes a re-kick sentinel without rebasing while an intermediate child is active', async () => {
+  it('uses the stack refresh path rather than skipping an intermediate active child', async () => {
     await initializeStack(2);
     await writeSentinel();
-    const childOneBefore = await git('rev-parse', 'feat/c1/demo');
-    const childTwoBefore = await git('rev-parse', 'feat/c2/demo');
     const events = new ConductorEventEmitter();
     const skipped: Array<{ child: number; reason: string }> = [];
     events.on('rebase_skipped_for_stack', (event) => {
@@ -99,15 +97,11 @@ describe('resumeRebaseFirst stacked-region guard', () => {
     })).resolves.toBe('rebased');
 
     expect(rebaseCalls).toBe(0);
-    expect(skipped).toEqual([{
-      type: 'rebase_skipped_for_stack', child: 2, reason: 'active child is not the leaf',
-    }]);
-    expect(await git('rev-parse', 'feat/c1/demo')).toBe(childOneBefore);
-    expect(await git('rev-parse', 'feat/c2/demo')).toBe(childTwoBefore);
+    expect(skipped).toEqual([]);
     await expect(readFile(join(repository, REKICK_SENTINEL), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('rebases the leaf worktree after the intermediate children close', async () => {
+  it('refreshes every moved stack ref when the base advances', async () => {
     await initializeStack(3);
     const childOneBefore = await git('rev-parse', 'feat/c1/demo');
     const childTwoBefore = await git('rev-parse', 'feat/c2/demo');
@@ -131,8 +125,8 @@ describe('resumeRebaseFirst stacked-region guard', () => {
     })).resolves.toBe('rebased');
 
     await expect(execFile('git', ['-C', repository, 'merge-base', '--is-ancestor', baseTip, 'feat/daemon-demo'])).resolves.toBeDefined();
-    expect(await git('rev-parse', 'feat/c1/demo')).toBe(childOneBefore);
-    expect(await git('rev-parse', 'feat/c2/demo')).toBe(childTwoBefore);
+    expect(await git('rev-parse', 'feat/c1/demo')).not.toBe(childOneBefore);
+    expect(await git('rev-parse', 'feat/c2/demo')).not.toBe(childTwoBefore);
     expect(skipped).toEqual([]);
   });
 

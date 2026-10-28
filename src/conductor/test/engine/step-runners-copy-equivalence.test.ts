@@ -87,7 +87,7 @@ describe('build_review copy equivalence', () => {
         gitRunner,
         // The active test-quality rubric is opt-in; these tests exercise the
         // one-shot judged branch after the replication preflight.
-        config: { build_review: { rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
+        config: { build_review: { rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } } } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },

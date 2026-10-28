@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:8, task:11
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { StepName, ComplexityTier } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -23,7 +23,6 @@ import {
 } from '../../src/engine/steps.js';
 import { phaseForStep } from '../../src/engine/resolved-config.js';
 import { isGatingStep } from '../../src/engine/gates.js';
-import { PRESEEDED_DONE } from '../../src/daemon-cli.js';
 
 describe('engine/steps', () => {
   // --- ALL_STEPS exact order ---
@@ -33,12 +32,16 @@ describe('engine/steps', () => {
       'worktree', 'memory', 'explore', 'complexity', 'prd',
       'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
       'coherence_check',
-      'coverage_binding', 'acceptance_specs', 'build', 'test_suite', 'build_review', 'manual_test', 'prd_audit',
+      'plan_review',
+      'acceptance_specs', 'build', 'test_suite', 'build_review', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'rebase', 'finish',
     ];
 
-    it('has exactly the 21 surviving steps', () => {
+    it('has exactly the 21 surviving steps including plan_review at the DECIDE boundary', () => {
       expect(ALL_STEPS).toHaveLength(21);
+      expect(ALL_STEPS.slice(10, 13).map((step) => step.name)).toEqual([
+        'coherence_check', 'plan_review', 'acceptance_specs',
+      ]);
     });
 
     it('has the exact surviving registry in order', () => {
@@ -108,10 +111,11 @@ describe('engine/steps', () => {
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('architecture_review is DECIDE/advisory, skippable for S, kickback target (precedes stories)', () => {
+    // Covers: task:9
+    it('architecture_review is DECIDE/gating, skippable for S, kickback target (precedes stories)', () => {
       const s = ALL_STEPS[6];
       expect(s.name).toBe('architecture_review');
-      expect(s.enforcement).toBe('advisory');
+      expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['architecture_diagram']);
       expect(s.skippableForTiers).toEqual(['S']);
       expect(s.kickbackTarget).toBe(true);
@@ -148,21 +152,22 @@ describe('engine/steps', () => {
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('coverage_binding is engine-native BUILD/gating after coherence_check and never skipped', () => {
-      const s = ALL_STEPS[11];
-      expect(s).toEqual({
-        name: 'coverage_binding',
-        label: 'Coverage Binding',
-        phase: 'BUILD',
+    it('registers plan_review immediately after coherence_check with its legacy-artifact disposition', () => {
+      expect(ALL_STEPS).toHaveLength(21);
+      expect(ALL_STEPS[11]).toEqual({
+        name: 'plan_review',
+        label: 'Plan Review',
+        phase: 'DECIDE',
         enforcement: 'gating',
-        prerequisites: ['plan'],
-        skippableForTiers: [],
+        prerequisites: ['coherence_check'],
+        skippableForTiers: ['S'],
         isCheckpoint: false,
-        kickbackTarget: true,
+        skillName: 'plan-review',
+        absentArtifactDisposition: 'skipped',
+        absentArtifactReason: 'landed-before-plan-review',
       });
-      expect(s.skippableForTracks).toBeUndefined();
-      expect(s.skillName).toBeUndefined();
-      expect(PRESEEDED_DONE).not.toContain('coverage_binding');
+      expect(getSkippableSteps('S')).toContain('plan_review');
+      expect(getSkippableSteps('S')).toHaveLength(7);
     });
 
     it('acceptance_specs is BUILD/gating, skippable for S', () => {
@@ -314,7 +319,7 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 19 for finish', () => {
+    it('returns 20 for finish', () => {
       expect(getStepIndex('finish')).toBe(20);
     });
   });
@@ -324,7 +329,7 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 19', () => {
+    it('returns finish for index 20', () => {
       expect(getStepByIndex(20).name).toBe('finish');
     });
 
@@ -351,7 +356,7 @@ describe('engine/steps', () => {
     it('Small tier does not skip non-skippable steps', () => {
       const nonSkippable: StepName[] = [
         'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
-        'plan', 'coverage_binding', 'build', 'test_suite',
+        'plan', 'build', 'test_suite',
         'architecture_review_as_built', 'finish',
       ];
       for (const step of nonSkippable) {
@@ -371,7 +376,7 @@ describe('engine/steps', () => {
       }
     });
 
-    it.each(['test_suite', 'coverage_binding'] as const)('%s is present for S/M/L tiers', (step) => {
+    it.each(['test_suite'] as const)('%s is present for S/M/L tiers', (step) => {
       for (const tier of ['S', 'M', 'L'] as ComplexityTier[]) {
         expect(shouldSkipForTier(step, tier)).toBe(false);
       }
@@ -384,7 +389,7 @@ describe('engine/steps', () => {
     // legitimately skip manual testing.
     it('locks the S-tier evidence-gate core as never-skippable (Task: T6)', () => {
       const evidenceGateCore: StepName[] = [
-        'coverage_binding', 'build', 'build_review', 'test_suite',
+        'build', 'build_review', 'test_suite',
         'architecture_review_as_built', 'rebase', 'finish',
       ];
       for (const step of evidenceGateCore) {
@@ -443,12 +448,12 @@ describe('engine/steps', () => {
   // --- getSkippableSteps ---
 
   describe('getSkippableSteps', () => {
-    it('returns 6 steps for S tier', () => {
+    it('returns 7 steps for S tier', () => {
       const result = getSkippableSteps('S');
       // Returned in ALL_STEPS order (architecture now precedes conflict_check).
       expect(result).toEqual([
         'architecture_diagram', 'architecture_review', 'conflict_check',
-        'coherence_check', 'acceptance_specs', 'manual_test',
+        'coherence_check', 'plan_review', 'acceptance_specs', 'manual_test',
       ]);
     });
 
@@ -466,6 +471,7 @@ describe('engine/steps', () => {
         'architecture_review',
         'conflict_check',
         'coherence_check',
+        'plan_review',
         'acceptance_specs',
         'manual_test',
       ]);
@@ -489,7 +495,6 @@ describe('engine/steps', () => {
       'finish',
       'prd_audit',
       'architecture_review_as_built',
-      'coverage_binding',
       'build',
       'rebase',
       'plan',
@@ -607,6 +612,15 @@ describe('engine/steps', () => {
   // --- buildStepRegistry ---
 
   describe('buildStepRegistry', () => {
+    // Covers: task:11
+    it('places acceptance_specs immediately after plan_review in the default registry', () => {
+      const names = buildStepRegistry({}).map((step) => step.name);
+      const planReview = names.indexOf('plan_review');
+
+      expect(names[planReview + 1]).toBe('acceptance_specs');
+      expect(names).not.toContain('coverage_binding');
+    });
+
     it('declares exactly build and test_suite as tree-attesting gates', () => {
       const defaultConfig: HarnessConfig = {};
 

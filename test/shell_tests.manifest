@@ -1,0 +1,138 @@
+# Scripts executed directly by the repository integrity check.
+check_as_built_markdown_authority.sh integrity integrity validates its contract directly
+check_build_review_rubric_skill_vocabularies.sh integrity integrity validates its contract directly
+check_github_invocation_boundary.sh integrity integrity validates its contract directly
+check_halt_writers.sh integrity integrity validates its contract directly
+check_interpreter_source.sh integrity integrity validates its contract directly
+check_migration_block_authoring.sh integrity integrity validates its contract directly
+check_model_table_presence.sh integrity integrity validates its contract directly
+check_integrity_prerequisites.sh integrity integrity validates model-table integrity prerequisites
+check_docs_guard_drift_fixture.sh integrity integrity validates docs-guard drift detection against a temporary copy
+check_skill_model_pins.sh integrity integrity validates its contract directly
+check_task_status_writers.sh integrity integrity validates its contract directly
+check_shell_test_classification.sh integrity integrity validates the delivered shell-test classifications
+check_skill_invocation_policy.sh integrity integrity validates its contract directly
+check_update_flow_config_ownership.sh integrity integrity validates its contract directly
+lint_shell.sh integrity integrity runs shell syntax and static checks
+test_as_built_markdown_authority.sh integrity integrity runs its fixture suite
+test_bootstrap_installer.sh integrity integrity runs its fixture suite
+test_ci_detect_docs_only.sh integrity integrity runs its fixture suite
+test_docs_navigation.sh integrity integrity runs its fixture suite
+test_docs_pages_smoke.sh integrity integrity runs its fixture suite
+test_harness_integrity.sh integrity integrity is the integrity entry point
+test_harness_integrity_failure_reporting.sh integrity integrity runs its fixture suite
+test_harness_integrity_update_flow.sh integrity integrity runs its fixture suite
+test_legacy_cli_guard_backends.sh integrity integrity runs its fixture suite
+test_lint_shell_enumeration.sh integrity integrity runs its fixture suite
+test_migration_block_authoring.sh integrity integrity runs its fixture suite
+test_model_table_presence.sh integrity integrity runs its fixture suite
+test_integrity_prerequisites.sh integrity integrity runs its fixture suite
+test_docs_guard_drift_fixture.sh integrity integrity runs its fixture suite
+test_skill_model_pins.sh integrity integrity runs its fixture suite
+test_task_status_writers.sh integrity integrity runs its fixture suite
+test_no_legacy_cli_references.sh integrity integrity runs its fixture suite
+test_provider_skill_contracts.sh integrity integrity runs its fixture suite
+test_release_pr_workflow.sh integrity integrity runs its fixture suite
+test_run_shell_tests.sh integrity integrity runs shell-test runner fixtures
+test_shell_test_classification.sh integrity integrity runs shell-test classification fixtures
+test_skill_invocation_policy.sh integrity integrity runs its fixture suite
+
+# Scripts called by an integrity-run fixture suite.
+check_docs_navigation.sh invoked-by:test_docs_navigation.sh documentation fixture invokes it
+docs_pages.smoke.test.sh invoked-by:test_docs_pages_smoke.sh Pages fixture invokes it
+run_shell_tests.sh invoked-by:test_run_shell_tests.sh shell-runner fixtures invoke it
+
+# Shared shell library; sourced by fixture scripts rather than executed.
+shell_test_manifest.sh sourced-helper shared shell-test manifest parsing helpers are sourced
+test_helpers.sh sourced-helper shared fixture helpers are sourced
+
+# Triage: examples acceptance scripts verified through the isolated shell runner.
+# triage: run_examples_acceptance_specs.sh deleted — obsolete: duplicate parent runner; each child is independently classified below
+# triage: test_examples_common_prompt.sh kept — isolated runner PASS
+test_examples_common_prompt.sh shell-runner verifies tiered prompt resolution and no-TTY failure handling
+# triage: test_examples_common_sandbox.sh kept — isolated runner PASS
+test_examples_common_sandbox.sh shell-runner verifies sandbox isolation and wedged-flow cleanup
+# triage: test_examples_common_timeout.sh kept — isolated runner PASS
+test_examples_common_timeout.sh shell-runner verifies timeout and checkpoint helper behavior
+# triage: test_examples_daemon.sh kept — isolated runner PASS
+test_examples_daemon.sh shell-runner verifies the daemon example's completion and failure paths
+# triage: test_examples_engineer.sh kept — isolated runner PASS
+test_examples_engineer.sh shell-runner verifies the engineer example's headless and guided paths
+# triage: test_examples_intake_loop.sh kept — isolated runner PASS
+test_examples_intake_loop.sh shell-runner verifies the intake-loop example's completion and failure paths
+# triage: test_examples_interactive.sh kept — isolated runner PASS
+test_examples_interactive.sh shell-runner verifies the interactive example's invocation and missing-binary handling
+# triage: test_examples_prompt_fixtures.sh kept — isolated runner PASS
+test_examples_prompt_fixtures.sh shell-runner verifies tiered prompt fixture content
+# triage: test_examples_readme_and_usage.sh kept — isolated runner PASS
+test_examples_readme_and_usage.sh shell-runner verifies example usage failure handling
+
+# Triage: bin/migrate orphan scripts verified through the isolated shell runner.
+# triage: test_bin_migrate_approval.sh fixed — isolated runner PASS after mocking its config CLI boundary
+test_bin_migrate_approval.sh shell-runner verifies migration approval behavior in isolated fixtures
+# triage: test_bin_migrate_blocks.sh kept — isolated runner PASS
+test_bin_migrate_blocks.sh shell-runner verifies migration block safety constraints
+# triage: test_bin_migrate_exec.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_bin_migrate_exec.sh shell-runner verifies migration block execution and ledger persistence
+# triage: test_bin_migrate_ledger.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_bin_migrate_ledger.sh shell-runner verifies migration ledger behavior in isolated consumers
+# triage: test_bin_migrate_multi_version_jump.sh fixed — isolated runner PASS after mocking its config CLI boundary
+test_bin_migrate_multi_version_jump.sh shell-runner verifies multi-version migration behavior in isolated fixtures
+# triage: test_bin_migrate_parse.sh kept — isolated runner PASS
+test_bin_migrate_parse.sh shell-runner verifies migration fence parsing and ordering
+
+# Triage: first install orphan scripts verified through the isolated shell runner.
+# triage: test_install_channel_selection.sh fixed — isolated runner PASS with the schema-launcher fixture boundary
+test_install_channel_selection.sh shell-runner verifies first-run installer update-channel selection
+# triage: test_install_check_build_auth.sh kept — isolated runner PASS
+test_install_check_build_auth.sh shell-runner verifies installer build-auth health reporting
+# triage: test_install_docs_guard_wiring.sh kept — isolated runner PASS
+test_install_docs_guard_wiring.sh shell-runner verifies installer docs-guard hook wiring
+# triage: test_install_literal_configuration.sh fixed — isolated runner PASS with a PATH-independent shell fixture
+test_install_literal_configuration.sh shell-runner verifies literal installer configuration handling
+# triage: test_install_node_guard.sh kept — isolated runner PASS
+test_install_node_guard.sh shell-runner verifies installer Node-version failure handling
+
+# Triage: remaining install, update, and RED-phase orphan scripts verified through the isolated shell runner.
+# triage: test_install_provider_readiness.sh kept — isolated runner PASS
+test_install_provider_readiness.sh shell-runner verifies installer provider-readiness reporting
+# triage: test_install_uninstall.sh kept — isolated runner PASS
+test_install_uninstall.sh shell-runner verifies installer uninstall and purge behavior
+# triage: test_install_update_engine_setup.sh fixed — isolated runner PASS with the canonical launcher fixture boundary
+test_install_update_engine_setup.sh shell-runner verifies installer engine setup and configuration behavior
+# triage: test_install_worktree_guard.sh kept — isolated runner PASS
+test_install_worktree_guard.sh shell-runner verifies installer worktree-root guard behavior
+# triage: test_rtk_hook_reinit.sh deleted — obsolete: RTK was removed from the install path
+# triage: test_bin_update.sh fixed — isolated runner PASS with canonical launcher and harness-reference fixtures
+test_bin_update.sh shell-runner verifies standalone update flow behavior
+# triage: test_bin_setup_failure_propagation.sh kept — isolated runner PASS
+test_bin_setup_failure_propagation.sh shell-runner verifies setup failure propagation and worktree isolation
+test_conductor_npm_no_audit.sh shell-runner verifies install paths skip npm audit and fund lookups
+
+# Triage: Codex and documentation acceptance runners and their children.
+# triage: run_first_class_codex_harness_parity_904_acceptance.sh deleted — obsolete: duplicate runner; child shell scripts are classified below and its Vitest acceptance file is in the default suite
+# triage: test_codex_guidance_contract.sh kept — isolated runner PASS
+test_codex_guidance_contract.sh shell-runner verifies Codex-facing bootstrap guidance contracts
+# triage: test_codex_skill_installation.sh fixed — isolated runner PASS after removing retired Unreleased changelog-migration assertions
+test_codex_skill_installation.sh shell-runner verifies isolated Codex catalog installation, update, check, and uninstall behavior
+test_install_skill_names.sh shell-runner verifies frontmatter-keyed installer skill links
+test_dependabot_npm_coverage.sh shell-runner verifies Dependabot watches every tracked npm root
+# triage: run_browsable_documentation_site_acceptance.sh deleted — obsolete: duplicate runner; test_docs_navigation.sh and test_docs_pages_smoke.sh retain integrity ownership
+
+# Triage: launcher, hook, and release orphan scripts verified through the isolated shell runner.
+# triage: test_ai_conductor_launcher.sh kept — isolated runner PASS
+test_ai_conductor_launcher.sh shell-runner verifies canonical launcher aliases, installation, and uninstall behavior
+# triage: test_conduct_ts_launcher.sh kept — isolated runner PASS
+test_conduct_ts_launcher.sh shell-runner verifies launcher realpath pinning and pinned runtime behavior
+# triage: test_generate_model_table_wrapper.sh kept — isolated runner PASS
+test_generate_model_table_wrapper.sh shell-runner verifies the model-table wrapper's source-only behavior
+# triage: test_post_commit_derive_feedback.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_post_commit_derive_feedback.sh shell-runner verifies post-commit feedback hook behavior and command gating
+# triage: test_rate_limit_wait.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_rate_limit_wait.sh shell-runner verifies StopFailure rate-limit wait parsing
+# triage: test_release_unreleased_state.sh kept — isolated runner PASS
+test_release_unreleased_state.sh shell-runner verifies release publisher workflow and consumed transition state
+# triage: test_session_start_summary.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_session_start_summary.sh shell-runner verifies session-start pipeline-summary behavior and parse failures
+# triage: test_skill_pipeline_contract.sh fixed — isolated runner PASS with current engine evidence-writer and policy contracts
+test_skill_pipeline_contract.sh shell-runner verifies cross-skill pipeline contracts

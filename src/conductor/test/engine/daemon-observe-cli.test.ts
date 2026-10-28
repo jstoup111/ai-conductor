@@ -1,4 +1,4 @@
-// Covers: task:6, task:11
+// Covers: task:6, task:7, task:11, task:24
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,11 +8,23 @@ import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
   computeStatusRow,
+  renderExecutorVersionsSection,
   runDaemonStatus,
   runDaemonLogs,
   detectDaemonObserveCommand,
 } from '../../src/engine/daemon-observe-cli.js';
+import { writeExecutorRecord } from '../../src/engine/executor-records.js';
 import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
+import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+
+const executorVersionSeam = vi.hoisted(() => ({ currentTarget: vi.fn() }));
+vi.mock('../../src/engine/engine-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/engine-store.js')>(),
+  currentTarget: executorVersionSeam.currentTarget,
+}));
+
+const ENGINE_V1 = '20261019T120000Z-aaaaaaaaaaaa';
+const ENGINE_V2 = '20261020T120000Z-bbbbbbbbbbbb';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -90,6 +102,7 @@ describe('engine/daemon-observe-cli', () => {
   let root: string;
 
   beforeEach(async () => {
+    executorVersionSeam.currentTarget.mockReset().mockResolvedValue(ENGINE_V2);
     root = await mkdtemp(join(tmpdir(), 'daemon-observe-'));
   });
 
@@ -198,6 +211,66 @@ describe('engine/daemon-observe-cli', () => {
       const out: string[] = [];
       await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
       expect(out.join('\n')).toContain('version:version-unknown');
+    });
+  });
+
+  describe('executor engine versions (Task 24)', () => {
+    async function writeExecutor(repo: string, slug: string, engineVersionId: string): Promise<void> {
+      await writeExecutorRecord(repo, slug, {
+        pid: 99,
+        engineDir: `/engine-store/dist-versions/${engineVersionId}`,
+        engineVersionId,
+        startedAt: '2026-10-20T12:00:00.000Z',
+      });
+    }
+
+    it('renders live executor pins and an older stale supervisor against current v2', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 42, engineDir: `/engine-store/dist-versions/${ENGINE_V1}` });
+      await writeExecutor(repo, 'v1-feature', ENGINE_V1);
+      await writeExecutor(repo, 'v2-feature', ENGINE_V2);
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toEqual([
+        `  EXECUTOR ENGINE CURRENT: ${ENGINE_V2}`,
+        `  SUPERVISOR ENGINE: ${ENGINE_V1} (older than current)`,
+        `  EXECUTOR [v1-feature]: ${ENGINE_V1} (older than current)`,
+        `  EXECUTOR [v2-feature]: ${ENGINE_V2}`,
+      ]);
+    });
+
+    it('keeps readable executor rows when another executor record is unreadable', async () => {
+      const repo = join(root, 'repo');
+      await writeExecutor(repo, 'healthy', ENGINE_V2);
+      await mkdir(join(repo, '.daemon', 'executors'), { recursive: true });
+      await writeFile(join(repo, '.daemon', 'executors', 'broken.json'), '{not json', 'utf8');
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toContain('  EXECUTOR [broken]: version unknown — record unreadable');
+      expect(out).toContain(`  EXECUTOR [healthy]: ${ENGINE_V2}`);
+    });
+
+    it('renders an unresolvable current engine and legacy dispatches as unknown without older markers', async () => {
+      executorVersionSeam.currentTarget.mockRejectedValueOnce(new Error('dist unavailable'));
+      const repo = join(root, 'repo');
+      await writeExecutor(repo, 'supervisor-fallback', ENGINE_V2);
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writeFile(join(repo, '.daemon', 'events.jsonl'), JSON.stringify({
+        type: 'feature_dispatch_started', slug: 'legacy-feature', kind: 'initial',
+      }) + '\n', 'utf8');
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toContain('  EXECUTOR ENGINE CURRENT: unknown');
+      expect(out).toContain(`  EXECUTOR [supervisor-fallback]: ${ENGINE_V2}`);
+      expect(out).toContain('  DISPATCH [legacy-feature]: engine unknown');
+      expect(out.join('\n')).not.toContain('older than current');
     });
   });
 
@@ -657,9 +730,11 @@ describe('engine/daemon-observe-cli', () => {
       });
       expect(code).toBe(0);
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
-      // One status line plus capability, GATED, and BLOCKED section lines per repo
+      // One status line plus capability, GATED, BLOCKED, and SHIPPED PRS section lines per repo
       // repo whose path exists (path-missing repos skip snapshot reads entirely).
-      expect(out.length).toBe(9);
+      // Each live supervisor now has an explicit engine row in addition to
+      // its status line, so a stale version can be compared to current.
+      expect(out.length).toBe(13);
     });
 
     it('prints a friendly message for an empty registry', async () => {
@@ -877,6 +952,104 @@ describe('engine/daemon-observe-cli', () => {
       });
     });
 
+    describe('SHIPPED PRS section (Task 10, Story 6)', () => {
+      async function writeShippedPrFixtures(repo: string, events: unknown[], watchUrls: string[]): Promise<void> {
+        const daemonDir = join(repo, '.daemon');
+        await mkdir(daemonDir, { recursive: true });
+        await writeFile(
+          join(daemonDir, 'events.jsonl'),
+          events.map((event) => (typeof event === 'string' ? event : JSON.stringify(event))).join('\n') + '\n',
+          'utf8',
+        );
+        await writeFile(
+          join(daemonDir, 'mergeable-watch.jsonl'),
+          watchUrls.map((prUrl, index) => JSON.stringify({ prUrl, slug: `feature-${index}`, repoCwd: repo })).join('\n') + '\n',
+          'utf8',
+        );
+      }
+
+      function readiness(prUrl: string, verdict: string) {
+        return {
+          type: 'shipped_pr_readiness',
+          prUrl,
+          slug: prUrl.split('/').at(-1),
+          verdict,
+          headSha: 'abc123',
+          mergeable: 'MERGEABLE',
+          checksOutcome: 'none',
+          isDraft: verdict === 'draft',
+        };
+      }
+
+      // Covers: task:10
+      it('lists only active watched PRs whose latest readiness verdict needs attention, without spawning gh', async () => {
+        const repo = join(root, 'repo-shipped-prs');
+        const urls = {
+          noChecks: 'https://github.test/acme/repo/pull/1',
+          ready: 'https://github.test/acme/repo/pull/2',
+          draft: 'https://github.test/acme/repo/pull/3',
+          removed: 'https://github.test/acme/repo/pull/4',
+        };
+        await writeShippedPrFixtures(repo, [
+          readiness(urls.noChecks, 'no-checks'),
+          readiness(urls.ready, 'no-checks'),
+          readiness(urls.draft, 'draft'),
+          readiness(urls.ready, 'ready'),
+          readiness(urls.removed, 'no-checks'),
+        ], [urls.noChecks, urls.ready, urls.draft]);
+        const execFileSpy = vi.spyOn(cp, 'execFile');
+        const execSpy = vi.spyOn(cp, 'exec');
+        const out: string[] = [];
+
+        try {
+          const result = await runDaemonStatus({
+            registryPath: await registry([record('repo-shipped-prs', repo)]),
+            out: (line) => out.push(line),
+          });
+
+          expect({ code: result.code, output: out.join('\n'), execFileCalls: execFileSpy.mock.calls, execCalls: execSpy.mock.calls }).toEqual({
+            code: 0,
+            output: expect.stringContaining('SHIPPED PRS:'),
+            execFileCalls: [],
+            execCalls: [],
+          });
+          expect(out.join('\n')).toContain('pull/1 — no-checks');
+          expect(out.join('\n')).toContain('pull/3 — draft');
+          expect(out.join('\n')).not.toContain('pull/2');
+          expect(out.join('\n')).not.toContain('pull/4');
+        } finally {
+          execFileSpy.mockRestore();
+          execSpy.mockRestore();
+        }
+      });
+
+      // Covers: task:10
+      it('renders no-attention, unknown, and malformed-ledger states without failing status', async () => {
+        const allReady = join(root, 'repo-all-ready');
+        const malformed = join(root, 'repo-malformed-readiness');
+        const unknown = join(root, 'repo-unknown-readiness');
+        const url = 'https://github.test/acme/repo/pull/5';
+        await writeShippedPrFixtures(allReady, [readiness(url, 'no-checks'), readiness(url, 'ready')], [url]);
+        await writeShippedPrFixtures(malformed, ['{not json', readiness(url, 'no-checks')], [url]);
+        await mkdir(unknown, { recursive: true });
+        const out: string[] = [];
+
+        const result = await runDaemonStatus({
+          registryPath: await registry([
+            record('repo-all-ready', allReady),
+            record('repo-malformed-readiness', malformed),
+            record('repo-unknown-readiness', unknown),
+          ]),
+          out: (line) => out.push(line),
+        });
+
+        expect({ code: result.code, output: out.join('\n') }).toEqual({
+          code: 0,
+          output: expect.stringMatching(/no shipped PRs need attention[\s\S]*SHIPPED PRS:[\s\S]*pull\/5.*no-checks[\s\S]*shipped-PR readiness unknown/),
+        });
+      });
+    });
+
     describe('attribution agreement rate (Task 18, Story 9)', () => {
       async function writeLedger(repo: string, lines: unknown[]): Promise<void> {
         const daemonDir = join(repo, '.daemon');
@@ -962,6 +1135,199 @@ describe('engine/daemon-observe-cli', () => {
         return featureRoot;
       }
 
+      async function writeDaemonPlan(
+        repo: string,
+        slug: string,
+        plan: string,
+        options: { activePlan?: string; otherPlan?: { name: string; content: string }; planName?: string } = {},
+      ): Promise<string> {
+        const featureRoot = join(repo, '.worktrees', slug);
+        const plansDir = join(featureRoot, '.docs', 'plans');
+        await mkdir(join(featureRoot, '.pipeline'), { recursive: true });
+        await mkdir(plansDir, { recursive: true });
+        await writeFile(join(plansDir, options.planName ?? `${slug}.md`), plan, 'utf8');
+        if (options.otherPlan) {
+          await writeFile(join(plansDir, options.otherPlan.name), options.otherPlan.content, 'utf8');
+        }
+        await writeFile(
+          join(featureRoot, '.pipeline', 'conduct-state.json'),
+          JSON.stringify({ build: 'in_progress', feature_desc: slug }),
+          'utf8',
+        );
+        if (options.activePlan) {
+          await writeFile(
+            join(featureRoot, '.pipeline', 'engine-state.json'),
+            JSON.stringify({ activePlanPath: `.docs/plans/${options.activePlan}` }),
+            'utf8',
+          );
+        }
+        return featureRoot;
+      }
+
+      function tasks(prefix: string, count: number): string {
+        return Array.from({ length: count }, (_, index) => `### Task ${prefix}${index + 1}: work`).join('\n');
+      }
+
+      // Covers: task:7
+      it('resolves a daemon feature plan without an activePlanPath', async () => {
+        const repo = join(root, 'repo-daemon-plan');
+        const slug = 'daemon-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 17), {
+          otherPlan: { name: 'other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-daemon-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [daemon-feature]: authored 17; added 0; remaining 4/4');
+      });
+
+      // Covers: task:7
+      it('honors a recorded active plan over the daemon feature plan', async () => {
+        const repo = join(root, 'repo-recorded-plan');
+        const slug = 'recorded-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 17), {
+          activePlan: 'recorded.md',
+          otherPlan: { name: 'recorded.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-recorded-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out.join('\n')).toContain('PLAN GROWTH [recorded-feature]: authored 5;');
+      });
+
+      // Covers: task:7
+      it('renders an unresolved daemon plan without a zero-cap remainder', async () => {
+        const repo = join(root, 'repo-unresolved-plan');
+        const slug = 'unresolved-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 3), {
+          planName: 'first-other.md',
+          otherPlan: { name: 'also-other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [unresolved-feature]: plan unresolved; added 0');
+        expect(out.some((line) => line.includes('remaining 0/0'))).toBe(false);
+      });
+
+      // Covers: task:7
+      it('renders unresolved flat pending growth without inventing a cap or recovery raise', async () => {
+        const repo = join(root, 'repo-unresolved-pending-plan');
+        const slug = 'unresolved-pending-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 3), {
+          planName: 'first-other.md',
+          otherPlan: { name: 'also-other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          pendingRepair: {
+            receiptId: 'unresolved-pending', taskIds: ['rem-1'],
+            charges: { prd_audit: { laps: 1, growth: 4 } },
+          },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-pending-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [unresolved-pending-feature]: plan unresolved; added 0; pending 4 (prd_audit 4)');
+      });
+
+      // Covers: task:7
+      it('renders flat pending growth through daemon status and preserves its projection details', async () => {
+        const repo = join(root, 'repo-pending-growth');
+        const slug = 'pending-growth-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 40), tasks('rem-', 11)].join('\n'));
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          growth: { authored: 40, added: 0, byGate: {} },
+          pendingRepair: {
+            receiptId: 'pending-growth',
+            taskIds: Array.from({ length: 11 }, (_, index) => `rem-${index + 1}`),
+            charges: {
+              prd_audit: { laps: 1, growth: 3 },
+              architecture_review_as_built: { laps: 1, growth: 8 },
+            },
+          },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-pending-growth', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain(
+          '  PLAN GROWTH [pending-growth-feature]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1',
+        );
+      });
+
+      // Covers: task:7
+      it('shows pending growth only when it is chargeable, and leaves ordinary status lines unchanged', async () => {
+        const repo = join(root, 'repo-status-growth-variants');
+        const pendingRoot = await writeDaemonPlan(repo, 'partial-pending', [tasks('', 40), tasks('rem-', 3)].join('\n'));
+        const baseLedger = { version: 1, gates: {}, growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } } };
+        await mkdir(join(pendingRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(pendingRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(pendingRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          ...baseLedger,
+          pendingRepair: {
+            receiptId: 'partial', taskIds: ['rem-1', 'rem-2', 'rem-3'],
+            charges: { prd_audit: { laps: 1, growth: 3 } },
+          },
+        }), 'utf8');
+        const lapsRoot = await writeDaemonPlan(repo, 'laps-only', [tasks('', 40), tasks('rem-', 1)].join('\n'));
+        await writeFile(join(lapsRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          ...baseLedger,
+          growth: { authored: 39, added: 2, byGate: { prd_audit: 2 } },
+          pendingRepair: {
+            receiptId: 'laps-only', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
+          },
+        }), 'utf8');
+        // A settled flat ledger's active plan includes its two charged tasks.
+        const ordinaryRoot = await writeDaemonPlan(repo, 'ordinary', tasks('', 42));
+        await writeFile(join(ordinaryRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify(baseLedger), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-status-growth-variants', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 5/10; pending 3 (prd_audit 3)');
+        expect(out.find((line) => line.startsWith('  PLAN GROWTH [partial-pending]:'))).not.toContain('minimum raise');
+        expect(out).toContain('  PLAN GROWTH [laps-only]: authored 39; added 2 (prd_audit: 2); remaining 3/5');
+        expect(out).toContain('  PLAN GROWTH [ordinary]: authored 40; added 2 (prd_audit: 2); remaining 3/5');
+      });
+
+      // Covers: task:7
+      it('renders config-derived and raised shared budgets for recorded growth', async () => {
+        const repo = join(root, 'repo-shared-budget');
+        const slug = 'shared-budget-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 24), tasks('rem-', 9)].join('\n'), {
+          otherPlan: { name: 'other.md', content: tasks('', 5) },
+        });
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
+        const ledgerPath = join(featureRoot, '.pipeline', 'kickback-ledger.json');
+        const growth = { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
+        await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {}, growth }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-shared-budget', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [shared-budget-feature]: authored 24; added 9 (prd_audit: 5, architecture_review_as_built: 4); remaining 3/12');
+
+        await writeFile(ledgerPath, JSON.stringify({ version: 1, effectiveGrowthCap: 20, gates: {}, growth }), 'utf8');
+        const raisedOut: string[] = [];
+        await runDaemonStatus({ registryPath: await registry([record('repo-shared-budget', repo)]), out: (line) => raisedOut.push(line) });
+
+        expect(raisedOut.find((line) => line.startsWith('  PLAN GROWTH [shared-budget-feature]'))).toMatch(/remaining 11\/20$/);
+      });
+
       it('uses the effective growth cap and reports growth cap evidence without an adjustment', async () => {
         const repo = join(root, 'repo-plan-growth');
         // The active plan includes the three persisted remediation headings;
@@ -1021,6 +1387,166 @@ describe('engine/daemon-observe-cli', () => {
 
         expect(out).toContain(
           '  PLAN GROWTH [legacy-feature]: authored 19; added 0; remaining 4/4',
+        );
+      });
+
+      // Covers: task:4, task:9
+      it('renders an as-built remediation lap without cap evidence', async () => {
+        const repo = join(root, 'repo-remediation-lap');
+        const featureRoot = await writeActivePlan(repo, 'laps-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            architecture_review_as_built: {
+              count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
+            },
+          } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-remediation-lap', repo)]), out: (line) => out.push(line) });
+
+        expect(out.find((line) => line.includes('KICKBACK BUDGET [laps-feature]:') && line.includes('architecture_review_as_built'))).toContain(
+          'Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining — tier unrecorded, treated as M; allowance 3 (default)',
+        );
+      });
+
+      // Covers: task:4
+      it('renders each remediation gate exactly once for an empty ledger', async () => {
+        const repo = join(root, 'repo-fresh-remediation');
+        const featureRoot = await writeActivePlan(repo, 'fresh-feature', 19);
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-fresh-remediation', repo)]), out: (line) => out.push(line) });
+
+        const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [fresh-feature]:'));
+        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
+        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
+      });
+
+      // Covers: task:9
+      it('uses the default tier-S prd-audit allowance consistently in status and inspect', async () => {
+        const repo = join(root, 'repo-tier-s-remediation');
+        const featureRoot = await writeActivePlan(repo, 'tier-s-feature', 19);
+        await writeFile(join(featureRoot, '.pipeline', 'conduct-state.json'), JSON.stringify({
+          build: 'in_progress', complexity_tier: 'S',
+        }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            prd_audit: {
+              count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
+            },
+          } }),
+          'utf8',
+        );
+        const status: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-tier-s-remediation', repo)]), out: (line) => status.push(line) });
+        const inspect: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'tier-s-feature', format: 'human' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+        )).toBe(0);
+
+        expect(status.find((line) => line.includes('KICKBACK BUDGET [tier-s-feature]:') && line.includes('prd_audit'))).toContain(
+          'Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)',
+        );
+        expect(inspect.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (prd_audit):'))).toContain(
+          'Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)',
+        );
+      });
+
+      // Covers: task:9
+      it('reports a malformed remediation-gate entry as unavailable without a tier allowance', async () => {
+        const repo = join(root, 'repo-broken-remediation');
+        const featureRoot = await writeActivePlan(repo, 'broken-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            prd_audit: { laps: 'not-a-number' },
+          } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        const { code } = await runDaemonStatus({ registryPath: await registry([record('repo-broken-remediation', repo)]), out: (line) => out.push(line) });
+
+        expect(code).toBe(0);
+        const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [broken-feature]:'));
+        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: prd_audit: budget unavailable (durable entry failed validation)');
+        const prdBudget = budgets.find((line) => line.includes('prd_audit: budget unavailable'));
+        expect(prdBudget).not.toContain('tier');
+        expect(prdBudget).not.toContain('allowance');
+      });
+
+      // Covers: task:9
+      it('keeps build-review cap-evidence output free of remediation allowance metadata', async () => {
+        const repo = join(root, 'repo-build-review-cap-evidence');
+        const featureRoot = await writeActivePlan(repo, 'build-review-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            build_review: {
+              count: 4, cumulative: 4, treeHash: null, lastReason: 'review cap', priorVerdict: false,
+              resolvedBefore: 0, effectiveLimit: 6, adjustmentsKnown: true,
+              capEvidence: {
+                gate: 'build_review', consumed: 4, limit: 6, latestReason: 'review cap', haltGeneration: 'halt-1',
+              },
+            },
+          } }),
+          'utf8',
+        );
+        const status: string[] = [];
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-build-review-cap-evidence', repo)]),
+          out: (line) => status.push(line),
+        });
+
+        const inspect: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'human' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+        )).toBe(0);
+        const inspectJson: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'json' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspectJson.push(line) },
+        )).toBe(0);
+
+        const expected = 'Kickback budget (build_review): 4/6 consumed; 2 remaining';
+        const statusLine = status.find((line) => line.includes('KICKBACK BUDGET [build-review-feature]:') && line.includes('build_review'));
+        const inspectLine = inspect.join('\n').split('\n\n').find((block) => block.startsWith('Kickback budget (build_review):'));
+        expect(statusLine).toContain(expected);
+        expect(inspectLine).toContain(expected);
+        expect(statusLine).not.toMatch(/— tier|allowance \d/);
+        expect(inspectLine).not.toMatch(/— tier|allowance \d/);
+        const buildReview = (JSON.parse(inspectJson[0]) as { gates: Array<Record<string, unknown>> }).gates
+          .find((gate) => gate.gate === 'build_review');
+        expect(buildReview).toMatchObject({ gate: 'build_review', consumed: 4, limit: 6, remaining: 2 });
+        expect(buildReview).not.toHaveProperty('tier');
+        expect(buildReview).not.toHaveProperty('allowanceSource');
+      });
+
+      // Covers: task:5
+      it('omits build-review budget without cap evidence or adjustment history', async () => {
+        const repo = join(root, 'repo-review-without-budget');
+        const featureRoot = await writeActivePlan(repo, 'review-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            build_review: { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+          } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-review-without-budget', repo)]), out: (line) => out.push(line) });
+
+        expect(out.filter((line) => line.includes('KICKBACK BUDGET [review-feature]:'))).not.toContainEqual(
+          expect.stringContaining('Kickback budget (build_review):'),
         );
       });
     });

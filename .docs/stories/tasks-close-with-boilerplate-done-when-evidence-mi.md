@@ -38,10 +38,10 @@ As the operator, I want a tagged check to close only when the test it relies on 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given task 3 has a `[test]` check and HEAD has a test file containing the cited title and a `Covers: task:3` marker, when `conduct task done 3` cites that file and title for the check, then the task completes and the check's close record has source `verified`.
-- Given task 3's `Story:` line cites Story 2 and the cited test file carries `Covers: S2.1` instead of a task marker, when the check is closed with that reference, then the check's close record has source `verified`.
-- Given the cited test file was committed before the feature branch and is unchanged in the feature diff, when the check is closed with a reference to it, then the check's close record has source `verified`.
-- Given `conduct task done` is run from a subdirectory of the worktree, when a check cites a test path relative to the repository root, then the path resolves from the repository root and the check verifies.
+- Given task 3 has a `[test]` check, started at commit A, and a commit after A adds the cited title to a test file carrying a `Covers: task:3` marker, when `conduct task done 3` cites that file and title for the check, then the task completes and the check's close record has source `verified`.
+- Given task 3's `Story:` line cites Story 2, the cited title was added after task 3's start commit, and the cited test file carries `Covers: S2.1` instead of a task marker, when the check is closed with that reference, then the check's close record has source `verified`.
+- Given the cited test file was committed before the feature branch and is unchanged in the feature diff, when the check is closed with a reference to it, then the reference passes the text checks, the task completes, and the check's close record has source `pending-judgement`.
+- Given `conduct task done` is run from a subdirectory of the worktree, when a check cites a test path relative to the repository root, then the path resolves from the repository root and the reference passes the text checks.
 
 #### Negative Paths
 - Given a tagged check, when it is closed with free-text evidence that names no test file and title, then the close is refused naming the check number and text, and the task stays not completed.
@@ -49,11 +49,11 @@ As the operator, I want a tagged check to close only when the test it relies on 
 - Given a tagged check, when it is closed citing a file at HEAD whose content does not contain the cited title after whitespace normalization, then the close is refused naming the check and the missing title.
 - Given a tagged check, when it is closed citing a file at HEAD that contains the title but whose `Covers:` markers name neither the task nor any criterion of the stories the task cites, then the close is refused naming the check and the missing marker.
 - Given a test file that exists only in the working tree and is not committed, when a tagged check cites it, then the close is refused because the file is absent at HEAD.
-- Given a test file in a language this repository does not use, when a tagged check cites it with a matching title and `Covers:` marker, then the check verifies exactly as a TypeScript test would.
+- Given a test file in a language this repository does not use, when a tagged check cites it with a matching title and `Covers:` marker, then the reference passes the text checks exactly as a TypeScript test would.
 
 ### Done When
 - [ ] Every refusal message names the check number, the check text, and which part of the reference failed.
-- [ ] Each close record in task status carries one of the sources `verified`, `reported`, `verify-only`, or `unverified`.
+- [ ] Each close record in task status carries one of the sources `verified`, `reported`, `verify-only`, `unverified`, `pending-judgement`, `judged`, or `operator-accepted`.
 
 ## Story 3: Untagged checks and older plans close exactly as before
 
@@ -65,7 +65,7 @@ As the operator, I want checks that do not need a test to keep closing on ordina
 
 #### Happy Path
 - Given an untagged check such as a configuration assertion, when it is closed with free-text evidence, then the task completes and the check's close record has source `reported`.
-- Given a task with one tagged and one untagged check, when the tagged check cites a verifiable test and the untagged check has free-text evidence, then the task completes with sources `verified` and `reported` respectively.
+- Given a task with one tagged and one untagged check, when the tagged check cites a verifiable test the task added after its start commit and the untagged check has free-text evidence, then the task completes with sources `verified` and `reported` respectively.
 
 #### Negative Paths
 - Given a plan with no `[test]` tags, when every task is closed with the same free-text evidence accepted before this change, then no close is refused.
@@ -100,7 +100,7 @@ As the operator, I want an agent that cannot produce a test to record that hones
 
 **Requirement:** adr-2026-08-22-done-when-evidence-at-task-close D8
 
-Only checks carrying an explicit `unverified` task-close record count as unverified. A build whose tasks are all resolved and which has no such record completes exactly as before.
+Only checks carrying an explicit `unverified` task-close record count as unverified. A build whose tasks are all resolved, which has no such record and no `pending-judgement` record, and in which the remediation-closure judgement reopens no task (`adr-2026-08-22-done-when-evidence-at-task-close` D19), completes exactly as before.
 
 As the operator, I want BUILD to get one chance to fix unverified checks before moving on, so that most gaps are fixed while the code is fresh and none of them stalls the feature.
 
@@ -108,8 +108,8 @@ As the operator, I want BUILD to get one chance to fix unverified checks before 
 
 #### Happy Path
 - Given every plan task is resolved and two checks are unverified, when the BUILD session ends and no nudge has been spent in this lap, then BUILD is not completed and the retry hint names both checks by task id and check text.
-- Given the nudge was spent in this lap and one check is still unverified, when the next BUILD session ends with every task resolved, then BUILD completes and one event is recorded naming the still-unverified check.
-- Given every plan task is resolved and no check is unverified, when the BUILD session ends, then BUILD completes with no nudge and no unverified-checks event.
+- Given the nudge was spent in this lap and one check is still unverified, when the next BUILD session ends with every task resolved and no citation pending judgement, then BUILD completes and one event is recorded naming the still-unverified check.
+- Given every plan task is resolved, no check is unverified, and no citation is pending judgement, when the BUILD session ends, then BUILD completes with no nudge and no unverified-checks event.
 
 #### Negative Paths
 - Given the nudge turn produces no new commit, when the progress-aware halt accounting runs, then the no-evidence attempt count is unchanged by the nudge.
@@ -117,7 +117,7 @@ As the operator, I want BUILD to get one chance to fix unverified checks before 
 - Given the per-step retry budget is already exhausted when unverified checks remain, when the BUILD session ends, then no nudge is given and the step follows its existing exhaustion behavior with no new halt class.
 - Given the nudge turn writes a test but leaves it uncommitted, when the BUILD session ends, then the existing uncommitted-work floor withholds completion exactly as it does for any other turn.
 - Given some plan tasks are still pending, when the BUILD session ends, then the pending tasks are reported as before and the nudge does not replace or hide that reason.
-- Given a task with a `[test]` check that was resolved by a no-diff skipped stamp or a verify-only stamp and so has no task-close record for that check, when the BUILD session ends with every task resolved, then that check is not counted as unverified and BUILD completes with no nudge.
+- Given a task with a `[test]` check that was resolved by a no-diff skipped stamp or a verify-only stamp and so has no task-close record for that check, when the BUILD session ends with every task resolved and no citation pending judgement, then that check is not counted as unverified and BUILD completes with no nudge.
 
 ### Done When
 - [ ] The unverified-checks event is part of the event union and has an event-sink registry row.

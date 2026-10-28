@@ -1,4 +1,4 @@
-// Covers: task:3, task:5, task:21, task:37, rem-ab5-1
+// Covers: task:1, task:3, task:4, task:5, task:8, task:21, task:37, rem-ab5-1
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
@@ -10,6 +10,25 @@ import {
 describe('config consumer registry', () => {
   it('is total over validator-accepted keys', () => {
     expect(() => assertRegistryCovers(CONFIG_CONSUMER_KEY_SETS, configConsumerRegistry)).not.toThrow();
+
+    // Keep the plan-review keys explicit here: total registry coverage alone
+    // does not show which runtime boundaries own this configuration.
+    expect(CONFIG_CONSUMER_KEY_SETS.top).toContain('plan_review');
+    expect(CONFIG_CONSUMER_KEY_SETS.plan_review).toContain('max_prompt_chars');
+    expect(configConsumerRegistry).toMatchObject({
+      plan_review: {
+        consumer: [
+          'src/conductor/src/engine/engineer-cli.ts',
+          'src/conductor/src/engine/step-runners.ts',
+        ],
+      },
+      'plan_review.max_prompt_chars': {
+        consumer: [
+          'src/conductor/src/engine/engineer-cli.ts',
+          'src/conductor/src/engine/step-runners.ts',
+        ],
+      },
+    });
   });
 
   it('declares the consumer for OTel attributes admitted by validation', () => {
@@ -65,14 +84,12 @@ describe('config consumer registry', () => {
       'build_progress_halt',
       'gate_code_validity',
       'retry_routing',
-      'coverage_binding',
-      'coverage_binding.judge',
       'markdown_viewer',
       'mermaid_renderer',
     ]));
   });
 
-  it.each(['test_suite', 'prd_audit', 'assess', 'build_progress', 'coverage_binding'] as const)(
+  it.each(['test_suite', 'prd_audit', 'assess', 'build_progress'] as const)(
     'rejects a newly accepted %s key until it declares a consumer',
     (block) => {
       const extendedSets = {
@@ -96,14 +113,27 @@ describe('config consumer registry', () => {
     });
   });
 
-  it('registers the BUILD child cursor as a direct stacked-PR enablement consumer', () => {
-    const childCursorSource = readFileSync(new URL('../../src/engine/child-cursor.ts', import.meta.url), 'utf8');
+  it('declares min_severity for built-in and custom build-review rubrics', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.rubrics']).toContain('min_severity');
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.custom_rubrics']).toContain('min_severity');
+    expect(configConsumerRegistry).toMatchObject({
+      'build_review.rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
+      },
+      'build_review.custom_rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
+      },
+    });
+  });
 
-    expect(childCursorSource).toContain('config.config.stacked_prs?.enabled === true');
+  it('registers the sealed-topology loader as a direct stacked-PR enablement consumer', () => {
+    const topologySource = readFileSync(new URL('../../src/engine/slice-topology.ts', import.meta.url), 'utf8');
+
+    expect(topologySource).toContain("config?.stacked_prs?.enabled === false");
     expect(configConsumerRegistry['stacked_prs.enabled'].consumer).toEqual([
       'src/conductor/src/engine/engineer/land-spec.ts',
       'src/conductor/src/engine/step-runners.ts',
-      'src/conductor/src/engine/child-cursor.ts',
+      'src/conductor/src/engine/slice-topology.ts',
     ]);
   });
 

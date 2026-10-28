@@ -93,7 +93,6 @@ export class MetricsListener {
     rebase_noop: () => {},
     rebase_changed: () => {},
     rebase_mergeable_skip: () => {},
-    pipeline_closeout: (listener, event) => listener.feature(event)?.onPipelineCloseout(event as Extract<OtelEvent, { type: 'pipeline_closeout' }>),
     gate_verdict: (listener, event) => {
       const verdict = event as Extract<OtelEvent, { type: 'gate_verdict' }>;
       listener.feature(verdict)?.onGateVerdict(verdict.step, verdict.satisfied ? 'pass' : 'fail', verdict.tier);

@@ -71,6 +71,8 @@ export type ConductState = {
    */
   session_started_at?: number;
   last_step?: StepName;
+  /** Why a step was fast-forwarded or skipped, keyed by its step name. */
+  step_reasons?: Partial<Record<StepName, string>>;
   pr_url?: string;
   /** Latest non-null rebase base retained for terminal provenance (adr-014 D18). */
   rebase_base_sha?: string;

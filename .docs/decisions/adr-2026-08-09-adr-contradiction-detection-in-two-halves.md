@@ -92,6 +92,8 @@ prose-only fix does — leaves no way to tell a careful pass from a skipped one.
 > **D2** — `conflict-check` gains `.docs/decisions/` in its corpus for early, pre-plan detection (corpus breadth as amended 2026-08-09 above). (above: "`conflict-check` gains `.docs/decisions/` in its corpus")
 > **D3** — `coherence-check` plus the validator gain the `adr` row class for late, land-gated enforcement. (above: "`coherence-check` plus the validator gain the `adr` row class")
 > **D4** — "Does this ADR contradict this story?" stays an LLM judgment in `conflict-check`'s pass and `coherence-check`'s §4d; "Was every approved ADR explicitly adjudicated, with a recorded verdict?" is mechanical accounting and becomes the `adr` layer. (above: "Applied here, the principle **splits the problem")
+>
+> **Amended 2026-10-10 by #3038:** the late-half LLM contradiction judgment D4 assigns to `coherence-check`'s §4d now belongs to the `plan_review` DECIDE step (`adr-2026-10-10-source-grounded-adversarial-plan-review-step` D3, D10): a fresh, read-only, source-grounded reviewer, preferably on a provider other than the authoring host, that runs after `coherence-check` at Medium/Large tier. `coherence-check` §4d is removed. The early half in `conflict-check` (D2) and the mechanical `adr`-row accounting (D3) are unchanged.
 
 ## Consequences
 

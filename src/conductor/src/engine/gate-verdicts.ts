@@ -8,6 +8,7 @@ import {
   type CompletionResult,
 } from './artifacts.js';
 import { isRegionStep, pipelinePathFor, type ChildId } from './child-context.js';
+import type { RestackCause } from './restack/restack-types.js';
 
 /**
  * Objective completion check for a gate. Prefers the richer kickback-target
@@ -96,6 +97,8 @@ export interface RebaseOperationRecord {
   appliedAt?: number;
   transition: RebaseTransitionDescriptor;
   replay: ReplayEvidence;
+  /** Present only for a stacked restack; omitted for byte-compatible N=1 records. */
+  cause?: RestackCause;
   /**
    * Optional for descriptors written before resume could complete an applying
    * operation. New descriptors persist every candidate before state changes.
@@ -156,6 +159,8 @@ export interface GateVerdict {
   kickback?: {
     from: StepName | 'decide-change';
     evidence: string;
+    /** A stacked restack's cause; the legacy rebase refund credits only base refreshes. */
+    cause?: RestackCause;
   };
   /** Optional additive authority for a previously judged pass after one replay. */
   preservation?: ReplayPreservationRecord;
@@ -248,6 +253,10 @@ export async function writeVerdict(
  */
 export const SKIP_VERDICT_PREFIX = 'skipped: ';
 
+/** Verdict files from the retired pre-BUILD coverage judge can remain in
+ * worktrees recreated from an older branch. They are not lifecycle evidence. */
+const RETIRED_VERDICT_FILES = new Set(['coverage_binding.json']);
+
 /**
  * Record a verdict-bearing gate that was resolved by a SKIP rather than by a
  * run (tier skip, track skip, config disable, `when:` false, upstream skip, or
@@ -314,7 +323,7 @@ export async function readAllVerdicts(
     return out;
   }
   for (const entry of entries) {
-    if (!entry.endsWith('.json')) continue;
+    if (!entry.endsWith('.json') || RETIRED_VERDICT_FILES.has(entry)) continue;
     const step = entry.slice(0, -'.json'.length) as StepName;
     const v = await readVerdict(dir, step);
     if (v) out[step] = v;

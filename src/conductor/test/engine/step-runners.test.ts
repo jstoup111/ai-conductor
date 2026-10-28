@@ -1,13 +1,13 @@
-// Covers: task:1, task:3, task:7, task:8, task:10, task:11, task:12, task:17
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2, task:rem-prd-audit-9-R3, task:rem-as-built-6-r7
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir, symlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { execa } from 'execa';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState, ExecutionContext, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
@@ -25,22 +25,26 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
-import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
+import { executeProviderCandidates, providerExecutionEventCallbacks } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
-import { settleRemediationRound } from '../../src/engine/kickback-ledger.js';
-import { remediationLapCapForGate } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
-import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdict, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { buildReviewPolicyIdentity } from '../../src/engine/build-review-review-frontier.js';
+import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
+import { getBuildReviewRubricDescriptor } from '../../src/engine/build-review-registry.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 const { buildPrdAuditProjection } = vi.hoisted(() => ({
   buildPrdAuditProjection: vi.fn(),
@@ -50,6 +54,11 @@ vi.mock('../../src/engine/prd-audit-projection.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/prd-audit-projection.js')>(),
   buildPrdAuditProjection,
 }));
+
+vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>();
+  return { ...actual, coordinateBuildReviewRubrics: vi.fn(actual.coordinateBuildReviewRubrics) };
+});
 
 function prdAuditProjectionFixture() {
   return {
@@ -94,6 +103,135 @@ function createMockProvider(): LLMProvider {
   };
 }
 
+function customCatalogEntry(config: ReturnType<typeof resolveBuildReviewConfig>, id = 'portable') {
+  const entry = config.catalog.find((candidate) => candidate.id === id);
+  if (!entry || entry.kind !== 'custom') throw new Error(`expected custom ${id} rubric`);
+  return entry;
+}
+
+describe('build_review declared replication suppressions', () => {
+  const sourcePath = 'src/source-widget.ts';
+  const targetPath = 'src/target-widget.ts';
+  const duplication = (path = targetPath, evidence = `${sourcePath}:8`) => ({
+    concernKind: 'duplication' as const, severity: 'minor' as const, summary: 'The declared copy repeats the source implementation.',
+    evidenceLocations: [evidence],
+    anchor: { rubric: 'implementationQuality' as const, locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' } },
+  });
+  const otherPath = 'src/other-widget.ts';
+  const declaredPlanBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
+  const runDeclaredReplication = async (
+    makeFinding: (loci: { target: any; other: any }) => ReturnType<typeof duplication>,
+    planBody = declaredPlanBody,
+  ) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'declared-replication-runner-'));
+    const planPath = join(projectDir, '.docs/plans/feature.md');
+    let effective!: ReturnType<typeof deriveEffectiveBuildReviewVerdict>;
+    let finding: ReturnType<typeof duplication> | undefined;
+
+    try {
+      await mkdir(join(projectDir, '.docs/plans'), { recursive: true });
+      await mkdir(join(projectDir, 'src'), { recursive: true });
+      await writeFile(planPath, planBody, 'utf8');
+      await writeFile(join(projectDir, sourcePath), 'export const widget = true;\n', 'utf8');
+      await writeFile(join(projectDir, targetPath), 'export const widget = true;\n', 'utf8');
+      const gitRunner = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\0${targetPath}\0M\0${otherPath}\0`, stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: [
+          `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;`,
+          `diff --git a/${otherPath} b/${otherPath}\n@@ -1 +1 @@\n-export const other = false;\n+export const other = true;`,
+        ].join('\n') + '\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:.docs/plans/feature.md') return { exitCode: 0, stdout: planBody, stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = false;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${otherPath}`) return { exitCode: 0, stdout: 'export const other = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${otherPath}`) return { exitCode: 0, stdout: 'export const other = false;\n', stderr: '' };
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      const runner = new DefaultStepRunner(createMockProvider(), 'replication', projectDir, {
+        gitRunner,
+        planPath,
+        config: {
+          build_review: {
+            enabled: true,
+            rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+          },
+        } as HarnessConfig,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } } as never),
+        },
+        buildReviewEffectiveResolver: async (_projectRoot, result) => {
+          const resolved = deriveEffectiveBuildReviewVerdict(result);
+          if (!resolved) throw new Error('expected build_review aggregate to yield an effective verdict');
+          effective = resolved;
+          return { ok: true, feature: { version: 'v1', repository: projectDir, feature: 'replication' }, effective };
+        },
+      });
+      vi.spyOn(runner as any, 'fileExists').mockImplementation(async (...args: any[]) => args[0] === join(projectDir, sourcePath));
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => {
+        const loci = Object.fromEntries(projection.changedFiles.map((file: any) => [file.path, {
+          path: file.path,
+          contentHash: file.hunks[0].contentHash,
+          display: `${file.path}:1`,
+        }]));
+        return {
+          kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v4', findings: [finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] })], verdict: 'FAIL',
+        };
+      });
+
+      const runResult = await runner.run('build_review', emptyState);
+      expect(runResult).toMatchObject({ success: true });
+
+      const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline/build-review.json'), 'utf8'));
+      const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
+      return { persisted, effective, identity };
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  };
+
+  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', async () => {
+    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
+      ...duplication(),
+      anchor: { rubric: 'implementationQuality', locus: target },
+    }));
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([{ findingId: identity.id, sourcePath, targetPath }]);
+    expect(effective).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
+  });
+
+  it.each([
+    ['an off-target anchor', ({ other }: any) => ({
+      ...duplication(otherPath),
+      anchor: { rubric: 'implementationQuality' as const, locus: other },
+    })],
+    ['mixed source and foreign evidence', ({ target }: any) => ({
+      ...duplication(),
+      evidenceLocations: [`${sourcePath}:8`, `${otherPath}:8`],
+      anchor: { rubric: 'implementationQuality' as const, locus: target },
+    })],
+  ])('does not suppress declared replication with %s', async (_label, makeFinding) => {
+    const { persisted, effective, identity } = await runDeclaredReplication(makeFinding);
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([]);
+    expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
+  });
+
+  it('does not suppress a source-only duplication when the plan has no Pattern-source declaration', async () => {
+    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
+      ...duplication(),
+      anchor: { rubric: 'implementationQuality', locus: target },
+    }), '# Plan\n\nThis plan declares no replication source.\n');
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([]);
+    expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
+  });
+});
+
 function interactiveRuntime(
   key: 'claude' | 'codex',
   invokeResponse: LLMProvider['invoke'],
@@ -133,102 +271,37 @@ function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefine
   for (const id of sessionIds) expect(id).toMatch(FRESH_SESSION_ID_RE);
 }
 
-function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' | 'does-not-assert' = 'asserts'): string {
-  const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-  const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-  return JSON.stringify({
-    verdicts: claims.map(({ id }) => verdict === 'asserts'
-      ? { id, verdict }
-      : { id, verdict, missingAssertion: 'No check requires emission.' }),
-  });
-}
-
-async function initializeAmendmentGitFixture(projectDir: string): Promise<void> {
-  await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectDir });
-  await execa('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-q', '-m', 'base'], { cwd: projectDir });
-  await execa('git', ['remote', 'add', 'origin', '.'], { cwd: projectDir });
-  await execa('git', ['fetch', '-q', 'origin', 'main:refs/remotes/origin/main'], { cwd: projectDir });
-}
-
-async function writeAmendmentCoverageInputs(projectDir: string, featureDesc: string): Promise<string> {
-  await initializeAmendmentGitFixture(projectDir);
-  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-  await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-  await writeFile(planPath, '### Task 1: Carry amendment\n**Done when:**\n- The service preserves the amended behavior.\n');
-  await writeFile(
-    join(projectDir, '.docs', 'decisions', `architecture-review-review-${featureDesc}.md`),
-    '> **Amended 2026-09-24 by #11:** The service preserves the amended behavior.\n',
-  );
-  return planPath;
-}
-
-function criterionCoherence(criterion = 'The service writes the audit record.'): string {
-  return [
-    '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |',
-    '| --- | --- | --- | --- | --- | --- |',
-    `| criterion | ${criterion} | task-2 | covered | "writes the audit record" | diff-local |`,
-  ].join('\n');
-}
-
-async function writeReopenCoverageInputs(projectDir: string, featureDesc: string, amendment: boolean): Promise<string> {
-  if (amendment) await initializeAmendmentGitFixture(projectDir);
-  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-  await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-  await writeFile(planPath, [
-    '### Task 1: Carry amendment', '**Done when:**', '- The service preserves the amended behavior.', '',
-    '### Task 2: Bind criterion', '**Done when:**', '- The service writes the audit record.', '',
-    '### Task 3: Contradicted work', '**Done when:**', '- The service keeps the old behavior.', '',
-  ].join('\n'));
-  await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), criterionCoherence());
-  if (amendment) {
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await writeFile(
-      join(projectDir, '.docs', 'decisions', `architecture-review-review-${featureDesc}.md`),
-      '> **Amended 2026-09-24 by #11:** The service preserves the amended behavior.\n',
-    );
-  }
-  return planPath;
-}
-
-async function writeTaskStatuses(projectDir: string, completed: readonly string[]): Promise<void> {
-  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
-  await writeFile(join(projectDir, '.pipeline', 'task-status.json'), JSON.stringify({
-    tasks: ['1', '2', '3'].map((id) => ({ id, status: completed.includes(id) ? 'completed' : 'pending' })),
-  }));
-}
-
-async function readTaskStatuses(projectDir: string): Promise<Record<string, string>> {
-  const value = JSON.parse(await readFile(join(projectDir, '.pipeline', 'task-status.json'), 'utf8')) as {
-    tasks: Array<{ id: string; status: string }>;
-  };
-  return Object.fromEntries(value.tasks.map((task) => [task.id, task.status]));
-}
-
-async function writeInvalidatedEnvelope(
-  projectDir: string,
-  featureDesc: string,
-  entries: readonly unknown[],
-  status: 'invalidated' | 'done' = 'invalidated',
-): Promise<void> {
-  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
-  await writeFile(join(projectDir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-    version: 1, slug: featureDesc, runId: 'prior-run', status, entries,
-  }));
-}
-
-function adrWithDecisions(decisionIds: readonly string[]): string {
-  return `# ADR\n\n## Decision\n\n${decisionIds.map((id) => `${id}. **Decision ${id}.**`).join('\n')}\n`;
-}
-
-function obligationRows(adrId: string, decisionIds: readonly string[]): string {
-  return decisionIds.map((id) =>
-    `| ${adrId}#D${id} | existing | none | Decision ${id} remains in force. |`,
-  ).join('\n');
-}
-
 describe('DefaultStepRunner', () => {
+  it('carries the provider that produced provider exit facts onto the step result', () => {
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project');
+    const toStepRunResult = (runner as unknown as {
+      toStepRunResult(step: StepName, result: ProviderExecutionResult): unknown;
+    }).toStepRunResult.bind(runner);
+
+    expect(toStepRunResult('remediate', {
+      success: false,
+      output: 'provider failed',
+      exitCode: 1,
+      preferredProvider: 'codex',
+      actualProvider: 'claude',
+      exitFacts: { processErrorCode: 'E2BIG' },
+      attempts: [],
+    })).toMatchObject({
+      provider: 'claude',
+      exitFacts: { processErrorCode: 'E2BIG' },
+    });
+
+    const preferredProviderResult = toStepRunResult('remediate', {
+      success: false,
+      output: 'provider unavailable',
+      exitCode: 1,
+      preferredProvider: 'codex',
+      attempts: [],
+    });
+    expect(preferredProviderResult).toMatchObject({ provider: 'codex' });
+    expect(preferredProviderResult).not.toHaveProperty('exitFacts');
+  });
+
   it('settles every shared source member after a custom-only early exit', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-materialization-settlement-'));
     const settle = vi.fn(async (_memberId: string) => {});
@@ -255,7 +328,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
           portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
@@ -296,11 +369,11 @@ describe('DefaultStepRunner', () => {
     await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
     const attempts: ProviderAttemptEvent[] = [];
     const piInvoke = vi.fn();
-    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+    const claudeInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: true,
-      output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+      output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }),
       exitCode: 0,
-      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
     }));
     const lifecycleCapability = { synchronousSpawnPermit: true } as const;
     const nativeSchemaCapability = { nativeOutputSchema: true } as const;
@@ -325,7 +398,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
@@ -379,13 +452,47 @@ describe('DefaultStepRunner', () => {
 
     try {
       await (runner as unknown as {
-        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], context: undefined, capabilities: unknown): Promise<unknown>;
-      }).runRubricBuildReview(inputs, config, 'S', undefined, {
+        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], planPath: undefined, context: undefined, capabilities: unknown): Promise<unknown>;
+      }).runRubricBuildReview(inputs, config, 'S', undefined, undefined, {
         claude: { provider: 'claude', platform: process.platform, status: 'available' },
       });
 
       expect(piInvoke).not.toHaveBeenCalled();
       expect(claudeInvoke).toHaveBeenCalledOnce();
+      const durableScope = {
+        mode: 'delta' as const,
+        reason: 'delta' as const,
+        sequence: 2,
+        predecessorLapId: 'lap-predecessor',
+        unreadableLapIds: [],
+        mergeBase: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
+        policyIdentity: `sha256:${'c'.repeat(64)}`,
+        reviewedHunks: [{ path: 'src/reviewed.ts', contentHash: `sha256:${'d'.repeat(64)}` }],
+        deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'e'.repeat(64)}` }],
+        outOfDeltaSourceIds: ['portable:prior-finding'],
+      };
+      await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy(...args: readonly unknown[]): Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(
+        config.catalog[0], inputs, 'lap-scope-projection', 'S', undefined,
+        async () => ({ provider: 'claude', platform: process.platform, status: 'available' }),
+        join(projectDir, '.pipeline'), undefined, durableScope, undefined, undefined,
+        async (policyIdentity: string) => ({ ...durableScope, policyIdentity }),
+      );
+      // Covers: task:rem-as-built-6-r2
+      const serializedCustomInput = (claudeInvoke.mock.calls[1]![0] as InvokeOptions).prompt
+        .match(/Frozen build-review input [^\n]+\.\nReview scope: (.+)\n/)?.[1];
+      expect(serializedCustomInput).toBeDefined();
+      expect(JSON.parse(serializedCustomInput!)).toEqual({
+        reviewScope: {
+          mode: 'delta',
+          deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'e'.repeat(64)}` }],
+        },
+      });
+      expect(serializedCustomInput).not.toContain('predecessorLapId');
+      expect(serializedCustomInput).not.toContain('reviewedHunks');
+      expect(serializedCustomInput).not.toContain('outOfDeltaSourceIds');
       expect(attempts).toEqual(expect.arrayContaining([
         expect.objectContaining({
           provider: 'pi', outcome: 'unavailable', invoked: false,
@@ -445,846 +552,6 @@ describe('DefaultStepRunner', () => {
       expect(exhausted.currentLapMechanicalFault).toBe(true);
       expect(JSON.parse(await readFile(aggregatePath, 'utf-8'))).toMatchObject({ lapId: 'lap-3' });
       expect(resolver).toHaveBeenCalledTimes(1);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('writes disabled coverage-binding completion evidence without invoking a provider', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-'));
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'coverage-run-1', projectDir, {
-      featureDesc: 'coverage-binding-feature',
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', emptyState)).resolves.toEqual({
-        success: true,
-        output: 'coverage_binding judge disabled',
-      });
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toEqual({
-        version: 1,
-        slug: 'coverage-binding-feature',
-        runId: 'coverage-run-1',
-        status: 'disabled',
-        entries: [],
-      });
-      expect(provider.invoke).not.toHaveBeenCalled();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('proceeds to judged claims when every DECIDE-set ADR decision has an obligation row', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-pass-'));
-    await initializeAmendmentGitFixture(projectDir);
-    const featureDesc = 'coverage-binding-adr-obligations-pass';
-    const adrId = 'adr-coverage-binding-obligations';
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
-    }));
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), adrWithDecisions(['1', '2', '3']));
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-pass', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).toHaveBeenCalledTimes(1);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses an amended ADR decision with no coverage row before dispatching the judge', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-missing-'));
-    const featureDesc = 'coverage-binding-adr-obligations-missing';
-    const adrId = 'adr-coverage-binding-amended';
-    const adrPath = `.docs/decisions/${adrId}.md`;
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    const provider = createMockProvider();
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1', '2', '3', '4']));
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-missing', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({
-        success: false,
-        refusal: { kind: 'needs-human' },
-      });
-      expect(result.output).toContain(adrPath);
-      expect(result.output).toContain('D4');
-      expect(result.output).toContain('no coverage row');
-      expect(provider.invoke).not.toHaveBeenCalled();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('runs the ADR-obligation layer while the coverage-binding judge is disabled', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-disabled-missing-'));
-    const featureDesc = 'coverage-binding-adr-disabled-missing';
-    const adrId = 'adr-coverage-binding-disabled';
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    const provider = createMockProvider();
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), adrWithDecisions(['1', '2', '3', '4']));
-    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-disabled', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
-        success: false,
-        refusal: { kind: 'needs-human', reason: expect.stringContaining(`${adrId}#D4`) },
-      });
-      expect(provider.invoke).not.toHaveBeenCalled();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('keeps the existing judge path when a legacy plan has no architecture obligation section', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-no-obligation-section-'));
-    const featureDesc = 'coverage-binding-no-obligation-section';
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
-    }));
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n');
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
-    const runner = new DefaultStepRunner(provider, 'coverage-run-no-obligation-section', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).toHaveBeenCalledOnce();
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        adrLayer: { disposition: 'not-applicable', adrIds: [] },
-      });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('tolerates the ADR layer at tier S without reading a cited ADR', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-s-obligations-'));
-    await initializeAmendmentGitFixture(projectDir);
-    const featureDesc = 'coverage-binding-tier-s-obligations';
-    const adrId = 'adr-tier-s-unreadable';
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
-    }));
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
-    const runner = new DefaultStepRunner(provider, 'coverage-run-tier-s-obligations', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).not.toHaveBeenCalled();
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        status: 'done', adrLayer: { disposition: 'not-applicable', adrIds: [] },
-      });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('tolerates a cited ADR with no citable decision', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-uncitable-adr-'));
-    await initializeAmendmentGitFixture(projectDir);
-    const featureDesc = 'coverage-binding-uncitable-adr';
-    const adrId = 'adr-uncitable';
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
-    }));
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), '# ADR\n\nNo Decision section is available.\n');
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
-    const runner = new DefaultStepRunner(provider, 'coverage-run-uncitable-adr', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).toHaveBeenCalledOnce();
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        adrLayer: { disposition: 'not-applicable', adrIds: [adrId] },
-      });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses a malformed coverage row with its ADR path and decision', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-malformed-obligation-'));
-    const featureDesc = 'coverage-binding-malformed-obligation';
-    const adrId = 'adr-malformed-obligation';
-    const adrPath = `.docs/decisions/${adrId}.md`;
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
-    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none |\n`);
-    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-malformed-obligation', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-      expect(result.output).toContain(adrPath);
-      expect(result.output).toContain('D1');
-      expect(result.output).toContain('expected 4');
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses ungrounded obligation evidence with its ADR path and decision', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-ungrounded-obligation-'));
-    const featureDesc = 'coverage-binding-ungrounded-obligation';
-    const adrId = 'adr-ungrounded-obligation';
-    const adrPath = `.docs/decisions/${adrId}.md`;
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | task | task-1 | The missing evidence. |\n`);
-    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-ungrounded-obligation', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-      expect(result.output).toContain(adrPath);
-      expect(result.output).toContain('D1');
-      expect(result.output).toContain('evidence is absent');
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses an invented decision with the cited ADR path', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invented-obligation-'));
-    const featureDesc = 'coverage-binding-invented-obligation';
-    const adrId = 'adr-invented-obligation';
-    const adrPath = `.docs/decisions/${adrId}.md`;
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
-    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1'])}\n| ${adrId}#D99 | existing | none | Invented decision. |\n`);
-    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-invented-obligation', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-      expect(result.output).toContain(adrPath);
-      expect(result.output).toContain('D99');
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns an infrastructure failure for an unreadable DECIDE-set ADR without an envelope', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-unreadable-adr-'));
-    const featureDesc = 'coverage-binding-unreadable-adr';
-    const adrId = 'adr-unreadable';
-    const adrPath = `.docs/decisions/${adrId}.md`;
-    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
-    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
-    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
-    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-unreadable-adr', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({ success: false });
-      expect(result).not.toHaveProperty('refusal');
-      expect(result.output).toContain(adrPath);
-      await expect(access(join(projectDir, '.pipeline', 'coverage-binding.json'))).rejects.toThrow();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('judges each applicable coverage claim in a fresh one-shot session and caches its digest', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-enabled-'));
-    const planPath = join(projectDir, 'plan.md');
-    const coherenceDir = join(projectDir, '.docs', 'coherence');
-    const featureDesc = 'coverage-binding-feature';
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
-    }));
-    await mkdir(coherenceDir, { recursive: true });
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n`);
-    await writeFile(join(coherenceDir, `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-2', projectDir, {
-      featureDesc,
-      planPath,
-      config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).toHaveBeenCalledTimes(1);
-      const first = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-      expect(first).toMatchObject({ resume: false });
-      expect(first.prompt).toContain('The service emits the required record');
-      expect(first.prompt).not.toContain('Steps');
-      const firstEnvelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(firstEnvelope).toMatchObject({ status: 'done', entries: [{ verdict: 'asserts', taskIds: ['1'] }] });
-
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).toHaveBeenCalledTimes(1);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('rewrites a digest cache hit with the current claim identity and emits that identity', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-rebound-'));
-    const planPath = join(projectDir, 'plan.md');
-    const coherenceDir = join(projectDir, '.docs', 'coherence');
-    const featureDesc = 'coverage-binding-rebound';
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
-    }));
-    const events = new ConductorEventEmitter();
-    const judged: unknown[] = [];
-    events.on('coverage_binding_judged', (event) => { judged.push(event); });
-    await mkdir(coherenceDir, { recursive: true });
-    const writeInputs = async (taskId: string) => {
-      await writeFile(planPath, `### Task ${taskId}: Bind the claim\n**Done when:**\n- The service emits the required record.\n`);
-      await writeFile(join(coherenceDir, `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-${taskId} | covered | "emits the required record" | diff-local |\n`);
-    };
-    await writeInputs('A');
-    const runner = new DefaultStepRunner(provider, 'coverage-run-rebound', projectDir, {
-      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      await writeInputs('B');
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-
-      expect(provider.invoke).toHaveBeenCalledTimes(1);
-      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(envelope.entries).toMatchObject([{ taskIds: ['B'] }]);
-      expect(judged).toMatchObject([
-        { type: 'coverage_binding_judged', taskIds: ['A'] },
-        { type: 'coverage_binding_judged', taskIds: ['B'] },
-      ]);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('reports an invalid coverage-binding payload through its typed classifier input', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invalid-payload-'));
-    const planPath = join(projectDir, 'plan.md');
-    const featureDesc = 'coverage-binding-invalid-payload';
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true, output: '{"verdict":"partial"}', exitCode: 0,
-    });
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n`);
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-invalid-payload', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
-        success: false,
-        infrastructureFailure: {
-          name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload',
-        },
-      });
-      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(envelope).toMatchObject({ status: 'failed', entries: [] });
-      await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects an amendment-shaped batch atomically before recording a verdict or reopening work', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invalid-amendment-payload-'));
-    const planPath = join(projectDir, 'plan.md');
-    const featureDesc = 'coverage-binding-invalid-amendment-payload';
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-      return {
-        success: true,
-        output: JSON.stringify({ verdicts: [{ id: claims[0]!.id, verdict: 'carried', taskIds: ['foreign-task'] }] }),
-        exitCode: 0,
-      };
-    });
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits an audit record.\n`);
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits an audit record | task-1 | covered | "emits an audit record" | diff-local |\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-invalid-amendment-payload', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
-        success: false,
-        infrastructureFailure: { name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload' },
-      });
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        status: 'failed', entries: [],
-      });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns a needs-human refusal with the bound checks for a does-not-assert verdict', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-refusal-'));
-    const planPath = join(projectDir, 'plan.md');
-    const featureDesc = 'coverage-binding-refusal';
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
-      success: true, output: coverageBindingBatchOutput(options, 'does-not-assert'), exitCode: 0,
-    }));
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n`);
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n`);
-    const runner = new DefaultStepRunner(provider, 'coverage-run-3', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
-        success: false,
-        refusal: { kind: 'needs-human', reason: expect.stringContaining('The service writes an audit record.') },
-      });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    { verdict: 'carried', payload: { verdict: 'carried', taskIds: ['1'] } },
-    { verdict: 'no-plan-obligation', payload: { verdict: 'no-plan-obligation' } },
-  ] as const)('completes amendment claims judged $verdict and emits their dedicated event', async ({ verdict, payload }) => {
-    const projectDir = await mkdtemp(join(tmpdir(), `coverage-binding-amendment-${verdict}-`));
-    const featureDesc = `coverage-binding-amendment-${verdict}`;
-    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, ...payload })) }), exitCode: 0 };
-    });
-    const events = new ConductorEventEmitter();
-    const observed: unknown[] = [];
-    events.on('coverage_binding_amendment_judged', (event) => { observed.push(event); });
-    const runner = new DefaultStepRunner(provider, `coverage-run-amendment-${verdict}`, projectDir, {
-      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(observed).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict }]);
-      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(envelope.status).toBe('done');
-      expect(envelope.entries.find((entry: { kind?: string }) => entry.kind === 'amendment')).toMatchObject({ kind: 'amendment', verdict });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('issues amendment claims to the judge by short id and records the real digest', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-ids-'));
-    const featureDesc = 'coverage-binding-amendment-ids';
-    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
-    const provider = createMockProvider();
-    let prompt = '';
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      prompt = options.prompt;
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'no-plan-obligation' })) }), exitCode: 0 };
-    });
-    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-ids', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      const { claims } = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{') + 2)) as { claims: Array<Record<string, unknown>> };
-      expect(claims.map(({ id }) => id)).toEqual(['a1']);
-      expect(prompt).not.toContain('sha256:');
-      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(envelope.status).toBe('done');
-      expect(envelope.entries.find((entry: { kind?: string }) => entry.kind === 'amendment')).toMatchObject({ kind: 'amendment', digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), verdict: 'no-plan-obligation' });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses a not-carried amendment with its artifact, text, and missing obligation', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-refusal-'));
-    const featureDesc = 'coverage-binding-amendment-refusal';
-    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'not-carried', missingObligation: 'Add a preservation task.' })) }), exitCode: 0 };
-    });
-    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-refusal', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-      expect(result.output).toContain('.docs/decisions/architecture-review-review-coverage-binding-amendment-refusal.md');
-      expect(result.output).toContain('The service preserves the amended behavior.');
-      expect(result.output).toContain('Add a preservation task.');
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses a cached not-carried amendment with its preserved missing obligation without provider dispatch', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cached-refusal-'));
-    const featureDesc = 'coverage-binding-amendment-cached-refusal';
-    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'not-carried', missingObligation: 'X' })) }), exitCode: 0 };
-    });
-    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-cached-refusal', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: false });
-      (provider.invoke as ReturnType<typeof vi.fn>).mockClear();
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(provider.invoke).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-      expect(result.output).toContain('Missing obligation: X');
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('reuses carried amendment claims and records disabled ones as unjudged without dispatch', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cache-'));
-    const featureDesc = 'coverage-binding-amendment-cache';
-    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'carried', taskIds: ['1'] })) }), exitCode: 0 };
-    });
-    const enabled = new DefaultStepRunner(provider, 'coverage-run-amendment-cache', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(enabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      await expect(enabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).toHaveBeenCalledOnce();
-
-      const disabledProvider = createMockProvider();
-      const disabled = new DefaultStepRunner(disabledProvider, 'coverage-run-amendment-disabled', projectDir, {
-        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-      });
-      await expect(disabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(disabledProvider.invoke).not.toHaveBeenCalled();
-      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(envelope.status).toBe('disabled');
-      expect(envelope.entries.find((entry: { kind?: string }) => entry.kind === 'amendment')).toMatchObject({ kind: 'amendment', verdict: 'unjudged' });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('reopens a completed task contradicted by an accepted amendment after a void', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-reopen-'));
-    const featureDesc = 'coverage-binding-amendment-reopen';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
-    const provider = createMockProvider();
-    let issuedCompletedTaskIds: string[] | undefined;
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ id: string; amendment?: string }>; completedTaskIds?: string[] };
-      if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
-      return {
-        success: true,
-        output: JSON.stringify({ verdicts: claims.map(({ id, amendment }) => amendment === undefined
-          ? { id, verdict: 'asserts' }
-          : { id, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
-        exitCode: 0,
-      };
-    });
-    await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    const baseline = new DefaultStepRunner(createMockProvider(), 'coverage-run-amendment-reopen-baseline', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-    await expect(baseline.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-    const prior = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-    await writeInvalidatedEnvelope(projectDir, featureDesc, prior.entries);
-    const events = new ConductorEventEmitter();
-    const reopened: unknown[] = [];
-    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
-    const before = await readFile(planPath, 'utf8');
-    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-reopen', projectDir, {
-      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(issuedCompletedTaskIds).toEqual(['1', '2', '3']);
-      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'pending', '1': 'completed', '2': 'completed' });
-      expect(reopened).toMatchObject([{ type: 'coverage_binding_task_reopened', taskId: '3', digest: expect.stringMatching(/^sha256:/) }]);
-      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
-      expect(await readFile(planPath, 'utf8')).toBe(before);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('reopens only completed tasks cited by a criterion digest changed after a void', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-criterion-reopen-'));
-    const featureDesc = 'coverage-binding-criterion-reopen';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
-    await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    const baseline = new DefaultStepRunner(createMockProvider(), 'coverage-run-criterion-baseline', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-    try {
-      await expect(baseline.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      const prior = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      await writeInvalidatedEnvelope(projectDir, featureDesc, prior.entries);
-      await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), criterionCoherence('The changed service writes the audit record.'));
-      const provider = createMockProvider();
-      const runner = new DefaultStepRunner(provider, 'coverage-run-criterion-reopen', projectDir, {
-        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-      });
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).not.toHaveBeenCalled();
-      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'pending', '1': 'completed', '3': 'completed' });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses a contradicted-task reopen when coverage_binding has exhausted its default lap cap', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-reopen-cap-'));
-    const featureDesc = 'coverage-binding-reopen-cap';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
-    await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    await writeInvalidatedEnvelope(projectDir, featureDesc, [{ digest: 'sha256:old', criterion: 'old', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }]);
-    const cap = remediationLapCapForGate('coverage_binding', {} as HarnessConfig);
-    for (let lap = 0; lap < cap; lap++) {
-      await settleRemediationRound(projectDir, `seed-${lap}`, ['coverage_binding']);
-    }
-    const events = new ConductorEventEmitter();
-    const reopened: unknown[] = [];
-    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'coverage-run-reopen-cap', projectDir, {
-      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-    try {
-      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-      expect(result.output).toContain('gates.coverage_binding');
-      expect(result.output).toContain(String(cap));
-      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
-      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: cap } } });
-      expect(reopened).toEqual([]);
-      expect(provider.invoke).not.toHaveBeenCalled();
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('does not route reopening through plan work or mutate the plan', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-no-replan-'));
-    const featureDesc = 'coverage-binding-no-replan';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
-    await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    await writeInvalidatedEnvelope(projectDir, featureDesc, [{ digest: 'sha256:old', criterion: 'old', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }]);
-    const before = await readFile(planPath, 'utf8');
-    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-no-replan', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(await readFile(planPath, 'utf8')).toBe(before);
-      await expect(readFile(join(projectDir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.not.toContain('"plan"');
-      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('does not reopen tasks after a rebase refresh or from a digest-less invalidated baseline', async () => {
-    for (const [name, status, entries] of [
-      ['rebase-refresh', 'done', []],
-      ['digest-less', 'invalidated', []],
-    ] as const) {
-      const projectDir = await mkdtemp(join(tmpdir(), `coverage-binding-${name}-`));
-      const featureDesc = `coverage-binding-${name}`;
-      const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
-      await writeTaskStatuses(projectDir, ['1', '2', '3']);
-      await writeInvalidatedEnvelope(projectDir, featureDesc, entries, status);
-      const runner = new DefaultStepRunner(createMockProvider(), `coverage-run-${name}`, projectDir, {
-        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-      });
-      try {
-        await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-        await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
-      } finally {
-        await rm(projectDir, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it.each([
-    ['judge-disabled predecessor', { status: 'disabled', recordedDigests: true }],
-    ['digest-less predecessor', { status: 'done', recordedDigests: false }],
-  ] as const)('does not reopen criterion work after a void with a %s', async (_caseName, predecessor) => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-void-provenance-'));
-    const featureDesc = 'coverage-binding-void-provenance';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
-    await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    await writeFile(join(projectDir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1,
-      slug: featureDesc,
-      runId: 'voided-run',
-      status: 'invalidated',
-      predecessor,
-      entries: [{ digest: 'sha256:old', criterion: 'old criterion', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }],
-    }));
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'coverage-run-void-provenance', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).not.toHaveBeenCalled();
-      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        status: 'disabled',
-        entries: [
-          { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
-          { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
-          { kind: 'conflict', verdict: 'unjudged' },
-        ],
-      });
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects an amendment contradiction from a digest-less invalidated baseline without reopening work', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-digest-less-amendment-'));
-    const featureDesc = 'coverage-binding-digest-less-amendment';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
-    let issuedCompletedTaskIds: string[] | undefined;
-    const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
-      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ id: string; amendment?: string }>; completedTaskIds?: string[] };
-      if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
-      return {
-        success: true,
-        output: JSON.stringify({ verdicts: claims.map(({ id, amendment }) => amendment === undefined
-          ? { id, verdict: 'asserts' }
-          : { id, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
-        exitCode: 0,
-      };
-    });
-    await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    await writeInvalidatedEnvelope(projectDir, featureDesc, []);
-    const events = new ConductorEventEmitter();
-    const reopened: unknown[] = [];
-    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
-    const runner = new DefaultStepRunner(provider, 'coverage-run-digest-less-amendment', projectDir, {
-      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
-        success: false,
-        infrastructureFailure: { name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload' },
-      });
-      expect(issuedCompletedTaskIds).toEqual([]);
-      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'completed' });
-      expect(reopened).toEqual([]);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it('records every current criterion and amendment digest when the judge is disabled', async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-digests-'));
-    const featureDesc = 'coverage-binding-disabled-digests';
-    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
-    const provider = createMockProvider();
-    const events = new ConductorEventEmitter();
-    const amendmentEvents: unknown[] = [];
-    const criterionEvents: unknown[] = [];
-    events.on('coverage_binding_amendment_judged', (event) => { amendmentEvents.push(event); });
-    events.on('coverage_binding_judged', (event) => { criterionEvents.push(event); });
-    const runner = new DefaultStepRunner(provider, 'coverage-run-disabled-digests', projectDir, {
-      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: false } } },
-    });
-    try {
-      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(provider.invoke).not.toHaveBeenCalled();
-      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
-      expect(envelope).toMatchObject({ status: 'disabled', entries: [
-        { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
-        { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
-        { kind: 'conflict', verdict: 'unjudged' },
-      ] });
-      expect(amendmentEvents).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict: 'unjudged' }]);
-      expect(criterionEvents).toEqual([]);
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -2053,6 +1320,50 @@ describe('DefaultStepRunner', () => {
 
     expect(prepared).toHaveBeenCalledOnce();
     expect(safety).toHaveBeenCalledOnce();
+  });
+
+  it('forwards the live candidate-start callback through provider-aware dispatch', async () => {
+    const onCandidateStart = vi.fn();
+    const executor = vi.fn(async (input: any) => {
+      input.onCandidateStart('build', {
+        provider: { kind: 'known', id: 'codex' },
+        executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+      });
+      return { success: true, output: 'done', exitCode: 0, preferredProvider: 'codex', actualProvider: 'codex', attempts: [] };
+    });
+    const context: any = {
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn())]),
+      sessions: new ProviderSessionStore(), executor, onCandidateStart,
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+
+    await runner.run('build', emptyState, {
+      executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    });
+
+    expect(onCandidateStart).toHaveBeenCalledWith('build', expect.objectContaining({
+      executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    }));
+  });
+
+  it('does not await a candidate-start listener before entering the provider runtime', async () => {
+    const events = new ConductorEventEmitter();
+    events.on('provider_attempt_started', async () => {
+      await new Promise<void>(() => {});
+    });
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessions: new ProviderSessionStore(),
+        ...providerExecutionEventCallbacks(events),
+      },
+    });
+
+    await expect(runner.run('build', emptyState)).resolves.toMatchObject({ success: true });
+    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it('retains terminal setup exhaustion when the real build runner maps an executor result', async () => {
@@ -2840,6 +2151,7 @@ describe('DefaultStepRunner', () => {
         model: 'gpt-5.6-terra',
         effort: 'medium',
         preferredProvider: 'codex',
+        provider: 'codex',
         actualProvider: 'codex',
         attempts: [
           {
@@ -2864,6 +2176,7 @@ describe('DefaultStepRunner', () => {
         model: 'opus',
         effort: 'high',
         preferredProvider: 'claude',
+        provider: 'claude',
         actualProvider: 'claude',
         attempts: [
           {
@@ -3346,6 +2659,7 @@ describe('DefaultStepRunner', () => {
       { step: 'conflict_check', prompt: '$conflict-check' },
       { step: 'plan', prompt: '$plan' },
       { step: 'coherence_check', prompt: '$coherence-check' },
+      { step: 'plan_review', prompt: '$plan-review' },
       { step: 'architecture_diagram', prompt: '$architecture-diagram' },
       { step: 'architecture_review', prompt: '$architecture-review' },
       { step: 'worktree', prompt: '$conduct worktree' },
@@ -4987,7 +4301,7 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
         config: { llm_provider: providerKey, build_review: {
-          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey } },
+          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey }, implementationQuality: { enabled: false } },
         } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
         sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
@@ -5223,7 +4537,739 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
+    // Covers: task:8, task:9
+    it('passes resolved and live act sources into the runner frontier', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = config.catalog.find((candidate) => candidate.id === 'implementationQuality')!;
+      const hunk = deriveChangedFileReferences([
+        'diff --git a/src/example.ts b/src/example.ts',
+        '@@ -1 +1 @@',
+        '-export const value = false;',
+        '+export const value = true;',
+      ].join('\n'))[0]!.hunks[0]!;
+      const finding = {
+        concernKind: 'duplication' as const,
+        severity: 'major' as const,
+        summary: 'The revised branch duplicates the existing implementation.',
+        evidenceLocations: ['src/example.ts:1'],
+        anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/example.ts', contentHash: hunk.contentHash, display: 'value' } },
+      };
+      const findingId = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding.concernKind, anchor: finding.anchor,
+      })!.id;
+      const sourceId = `implementationQuality:${findingId}`;
+      const engineIdentity = {
+        engineStamp: 'engine-a',
+        skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
+      };
+      const descriptor = getBuildReviewRubricDescriptor('implementationQuality').contract;
+      const policyIdentity = buildReviewPolicyIdentity('implementationQuality', {
+        contractVersion: descriptor.output.version,
+        projectionVersion: descriptor.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        effectiveBundleDigest: 'sha256:bundle-a',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'implementationQuality.json'), JSON.stringify({
+        version: 2,
+        rubric: 'implementationQuality',
+        lapId: 'lap-prior',
+        snapshotDigest: 'sha256:prior',
+        provenance: { kind: 'fresh' },
+        result: {
+          kind: 'judged', rubric: 'implementationQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior',
+          contractVersion: 'v4', findings: [finding], verdict: 'FAIL',
+        },
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior',
+          policyIdentity, reviewedHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config: {} as HarnessConfig });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set([sourceId]));
+      let observedScope: unknown;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.implementationQuality;
+        throw new Error('expected frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', mergeBase: 'base', headSha: 'current', diff: [
+            'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
+            '-export const value = false;', '+export const value = true;',
+          ].join('\n'),
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
+
+      vi.spyOn(runner as any, 'liveBuildReviewActSourceIds').mockResolvedValue({
+        unappliedLiveSourceIds: new Set([sourceId]), appliedLiveSourceIds: new Set(),
+      });
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.implementationQuality;
+        throw new Error('expected live frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', mergeBase: 'base', headSha: 'current', diff: [
+            'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
+            '-export const value = false;', '+export const value = true;',
+          ].join('\n'),
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected live frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }] });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.implementationQuality;
+        throw new Error('expected unmapped frontier observation');
+      });
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:unmapped', mergeBase: 'base', headSha: 'unmapped', diff: [
+            'diff --git a/src/other.ts b/src/other.ts', '@@ -1 +1 @@',
+            '-export const other = false;', '+export const other = true;',
+          ].join('\n'),
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected unmapped frontier observation');
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'open-source-unmapped' });
+    });
+
+    // Covers: task:8, task:11
+    it('settles a custom prior finding into an empty delta after its candidate resolves the policy identity', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+          },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = customCatalogEntry(config);
+      const diff = [
+        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
+        '-export const portable = false;', '+export const portable = true;',
+      ].join('\n');
+      const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
+      const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
+      const declaration = {
+        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+        question: entry.question, source: 'project' as const, resources: entry.resources,
+      };
+      const stamp = {
+        rubric: entry.id, lapId: 'lap-prior', declaration,
+        policy: { version: 'v1' as const, bundleDigest: `sha256:${'a'.repeat(64)}` },
+        candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
+        reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'b'.repeat(64)}` },
+      };
+      const references = {
+        sourceRegions: [{ path: 'src/custom.ts', startLine: 1, endLine: 1, contentHash: hunk.contentHash, display: 'custom hunk' }],
+      };
+      const judged = stampBuildReviewCustomJudgedResult({
+        kind: 'custom-findings', version: 'v2', findings: [{
+          concernId: 'portable-policy-gap', summary: 'The changed boundary lacks portability evidence.', severity: 'major',
+          evidenceLocations: ['src/custom.ts:1'], sourceRegions: references.sourceRegions,
+        }],
+      }, stamp, references)!;
+      const policyIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: stamp.policy.bundleDigest,
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
+        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
+        descriptor: {
+          version: 'v1', semanticSkill: entry.skill, declaration,
+          installation: { source: 'project' }, effectivePolicy: stamp.policy,
+          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
+        },
+        result: judged,
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity,
+          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const baselinePath = join(dir, 'baseline');
+      const headPath = join(dir, 'head');
+      await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
+      const capture: NonNullable<StepRunnerOptions['buildReviewPolicyCapture']> = vi.fn(async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: stamp.policy.bundleDigest,
+      }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        config: {} as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([{
+          key: 'claude',
+          provider: {
+            lifecycleCapability: { synchronousSpawnPermit: true },
+            nativeSchemaCapability: { nativeOutputSchema: true },
+            invoke: provider.invoke,
+          },
+          lifecycleCapability: { synchronousSpawnPermit: true },
+          nativeSchemaCapability: { nativeOutputSchema: true },
+          policy: CLAUDE_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+        }]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['claude'],
+        probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
+        buildReviewPolicyCatalog: async () => [{
+          semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
+          canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: capture,
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'custom-settlement' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
+      });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(
+        new Set([`${entry.id}:${judged.findings[0]!.identity.id}`]),
+      );
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation((async (...args: unknown[]) => {
+        const resolveScope = args[11] as ((policyIdentity: string) => Promise<unknown>) | undefined;
+        await resolveScope?.(policyIdentity);
+        return { id: entry.id, success: true, member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } } };
+      }) as any);
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
+        },
+        sourceMaterialization: {
+          source: {
+            identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current' },
+            baselinePath, headPath,
+          },
+          contextFor: (memberId: string) => ({ memberId, source: {
+            identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current' },
+            baselinePath, headPath,
+          } }),
+          settle: async () => {}, finish: async () => {},
+        },
+      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+
+      expect(capture).not.toHaveBeenCalled();
+      expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
+    // Covers: task:rem-prd-audit-6-r1
+    it('uses the candidate-resolved custom policy identity for a version-changed lap', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+          },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = customCatalogEntry(config);
+      const diff = [
+        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
+        '-export const portable = false;', '+export const portable = true;',
+      ].join('\n');
+      const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
+      const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
+      const declaration = {
+        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+        question: entry.question, source: 'project' as const, resources: entry.resources,
+      };
+      const priorBundleDigest = `sha256:${'a'.repeat(64)}`;
+      const currentBundleDigest = `sha256:${'b'.repeat(64)}`;
+      const stamp = {
+        rubric: entry.id, lapId: 'lap-prior', declaration,
+        policy: { version: 'v1' as const, bundleDigest: priorBundleDigest },
+        candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
+        reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'c'.repeat(64)}` },
+      };
+      const judged = stampBuildReviewCustomJudgedResult(
+        { kind: 'custom-findings', version: 'v2', findings: [] }, stamp, { sourceRegions: [] },
+      )!;
+      const priorPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: priorBundleDigest,
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
+        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
+        descriptor: {
+          version: 'v1', semanticSkill: entry.skill, declaration,
+          installation: { source: 'project' }, effectivePolicy: stamp.policy,
+          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
+        },
+        result: judged,
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity: priorPolicyIdentity,
+          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const capture: NonNullable<StepRunnerOptions['buildReviewPolicyCapture']> = vi.fn(async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# changed policy bundle') }],
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: currentBundleDigest,
+      }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        config: {} as HarnessConfig,
+        buildReviewPolicyCatalog: async () => [{
+          semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
+          canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: capture,
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-version-change' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
+      });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      let observedScope: unknown;
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
+        const reviewScope = args[8];
+        const resolveReviewScope = args[11] as (policyIdentity: string) => Promise<unknown>;
+        expect(reviewScope).toBeUndefined();
+        const currentPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+          contractVersion: entry.contract.output.version,
+          projectionVersion: entry.contract.projection.version,
+          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          effectiveBundleDigest: currentBundleDigest,
+          provider: 'claude', model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        });
+        observedScope = await resolveReviewScope(currentPolicyIdentity);
+        return {
+          id: entry.id, success: true,
+          member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
+        };
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
+        },
+      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+
+      expect(capture).not.toHaveBeenCalled();
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+    });
+
+    // Covers: task:rem-as-built-6-r6
+    it('does not prefetch a custom policy identity before candidate dispatch', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+          },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = customCatalogEntry(config);
+      const diff = [
+        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
+        '-export const portable = false;', '+export const portable = true;',
+      ].join('\n');
+      const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
+      const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
+      const declaration = {
+        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+        question: entry.question, source: 'project' as const, resources: entry.resources,
+      };
+      const priorBundleDigest = `sha256:${'a'.repeat(64)}`;
+      const stamp = {
+        rubric: entry.id, lapId: 'lap-prior', declaration,
+        policy: { version: 'v1' as const, bundleDigest: priorBundleDigest },
+        candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
+        reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'b'.repeat(64)}` },
+      };
+      const judged = stampBuildReviewCustomJudgedResult(
+        { kind: 'custom-findings', version: 'v2', findings: [] }, stamp, { sourceRegions: [] },
+      )!;
+      const unavailablePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: 'unavailable',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
+        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
+        descriptor: {
+          version: 'v1', semanticSkill: entry.skill, declaration,
+          installation: { source: 'project' }, effectivePolicy: stamp.policy,
+          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
+        },
+        result: judged,
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity: unavailablePolicyIdentity,
+          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      }));
+      const catalog = vi.fn().mockRejectedValueOnce(new Error('preliminary catalog unavailable'));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        config: {} as HarnessConfig,
+        buildReviewPolicyCatalog: catalog,
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-identity-unavailable' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
+      });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      let observedScope: unknown;
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
+        const reviewScope = args[8];
+        const resolveReviewScope = args[11] as (policyIdentity: string) => Promise<unknown>;
+        expect(reviewScope).toBeUndefined();
+        const candidatePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
+          contractVersion: entry.contract.output.version,
+          projectionVersion: entry.contract.projection.version,
+          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          effectiveBundleDigest: `sha256:${'b'.repeat(64)}`,
+          provider: 'claude', model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        });
+        observedScope = await resolveReviewScope(candidatePolicyIdentity);
+        return {
+          id: entry.id, success: true,
+          member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
+        };
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
+        },
+      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+
+      expect(catalog).not.toHaveBeenCalled();
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+    });
+
+    it('persists the fallback candidate policy identity and reuses it for the next delta lap', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            portable: {
+              enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project',
+              llm_provider: ['pi', 'claude'], max_retries: 1,
+            },
+          },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = customCatalogEntry(config);
+      const diff = [
+        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
+        '-export const portable = false;', '+export const portable = true;',
+      ].join('\n');
+      const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
+      const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
+      const bundleA = `sha256:${'a'.repeat(64)}`;
+      const bundleB = `sha256:${'b'.repeat(64)}`;
+      const preliminaryIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version, projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: bundleA, provider: 'pi,claude', model: entry.policy.model,
+        effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      const baselinePath = join(dir, 'baseline');
+      const headPath = join(dir, 'head');
+      await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
+      const claudeInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true, output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }), exitCode: 0,
+        finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
+      }));
+      const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
+        key, provider: { lifecycleCapability: { synchronousSpawnPermit: true as const }, nativeSchemaCapability: { nativeOutputSchema: true as const }, invoke },
+        lifecycleCapability: { synchronousSpawnPermit: true as const }, nativeSchemaCapability: { nativeOutputSchema: true as const },
+        policy: CLAUDE_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        config: {} as HarnessConfig, providerRuntimes: new ProviderRuntimeSet([runtime('pi', vi.fn()), runtime('claude', claudeInvoke)]),
+        sessionStore: new ProviderSessionStore(), configuredProviders: ['pi', 'claude'],
+        buildReviewPolicyCatalog: async ({ provider: catalogProvider }) => [{
+          semanticName: entry.skill, source: 'project', installationOrigin: `/fixture/${catalogProvider}`,
+          canonicalSkillPath: `/fixture/${catalogProvider}/SKILL.md`, packageRoot: `/fixture/${catalogProvider}`,
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}`,
+          definitionPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}/SKILL.md`,
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy') }],
+          metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: policy.packageRoot.endsWith('/pi') ? bundleA : bundleB,
+        }),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const, feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-fallback-identity' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
+      });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+
+      const inputs = {
+        sourceSnapshot: { digest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff },
+        sourceMaterialization: {
+          source: { identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current' }, baselinePath, headPath },
+          contextFor: (memberId: string) => ({ memberId, source: { identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current' }, baselinePath, headPath } }),
+          settle: async () => {}, finish: async () => {},
+        },
+      } as any;
+      await (runner as any).dispatchInstalledBuildReviewPolicy(
+        entry, inputs, 'lap-current', 'M', undefined,
+        async (providerKey: string) => providerKey === 'pi'
+          ? { provider: 'pi', platform: process.platform, status: 'unavailable', reason: 'fixture fallback' }
+          : { provider: 'claude', platform: process.platform, status: 'available' },
+        join(dir, '.pipeline'), undefined,
+        {
+          mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'current',
+          policyIdentity: preliminaryIdentity, predecessorLapId: 'lap-prior',
+          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      );
+
+      const current = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'lap-current', 'portable.json'), 'utf8'));
+      const actualIdentity = buildReviewPolicyIdentity(entry.id, {
+        contractVersion: entry.contract.output.version, projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        effectiveBundleDigest: bundleB, provider: 'claude', model: current.descriptor.producer.model,
+        effort: current.descriptor.producer.effort, engineStamp: engineIdentity.engineStamp,
+      });
+      let nextScope: unknown;
+      vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
+        const scope = args[8];
+        const resolveReviewScope = args[11] as (policyIdentity: string) => Promise<unknown>;
+        expect(scope).toBeUndefined();
+        nextScope = await resolveReviewScope(actualIdentity);
+        return { id: entry.id, success: true, member: { result: { kind: 'scope-empty' as const, rubric: entry.id } } };
+      });
+      await (runner as any).runRubricBuildReviewInner({
+        ...inputs,
+        sourceSnapshot: { ...inputs.sourceSnapshot, digest: 'sha256:next', headSha: 'next' },
+      }, config, 'M', 'plan.md');
+      vi.mocked((runner as any).dispatchInstalledBuildReviewPolicy).mockRestore();
+      await (runner as any).dispatchInstalledBuildReviewPolicy(
+        entry,
+        {
+          sourceSnapshot: { digest: 'sha256:open-source', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'open-source', diff },
+          sourceMaterialization: {
+            source: { identity: { snapshotDigest: 'sha256:open-source', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'open-source' }, baselinePath, headPath },
+            contextFor: (memberId: string) => ({ memberId, source: { identity: { snapshotDigest: 'sha256:open-source', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'open-source' }, baselinePath, headPath } }),
+            settle: async () => {}, finish: async () => {},
+          },
+        },
+        'lap-open-source', 'M', undefined,
+        async (providerKey: string) => providerKey === 'pi'
+          ? { provider: 'pi', platform: process.platform, status: 'unavailable', reason: 'fixture fallback' }
+          : { provider: 'claude', platform: process.platform, status: 'available' },
+        join(dir, '.pipeline'), undefined,
+        {
+          mode: 'full', reason: 'open-source-unmapped', sequence: 3, unreadableLapIds: [], mergeBase: 'base', headSha: 'open-source',
+          policyIdentity: preliminaryIdentity, predecessorLapId: 'lap-current',
+          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+        },
+      );
+      const openSource = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'lap-open-source', 'portable.json'), 'utf8'));
+      expect(claudeInvoke).toHaveBeenCalledOnce();
+      expect(current.descriptor).toMatchObject({ effectivePolicy: { bundleDigest: bundleB }, producer: { provider: 'claude' } });
+      expect(current.reviewScope).toMatchObject({
+        mode: 'full', reason: 'version-changed', policyIdentity: actualIdentity,
+      });
+      // The fallback lap persisted Claude's actual identity. Re-resolving that
+      // same candidate is compatible evidence, so only a delta is needed.
+      expect(nextScope).toMatchObject({ mode: 'delta', reason: 'delta', policyIdentity: actualIdentity });
+      expect(openSource.reviewScope).toMatchObject({
+        mode: 'full', reason: 'version-changed', policyIdentity: actualIdentity,
+      });
+    });
+
+    // Covers: task:2, task:6, task:9, task:rem-as-built-rem-2, task:rem-as-built-rem-5
+    it('uses compatible current test-scope resolutions for the frontier and policy identity', async () => {
+      const provider = createMockProvider();
+      const config = resolveBuildReviewConfig({
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        },
+      } as HarnessConfig, CLAUDE_POLICY);
+      const entry = config.catalog.find((candidate) => candidate.id === 'testQuality')!;
+      const diff = [
+        'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
+        '-export const value = false;', '+export const value = true;',
+        '@@ -10 +10 @@', '-export const other = false;', '+export const other = true;',
+      ].join('\n');
+      const [resolvedHunk, indeterminateHunk] = deriveChangedFileReferences(diff)[0]!.hunks;
+      const candidates = [
+        { id: 'candidate-resolved', source: { fileName: 'src/example.ts', side: 'head' as const }, region: { start: 0, end: 1 } },
+        { id: 'candidate-current', source: { fileName: 'src/example.ts', side: 'head' as const }, region: { start: 2, end: 3 } },
+      ];
+      const testScope = { candidates: candidates.map((candidate) => ({
+        source: candidate.source, declaration: { span: candidate.region }, markers: [], associationChanges: [], reasons: ['uncertain-association'],
+      })) };
+      const engineIdentity = {
+        engineStamp: 'engine-a', skillDigests: { testQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
+      };
+      const descriptor = getBuildReviewRubricDescriptor('testQuality').contract;
+      const policyIdentity = buildReviewPolicyIdentity('testQuality', {
+        contractVersion: descriptor.output.version, projectionVersion: descriptor.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        effectiveBundleDigest: 'sha256:bundle-a',
+        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        testScope: {
+          analysisVersion: 'test-scope-v2',
+          bindingIdentity: `sha256:${createHash('sha256').update(JSON.stringify(candidates.map((candidate) => candidate.id).sort())).digest('hex')}`,
+        },
+      });
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'testQuality.json'), JSON.stringify({
+        version: 2, rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
+        result: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', contractVersion: 'v4', findings: [], verdict: 'PASS',
+          scopeResolutions: [{
+            candidateId: 'candidate-resolved', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable',
+            sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: resolvedHunk!.contentHash, display: 'covered test' },
+            obligationReferences: ['task:1'],
+          }],
+        },
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity,
+          reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
+        },
+      }));
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-resolved'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-resolved', 'testQuality.json'), JSON.stringify({
+        version: 2, rubric: 'testQuality', lapId: 'lap-resolved', snapshotDigest: 'sha256:resolved', provenance: { kind: 'fresh' },
+        result: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-resolved', snapshotDigest: 'sha256:resolved', contractVersion: 'v4', findings: [], verdict: 'PASS',
+          scopeResolutions: [
+            { candidateId: 'candidate-resolved', status: 'resolved', sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: resolvedHunk!.contentHash, display: 'covered test' }, obligationReferences: ['task:1'], associationReason: 'The candidate is now covered.' },
+            { candidateId: 'candidate-current', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable', sourceRegion: { path: 'src/example.ts', startLine: 10, endLine: 10, contentHash: indeterminateHunk!.contentHash, display: 'current test' }, obligationReferences: ['task:2'] },
+          ],
+        },
+        reviewScope: {
+          mode: 'full', reason: 'first-lap', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'resolved', policyIdentity,
+          reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
+        },
+      }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { config: {} as HarnessConfig });
+      vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
+      let observedScope: unknown;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.testQuality;
+        throw new Error('expected unknown frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: {
+          digest: 'sha256:current', mergeBase: 'base', headSha: 'current',
+          diff, testScopeAnalysisVersion: 'test-scope-v2', testScope, testScopeEvidence: candidates,
+        },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected unknown frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: indeterminateHunk!.contentHash }] });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.testQuality;
+        throw new Error('expected stale unknown to be ignored');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: { digest: 'sha256:version-changed', mergeBase: 'base', headSha: 'version-changed', diff, testScope, testScopeEvidence: candidates, testScopeAnalysisVersion: 'test-scope-v3' },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected stale unknown to be ignored');
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.testQuality;
+        throw new Error('expected child-local frontier observation');
+      });
+
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: { digest: 'sha256:binding-changed', mergeBase: 'base', headSha: 'binding-changed', diff, testScope, testScopeEvidence: [...candidates.slice(0, 1), { ...candidates[1]!, id: 'candidate-rebound' }], testScopeAnalysisVersion: 'test-scope-v2' },
+      }, config, 'M', 'plan.md')).rejects.toThrow('expected child-local frontier observation');
+
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
+
+      observedScope = undefined;
+      vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
+        observedScope = input.reviewScopes?.testQuality;
+        throw new Error('expected sibling child frontier isolation');
+      });
+      await mkdir(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling', 'testQuality.json'), JSON.stringify({
+        version: 2, rubric: 'testQuality', lapId: 'lap-sibling', snapshotDigest: 'sha256:sibling', provenance: { kind: 'fresh' },
+        result: { kind: 'judged', rubric: 'testQuality', lapId: 'lap-sibling', snapshotDigest: 'sha256:sibling', contractVersion: 'v4', findings: [], verdict: 'PASS' },
+        reviewScope: { mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'sibling', policyIdentity, reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [] },
+      }));
+      await expect((runner as any).runRubricBuildReviewInner({
+        sourceSnapshot: { digest: 'sha256:child-current', mergeBase: 'base', headSha: 'child-current', diff, testScope, testScopeEvidence: candidates, testScopeAnalysisVersion: 'test-scope-v2' },
+      }, config, 'M', 'plan.md', undefined, undefined, parseChildId('1'))).rejects.toThrow('expected sibling child frontier isolation');
+
+      expect(observedScope).toMatchObject({ mode: 'full', reason: 'first-lap' });
+    });
+
+    // #3317: a branch that commits a root `node_modules` symlink must not make
+    // the preflight's own root dependency link fail with EEXIST.
+    it.each([
+      ['an untracked root dependency path', false],
+      ['a tracked root node_modules symlink', true],
+    ])('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run with %s', async (_case, tracksRootDependencyLink) => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
       const selector = 'src/conductor/spec/example.test.mjs';
@@ -5256,6 +5302,10 @@ TIER: M`,
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
         await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nfunction it(_title, body) { body(); }\n// Covers: task:1\nit('loads checkout dependencies', () => { if (!uuidv4() || !execa || answer !== 2) { writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies').then(() => process.exit(1)); } });\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
+        if (tracksRootDependencyLink) {
+          await symlink('src/conductor/node_modules', join(featureRoot, 'node_modules'));
+          await execa('git', ['add', 'node_modules'], { cwd: featureRoot });
+        }
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
         await writeFile(join(sourceDependencies, 'uuid/package.json'), '{"name":"uuid","type":"module","exports":"./index.mjs"}\n');
@@ -5312,7 +5362,7 @@ TIER: M`,
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true } },
+            rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
           } } as HarnessConfig,
           buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
         });
@@ -5359,9 +5409,9 @@ TIER: M`,
             rubric,
             lapId,
             snapshotDigest,
-            contractVersion: 'v3' as never,
+            contractVersion: 'v4' as never,
             findings: [{
-              concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+              concernKind: 'test-insensitive', severity: 'major', summary: 'The changed test does not observe the behavior it should.',
               evidenceLocations: ['x:1'],
               anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
             }],
@@ -5384,9 +5434,9 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v3',
+        contractVersion: 'v4',
         findings: [{
-          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+          concernKind: 'test-insensitive', severity: 'major', summary: 'The changed test does not observe the behavior it should.',
           evidenceLocations: ['x:1'],
           anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
         }],
@@ -5415,7 +5465,7 @@ TIER: M`,
         gitRunner: scopedTestGit(), planPath, events,
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           suppressedFindingId = projectBuildReviewAggregateSources(aggregate as never)![0]!.findingId;
@@ -5433,9 +5483,9 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v3',
+        contractVersion: 'v4',
         findings: [{
-          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+          concernKind: 'test-insensitive', severity: 'minor', summary: 'The changed test does not observe the behavior it should.',
           evidenceLocations: ['x:1'],
           anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
           confidence: 40,
@@ -5450,6 +5500,7 @@ TIER: M`,
       const persisted = await new RemediationCaseStore(dir, feature).read();
       if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
       expect(persisted.state.suppressions).toEqual([{
+        kind: 'confidence',
         findingId: suppressedFindingId,
         rubric: 'testQuality',
         summary: 'The changed test does not observe the behavior it should.',
@@ -5459,13 +5510,21 @@ TIER: M`,
       }]);
     });
 
-    it('publishes an empty registered-rubric set as a reasoned PASS without dispatch', async () => {
+    it('publishes an empty registered-rubric set as a reasoned PASS when security and implementation quality opt out over the test-quality default', async () => {
       const provider = createMockProvider();
       const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
         events,
+        config: {
+          build_review: {
+            rubrics: {
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
+        } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
       const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric');
@@ -5586,7 +5645,7 @@ TIER: M`,
         name: 'test-quality is enabled explicitly',
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         expectedInvokeCalls: 1,
       },
@@ -5596,7 +5655,7 @@ TIER: M`,
           test_suite: { scoped_command: 'true' },
           build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true, model: 'opus' } },
+            rubrics: { testQuality: { enabled: true, model: 'opus' }, security: { enabled: false }, implementationQuality: { enabled: false } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
@@ -5628,6 +5687,109 @@ TIER: M`,
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
     });
 
+    it('dispatches implementation quality and security as the default rubrics', async () => {
+      await scopedPlan();
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const result = {
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+        };
+        return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
+      });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        providerKey: 'codex',
+        config: { llm_provider: 'codex', build_review: { enabled: true } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['codex'],
+        buildReviewPolicyCatalog: async ({ skill }) => [{
+          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
+          effective: {
+            rawVerdict: 'PASS' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: ['testQuality'] as const,
+            infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result.success, result.output).toBe(true);
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      const prompts = invoke.mock.calls.map(([options]) => options.prompt);
+      expect(prompts.join('\n')).toContain('# build-review-implementation-quality');
+      expect(prompts.join('\n')).toContain('# build-review-security');
+      expect(prompts.join('\n')).not.toContain('Build Review Test Quality rubric');
+    });
+
+    it('dispatches only implementation quality when security is disabled and every other rubric uses its default', async () => {
+      await scopedPlan();
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const result = {
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+        };
+        return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
+      });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(), planPath, providerKey: 'codex',
+        config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { security: { enabled: false } } } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['codex'],
+        buildReviewPolicyCatalog: async ({ skill }) => [{
+          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['testQuality', 'security'] as const, infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+      });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      const prompts = invoke.mock.calls.map(([options]) => options.prompt).join('\n');
+      expect(prompts).toContain('# build-review-implementation-quality');
+      expect(prompts).not.toContain('# build-review-security');
+    });
+
     it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {
       await scopedPlan();
       const provider = createMockProvider();
@@ -5636,7 +5798,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
@@ -5660,6 +5822,153 @@ TIER: M`,
       expect(dispatched!.endsWith(prompt!)).toBe(true);
     });
 
+    it('retains a rejected built-in reviewer response and links it from the infrastructure fault event', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const findings = [{ concernKind: 'test-insensitive' }];
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        exitCode: 0,
+        output: 'reviewer final message',
+        finalStructuredResult: { findings },
+      });
+      const events = new ConductorEventEmitter();
+      const failures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+      events.on('build_review_rubric_infrastructure_failure', (event) => {
+        if (event.type === 'build_review_rubric_infrastructure_failure') failures.push(event);
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        events,
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      await runner.run('build_review', emptyState);
+
+      expect(failures).toHaveLength(1);
+      const failure = failures[0]!;
+      const [lapId] = (await readdir(join(dir, '.pipeline/build-review'))).filter((lap) => lap.startsWith('lap-'));
+      expect(lapId).toBeDefined();
+      const retainedResponsePath = `.pipeline/build-review-rejections/${lapId}/testQuality.1.json`;
+      const record = JSON.parse(await readFile(join(dir, retainedResponsePath), 'utf8'));
+      const ledger = await readKickbackLedger(dir);
+
+      expect(record).toMatchObject({
+        version: 1,
+        rubric: 'testQuality',
+        rubricKind: 'builtin',
+        attempt: 1,
+        reason: 'invalid-structured-result',
+        output: 'reviewer final message',
+        structuredResult: { findings },
+        detail: ledger.gates.build_review?.lastMechanicalFault?.detail,
+        rejection: failure.rejection,
+      });
+      expect(failure.retainedResponsePath).toBe(retainedResponsePath);
+    });
+
+    it('keeps the built-in rejection fault outcome when response retention is unavailable', async () => {
+      await scopedPlan();
+      const findings = [{ concernKind: 'test-insensitive' }];
+      const response = {
+        success: true,
+        exitCode: 0,
+        output: 'reviewer final message',
+        finalStructuredResult: { findings },
+      };
+      const baselineProvider = createMockProvider();
+      (baselineProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+      const baselineEvents = new ConductorEventEmitter();
+      const baselineFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+      baselineEvents.on('build_review_rubric_infrastructure_failure', (event) => {
+        if (event.type === 'build_review_rubric_infrastructure_failure') baselineFailures.push(event);
+      });
+      const baselineRunner = new DefaultStepRunner(baselineProvider, 'session-1', dir, {
+        events: baselineEvents,
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const baselineResult = await baselineRunner.run('build_review', emptyState);
+      const baselineLedger = await readKickbackLedger(dir);
+      const baselineFailure = baselineFailures[0]!;
+      const blockedDir = await mkdtemp(join(tmpdir(), 'build-review-retention-blocked-'));
+      try {
+        const blockedPlanPath = join(blockedDir, 'plan.md');
+        await scopedPlan(blockedPlanPath);
+        await mkdir(join(blockedDir, '.pipeline'), { recursive: true });
+        await writeFile(join(blockedDir, '.pipeline', 'build-review-rejections'), 'not a directory\n', 'utf-8');
+        const blockedProvider = createMockProvider();
+        (blockedProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+        const blockedEvents = new ConductorEventEmitter();
+        const blockedFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+        blockedEvents.on('build_review_rubric_infrastructure_failure', (event) => {
+          if (event.type === 'build_review_rubric_infrastructure_failure') blockedFailures.push(event);
+        });
+        const blockedRunner = new DefaultStepRunner(blockedProvider, 'session-1', blockedDir, {
+          events: blockedEvents,
+          gitRunner: scopedGit(),
+          planPath: blockedPlanPath,
+          ...testQualityOptIn(),
+          ...currentBuildReviewProof(),
+        });
+
+        const blockedResult = await blockedRunner.run('build_review', emptyState);
+        const blockedLedger = await readKickbackLedger(blockedDir);
+        const blockedFailure = blockedFailures[0]!;
+
+        expect(blockedResult.output).toBe(baselineResult.output);
+        expect(blockedResult.currentLapMechanicalFault).toBe(true);
+        expect({
+          mechanicalFaults: blockedLedger.gates.build_review?.mechanicalFaults,
+          lastMechanicalFault: blockedLedger.gates.build_review?.lastMechanicalFault,
+        }).toEqual({
+          mechanicalFaults: 1,
+          lastMechanicalFault: baselineLedger.gates.build_review?.lastMechanicalFault,
+        });
+        expect({
+          reason: blockedFailure.reason,
+          cause: blockedFailure.cause,
+          rejection: blockedFailure.rejection,
+          excerpt: blockedFailure.excerpt,
+        }).toEqual({
+          reason: baselineFailure.reason,
+          cause: baselineFailure.cause,
+          rejection: baselineFailure.rejection,
+          excerpt: baselineFailure.excerpt,
+        });
+        expect(blockedFailure).not.toHaveProperty('retainedResponsePath');
+        await expect(access(join(blockedDir, '.pipeline/build-review.json'))).rejects.toThrow();
+      } finally {
+        await rm(blockedDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not create a retention directory for an accepted test-quality judgment', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        exitCode: 0,
+        output: '{"findings":[]}',
+        finalStructuredResult: { findings: [] },
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result.output).toContain('"verdict":"PASS"');
+      await expect(access(join(dir, '.pipeline/build-review-rejections'))).rejects.toThrow();
+    });
+
     it('retains final failed-grader exit facts through the exhausted mechanical-fault aggregate', async () => {
       await scopedPlan();
       const provider = createMockProvider();
@@ -5674,7 +5983,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
@@ -5736,7 +6045,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }
@@ -5866,7 +6175,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }
@@ -6341,43 +6650,6 @@ describe('auxiliary provider dispatch tier telemetry', () => {
       await rm(projectDir, { recursive: true, force: true });
     }
   });
-
-  it.each([
-    ['M' as const, { tier: 'M' }],
-    [undefined, {}],
-  ])('records tier metadata for a coverage-binding dispatch (%s)', async (tier, expected) => {
-    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-'));
-    const featureDesc = 'coverage-binding-tier';
-    const planPath = join(projectDir, 'plan.md');
-    const attempts: ProviderAttemptEvent[] = [];
-    const invoke = vi.fn(async (options: InvokeOptions) => ({ success: true, output: coverageBindingBatchOutput(options), exitCode: 0 }));
-    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
-    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n');
-    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
-    const runner = new DefaultStepRunner(createMockProvider(), 'tier-coverage-binding', projectDir, {
-      featureDesc, planPath, config: {
-        coverage_binding: { judge: { enabled: true } }, llm_provider: ['claude'],
-        steps: { coverage_binding: { llm_provider: 'claude' } },
-      },
-      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
-      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
-      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
-    });
-
-    try {
-      const executionContext: ExecutionContext = {
-        executionId: 'coverage-execution', subject: { kind: 'lifecycle-step', step: 'coverage_binding' },
-      };
-      await expect(runner.run('coverage_binding', tier === undefined ? {} : { complexity_tier: tier }, { executionContext })).resolves.toMatchObject({ success: true });
-      for (const attempt of attempts) expect(attempt.executionContext).toEqual(executionContext);
-      const invocation = attempts.find((attempt) => attempt.invoked);
-      expect(invocation).toBeDefined();
-      expect(invocation).toMatchObject(expected);
-      expect('tier' in invocation!).toBe(tier !== undefined);
-    } finally {
-      await rm(projectDir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe('build_review rubric dispatch', () => {
@@ -6502,6 +6774,103 @@ describe('build_review rubric dispatch', () => {
     expect(attempts).toEqual(expect.arrayContaining([
       expect.objectContaining({ provider: 'claude', invoked: true }),
     ]));
+  });
+
+  it.each([
+    {
+      name: 'a delta lap',
+      reviewScope: {
+        mode: 'delta' as const,
+        deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'c'.repeat(64)}` }],
+      },
+      scopeInstruction: 'Judge only the `reviewScope` delta hunks.',
+    },
+    {
+      name: 'a full lap',
+      reviewScope: { mode: 'full' as const, deltaHunks: [] },
+      scopeInstruction: 'Judge the full changed diff described by `changedFiles`.',
+    },
+  ])('renders the projected peer review scope for %s', async ({ reviewScope, scopeInstruction }) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-peer-scope-'));
+    const baselinePath = join(projectDir, 'baseline');
+    const headPath = join(projectDir, 'head');
+    await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
+    const invoke = vi.fn<(options: InvokeOptions) => Promise<InvokeResult>>(async (_options) => ({
+      success: true,
+      output: '{"findings":[]}',
+      exitCode: 0,
+      finalStructuredResult: { findings: [] },
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'peer-scope', projectDir, {
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project',
+        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (capturedPolicy) => ({
+        policy: capturedPolicy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review test quality\n') }],
+        metadata: { version: 1, semanticName: capturedPolicy.semanticName, source: capturedPolicy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const peerProjection = {
+      rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4',
+      lapId, snapshotDigest, contentDigest: 'sha256:content', digest: 'sha256:peer-projection',
+      mergeBase: 'base', headSha: 'head', changedFiles: [], reviewScope,
+      runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
+      testScope: { analysisVersion: 'test-scope-v1', changedDeclarations: [], targets: [], candidates: [], notes: [], affectedGroups: [], sharedSources: [], evidence: [] },
+      testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: 'not-requested' },
+    };
+    const inputs = {
+      sourceSnapshot: {
+        contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head',
+        sourceChanges: [{ kind: 'M', path: 'src/current.ts' }],
+      },
+      sourceMaterialization: {
+        contextFor: () => ({
+          memberId: 'testQuality',
+          source: {
+            identity: { snapshotDigest, contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' },
+            baselinePath,
+            headPath,
+          },
+        }),
+        settle: async () => {},
+      },
+    };
+
+    try {
+      await (runner as unknown as {
+        dispatchBuildReviewRubric: (
+          branch: unknown, projection: unknown, tier: undefined, context: undefined,
+          inputs: unknown, engineIdentity: unknown, customPolicyLap: boolean,
+          readOnlyReviewCapabilityFor: (provider: string) => Promise<unknown>,
+        ) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(
+        branch,
+        peerProjection,
+        undefined,
+        undefined,
+        inputs,
+        { engineStamp: 'engine-stamp', skillDigests: { testQuality: { kind: 'resolved', digest: `sha256-v1:${'a'.repeat(64)}` } } },
+        true,
+        async (provider) => ({ provider, platform: process.platform, status: 'available' }),
+      );
+
+      const prompt = invoke.mock.calls[0]?.[0].prompt;
+      expect(prompt).toContain(JSON.stringify({ reviewScope }));
+      expect(prompt).toContain(scopeInstruction);
+      if (reviewScope.mode === 'full') {
+        expect(prompt).not.toContain('Judge only the `reviewScope` delta hunks.');
+      }
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
 });

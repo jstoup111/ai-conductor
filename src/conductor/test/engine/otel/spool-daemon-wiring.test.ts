@@ -1,6 +1,6 @@
 // Covers: task:16
 import { createServer, type Server } from 'node:http';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,8 @@ import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const leaseUnlinkFailures = vi.hoisted(() => new Set<string>());
+const publishedLeasePaths = vi.hoisted(() => new Set<string>());
+const leasePublicationWaiters = vi.hoisted(() => new Map<string, () => void>());
 const interactiveSpoolDirectories = vi.hoisted(() => new Map<string, string>());
 // This suite uses only fixture-owned loopback endpoints. Keep the process-wide
 // test export refusal intact and inject the deliberate test environment at the
@@ -27,6 +29,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         throw Object.assign(new Error('lease unlink denied'), { code: 'EACCES' });
       }
       return filesystem.rm(path, options);
+    },
+    link: async (existingPath: Parameters<typeof filesystem.link>[0], newPath: Parameters<typeof filesystem.link>[1]) => {
+      await filesystem.link(existingPath, newPath);
+      const path = String(newPath);
+      publishedLeasePaths.add(path);
+      leasePublicationWaiters.get(path)?.();
     },
   };
 });
@@ -86,8 +94,15 @@ async function eventually(predicate: () => boolean | Promise<boolean>): Promise<
   throw new Error('timed out waiting for expected OTel wiring state');
 }
 
+function waitForLeasePublication(path: string): Promise<void> {
+  if (publishedLeasePaths.has(path)) return Promise.resolve();
+  return new Promise<void>((resolve) => leasePublicationWaiters.set(path, resolve));
+}
+
 afterEach(async () => {
   leaseUnlinkFailures.clear();
+  publishedLeasePaths.clear();
+  leasePublicationWaiters.clear();
   interactiveSpoolDirectories.clear();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -143,14 +158,15 @@ describe('daemon OTel spool wiring', () => {
       if (event.type === 'renderer_error') failures.push(event);
     });
     const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } };
+    const leasePath = join(project, '.daemon', 'otel-spool', 'lease.json');
+    const leasePublished = waitForLeasePublication(leasePath);
     const context = {
       pipelineDir: join(project, '.pipeline'), runId: 'run', feature: 'feature', project,
       branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false, env: loopbackOtelEnv,
     };
     const visualizer = wireOtelVisualizer(config, context, events);
     const metrics = wireInteractiveOtelMetrics(config, context, events);
-    const leasePath = join(project, '.daemon', 'otel-spool', 'lease.json');
-    await eventually(async () => access(leasePath).then(() => true, () => false));
+    await leasePublished;
     leaseUnlinkFailures.add(leasePath);
 
     await expect(Promise.all([visualizer?.stop(), metrics?.stop()])).resolves.toEqual([undefined, undefined]);

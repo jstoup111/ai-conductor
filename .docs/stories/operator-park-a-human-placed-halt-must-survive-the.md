@@ -185,14 +185,14 @@ never rot silently.
 - Given a parked, halted feature, when the daemon dashboard renders, then the feature appears
   once, under a `PARKED` group (not under `HALTED`). `PARKED` takes precedence over **every**
   other group (HALTED, PROCESSED, GATED, IN-PROGRESS, WAITING, ELIGIBLE — including groups added
-  by sibling specs); the existing groups' relative order among themselves is unchanged.
+  by sibling specs) for bucket membership; the group's display position follows the dashboard's
+  actionable-first display order, not its precedence.
 - Given a parked, never-dispatched backlog slug, when the dashboard renders, then it appears
   under `PARKED`, not `ELIGIBLE`.
 
 #### Negative Paths
 - Given no parked features, when the dashboard renders, then no `PARKED` section noise is
-  added beyond an empty-group header consistent with existing empty groups, and output for all
-  other groups is unchanged from today.
+  added beyond an empty-group header consistent with existing empty groups.
 - Given `.daemon/parked/` contains a marker for a slug with no worktree AND no backlog entry
   (stale park after a slug rename), when the dashboard renders, then the stale park is listed
   under `PARKED` (visible, not hidden) so the operator can notice and unpark it.

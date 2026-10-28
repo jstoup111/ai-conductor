@@ -104,13 +104,14 @@ function isExecutionContext(value: unknown): value is ExecutionContext {
 
 function isExecutionSubject(value: unknown): value is ExecutionSubject {
   if (!isRecord(value) || typeof value.kind !== 'string') return false;
-  if (value.kind === 'lifecycle-step') return isLifecycleStep(value.step);
+  if (value.kind === 'lifecycle-step') return isStepName(value.step);
   return value.kind === 'configured-member'
     && isNonEmptyString(value.parentGroup)
     && isNonEmptyString(value.member);
 }
 
-function isLifecycleStep(value: unknown): value is StepName {
+/** Runtime guard for the closed built-in and out-of-band StepName domain. */
+export function isStepName(value: unknown): value is StepName {
   return typeof value === 'string' && lifecycleStepNames.has(value);
 }
 

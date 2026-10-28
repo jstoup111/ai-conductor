@@ -76,7 +76,7 @@ As an operator, I want kickback accounting to reflect repairs actually built so 
 - Given a halted repair with appended uncharged tasks and no prior growth record, when growth is derived from the active plan, then the appended tasks are not counted as authored and the 25 percent growth denominator is unchanged by them.
 - Given a remediation round whose append fails, when the round completes, then no pending charge is recorded and the laps and growth values are unchanged.
 - Given a plan that already contained rem- prefixed tasks before this feature's growth record existed, when growth is derived with a pending repair recorded, then those earlier tasks still count as authored and only the tasks named by the pending charge are excluded.
-- Given an unreadable kickback ledger, when a remediation round would append, then the feature halts fail-closed and no task is appended and no pending charge is recorded.
+- Given an N=1 feature with an unreadable kickback ledger, when a remediation round would append, then the feature halts fail-closed and no task is appended and no pending charge is recorded.
 - Given a kickback ledger whose pending repair record is present but malformed, when build would dispatch or a budget is read, then the prd_audit, as-built and growth allowances read as exhausted and build is not dispatched.
 - Given an existing-task round replayed after a crash, when admission runs again for the same repair obligation, then no second pending charge is recorded and only one lap is charged at build dispatch.
 

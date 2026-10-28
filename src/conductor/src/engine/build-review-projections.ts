@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type {
-  BuildReviewEffectiveResultDescriptor,
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
   BuildReviewScopeIncompleteFault,
@@ -10,7 +9,6 @@ import type {
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
-import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type {
   RevertedProductionFileReference,
@@ -44,6 +42,12 @@ export interface BuildReviewTestQualityProjectionInput {
   readonly preflight: TestQualityPreflightEvidence;
 }
 
+/** The engine-computed hunk subset a rubric must judge for this lap. */
+export interface BuildReviewProjectionReviewScope {
+  readonly mode: 'full' | 'delta';
+  readonly deltaHunks: readonly { readonly path: string; readonly contentHash: string }[];
+}
+
 /** The complete engine-owned source from which the closed projection is derived. */
 export interface BuildReviewProjectionSource {
   readonly lapId: BuildReviewLapId;
@@ -51,6 +55,8 @@ export interface BuildReviewProjectionSource {
   readonly testQuality: BuildReviewTestQualityProjectionInput;
   /** Security's whole-feature source at a stacked leaf; otherwise shared. */
   readonly securitySnapshot?: BuildReviewSourceSnapshot;
+  /** One engine-computed review scope per built-in rubric. */
+  readonly reviewScopes?: Readonly<Partial<Record<BuildReviewRubricId, BuildReviewProjectionReviewScope>>>;
 }
 
 /** One hunk's line-range header from a unified diff (`@@ -old +new @@`). */
@@ -77,9 +83,9 @@ export interface ChangedFileReference {
 
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
-  readonly contractVersion: 'v3';
-  /** Versioned frozen-input shape; v3 carries typed scope and pinned evidence. */
-  readonly projectionVersion: 'v3';
+  readonly contractVersion: 'v4';
+  /** Versioned frozen-input shape; v4 carries typed scope, pinned evidence and the engine-computed review scope. */
+  readonly projectionVersion: 'v4';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   /** Stable identity of the source content, independent of commit provenance. */
@@ -90,6 +96,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly headSha: string;
   /** The graded diff by reference — paths, change kinds, and hunk line ranges. */
   readonly changedFiles: readonly ChangedFileReference[];
+  /** The hunk subset this rubric judges; the whole diff remains context. */
+  readonly reviewScope: BuildReviewProjectionReviewScope;
 }
 
 export interface TestQualityProjection extends CommonProjection<'testQuality'> {
@@ -118,8 +126,9 @@ export interface TestQualityProjection extends CommonProjection<'testQuality'> {
 
 /** Whole-diff, by-reference projection for the security review branch. */
 export interface SecurityProjection extends CommonProjection<'security'> {}
+export interface ImplementationQualityProjection extends CommonProjection<'implementationQuality'> {}
 
-export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection;
+export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection | ImplementationQualityProjection;
 
 /** Test-scope fields belong exclusively to the test-quality rubric. */
 export function isTestQualityProjection(
@@ -186,22 +195,8 @@ export function buildReviewRubricPromptView(projection: BuildReviewRubricProject
 export type BuildReviewRubricProjections = {
   readonly testQuality: TestQualityProjection;
   readonly security: SecurityProjection;
+  readonly implementationQuality: ImplementationQualityProjection;
 };
-
-/**
- * Bind parser choice to one already-resolved effective catalog member.  This
- * intentionally does not consult the built-in registry or an enabled map:
- * custom policy ids are dynamic while built-ins retain their bespoke parser.
- */
-export function buildReviewEffectiveResultDescriptor(
-  entry: ResolvedBuildReviewCatalogEntry,
-): BuildReviewEffectiveResultDescriptor {
-  if (entry.kind !== 'builtin') return Object.freeze({ kind: 'custom', rubric: entry.id, parser: 'custom-findings-v1' });
-  // Each built-in carries its own catalog id and parser tag; never relabel one as another.
-  return entry.id === 'security'
-    ? Object.freeze({ kind: 'builtin', rubric: 'security', parser: 'security-v3' })
-    : Object.freeze({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
-}
 
 /** Parse a reviewer response using the parser bound by the effective member. */
 export { parseBuildReviewReviewerPayload } from './build-review-domain.js';
@@ -456,16 +451,32 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
   const snapshot = rubric === 'security'
     ? source.securitySnapshot ?? source.inputs.sourceSnapshot
     : source.inputs.sourceSnapshot;
+  const changedFiles = deriveChangedFileReferences(snapshot.diff);
+  const suppliedReviewScope = source.reviewScopes?.[rubric] ?? {
+    mode: 'full' as const,
+    deltaHunks: changedFiles.flatMap((file) => file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash }))),
+  };
+  // The scope is derived from durable engine state, but it still crosses this
+  // projection boundary. Copy and freeze it so later mutation of assembly
+  // inputs cannot change an already-sealed cache identity or reviewer input.
+  const reviewScope: BuildReviewProjectionReviewScope = Object.freeze({
+    mode: suppliedReviewScope.mode,
+    deltaHunks: Object.freeze(suppliedReviewScope.deltaHunks.map((hunk) => Object.freeze({
+      path: hunk.path,
+      contentHash: hunk.contentHash,
+    }))),
+  });
   return {
     rubric,
-    contractVersion: descriptor.contract.output.version as 'v3',
-    projectionVersion: descriptor.contract.projection.version as 'v3',
+    contractVersion: descriptor.contract.output.version as 'v4',
+    projectionVersion: descriptor.contract.projection.version as 'v4',
     lapId: source.lapId,
     snapshotDigest: snapshot.digest,
     contentDigest: snapshot.contentDigest,
     mergeBase: snapshot.mergeBase,
     headSha: snapshot.headSha,
-    changedFiles: deriveChangedFileReferences(snapshot.diff),
+    changedFiles,
+    reviewScope,
   };
 }
 
@@ -498,5 +509,6 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     preflight: source.testQuality.preflight,
   }) as TestQualityProjection;
   const security = seal(common(source, 'security')) as SecurityProjection;
-  return Object.freeze({ testQuality, security });
+  const implementationQuality = seal(common(source, 'implementationQuality')) as ImplementationQualityProjection;
+  return Object.freeze({ testQuality, security, implementationQuality });
 }

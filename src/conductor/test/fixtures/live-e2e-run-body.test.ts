@@ -50,7 +50,10 @@ describe('live E2E linked-worktree fixture seeding', () => {
       mainCheckoutDir = seeded.mainCheckoutDir;
       const [identity, resolution] = await Promise.all([
         resolveBuildReviewFeatureIdentity(seeded.projectDir),
-        resolveEffectiveBuildReviewVerdict(seeded.projectDir, passingAggregate),
+        resolveEffectiveBuildReviewVerdict(seeded.projectDir, passingAggregate, {
+          child: undefined,
+          adjudicationEnabled: true,
+        }),
       ]);
 
       observed = {
@@ -812,16 +815,17 @@ describe('live E2E preflight dispatch boundary', () => {
         home: { homeDir: string },
         dispatch: () => Promise<void>,
         providerKey: string,
-        preflight: (homeDir: string, providerKey?: string) => Promise<void>,
+        preflight: (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>,
+        sourceRoot?: string,
       ) => Promise<void>;
     };
     const preflight = vi.fn(async () => { throw new Error('selected provider command unavailable'); });
     const dispatch = vi.fn(async () => {});
 
-    await expect(dispatchAfterLivePreflight({ homeDir: '/tmp/live-home' }, dispatch, 'codex', preflight))
+    await expect(dispatchAfterLivePreflight({ homeDir: '/tmp/live-home' }, dispatch, 'codex', preflight, '/tmp/live-source'))
       .rejects.toThrow('selected provider command unavailable');
     expect({ preflight: preflight.mock.calls, dispatches: dispatch.mock.calls.length }).toEqual({
-      preflight: [['/tmp/live-home', 'codex']],
+      preflight: [['/tmp/live-home', '/tmp/live-source', 'codex']],
       dispatches: 0,
     });
   });
@@ -832,7 +836,8 @@ describe('live E2E preflight dispatch boundary', () => {
         home: { homeDir: string },
         dispatch: () => Promise<T>,
         providerKey: string,
-        preflight: (homeDir: string, providerKey?: string) => Promise<void>,
+        preflight: (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>,
+        sourceRoot?: string,
       ) => Promise<T>;
     };
     const preflight = vi.fn(async () => {});
@@ -849,6 +854,7 @@ describe('live E2E preflight dispatch boundary', () => {
       dispatch,
       'claude',
       preflight,
+      '/tmp/live-source',
     );
 
     expect({
@@ -860,7 +866,7 @@ describe('live E2E preflight dispatch boundary', () => {
       commandUnresolvedName: result.commandUnresolvedName,
       successfulTerminalState: result.success,
     }).toEqual({
-      preflight: [['/tmp/live-home', 'claude']],
+      preflight: [['/tmp/live-home', '/tmp/live-source', 'claude']],
       dispatches: 1,
       success: false,
       exitCode: 1,

@@ -76,6 +76,9 @@ refusal is not a git conflict: do not invoke the rebase resolver or run `git reb
       whose plans lack a dependency tree
 - [ ] Every story has both happy and negative paths
 - [ ] Conflict-check has passed (check `.docs/conflicts/` for recent clean pass, or no blocking conflicts)
+- [ ] Before the plan declares a `## Slices` section, the operator has explicitly accepted stacked
+      delivery and `.docs/complexity/<stem>.md` carries `Stacked-Delivery: approved` (see Slice
+      manifest). Land refuses a sliced plan without that line, after plan review has already run
 
 If preconditions are not met, state which are missing and suggest the appropriate skill.
 
@@ -244,11 +247,11 @@ The tag is part of the authored check text and makes the task-close boundary req
 conjunctions: every outcome it states — including absence and no-op outcomes such as "no dispatch
 is attempted", "nothing is published", or "the branch settles `absent`" — must be explicitly
 required by at least one check in a cited task, with the same precision the criterion uses
-("byte-identical" is not satisfied by "deep-equal"). The `coverage_binding` judge refuses the plan
-before BUILD when any outcome is only implied. One check may carry several outcomes; when a task's
+("byte-identical" is not satisfied by "deep-equal"). The independent coverage judgement (§7a) refuses
+the plan before it lands when any outcome is only implied. One check may carry several outcomes; when a task's
 criteria need more than five checks to cover, split the task rather than dropping outcomes.
 
-Five drift shapes account for most `coverage_binding` refusals; check each mapped criterion for them:
+Five drift shapes account for most coverage-judgement refusals; check each mapped criterion for them:
 
 - **Layer drift.** The check asserts a lower mechanism than the criterion names — two render calls
   where the criterion says two dispatches, a store where it says the resolved candidate list. Assert
@@ -339,7 +342,8 @@ without making the task undeliverable or its evidence stale.
 ## Slice manifest
 
 For a Large feature, propose delivery slices only when the resolved project configuration enables
-`stacked_prs.enabled`. Slice a Medium feature only when the operator asks for it. On operator
+`stacked_prs.enabled`. Slice a Medium feature only when the operator asks for it. Ask the operator
+to choose stacked or single-PR delivery before writing the section; never add it unasked. On operator
 acceptance, declare one optional `## Slices` section before the first task heading and write
 `Stacked-Delivery: approved` into `.docs/complexity/<stem>.md`. If the operator declines, author
 no manifest and no sign-off line.
@@ -469,7 +473,7 @@ decisions. Use the exact table contract from Section 7.]
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left
       without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
-- [ ] Tasks do not invalidate each other's fixtures or assertions; `/coherence-check` sweeps this
+- [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this
       at Medium and Large tier, and Small tier gains no required step for it
 ```
 
@@ -505,10 +509,14 @@ After generating tasks, check the total count:
 | Task Count | Action |
 |---|---|
 | 1-20 | Normal — proceed |
-| 21-40 | Warning — surface to user: "This plan has N tasks (~X hours). Consider splitting into multiple features." |
-| 41+ | Hard stop — refused when the spec is landed unless the plan carries an authorized scope exception. Break into separately plannable features and run the stories and plan steps for each. |
+| 21-29 | Warning — surface to user: "This plan has N tasks (~X hours). Consider splitting into multiple features." |
+| 30+ | Hard stop — refused when the spec is landed unless the plan carries an authorized scope exception. Break into separately plannable features and run the stories and plan steps for each. |
 
-The only exception for a plan with 41 or more tasks is exactly one
+Reaching this table with 30+ tasks usually means the split was missed upstream. `/architecture-review`
+§3a owns the split decision before stories are written, and its rules for ordering, flagging, and
+reachability apply here too.
+
+The only exception for a plan with 30 or more tasks is exactly one
 `**Scope-exception:** <non-empty rationale>` declaration on one physical line in the plan. A
 missing, empty, or duplicate declaration is rejected when the spec is landed; a valid rationale is
 the recorded authorization for the oversized plan.
@@ -522,15 +530,16 @@ After generating the plan, cross-reference:
 - If any criterion is uncovered, add a task
 - For each row, list the criterion's Then outcomes and confirm the cited task's checks explicitly
   require every one (§3c); widen a check or add one for any outcome that is only implied
-- **Contradiction pass (mandatory):** check every task's Done-when bullets and required behavior
+- **Contradiction pass (mandatory at Small tier):** check every task's Done-when bullets and required behavior
   against *every* criterion, not only those it cites — negative paths and "only"/"never"/"no"
   constraints first. If satisfying a task would violate a criterion, or the task's design cannot
   represent state a criterion depends on, fix the plan before landing or surface it to the operator.
   Example: Story 6 negative "the only assertion changes are the added credential option" vs a task
   whose Done-when requires new endpoint assertions — covered, yet contradictory. The pass is run by
   an independent judge, never the plan's author (§7b).
-- Run the independent coverage judgement (§7a) and the independent contradiction judgement (§7b),
-  and resolve every refusal and conflict before landing
+- Run the independent coverage judgement (§7a) at every tier. At Medium and Large tier, plan review
+  owns the independent contradiction judgement; at Small tier, run §7b. Resolve every refusal and
+  conflict before landing.
 - Present the coverage mapping to the user
 
 Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell
@@ -547,13 +556,12 @@ must be taken from one cited task's `Done when` block, and the disposition is
 #### 7a. Independent Coverage Judgement
 
 **GATE: before the plan lands, a fresh subagent judges every criterion row. The plan's author never
-judges its own checks.** The `coverage_binding` step applies this same judgement before BUILD. A
-refusal there halts the feature and needs an amendment and an operator reseal; a refusal here is a
-one-turn fix.
+judges its own checks.** This is the only coverage judgement: no engine step re-judges coverage
+before BUILD.
 
 1. Build one claim per criterion row: the exact criterion text and every `Done when` bullet of each
    cited task, verbatim. Include nothing else — no plan prose, stories, files, or rationale — so the
-   subagent sees exactly what the gate sees. Number the claims.
+   subagent sees only the claim and its checks. Number the claims.
 2. Dispatch one subagent with fresh context through the selected host's available subagent facility.
    Instruct it to apply `skills/coverage-binding/SKILL.md` exactly — its judgement policy and its
    result contract, using the claim numbers as claim ids — and to read nothing beyond the supplied
@@ -568,12 +576,9 @@ one-turn fix.
 5. Never overrule a refusal by argument, and never edit a criterion to fit a check. Criteria change
    only through the stories step.
 
-For M and L plans, `coherence-check` repeats this judgement on its own criterion rows, because those
-rows are what `coverage_binding` judges at those tiers.
-
 #### 7b. Independent Contradiction Judgement
 
-**GATE: before the plan lands, at every tier, a fresh subagent checks the whole plan against every
+**GATE: before the plan lands, only at tier S, a fresh subagent checks the whole plan against every
 criterion and every approved ADR decision the plan is subject to. The plan's author never judges its
 own plan for contradictions.** The author wrote the tasks to fit the criteria it read; a pass in the
 same context re-reads them the same way. A contradiction that reaches BUILD costs a full build and
@@ -598,9 +603,6 @@ its review laps before it surfaces, and then an amendment and an operator reseal
    and the criterion or decision. Never land it.
 5. Never overrule a conflict by argument. If you believe the judge misread, show the operator both
    passages and let them decide.
-
-For M and L plans, `coherence-check` repeats this judgement over the final plan (its §4d sweep),
-because amendments made after this pass can introduce a new conflict.
 
 **GATE: Every citable decision in each non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in
 the current spec change set must have exactly one row in `## Architecture Obligation Coverage`.** Use
@@ -675,6 +677,8 @@ any code is written. The full flow from here is:
 ## Verification
 
 - [ ] Preconditions validated (stories exist, both paths, conflict-check clean)
+- [ ] A `## Slices` section exists only with the operator's stacked-delivery acceptance recorded as
+      `Stacked-Delivery: approved` in `.docs/complexity/<stem>.md`
 - [ ] Every acceptance criterion maps to at least one task
 - [ ] Every citable decision in each non-deleted land-accepted ADR in the current change set has one
       mechanically valid Architecture Obligation Coverage row
@@ -686,12 +690,12 @@ any code is written. The full flow from here is:
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Every `Done when:` check names a mechanism and its observable assertion, rather than merely
       restating the mapped criterion; each bullet occupies one physical line
-- [ ] A fresh subagent found no contradiction between any task and any criterion or subject ADR
-      decision (§7b)
+- [ ] At Small tier, a fresh subagent found no contradiction between any task and any criterion or
+      subject ADR decision (§7b); at Medium and Large tier, plan review owns that contradiction check
 - [ ] Every outcome in each mapped criterion's Then-clause, including absence/no-op outcomes, is
       explicitly required by a cited task's `Done when:` check at the criterion's precision (§3c)
 - [ ] Dependencies are declared and acyclic
-- [ ] Tasks do not invalidate each other's fixtures or assertions; `/coherence-check` sweeps this
+- [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this
       at Medium and Large tier, and Small tier gains no required step for it
 - [ ] `ai-conductor plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
       violations; no task targets another feature's sealed artifact

@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-4, task:rem-prd-audit-4-2, task:rem-prd-audit-4-3
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -24,8 +25,8 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
     version: 2,
     rubric: "testQuality",
-    contractVersion: "v3",
-    projectionVersion: "v3",
+    contractVersion: "v4",
+    projectionVersion: "v4",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -35,7 +36,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
       rubric: "testQuality",
       lapId: "lap-a" as never,
       snapshotDigest,
-      contractVersion: "v3" as never,
+      contractVersion: "v4" as never,
       findings: [],
       verdict: "PASS",
     },
@@ -51,7 +52,7 @@ function securityEntry(overrides: Partial<BuildReviewCacheEntry> = {}): BuildRev
       rubric: "security",
       lapId: "lap-a" as never,
       snapshotDigest: "snapshot-a",
-      contractVersion: "v3",
+      contractVersion: "v4",
       findings: [],
       verdict: "PASS",
     },
@@ -63,8 +64,8 @@ function candidateIdentity(overrides: Partial<BuildReviewCacheSemanticIdentity> 
   return {
     declarationFingerprint: "sha256:declaration-a",
     effectiveBundleDigest: "sha256:bundle-a",
-    contractVersion: "v3",
-    projectionVersion: "v3",
+    contractVersion: "v4",
+    projectionVersion: "v4",
     semanticInputDigest: "sha256:input-a",
     executionPolicyFingerprint: "sha256:execution-a",
     engineStamp: "8e7daae72ad7",
@@ -119,8 +120,8 @@ describe("build-review semantic cache", () => {
     const semanticIdentity = {
       declarationFingerprint: fingerprintBuildReviewPolicyDeclaration(declaration),
       effectiveBundleDigest: "sha256:bundle-a",
-      contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+      contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
       semanticInputDigest: "sha256:input-a",
       executionPolicyFingerprint: "sha256:execution-a",
       engineStamp: "8e7daae72ad7",
@@ -131,8 +132,8 @@ describe("build-review semantic cache", () => {
     const cached = { ...entry(), semanticIdentity };
     const lookup = {
       rubric: "testQuality" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+      contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -184,11 +185,12 @@ describe("build-review semantic cache", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v2" })).toBeUndefined();
   });
 
-  it("preserves the v3 cache contract boundary by rejecting a future v4 contract version", () => {
-    expect(parseBuildReviewCacheEntry({ ...entry(), contractVersion: "v4" })).toBeUndefined();
+  it("admits the current v4 cache descriptor pair and rejects a future v5 contract version", () => {
+    expect(parseBuildReviewCacheEntry(entry())).toEqual(entry());
+    expect(parseBuildReviewCacheEntry({ ...entry(), contractVersion: "v5" as never })).toBeUndefined();
   });
 
-  it("persists the custom descriptor's v1/v1 cache pair without widening the v3 boundary", async () => {
+  it("persists the custom descriptor's v2/v1 cache pair without widening the v4 boundary", async () => {
     const descriptor = {
       version: "v1" as const,
       semanticSkill: "portable-policy",
@@ -202,7 +204,7 @@ describe("build-review semantic cache", () => {
       producer: { provider: "codex", model: "gpt-5.6-sol", effort: "medium" },
     };
     const result = stampBuildReviewCustomJudgedResult(
-      { kind: "custom-findings", version: "v1", findings: [] },
+      { kind: "custom-findings", version: "v2", findings: [] },
       {
         rubric: descriptor.declaration.rubricId, lapId: "lap-a",
         declaration: descriptor.declaration, policy: descriptor.effectivePolicy,
@@ -212,23 +214,23 @@ describe("build-review semantic cache", () => {
     )!;
     const customEntry: BuildReviewCacheEntry = {
       ...entry(), rubric: descriptor.declaration.rubricId,
-      contractVersion: "v1", projectionVersion: "v1",
-      semanticIdentity: candidateIdentity({ contractVersion: "v1", projectionVersion: "v1" }),
+      contractVersion: "v2", projectionVersion: "v1",
+      semanticIdentity: candidateIdentity({ contractVersion: "v2", projectionVersion: "v1" }),
       result: { descriptor, result },
     };
     const fs = memoryFilesystem();
 
     await expect(tryWriteBuildReviewCacheEntry("/feature", customEntry, fs)).resolves.toEqual({ ok: true });
     await expect(readBuildReviewCacheEntry("/feature", customEntry.rubric, fs, customEntry.semanticIdentity))
-      .resolves.toMatchObject({ contractVersion: "v1", projectionVersion: "v1" });
+      .resolves.toMatchObject({ contractVersion: "v2", projectionVersion: "v1" });
     expect(parseBuildReviewCacheEntry({ ...customEntry, contractVersion: "v4" })).toBeUndefined();
   });
 
-  it("parses legacy projection candidates through the read seam, then misses against the current v3 identity", async () => {
+  it("parses legacy projection candidates through the read seam, then misses against the current v4 identity", async () => {
     const currentLookup = {
       rubric: "testQuality",
-      contractVersion: "v3",
-      projectionVersion: "v3",
+      contractVersion: "v4",
+      projectionVersion: "v4",
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -246,14 +248,14 @@ describe("build-review semantic cache", () => {
 
     expect([
       classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs), currentLookup),
-      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v3", projectionDigest: "sha256:changed-input" }, currentLookup),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v4", projectionDigest: "sha256:changed-input" }, currentLookup),
     ]).toEqual([
       { kind: "miss", reason: "projection-version-mismatch" },
       { kind: "miss", reason: "projection-digest-mismatch" },
     ]);
   });
 
-  it("misses a pre-reference v3 entry closed without advancing the projection version", async () => {
+  it("misses a pre-reference entry closed without advancing the projection version", async () => {
     const root = "/feature";
     const path = cacheEntryPath(root, "testQuality");
     const oldEngineEntry = {
@@ -264,8 +266,8 @@ describe("build-review semantic cache", () => {
     const currentProjectionDigest = "sha256:digest-that-includes-evidence-content-hash";
     const currentLookup = {
       rubric: "testQuality",
-      contractVersion: "v3",
-      projectionVersion: "v3",
+      contractVersion: "v4",
+      projectionVersion: "v4",
       // The reference-only projection instead digests its pinned contentHash.
       projectionDigest: currentProjectionDigest,
       policyFingerprint: oldEngineEntry.policyFingerprint,
@@ -282,11 +284,11 @@ describe("build-review semantic cache", () => {
       classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", memoryFilesystem({ [path]: JSON.stringify(oldEngineEntry) })), currentLookup),
       classifyBuildReviewCacheLookup({ ...oldEngineEntry, projectionDigest: currentProjectionDigest, engineIdentity: { ...oldEngineEntry.engineIdentity, engineStamp: "aaaaaaaaaaaa" } }, currentLookup),
       written.projectionVersion,
-      parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v4" }),
+      parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v5" as never }),
     ]).toEqual([
       { kind: "miss", reason: "projection-digest-mismatch" },
       { kind: "miss", reason: "engine-version-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" },
-      "v3",
+      "v4",
       undefined,
     ]);
   });
@@ -375,8 +377,8 @@ describe("build-review semantic cache", () => {
       path,
       lookup: classifyBuildReviewCacheLookup(foreignCandidate, {
         rubric: "testQuality",
-        contractVersion: "v3",
-        projectionVersion: "v3",
+        contractVersion: "v4",
+        projectionVersion: "v4",
         projectionDigest: freshEntry.projectionDigest,
         policyFingerprint: freshEntry.policyFingerprint,
         engineIdentity: freshEntry.engineIdentity,
@@ -399,7 +401,7 @@ describe("build-review semantic cache", () => {
     const fs = memoryFilesystem({ [path]: JSON.stringify({ version: 2, result: entry().result }) });
 
     expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs), {
-      rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3", projectionDigest: "sha256:projection-a",
+      rubric: "testQuality", contractVersion: "v4", projectionVersion: "v4", projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a", engineIdentity: entry().engineIdentity, lapId: "lap-current" as never, snapshotDigest: "snapshot-current",
     })).toEqual({ kind: "miss", reason: "invalid-entry" });
     expect(fs.writeCalls).toEqual([]);
@@ -418,7 +420,7 @@ describe("build-review semantic cache", () => {
     };
     const fs = memoryFilesystem({ [cacheEntryPath(root, "testQuality", priorIdentity)]: JSON.stringify(prior) });
     const lookup = {
-      rubric: "testQuality" as const, contractVersion: "v3" as const, projectionVersion: "v3" as const,
+      rubric: "testQuality" as const, contractVersion: "v4" as const, projectionVersion: "v4" as const,
       projectionDigest: prior.projectionDigest, policyFingerprint: prior.policyFingerprint,
       engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:bundle-current" },
       semanticIdentity: currentIdentity, lapId: "lap-current" as never, snapshotDigest: "snapshot-current",
@@ -447,6 +449,7 @@ describe("build-review semantic cache", () => {
         ...entry().result,
         findings: [{
           concernKind: "test-insensitive",
+          severity: "minor",
           summary: "The changed test does not observe the behavior it should.",
           evidenceLocations: ["src/a.ts:1"],
           anchor: { rubric: "testQuality" as const, locus: { path: "test/a.test.ts", contentHash: "sha256:fixture", display: "fixture test" } },
@@ -456,8 +459,8 @@ describe("build-review semantic cache", () => {
     };
     const request = {
       rubric: "testQuality" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+      contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -519,7 +522,7 @@ describe("build-review semantic cache", () => {
     const testQuality = { changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested" } } as never;
     const oldProjection = deriveBuildReviewRubricProjections({ lapId: oldLap, inputs: frozenInputs, testQuality }).testQuality;
     const currentProjection = deriveBuildReviewRubricProjections({ lapId: currentLap, inputs: frozenInputs, testQuality }).testQuality;
-    const dispatchModel = vi.fn(async (branch, projection) => ({ kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: "v3" as never, findings: [], verdict: "PASS" as const }));
+    const dispatchModel = vi.fn(async (branch, projection) => ({ kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: "v4" as never, findings: [], verdict: "PASS" as const }));
 
     const coordination = await coordinateBuildReviewRubrics({
       config, inputs: frozenInputs, lapId: currentLap, preflight: async () => ({ classification: "approved-exception" as const, exception: "empty-test-set" as const, cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
@@ -538,6 +541,109 @@ describe("build-review semantic cache", () => {
     expect(dispatchModel).not.toHaveBeenCalled();
     expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "testQuality") : undefined)
       .toMatchObject({ kind: "cache-hit", result: { lapId: "lap-current", snapshotDigest: "sha256:snapshot-current" } });
+  });
+
+  it("reuses a matching implementation-quality judgement without a provider dispatch", async () => {
+    const policy = { enabled: true, llm_provider: "claude" as const, model: "sonnet", effort: "medium" as const, model_fallback_ladder: ["sonnet"], max_retries: 1, escalate: false };
+    const config = {
+      enabled: true,
+      scopeContainmentEnforced: false,
+      maxParallel: 5,
+      rubrics: {
+        testQuality: { ...policy, enabled: false },
+        security: { ...policy, enabled: false },
+        implementationQuality: policy,
+      },
+    } as never;
+    const frozenInputs = {
+      diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
+      repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" },
+      sourceSnapshot: { digest: "sha256:snapshot-current", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head", diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testQuality: { inScopeTests: [], unresolvedMarkers: [] } },
+    } as never;
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const skillDigest = "sha256:implementation-quality-skill";
+    const dispatchModel = vi.fn(async () => {
+      throw new Error("implementation-quality cache hit must not dispatch a provider");
+    });
+    const readCache = vi.fn(async (branch, projection, policyFingerprint, semanticIdentity) => ({
+      ...entry(),
+      rubric: branch.rubric,
+      projectionDigest: projection.digest,
+      policyFingerprint,
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest },
+      semanticIdentity,
+      result: {
+        kind: "judged" as const,
+        rubric: branch.rubric,
+        lapId: parseBuildReviewLapId("lap-cached")!,
+        snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v4" as const,
+        findings: [],
+        verdict: "PASS" as const,
+      },
+    }));
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config, inputs: frozenInputs, lapId,
+      preflight: async () => ({ classification: "not-requested" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { implementationQuality: { kind: "resolved" as const, digest: skillDigest } } },
+      readCache,
+      dispatchModel,
+      writeArtifact: async (artifact: never) => ({ version: 1 as const, ...(artifact as object) }),
+      writeCache: async () => undefined,
+    } as never);
+
+    expect(readCache).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: "implementationQuality", skillName: "build-review-implementation-quality" }),
+      expect.objectContaining({ rubric: "implementationQuality" }),
+      expect.any(String),
+      expect.objectContaining({ effectiveBundleDigest: skillDigest, engineStamp: "8e7daae72ad7" }),
+    );
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(coordination.kind === "ready" ? coordination.branches : []).toContainEqual(expect.objectContaining({
+      kind: "cache-hit", rubric: "implementationQuality", result: expect.objectContaining({ lapId }),
+    }));
+  });
+
+  it.each([
+    ['a changed build-review-implementation-quality SKILL.md digest',
+      { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill-edited' }, 'skill-digest-mismatch'],
+    ['a changed implementation-quality provider', undefined, 'provider-mismatch'],
+    ['a changed implementation-quality model', undefined, 'model-mismatch'],
+    ['a changed implementation-quality effort', undefined, 'effort-mismatch'],
+  ] as const)('misses implementation-quality cache evidence after %s and re-judges', async (_label, changedIdentity, reason) => {
+    const policy = { enabled: true, llm_provider: 'claude' as const, model: 'sonnet', effort: 'medium' as const, model_fallback_ladder: ['sonnet'], max_retries: 1, escalate: false };
+    const currentPolicy = _label.includes('provider') ? { ...policy, llm_provider: 'codex' as const }
+      : _label.includes('model') ? { ...policy, model: 'opus' }
+        : _label.includes('effort') ? { ...policy, effort: 'high' as const } : policy;
+    const config = { enabled: true, scopeContainmentEnforced: false, maxParallel: 1, rubrics: {
+      testQuality: { ...policy, enabled: false }, security: { ...policy, enabled: false }, implementationQuality: currentPolicy,
+    } } as never;
+    const frozenInputs = {
+      diff: 'diff --git a/src/a.ts b/src/a.ts', planBody: '# Plan\n', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+      repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: 'head', outcome: 'PASS' },
+      sourceSnapshot: { digest: 'sha256:snapshot-current', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff --git a/src/a.ts b/src/a.ts', planBody: '# Plan\n', repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testQuality: { inScopeTests: [], unresolvedMarkers: [] } },
+    } as never;
+    const lapId = parseBuildReviewLapId('lap-current')!;
+    const oldIdentity = candidateIdentity({ effectiveBundleDigest: 'sha256:implementation-quality-skill' });
+    const dispatchModel = vi.fn(async (branch, projection) => ({ kind: 'judged' as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v4' as const, findings: [], verdict: 'PASS' as const }));
+    const readCache = vi.fn(async (branch, projection, policyFingerprint) => ({
+      ...entry(), rubric: branch.rubric, projectionDigest: projection.digest, policyFingerprint,
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill' }, semanticIdentity: oldIdentity,
+      result: { ...entry().result, rubric: branch.rubric, lapId: parseBuildReviewLapId('lap-cached')!, snapshotDigest: projection.snapshotDigest },
+    }));
+    const engineIdentity = changedIdentity === undefined
+      ? { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: 'sha256:implementation-quality-skill' } } }
+      : { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: changedIdentity.skillDigest } } };
+    const coordination = await coordinateBuildReviewRubrics({
+      config, inputs: frozenInputs, lapId, preflight: async () => ({ classification: 'not-requested' as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' } }),
+      engineIdentity, readCache, dispatchModel, writeArtifact: async (artifact: never) => ({ version: 1 as const, ...(artifact as object) }), writeCache: async () => undefined,
+    } as never);
+
+    expect(readCache).toHaveBeenCalled();
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(coordination.kind === 'ready' ? coordination.branches : []).toContainEqual(expect.objectContaining({ kind: 'dispatched', rubric: 'implementationQuality', result: expect.objectContaining({ verdict: 'PASS' }) }));
+    expect(reason).toBeTruthy();
   });
 
   it("keeps a security projection digest stable when identical hunk content is rebased", () => {
@@ -567,8 +673,8 @@ describe("build-review semantic cache", () => {
     const cached = securityEntry();
     const request = {
       rubric: "security" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+      contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
       projectionDigest: cached.projectionDigest,
       policyFingerprint: cached.policyFingerprint,
       engineIdentity: cached.engineIdentity,
@@ -590,8 +696,8 @@ describe("build-review semantic cache", () => {
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
     const request = {
       rubric: "testQuality" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+      contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -626,8 +732,8 @@ describe("build-review semantic cache", () => {
     const current = entry();
     const lookup = {
       rubric: "testQuality" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+      contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
       projectionDigest: current.projectionDigest,
       policyFingerprint: current.policyFingerprint,
       engineIdentity: current.engineIdentity,
@@ -658,8 +764,8 @@ describe("engine identity in the cache key (adr-2026-08-21)", () => {
   };
   const request = {
     rubric: "testQuality" as const,
-    contractVersion: "v3" as const,
-      projectionVersion: "v3" as const,
+    contractVersion: "v4" as const,
+      projectionVersion: "v4" as const,
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     engineIdentity,
@@ -736,7 +842,7 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
   } as never;
   const preflight = async () => ({ classification: "approved-exception" as const, exception: "empty-test-set" as const, cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } });
   const lap = () => parseBuildReviewLapId("lap-current")!;
-  const dispatch = vi.fn(async (branch: { rubric: string }, projection: { lapId: string; snapshotDigest: string }) => ({ kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: "v3" as never, findings: [], verdict: "PASS" as const }));
+  const dispatch = vi.fn(async (branch: { rubric: string }, projection: { lapId: string; snapshotDigest: string }) => ({ kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: "v4" as never, findings: [], verdict: "PASS" as const }));
 
   it("fails the rubric closed (cache-read-failed naming the SKILL.md path) when the skill digest is unavailable", async () => {
     const readCache = vi.fn(async () => undefined);
@@ -758,9 +864,17 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
     });
   });
 
-  it("keeps v3 descriptor versions when a pre-migration cache entry misses on engine identity", async () => {
-    const cachedIdentity = { engineStamp: "aaaaaaaaaaaa", skillDigest: "sha256:skill-a" };
+  it("misses a v3 cache entry, redispatches the reviewer, and stores a v4 entry", async () => {
     const currentIdentity = { engineStamp: "bbbbbbbbbbbb", skillDigests: { testQuality: { kind: "resolved" as const, digest: "sha256:skill-a" } } };
+    const legacyEntry: BuildReviewCacheEntry = {
+      ...entry(),
+      contractVersion: "v3",
+      projectionVersion: "v3",
+      semanticIdentity: candidateIdentity({ contractVersion: "v3", projectionVersion: "v3", engineStamp: "bbbbbbbbbbbb" }),
+      engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:skill-a" },
+      result: { ...entry().result, contractVersion: "v3" },
+    };
+    expect(parseBuildReviewCacheEntry(legacyEntry)).toBeUndefined();
     const fs = memoryFilesystem();
     const written: BuildReviewCacheEntry[] = [];
     const events: unknown[] = [];
@@ -768,8 +882,8 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
       config, inputs: frozenInputs, lapId: lap(), preflight,
       engineIdentity: currentIdentity,
       readCache: async (_branch: never, projection: { digest: string; snapshotDigest: string }, policyFingerprint: string) => ({
-        ...entry(), projectionDigest: projection.digest, policyFingerprint, engineIdentity: cachedIdentity,
-        result: { ...entry().result, lapId: "lap-old", snapshotDigest: projection.snapshotDigest },
+        ...legacyEntry, projectionDigest: projection.digest, policyFingerprint,
+        result: { ...legacyEntry.result, lapId: "lap-old", snapshotDigest: projection.snapshotDigest },
       }),
       dispatchModel: dispatch,
       writeArtifact: async (artifact: never) => ({ version: 1 as const, ...(artifact as object) }),
@@ -782,23 +896,18 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
     } as never);
 
     expect(coordination.kind === "ready" ? coordination.branches[0] : undefined).toMatchObject({ kind: "dispatched" });
-    expect(events).toContainEqual({
-      type: "build_review_cache_discarded",
-      rubric: "testQuality",
-      lapId: "lap-current",
-      reason: "engine-version-mismatch",
-      cachedEngineStamp: "aaaaaaaaaaaa",
-      currentEngineStamp: "bbbbbbbbbbbb",
-    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "build_review_cache_discarded" }));
     const fresh = written[0]!;
     const descriptor = getBuildReviewRubricDescriptor('testQuality');
     expect(fresh).toMatchObject({
-      contractVersion: descriptor.contract.output.version,
-      projectionVersion: descriptor.contract.projection.version,
+      contractVersion: 'v4',
+      projectionVersion: 'v4',
       engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:skill-a" },
     });
+    expect(descriptor.contract.output.version).toBe('v4');
     await expect(readBuildReviewCacheEntry('/feature', 'testQuality', fs, fresh.semanticIdentity)).resolves.toMatchObject({
-      contractVersion: 'v3', projectionVersion: 'v3',
+      contractVersion: 'v4', projectionVersion: 'v4',
     });
   });
 });

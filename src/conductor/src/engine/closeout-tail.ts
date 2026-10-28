@@ -2,7 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { ExternalPipelineEvent } from './closeout-events.js';
+import {
+  ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES,
+  type ExternalPipelineEvent,
+} from './closeout-events.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { SessionEventReader } from './session-event-reader.js';
 
@@ -22,7 +25,7 @@ function isAlreadyProjected(projectRoot: string, event: ExternalPipelineEvent): 
 }
 
 type TailRecord =
-  | { kind: 'event'; event: ExternalPipelineEvent }
+  | { kind: 'event'; event: unknown; byteOffset: number }
   | { kind: 'malformed-line'; byteOffset: number };
 
 /**
@@ -61,7 +64,11 @@ class CloseoutTailReader {
       const line = completed.subarray(lineStart, lineEnd);
       if (line.byteLength > 0) {
         try {
-          records.push({ kind: 'event', event: JSON.parse(line.toString('utf8')) as ExternalPipelineEvent });
+          records.push({
+            kind: 'event',
+            event: JSON.parse(line.toString('utf8')),
+            byteOffset: this.offset + lineStart,
+          });
         } catch {
           records.push({ kind: 'malformed-line', byteOffset: this.offset + lineStart });
         }
@@ -124,8 +131,21 @@ export class CloseoutEventTail {
   private async pollOnce(): Promise<void> {
     for (const record of await this.reader.read()) {
       if (record.kind === 'event') {
-        if (isAlreadyProjected(this.projectRoot, record.event)) continue;
-        await this.events.emit(record.event);
+        const type = typeof record.event === 'object' && record.event !== null
+          ? (record.event as { type?: unknown }).type
+          : undefined;
+        if (!ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES.includes(type as ExternalPipelineEvent['type'])) {
+          await this.events.emit({
+            type: 'pipeline_tail_diagnostic',
+            reason: 'unadmitted-type',
+            path: PIPELINE_CLOSEOUT_LEDGER,
+            byteOffset: record.byteOffset,
+          });
+          continue;
+        }
+        const event = record.event as ExternalPipelineEvent;
+        if (isAlreadyProjected(this.projectRoot, event)) continue;
+        await this.events.emit(event);
       } else {
         await this.events.emit({
           type: 'pipeline_tail_diagnostic',
@@ -183,5 +203,15 @@ export class CloseoutEventTail {
   async drain(): Promise<void> {
     await this.poll();
     await this.projectSessionRecords(true);
+  }
+
+  /**
+   * Join any poll already reading, then always make one fresh ledger read.
+   * A caller at a dispatch boundary must not mistake the joined poll's
+   * snapshot for a read that includes a producer append that raced it.
+   */
+  async flush(): Promise<void> {
+    await this.poll();
+    await this.poll();
   }
 }

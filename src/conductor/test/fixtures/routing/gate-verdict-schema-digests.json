@@ -1,0 +1,9 @@
+{
+  "sourceCommit": "8aedc143fa",
+  "prdAudit": {
+    "schemaSha256": "121888f34d1f5a114f3691f35a36b811d130d4b1da8524ffabb94724034a508e"
+  },
+  "asBuilt": {
+    "schemaSha256": "033e37d84c181a159cc2f883fc32e262c899e7e2e2fbbfe68dcea6a1591b79e6"
+  }
+}

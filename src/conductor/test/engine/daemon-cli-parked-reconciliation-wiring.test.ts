@@ -88,10 +88,10 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
   });
 
   it('forces dashboard classification to autoCleanup: false, so a configured false toggle cannot delete during render', () => {
-    const dashboardCall = source.match(/const reconciliation = await reconcileParkedFeatures\(\{([\s\S]*?)\}\);/);
+    const dashboardCall = source.match(/const reconciliation = await options\.reconcileParkedFeatures\(\{([\s\S]*?)\}\);/);
     expect(dashboardCall?.[1]).toBeDefined();
     expect(dashboardCall?.[1]).toContain('autoCleanup: false');
-    expect(source).toContain("classification === 'merged'\n                ? 'merged-ready'");
+    expect(source).toContain("classification === 'merged' ? 'merged-ready'");
   });
 
   it('keeps every daemon-cli reconciliation caller observational or event-spine wired (rem-ab2-1)', () => {
@@ -104,17 +104,14 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     const onEvent = optionNamedBy(/event-spine sink/);
     expect([autoCleanup, reclaimMergedWorktrees, onEvent]).not.toContain(undefined);
 
-    const calls: string[] = [];
-    for (let index = source.indexOf('reconcileParkedFeatures({'); index >= 0; index = source.indexOf('reconcileParkedFeatures({', index + 1)) {
-      calls.push(objectAt(source, index));
-    }
-    expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      const cleanupDisabled = new RegExp(`\\b${autoCleanup}:\\s*false`).test(call)
-        && new RegExp(`\\b${reclaimMergedWorktrees}:\\s*false`).test(call);
-      const eventWired = new RegExp(`\\b${onEvent}:`).test(call);
-      expect(cleanupDisabled || eventWired).toBe(true);
-    }
+    // The informational dashboard adapter forwards its explicit disabled
+    // policy, while the mutating sweep is connected to the event spine.
+    expect(source).toMatch(new RegExp(
+      `reconcileParkedFeatures\\(\\{[\\s\\S]*?\\b${autoCleanup},[\\s\\S]*?\\b${reclaimMergedWorktrees}:\\s*reclaim,`,
+    ));
+    expect(source).toMatch(new RegExp(
+      `reconcileParkedFeatures: async \\(\\{ disposeHaltWatcher, isFeatureInFlight \\}\\) => \\{[\\s\\S]*?\\b${onEvent}:`,
+    ));
   });
 });
 

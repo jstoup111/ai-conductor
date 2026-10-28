@@ -90,12 +90,12 @@ describe('child-scoped build-review remediation cases', () => {
 
     await expect(second.read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
+      state: { version: 'v3', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [], outbox: [] },
     });
     await expect(second.mutate(async () => ({ value: undefined, nextState: state('child-2-case') }))).resolves.toEqual({ ok: true, value: undefined });
 
     await expect(readFile(remediationCaseStorePath(root, child1), 'utf8')).resolves.toBe(firstBytes);
-    await expect(second.read()).resolves.toEqual({ ok: true, state: state('child-2-case') });
+    await expect(second.read()).resolves.toEqual({ ok: true, state: { ...state('child-2-case'), version: 'v3', outbox: [] } });
     await expect(readRemediationCaseStoreFeature(root, undefined, child2)).resolves.toEqual({ ok: true, feature: FEATURE });
   });
 
@@ -105,7 +105,7 @@ describe('child-scoped build-review remediation cases', () => {
 
     await expect(store.mutate(async () => ({ value: undefined, nextState: state('flat-case') }))).resolves.toEqual({ ok: true, value: undefined });
     expect(remediationCaseStorePath(root)).toBe(join(root, '.pipeline', 'remediation-cases.json'));
-    await expect(store.read()).resolves.toEqual({ ok: true, state: state('flat-case') });
+    await expect(store.read()).resolves.toEqual({ ok: true, state: { ...state('flat-case'), version: 'v3', outbox: [] } });
   });
 
   it('uses the active child case store for build-review retry recovery', async () => {

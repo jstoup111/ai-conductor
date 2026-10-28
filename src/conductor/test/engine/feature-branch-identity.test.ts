@@ -8,7 +8,10 @@ import {
   SPEC_PREFIX,
   SPEC_REF_GLOBS,
   childBranchFor,
+  daemonOwnedSlugOfBranch,
+  daemonOwnedSlugOfRef,
   featureSlugOf,
+  isChildRefOf,
   isDaemonOwnedBranchName,
   leafBranchFor,
   parseFeatureBranch,
@@ -199,5 +202,35 @@ describe('featureSlugOf', () => {
 
   it('returns undefined for unrecognized identities', () => {
     expect(featureSlugOf(parseFeatureBranch('main'))).toBeUndefined();
+  });
+});
+describe('daemon-owned slug helpers', () => {
+  it('returns the slug of leaf and child refs, local or remote-tracking', () => {
+    expect(daemonOwnedSlugOfRef('refs/heads/feat/daemon-x')).toBe('x');
+    expect(daemonOwnedSlugOfRef('refs/heads/feat/c2/x')).toBe('x');
+    expect(daemonOwnedSlugOfRef('refs/remotes/origin/feat/c1/x')).toBe('x');
+  });
+
+  it('returns undefined for spec, interactive, and unrecognized refs', () => {
+    expect(daemonOwnedSlugOfRef('refs/heads/spec/x')).toBeUndefined();
+    expect(daemonOwnedSlugOfRef('refs/heads/feature/x')).toBeUndefined();
+    expect(daemonOwnedSlugOfRef('refs/heads/main')).toBeUndefined();
+    expect(daemonOwnedSlugOfRef('refs/heads/feat/c0/x')).toBeUndefined();
+  });
+
+  it('accepts a branch with or without its refs/heads/ prefix', () => {
+    expect(daemonOwnedSlugOfBranch('feat/c1/x')).toBe('x');
+    expect(daemonOwnedSlugOfBranch('refs/heads/feat/daemon-x')).toBe('x');
+    expect(daemonOwnedSlugOfBranch('spec/x')).toBeUndefined();
+    expect(daemonOwnedSlugOfBranch('custom/branch')).toBeUndefined();
+  });
+});
+
+describe('isChildRefOf', () => {
+  it('matches only child refs of the named feature', () => {
+    expect(isChildRefOf('refs/heads/feat/c1/x', 'x')).toBe(true);
+    expect(isChildRefOf('refs/heads/feat/c1/y', 'x')).toBe(false);
+    expect(isChildRefOf('refs/heads/feat/daemon-x', 'x')).toBe(false);
+    expect(isChildRefOf('refs/conductor/x/closed/1', 'x')).toBe(false);
   });
 });

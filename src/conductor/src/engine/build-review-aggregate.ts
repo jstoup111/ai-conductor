@@ -4,12 +4,14 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   deriveBuildReviewScopeIncompleteFault,
+  isBelowSeverityThreshold,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
   type BuildReviewLapId,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
   type BuildReviewScopeIncompleteFault,
+  type BuildReviewSeverity,
 } from './build-review-domain.js';
 import { BUILD_REVIEW_RUBRIC_IDS, isRegisteredRubric } from './build-review-registry.js';
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
@@ -25,14 +27,18 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 import {
   parseBuildReviewCustomArtifactMember,
   type BuildReviewCustomArtifactMember,
+  type BuildReviewReviewScope,
 } from './build-review-artifacts.js';
+import { mapBuildReviewFindingToHunks } from './build-review-finding-hunks.js';
+import type { ChangedFileReference } from './build-review-projections.js';
+import type { BuildReviewCustomFinding, BuildReviewFinding } from './build-review-domain.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
 const CUSTOM_AGGREGATE_VERSION = 'v2' as const;
 const RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const RETIRED_REASON_PREFIX = new RegExp(`^\\[(${DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.join('|')})\\]`);
 
-type Coverage = 'judged' | 'skipped' | 'infrastructure-failure' | 'scope-incomplete';
+type Coverage = 'judged' | 'skipped' | 'scope-empty' | 'infrastructure-failure' | 'scope-incomplete';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
 type LegacyFindings = Record<BuildReviewRubricId, string[]>;
 
@@ -47,6 +53,12 @@ export interface BuildReviewAggregate {
   readonly aggregateVersion: typeof AGGREGATE_VERSION | typeof CUSTOM_AGGREGATE_VERSION;
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
+  /**
+   * A stacked leaf child reviews security against the whole-feature snapshot
+   * while its other rubrics judge the child snapshot; absent means security
+   * shares `snapshotDigest`.
+   */
+  readonly securitySnapshotDigest?: string;
   readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
   /** Derived from persisted, validated judged scope resolutions. */
   readonly scopeIncomplete: readonly BuildReviewScopeIncompleteFault[];
@@ -55,6 +67,8 @@ export interface BuildReviewAggregate {
   readonly rubric: Readonly<RubricFlags>;
   readonly findings: Readonly<LegacyFindings>;
   readonly reasons: readonly string[];
+  /** Engine-stamped duplication findings permitted by a declared exact replication. */
+  readonly declaredReplicationSuppressions?: readonly { readonly findingId: string; readonly sourcePath: string; readonly targetPath: string }[];
   /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
   readonly reducedCoverageEvidence?: string;
   readonly codeStamp?: string | null;
@@ -67,6 +81,7 @@ export interface BuildReviewAggregate {
 export interface BuildReviewAggregateInput {
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
+  readonly securitySnapshotDigest?: string;
   /**
    * Construction compatibility: callers written before the default-off
    * security rubric may omit it. The join seals that omission as the explicit
@@ -77,6 +92,7 @@ export interface BuildReviewAggregateInput {
   readonly codeStamp?: string | null;
   readonly customResults?: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
   readonly currentCustomRubrics?: readonly string[];
+  readonly declaredReplicationSuppressions?: readonly { readonly findingId: string; readonly sourcePath: string; readonly targetPath: string }[];
 }
 
 /** Raw and accepted-risk state remain independently inspectable after join. */
@@ -86,6 +102,10 @@ export interface BuildReviewEffectiveVerdict {
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
   readonly suppressedFindingIds: readonly string[];
+  /** Findings observed outside this delta lap's review frontier. */
+  readonly outOfDeltaFindingIds?: readonly string[];
+  /** Findings below a declared severity threshold; visible but non-blocking. */
+  readonly advisoryFindingIds?: readonly string[];
   /**
    * Current findings a finalized autonomous remediation case already settled
    * (`finalizedBuildReviewSourceIds`). Like accepted findings they no longer
@@ -111,6 +131,32 @@ export interface BuildReviewEffectiveVerdict {
   readonly uncoveredScopeIncompleteRubrics?: readonly BuildReviewRubricId[];
   /** Present from the live reducer; optional for existing injected resolver fakes. */
   readonly scopeIncompleteRubrics?: readonly BuildReviewRubricId[];
+  /** Operator-reduced coverage releases retries but is not absence evidence. */
+  readonly hasRecordedReducedCoverage?: boolean;
+}
+
+/** Ephemeral, engine-computed scope facts shared by all current-lap readers. */
+export interface BuildReviewEffectiveScope {
+  readonly reviewScope: Pick<BuildReviewReviewScope, 'mode' | 'deltaHunks'>;
+  readonly changedFiles: readonly ChangedFileReference[];
+}
+
+function scopedHunkKey(hunk: { readonly path: string; readonly contentHash: string }): string {
+  return `${hunk.path}\u0000${hunk.contentHash}`;
+}
+
+/** Delta bookkeeping is never accepted risk and critical findings remain live. */
+export function isBuildReviewFindingOutOfDelta(
+  finding: BuildReviewFinding | BuildReviewCustomFinding,
+  scope: BuildReviewEffectiveScope | undefined,
+): boolean {
+  if (scope?.reviewScope.mode !== 'delta' || finding.severity === 'critical') return false;
+  const delta = new Set(scope.reviewScope.deltaHunks.map(scopedHunkKey));
+  if (finding.causeHunk && delta.has(scopedHunkKey(finding.causeHunk))) return false;
+  const targets = mapBuildReviewFindingToHunks(finding, scope.changedFiles);
+  return targets.length > 0 && targets.every((target) => target.kind === 'hunks'
+    ? target.hunks.every((hunk) => !delta.has(scopedHunkKey(hunk)))
+    : !scope.reviewScope.deltaHunks.some((hunk) => hunk.path === target.path));
 }
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
@@ -123,6 +169,7 @@ export interface BuildReviewRawSourceProjection {
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
   readonly confidence?: number;
+  readonly severity?: BuildReviewSeverity;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -157,9 +204,11 @@ function customSourceProjection(
     const payload = record(identity?.canonicalPayload);
     const evidenceLocations = finding?.evidenceLocations;
     const confidence = finding?.confidence;
+    const severity = finding?.severity;
     if (!finding || !identity || !payload || typeof finding.summary !== 'string' || finding.summary.length === 0 ||
       !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.some((location) => typeof location !== 'string' || location.length === 0) ||
       (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) ||
+      (severity !== undefined && severity !== 'critical' && severity !== 'major' && severity !== 'minor' && severity !== 'nit') ||
       typeof identity.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(identity.id) ||
       typeof identity.canonicalJson !== 'string' || identity.canonicalJson !== canonicalJson(payload) ||
       identity.id !== `sha256:${createHash('sha256').update(identity.canonicalJson).digest('hex')}` ||
@@ -173,6 +222,7 @@ function customSourceProjection(
       concernKind: payload.concernId, summary: finding.summary,
       evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
       ...(confidence === undefined ? {} : { confidence: confidence as number }),
+      ...(severity === undefined ? {} : { severity: severity as BuildReviewSeverity }),
     }));
   }
   return new Set(sources.map((source) => source.findingId)).size === sources.length
@@ -213,8 +263,10 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
     ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.scopeResolutions === undefined ? [] : ['scopeResolutions']), ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), ...(candidate.counterfactualSensitivity === undefined ? [] : ['counterfactualSensitivity']), 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
+      : candidate.kind === 'scope-empty'
+        ? ['kind', 'rubric']
       : candidate.kind === 'infrastructure-failure'
-        ? ['kind', 'rubric', 'reason', 'detail', ...(candidate.providerSetupExhaustion === undefined ? [] : ['providerSetupExhaustion'])]
+        ? ['kind', 'rubric', 'reason', 'detail', ...(candidate.providerSetupExhaustion === undefined ? [] : ['providerSetupExhaustion']), ...(candidate.rejection === undefined ? [] : ['rejection'])]
         : [];
   return exactKeys(candidate, keys) ? parseBuildReviewRubricResult(candidate) : undefined;
 }
@@ -259,6 +311,7 @@ function parseResults(
   value: unknown,
   lapId: BuildReviewLapId,
   snapshotDigest: string,
+  securitySnapshotDigest: string = snapshotDigest,
 ): Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>> | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, RUBRICS)) return undefined;
@@ -268,7 +321,8 @@ function parseResults(
     if (envelope.kind === 'invalid') return undefined;
     const result = envelope.kind === 'mechanical-fault' ? envelope.fault : envelope.result;
     if (envelope.kind === 'valid' && result.rubric !== rubric) return undefined;
-    if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== snapshotDigest)) return undefined;
+    const expectedDigest = rubric === 'security' ? securitySnapshotDigest : snapshotDigest;
+    if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== expectedDigest)) return undefined;
     results[rubric] = result;
   }
   return results;
@@ -286,6 +340,7 @@ function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
   switch (result.kind) {
     case 'judged': return result.findings.map((finding) => finding.concernKind);
     case 'skipped': return [`skipped: ${result.reason}`];
+    case 'scope-empty': return ['scope empty'];
     case 'infrastructure-failure': return [`infrastructure failure: ${result.detail}`];
   }
 }
@@ -299,9 +354,10 @@ function aggregateVerdict(
   custom?: { readonly results: Readonly<Record<string, BuildReviewCustomArtifactMember>>; readonly current: readonly string[] },
 ): 'PASS' | 'FAIL' {
   const currentCustom = custom?.current.map((rubric) => custom.results[rubric]!) ?? [];
-  const judgedCount = RUBRICS.filter((name) => results[name].kind === 'judged').length + currentCustom.filter((member) => member.result.kind === 'judged').length;
-  return judgedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) && !currentCustom.some((member) =>
-    member.result.kind !== 'judged' || member.result.verdict === 'FAIL',
+  const completedCount = RUBRICS.filter((name) => results[name].kind === 'judged' || results[name].kind === 'scope-empty').length + currentCustom.filter((member) => member.result.kind === 'judged' || member.result.kind === 'scope-empty').length;
+  return completedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) && !currentCustom.some((member) =>
+    (member.result.kind !== 'judged' && member.result.kind !== 'scope-empty') ||
+    (member.result.kind === 'judged' && member.result.verdict === 'FAIL'),
   ) ? 'PASS' : 'FAIL';
 }
 
@@ -311,6 +367,7 @@ function normalizeBuildReviewAggregateResults(
   return Object.freeze({
     testQuality: results.testQuality,
     security: results.security ?? { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+    implementationQuality: results.implementationQuality ?? { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' },
   });
 }
 
@@ -328,7 +385,12 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     coverage[name] = coverageFor(result);
     rubric[name] = legacyFailure(result);
     findings[name] = legacyFindingDetails(result);
-    reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    // The default-on rubric's disabled compatibility placeholder is coverage,
+    // not a reader-facing reason. This preserves old aggregate rendering while
+    // still retaining the exhaustive result in the typed map.
+    if (!(name === 'implementationQuality' && results[name].kind === 'skipped')) {
+      reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    }
     if (scopeFault) {
       scopeIncomplete.push(scopeFault);
       reasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
@@ -339,9 +401,11 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
   if (hasCustom && !custom) throw new Error('build-review aggregate requires valid self-describing custom evidence');
   const aggregate: BuildReviewAggregate = {
     aggregateVersion: hasCustom ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
+    ...(input.securitySnapshotDigest === undefined || input.securitySnapshotDigest === input.snapshotDigest ? {} : { securitySnapshotDigest: input.securitySnapshotDigest }),
     results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(results, custom),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
+    ...(input.declaredReplicationSuppressions === undefined ? {} : { declaredReplicationSuppressions: Object.freeze([...input.declaredReplicationSuppressions]) }),
     ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
   const validated = parseBuildReviewAggregate(aggregate);
@@ -380,15 +444,23 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   const isV2 = source?.aggregateVersion === CUSTOM_AGGREGATE_VERSION;
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'scopeIncomplete', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
+    ...(source.securitySnapshotDigest === undefined ? [] : ['securitySnapshotDigest']),
     ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
+    ...(source.declaredReplicationSuppressions === undefined ? [] : ['declaredReplicationSuppressions']),
     ...(isV2 ? ['customResults', 'currentCustomRubrics'] : []),
   ]) || (!isV1 && !isV2) || !isNonEmptyString(source.snapshotDigest) ||
+    (source.securitySnapshotDigest !== undefined && !isNonEmptyString(source.securitySnapshotDigest)) ||
     (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
-    (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp))) return undefined;
+    (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp)) ||
+    (source.declaredReplicationSuppressions !== undefined && (!Array.isArray(source.declaredReplicationSuppressions) || source.declaredReplicationSuppressions.some((entry) => {
+      const item = record(entry);
+      return !item || !exactKeys(item, ['findingId', 'sourcePath', 'targetPath']) || !isNonEmptyString(item.findingId) || !isNonEmptyString(item.sourcePath) || !isNonEmptyString(item.targetPath);
+    })))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
-  const results = parseResults(source.results, lapId, source.snapshotDigest);
+  const securitySnapshotDigest = source.securitySnapshotDigest as string | undefined;
+  const results = parseResults(source.results, lapId, source.snapshotDigest, securitySnapshotDigest);
   const custom = isV2 ? parseCustomResults(source.customResults, source.currentCustomRubrics) : undefined;
   const coverage = record(source.coverage);
   const rubric = record(source.rubric);
@@ -401,12 +473,14 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   const expectedReasons: string[] = [];
   const expectedScopeIncomplete: BuildReviewScopeIncompleteFault[] = [];
   for (const name of RUBRICS) {
-    if (coverage[name] !== 'judged' && coverage[name] !== 'skipped' && coverage[name] !== 'infrastructure-failure' && coverage[name] !== 'scope-incomplete' ||
+    if (coverage[name] !== 'judged' && coverage[name] !== 'skipped' && coverage[name] !== 'scope-empty' && coverage[name] !== 'infrastructure-failure' && coverage[name] !== 'scope-incomplete' ||
       typeof rubric[name] !== 'boolean' || !Array.isArray(findings[name]) || findings[name].some((finding) => typeof finding !== 'string')) return undefined;
     expectedCoverage[name] = coverageFor(results[name]);
     expectedRubric[name] = legacyFailure(results[name]);
     expectedFindings[name] = legacyFindingDetails(results[name]);
-    expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    if (!(name === 'implementationQuality' && results[name].kind === 'skipped')) {
+      expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    }
     const scopeFault = scopeFaultFor(results[name]);
     if (scopeFault) {
       expectedScopeIncomplete.push(scopeFault);
@@ -420,10 +494,12 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     JSON.stringify(source.scopeIncomplete) !== JSON.stringify(expectedScopeIncomplete) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
   return {
-    aggregateVersion: isV2 ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
+    aggregateVersion: isV2 ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest,
+    ...(securitySnapshotDigest === undefined ? {} : { securitySnapshotDigest }), results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
+    ...(source.declaredReplicationSuppressions === undefined ? {} : { declaredReplicationSuppressions: Object.freeze(source.declaredReplicationSuppressions as { readonly findingId: string; readonly sourcePath: string; readonly targetPath: string }[]) }),
     ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
 }
@@ -456,6 +532,7 @@ export function projectBuildReviewAggregateSources(value: unknown): readonly Bui
         summary: finding.summary,
         evidenceLocations: Object.freeze([...finding.evidenceLocations]),
         ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
+        ...(finding.severity === undefined ? {} : { severity: finding.severity }),
       }));
     }
   }
@@ -480,6 +557,8 @@ export function deriveEffectiveBuildReviewVerdict(
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
+  minSeverity: Partial<Record<BuildReviewRubricId, BuildReviewSeverity>> = {},
+  scopes: Partial<Record<BuildReviewRubricId, BuildReviewEffectiveScope>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -487,16 +566,23 @@ export function deriveEffectiveBuildReviewVerdict(
   const settled: string[] = [];
   const unresolved: string[] = [];
   const suppressed: string[] = [];
+  const advisory: string[] = [];
+  const outOfDelta: string[] = [];
+  const declaredReplicationIds = new Set(aggregate.declaredReplicationSuppressions?.map((entry) => entry.findingId) ?? []);
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
   const uncoveredInfrastructure: BuildReviewRubricId[] = [];
   const scopeIncomplete: BuildReviewRubricId[] = [];
   const uncoveredScopeIncomplete: BuildReviewRubricId[] = [];
-  let judgedCount = 0;
+  let completedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
     if (result.kind === 'skipped') {
       skipped.push(rubric);
+      continue;
+    }
+    if (result.kind === 'scope-empty') {
+      completedCount += 1;
       continue;
     }
     if (result.kind === 'infrastructure-failure') {
@@ -508,7 +594,7 @@ export function deriveEffectiveBuildReviewVerdict(
       ))) uncoveredInfrastructure.push(rubric);
       continue;
     }
-    judgedCount += 1;
+    completedCount += 1;
     const scopeFault = scopeFaultFor(result);
     if (scopeFault) {
       scopeIncomplete.push(rubric);
@@ -523,19 +609,25 @@ export function deriveEffectiveBuildReviewVerdict(
       if (!identity) return undefined;
       if (acceptedFindingIds.has(identity.id)) accepted.push(identity.id);
       else if (settledSourceIds.has(`${rubric}:${identity.id}`)) settled.push(identity.id);
+      else if (isBuildReviewFindingOutOfDelta(finding, scopes[rubric])) outOfDelta.push(identity.id);
+      else if (declaredReplicationIds.has(identity.id)) suppressed.push(identity.id);
       else if (finding.confidence !== undefined && finding.confidence < (minConfidence[rubric] ?? 0)) suppressed.push(identity.id);
+      else if (finding.severity !== undefined && minSeverity[rubric] !== undefined && isBelowSeverityThreshold(finding.severity, minSeverity[rubric]!)) advisory.push(identity.id);
       else unresolved.push(identity.id);
     }
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
+    verdict: completedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved), suppressedFindingIds: Object.freeze(suppressed),
+    ...(advisory.length === 0 ? {} : { advisoryFindingIds: Object.freeze(advisory) }),
+    ...(outOfDelta.length === 0 ? {} : { outOfDeltaFindingIds: Object.freeze(outOfDelta) }),
     ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
     uncoveredScopeIncompleteRubrics: Object.freeze(uncoveredScopeIncomplete),
     ...(scopeIncomplete.length > 0 ? { scopeIncompleteRubrics: Object.freeze(scopeIncomplete) } : {}),
+    ...(reducedCoverage.length === 0 ? {} : { hasRecordedReducedCoverage: true }),
   });
 }
 
@@ -551,6 +643,8 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
+  minSeverity: Partial<Record<BuildReviewRubricId, BuildReviewSeverity>> = {},
+  scopes: Partial<Record<BuildReviewRubricId, BuildReviewEffectiveScope>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -587,5 +681,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
       matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
     minConfidence,
     settledSourceIds,
+    minSeverity,
+    scopes,
   );
 }

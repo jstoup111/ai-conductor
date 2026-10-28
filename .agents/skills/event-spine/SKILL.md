@@ -106,9 +106,17 @@ one record. One writer per ledger file is therefore a correctness requirement, a
 the correct remedy — still the same union, still merged by `ts`.
 
 **C — Durable state, not an occurrence in time.**
-Gate evidence artifacts and committed design docs are *state*: they answer "what is true now",
-survive as the record, and are read by name. Events answer "what happened, when". Do not force state
-onto the bus, and do not reconstruct occurrences from state.
+A record is *state* when it answers "what is true now", survives as the record, and is read by name
+as the authority for a decision. Events answer "what happened, when". Decide by that role, not by
+the kind of artifact. Gate evidence artifacts and committed design docs are state. So are
+engine-owned authority and budget records (for example a kickback ledger, a route record, or a
+settlement receipt) that are read by name and often guarded by an atomic replace or a
+compare-and-swap. An append-only log cannot enforce a compare-and-swap, so such a record cannot
+live on the bus. Rebuilding one state record from another, such as a ledger reconciled from
+receipts, is still state. Do not force state onto the bus, and do not reconstruct occurrences from
+state. The exception covers the record and nothing else: if a record is read to learn *when*
+something happened, or polled to tell another component that something happened, it is a channel.
+The state change itself is still an occurrence and is emitted on the spine.
 
 **"Faster to bolt on" is not an exception.** Neither is "the bus doesn't have a variant for this
 yet", "this is only for debugging", or "it's just one field".
@@ -189,8 +197,11 @@ Return zero findings for these changes when the frozen diff establishes the stat
 - A same-schema, single-writer sibling ledger that the existing reader merges, under exceptions A
   and B. A separate writer file is permitted for process access or atomicity, while the
   `ConductorEvent` schema and reader path remain shared.
-- Gate evidence artifacts and committed design docs. They are durable state under exception C,
-  not occurrences reconstructed outside the bus.
+- Gate evidence artifacts, committed design docs, and engine-owned authority or budget records
+  (ledgers, route records, receipts) read by name as current state. They are durable state under
+  exception C, not occurrences reconstructed outside the bus. That includes a state record rebuilt
+  from other state records. A record read to learn when something happened, or to signal another
+  component, is still a channel.
 - Writes confined to test files or fixtures. Test-only data does not create a production channel.
 
 ### New-channel approval

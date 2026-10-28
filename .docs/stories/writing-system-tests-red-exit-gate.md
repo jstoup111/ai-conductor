@@ -67,7 +67,8 @@ disk as completed work.
 
 ### Negative Path
 
-- **Given** a retry session that sees the committed spec files,
+- **Given** a retry session that sees the committed spec files, outside a routed repair pass on a
+  stacked host (which runs acceptance in verify-green mode),
 - **When** it considers exiting because the files exist,
 - **Then** it MUST NOT exit as complete while `.pipeline/acceptance-specs-red.json` is missing —
   a missing execution marker means the specs were never run and the step is not done.

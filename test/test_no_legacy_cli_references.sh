@@ -23,10 +23,10 @@ if [ "$scanner" = rg ]; then
     --glob '!bin/ai-conductor' \
     --glob '!bin/conduct' \
     --glob '!bin/update' \
-    src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+    src/conductor/src hooks skills bin README.md HARNESS.md docs)
 else
   scan_output=$(cd "$HARNESS_DIR" && grep -rInH --fixed-strings --exclude-dir=node_modules 'conduct-ts' \
-    src/conductor/src hooks skills bin README.md HARNESS.md docs/reference/cli.md docs/reference/skills.md)
+    src/conductor/src hooks skills bin README.md HARNESS.md docs)
 fi
 scan_exit=$?
 set -e
@@ -61,9 +61,9 @@ while IFS= read -r hit; do
       ;;
     # The managed-session instruction audit recognizes both the canonical and
     # compatibility command prefixes; it does not invoke either command.
-    'src/conductor/src/engine/session-command-audit.ts:const COMMAND = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;')
+    'src/conductor/src/engine/session-command-audit.ts:const COMMAND = /(?<![.\w/-])(?:ai-conductor|conduct-ts)(?!:)\s+([a-z][a-z0-9-]*)\b/g;')
       ;;
-    'src/conductor/src/engine/session-command-audit.ts:const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\b/;')
+    'src/conductor/src/engine/session-command-audit.ts:const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)(?!:)\b/;')
       ;;
     # Claude read-only review denies every observed launcher, compatibility
     # alias included; it names the alias only to refuse it.
@@ -151,6 +151,12 @@ while IFS= read -r hit; do
     bin/install:*'conduct-ts bundle'*|bin/install:*'conduct-ts dependencies'*|bin/install:*'conduct-ts requires Node'*|bin/install:*'build conduct-ts'*|bin/install:*'build conduct_ts'*|bin/install:*'cannot build conduct-ts'*|bin/install:*'conduct-ts not built'*|bin/install:*'conduct-ts not installed'*|bin/install:*'conduct-ts symlink'*|bin/install:*'conduct-ts script'*|bin/install:*'conduct-ts is the engine-layer'*|bin/install:*'invoking `conduct-ts` explicitly.'*|bin/install:*'conduct-ts symlink cannot'*|bin/install:*'Installation incomplete — conduct-ts was not installed.'*|bin/install:*'CONDUCT_TS_FAILURE'*|bin/install:*'node_supports_conduct_ts'*|bin/install:*'build_conduct_ts'*|bin/install:*'local conduct_ts_'*|bin/install:*'current_ts='*|bin/install:*'${HARNESS_DIR}/bin/conduct-ts'*|bin/install:*'${LOCAL_BIN}/conduct-ts'*|bin/install:*'Skills, permissions and hooks are installed and usable, but conduct-ts is'*|bin/install:*'whole failed. Restate the cause here: the diagnosis in the conduct-ts'*)
       ;;
     bin/install:*'for entrypoint in conduct conduct-ts ai-conductor'*|bin/install:*'conduct-ts) expected_source'*)
+      ;;
+    # The uninstall docs list the deprecated alias among the links it removes.
+    'docs/quickstart.md:`--uninstall` removes harness-owned skill and reference links, the `conduct`, `conduct-ts`, and')
+      ;;
+    # The session-command audit docs name the compatibility prefix it recognizes.
+    'docs/contributing/extending.md:`src/conductor/src/engine/`, and evaluates each `ai-conductor <subcommand>` (or `conduct-ts`) occurrence')
       ;;
     *)
       printf 'non-allowlisted conduct-ts reference: %s\n' "$hit" >&2

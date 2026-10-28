@@ -16,6 +16,10 @@ unregistered / won't auto-build"). The objections behind that rule have been re-
   (adr-2026-06-30-sandbox-build-isolation), so a self-build never mutates the live harness.
 - **The running daemon is not swapped mid-build** — it executes the `dist/` loaded at start;
   new code goes live only on `bin/install`.
+  > **Amended 2026-10-15 by #2392:** The supervisor still runs the build it loaded at start.
+  > Each feature now runs in a child executor pinned to the build current at its claim, so
+  > new engine code reaches the next dispatch without a restart. A running build is still
+  > never swapped. See adr-2026-10-15-per-dispatch-engine-pinned-executor D1 and D2.
 - **Serial daemon** — concurrency is clamped to 1; no self-collision.
 - **HALT-based release gates** — version approval + integrity/CHANGELOG/migration gates run
   before any PR opens and fail closed (adr-2026-06-30-halt-based-release-gates).

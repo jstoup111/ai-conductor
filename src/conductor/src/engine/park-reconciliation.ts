@@ -7,6 +7,7 @@ import {
 import { GhCapabilityError } from './tracker-client.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { access, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { isOperatorParked, listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
@@ -18,6 +19,9 @@ import { phaseMarkerPath } from './phase-marker.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { ConductorEvent, WorktreeReclaimRetainedReason } from '../types/events.js';
 import { runTrackerAmbientRead } from './tracker-client.js';
+import { makeGitRunner, type GitRunner as RebaseGitRunner } from './rebase.js';
+import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
+import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -113,6 +117,7 @@ export interface ParkedSweepEntry {
 }
 
 export interface ParkedSweepResult {
+  outcome?: 'completed' | 'skipped-unchanged';
   entries: ParkedSweepEntry[];
   counts: {
     reconciled: number;
@@ -123,6 +128,18 @@ export interface ParkedSweepResult {
     skipped: number;
   };
   refusedByReason: Partial<Record<RefusalReason, number>>;
+}
+
+/** Process-local state for avoiding unchanged parked reconciliation work. */
+export interface ParkedReconciliationMemo {
+  fingerprint?: string;
+  completedAt?: number;
+  result?: ParkedSweepResult;
+}
+
+/** A daemon owns one memo for its lifetime; it is deliberately never persisted. */
+export function createParkedReconciliationMemo(): ParkedReconciliationMemo {
+  return {};
 }
 
 export interface ReconcileParkedFeaturesOptions {
@@ -138,6 +155,8 @@ export interface ReconcileParkedFeaturesOptions {
   disposeHaltWatcher?: (slug: string) => void;
   /** Daemon-pool liveness guard; active worktrees are never reclaimed. */
   isFeatureInFlight?: (slug: string) => boolean;
+  /** Live daemon claim inventory used only to invalidate the process memo. */
+  inFlightSlugs?: () => readonly string[];
   /** Test seam for the single pass-wide registered-worktree snapshot. */
   worktreeListing?: () => Promise<RegisteredWorktree[] | null>;
   /** Resolved reclamation policy; false holds registered, non-parked candidates. */
@@ -152,6 +171,10 @@ export interface ReconcileParkedFeaturesOptions {
   /** Whether project teardown output should be logged. */
   verbose?: boolean;
   worktreeLifecycle?: WorktreeLifecycleQueue;
+  /** Daemon-process memo. Omit for one-off/operator reconciliation. */
+  memo?: ParkedReconciliationMemo;
+  /** Clock seam for the ten-minute full-pass bound. */
+  now?: () => number;
 }
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -266,24 +289,78 @@ async function listShippedStemsOnMain(
 async function listBranchesBySlug(
   runGit: GitRunner,
   projectRoot: string,
-): Promise<Map<string, string[]> | null> {
+): Promise<{ branchesBySlug: Map<string, string[]>; refsFingerprintMaterial: string } | null> {
   try {
-    const { stdout } = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], {
+    const { stdout } = await runGit([
+      'for-each-ref',
+      '--format=%(refname:short) %(objectname)',
+      'refs/heads',
+      'refs/remotes/origin/main',
+    ], {
       cwd: projectRoot,
     });
     const bySlug = new Map<string, string[]>();
+    let originMainSha = '';
     for (const line of stdout.split('\n')) {
-      const ref = line.trim();
+      const [ref = '', objectId = ''] = line.trim().split(/\s+/, 2);
       if (!ref) continue;
+      if (ref === 'origin/main') {
+        originMainSha = objectId;
+        continue;
+      }
       const key = undatedStem(ref.slice(ref.lastIndexOf('/') + 1));
       const existing = bySlug.get(key);
       if (existing) existing.push(ref);
       else bySlug.set(key, [ref]);
     }
-    return bySlug;
+    return { branchesBySlug: bySlug, refsFingerprintMaterial: `${originMainSha}\n${stdout}` };
   } catch {
     return null;
   }
+}
+
+async function fingerprintParkedInputs(
+  projectRoot: string,
+  parkedSlugs: readonly string[],
+  registeredWorktrees: readonly RegisteredWorktree[] | null,
+  branches: { branchesBySlug: Map<string, string[]>; refsFingerprintMaterial: string } | null,
+  shippedStems: readonly string[] | null,
+  isFeatureInFlight: ((slug: string) => boolean) | undefined,
+  inFlightSlugs: (() => readonly string[]) | undefined,
+): Promise<string> {
+  const slugs = [...new Set([
+    ...parkedSlugs,
+    ...(registeredWorktrees ?? []).map(({ slug }) => slug),
+  ])].sort();
+  const markers = await Promise.all([...parkedSlugs].sort().map(async (slug) => {
+    try {
+      return [slug, await readFile(join(projectRoot, '.daemon', 'parked', slug), 'utf-8')];
+    } catch (error) {
+      return [slug, `!${String((error as { code?: unknown }).code ?? 'unreadable')}`];
+    }
+  }));
+  const halts = await Promise.all(slugs.map(async (slug) => {
+    try {
+      await access(join(projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
+      return [slug, true] as const;
+    } catch (error) {
+      return [slug, (error as { code?: unknown }).code === 'ENOENT' ? false : 'unreadable'] as const;
+    }
+  }));
+  const refs = branches === null
+    ? null
+    : branches.refsFingerprintMaterial;
+  const input = JSON.stringify({
+    worktrees: registeredWorktrees,
+    refs,
+    markers,
+    halts,
+    shippedStems: shippedStems === null ? null : [...shippedStems].sort(),
+    inFlight: inFlightSlugs
+      ? [...inFlightSlugs()].sort()
+      : slugs.filter((slug) => isFeatureInFlight?.(slug) ?? false),
+  });
+  return createHash('sha256').update(input).digest('hex');
 }
 
 /**
@@ -552,8 +629,9 @@ async function gatherMergeEvidence(
     ? prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot))
     : [];
   if (shippedStems === null) return null;
-  const branchesBySlug =
-    prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
+  const branchesBySlug = prefetched?.branchesBySlug
+    ?? (await listBranchesBySlug(runGit, projectRoot))?.branchesBySlug
+    ?? null;
   if (branchesBySlug === null) return null;
 
   const key = undatedStem(slug);
@@ -637,18 +715,41 @@ export async function reconcileParkedFeatures(
   const enumeratedCandidates = [...candidates.values()]
     .filter((candidate) => !candidate.parked).length;
 
-  // Read pass-invariant evidence once. Only record-gated candidates consult the
-  // shipped-record listing (adr-2026-08-01 D8), so a pass without one never
-  // reads it.
-  const hasRecordGatedCandidate = [...candidates.values()].some((candidate) =>
-    candidate.reclaimable && requiresShippedRecord(candidate.branch),
-  );
+  // Read pass-invariant evidence once. The shipped listing remains part of the
+  // memo fingerprint even when this particular pass has no record-gated
+  // candidate, so a record landing invalidates a previously skipped sweep.
   const prefetched = {
-    shippedStems: hasRecordGatedCandidate
-      ? await listShippedStemsOnMain(runGit, opts.projectRoot)
-      : [],
+    shippedStems: await listShippedStemsOnMain(runGit, opts.projectRoot),
     branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
   };
+
+  // The inputs above are the complete pre-candidate view.  Do this after the
+  // existing prefetch so an unchanged pass avoids GitHub and every per-branch
+  // ancestry probe, while a restart (a new memo) always makes a full pass.
+  const fingerprint = await fingerprintParkedInputs(
+    opts.projectRoot,
+    parkedSlugs,
+    registeredWorktrees,
+    prefetched.branchesBySlug,
+    prefetched.shippedStems,
+    opts.isFeatureInFlight,
+    opts.inFlightSlugs,
+  );
+  const now = opts.now?.() ?? Date.now();
+  const previous = opts.memo?.result;
+  if (
+    opts.memo?.fingerprint === fingerprint
+    && opts.memo.completedAt !== undefined
+    && previous !== undefined
+    && now - opts.memo.completedAt < 10 * 60 * 1000
+  ) {
+    return {
+      outcome: 'skipped-unchanged',
+      entries: previous.entries.map((entry) => ({ ...entry })),
+      counts: { ...previous.counts },
+      refusedByReason: { ...previous.refusedByReason },
+    };
+  }
 
   for (const [slug, candidate] of candidates) {
     let retainedReason: WorktreeReclaimRetainedReason | undefined;
@@ -683,7 +784,7 @@ export async function reconcileParkedFeatures(
         runGit,
         opts.projectRoot,
         slug,
-        prefetched,
+        { ...prefetched, branchesBySlug: prefetched.branchesBySlug?.branchesBySlug ?? null },
         candidate.branch,
       );
       if (evidence === null) {
@@ -845,7 +946,18 @@ export async function reconcileParkedFeatures(
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 
-  return { entries, counts, refusedByReason };
+  const result = { outcome: 'completed' as const, entries, counts, refusedByReason };
+  if (opts.memo) {
+    opts.memo.fingerprint = fingerprint;
+    opts.memo.completedAt = now;
+    opts.memo.result = {
+      outcome: result.outcome,
+      entries: entries.map((entry) => ({ ...entry })),
+      counts: { ...counts },
+      refusedByReason: { ...refusedByReason },
+    };
+  }
+  return result;
 }
 
 /**
@@ -1098,6 +1210,29 @@ export async function reconcileMergedPark(
   }
   steps.push('worktree-removed');
 
+  // Park reclamation deliberately leaves every child branch and its two
+  // stack-specific refs in place. Retire the active receipt instead, so a
+  // later feature with this slug starts fresh without orphaning kept children.
+  const publicationGit: RebaseGitRunner = async (args, options = {}) => {
+    const result = await runGit(args, {
+      cwd: opts.projectRoot,
+      ...(options.input === undefined ? {} : { input: options.input }),
+      ...(options.credential === undefined ? {} : { credential: options.credential }),
+      ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+    });
+    return { stdout: result.stdout, stderr: '', exitCode: result.exitCode ?? 0 };
+  };
+  const publication = await activePublicationRecord(opts.projectRoot, opts.slug, { git: publicationGit });
+  if (publication && publication.record.members.length > 1) {
+    await writePublicationRecord(
+      opts.projectRoot,
+      opts.slug,
+      publication,
+      { ...publication.record, tornDown: true },
+      { git: publicationGit },
+    );
+  }
+
   // The gate above proved every branch for this slug is contained in
   // origin/main, so deleting them cannot drop a commit. The no-branch case is
   // the normal end state for shipped work whose branch was deleted at merge:
@@ -1132,6 +1267,12 @@ export async function reconcileMergedPark(
     }
     steps.push('unparked');
   }
+
+  // This line is reachable only after every reclaim gate and each destructive
+  // worktree/branch/unpark operation has succeeded.  A failed local ref
+  // cleanup is retried by the next sweep; it never rewrites the reclaim
+  // decision already proven above.
+  await deleteFeatureConductorRefs(opts.slug, makeGitRunner(opts.projectRoot));
 
   return opts.emitProof && opts.branch !== undefined
     ? { slug: opts.slug, steps, proof }

@@ -1,3 +1,4 @@
+// Covers: task:37, task:rem-prd-audit-rem-v3-divergence-mapping
 /**
  * Tests for the SHIP-phase-entry draft PR publisher (`openShipDraftPr`).
  *
@@ -8,6 +9,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   openShipDraftPr as openGuardedShipDraftPr,
   shipDraftPrBody,
@@ -17,6 +21,7 @@ import {
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { isEngineFlooredBody, PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 const CWD = '/repo';
 const BRANCH = 'feat/widget-import';
@@ -63,6 +68,9 @@ function fakeGit(
   const git: GitRunner = async (args) => {
     calls.push([...args]);
     if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/repo.git\n' };
+    if (args[0] === 'rev-parse' && args.some((arg) => arg.startsWith('refs/remotes/origin/'))) {
+      return { stdout: 'a'.repeat(40) + '\n' };
+    }
     const result = handler(args);
     if (result instanceof Error) throw result;
     return result;
@@ -111,6 +119,33 @@ function createsGh(): { gh: GhRunner; calls: string[][] } {
 }
 
 describe('openShipDraftPr', () => {
+  it('maps a typed published-stack refusal to a retained halt naming the mismatched position', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ship-draft-stack-tip-'));
+    const { git } = aheadGit();
+    const { gh } = createsGh();
+    const events: unknown[] = [];
+    try {
+      await expect(openShipDraftPr({
+        gh,
+        git,
+        cwd: root,
+        branch: BRANCH,
+        baseBranch: BASE,
+        featureDesc: 'widget import flow',
+        events: { emit: async (event) => { events.push(event); } },
+        remoteGit: async () => ({
+          kind: 'refused', reason: 'stack-tip-mismatch',
+          members: [{ pr: 103, position: parseChildId(3)!, branch: 'feat/c3/widget-import-flow' }],
+        }),
+      })).resolves.toEqual({ outcome: 'stack-tip-diverged', reason: 'guarded remote publication refused: stack-tip-mismatch' });
+
+      await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 3');
+      expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [103] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('pushes the branch and opens a DRAFT PR against the base branch', async () => {
     const { git, calls: gitCalls } = aheadGit();
     const { gh, calls: ghCalls } = createsGh();
@@ -483,12 +518,12 @@ describe('openShipDraftPr', () => {
     expect(gitCalls.flat()).not.toContain('--force');
   });
 
-  it('publishes a rewritten branch with --force-with-lease when pushMode is lease', async () => {
+  it('publishes a rewritten branch with an explicit expected-SHA lease when pushMode is lease', async () => {
     const { git, calls: gitCalls } = fakeGit((args) => {
       if (args[0] === 'rev-list') return { stdout: '31\n' };
       if (args[0] === 'push') {
         // A rebased branch can never be published by a plain push.
-        if (!args.includes('--force-with-lease')) {
+        if (!args.some((arg) => arg.startsWith('--force-with-lease=refs/heads/'))) {
           return new Error('! [rejected] feat/widget-import -> feat/widget-import (non-fast-forward)');
         }
         return { stdout: '' };
@@ -508,10 +543,18 @@ describe('openShipDraftPr', () => {
     });
 
     expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
+    expect(gitCalls.filter((call) => call[0] === 'fetch')).toEqual([
+      ['fetch', 'origin', `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`],
+    ]);
     const push = gitCalls.find((c) => c[0] === 'push');
-    expect(push).toEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`, '--force-with-lease']);
-    // A lease, never a bare force: a genuinely-moved remote must still fail closed.
+    expect(push).toEqual([
+      'push', 'origin', `HEAD:refs/heads/${BRANCH}`,
+      `--force-with-lease=refs/heads/${BRANCH}:${'a'.repeat(40)}`,
+    ]);
+    // A lease, never a bare force or bare lease: a genuinely-moved remote
+    // must still fail closed against the SHA observed by that single fetch.
     expect(gitCalls.flat()).not.toContain('--force');
+    expect(gitCalls.flat()).not.toContain('--force-with-lease');
   });
 
   it('reports a stale-lease rejection as its own outcome, distinct from push-failed', async () => {

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+// Covers: S9.2
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { StepName } from '../../src/types/index.js';
 import { readState } from '../../src/engine/state.js';
+import { renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import {
   cleanupDecideEntryFixture,
   conductorFor,
@@ -42,6 +44,12 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
   });
 
   it('reaches acceptance_specs with zero DECIDE provider dispatches', async () => {
+    await mkdir(join(fixture.root, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(
+      join(fixture.root, '.docs', 'plan-review', 'another-feature.md'),
+      '# Historical plan review\n',
+      'utf8',
+    );
     await writeFixtureState(fixture, {
       feature_desc: 'decide-entry-fixture',
       track: 'technical',
@@ -56,18 +64,52 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       run: async (step) => {
         ran.push(step);
         haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
-        return step === 'coverage_binding'
-          ? { success: true }
-          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
-    expect(ran).toEqual(['coverage_binding', 'acceptance_specs']);
+    expect(ran).toEqual(['acceptance_specs']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.explore).toBe('skipped');
     expect(state.ok && state.value.complexity).toBe('skipped');
+    expect(state.ok && state.value.plan_review).toBe('skipped');
+    expect(state.ok && state.value.step_reasons?.plan_review).toBe('landed-before-plan-review');
     expect(haltedBeforeFirstDispatch).toBe(false);
+  });
+
+  it('fast-forwards a valid plan review artifact and halts for its standing blocking finding', async () => {
+    const artifactPath = join(fixture.root, '.docs', 'plan-review', 'decide-entry-fixture.md');
+    await mkdir(join(fixture.root, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(artifactPath, renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest: { digest: 'digest', planTaskDigests: {}, storyDigests: {}, adrDecisionDigests: {}, artifactDigests: {} },
+    }), 'utf8');
+    await writeFixtureState(fixture, {
+      feature_desc: 'decide-entry-fixture', track: 'technical', complexity_tier: 'M', worktree: 'done', memory: 'done',
+    });
+    await conductorFor(fixture, { run: async () => ({ success: false, output: 'acceptance sentinel' }) }).run();
+    let state = await readState(fixture.statePath);
+    expect(state.ok && state.value.plan_review).toBe('done');
+
+    await writeFile(artifactPath, renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [{ id: 'blocked-1', severity: 'blocking', lens: 'feasibility', artifact: '.docs/plans/decide-entry-fixture.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, evidence: ['src/file.ts:1'], summary: 'blocked' }],
+      dispositions: [],
+      reviewedDigest: { digest: 'digest', planTaskDigests: {}, storyDigests: {}, adrDecisionDigests: {}, artifactDigests: {} },
+    } as any), 'utf8');
+    await writeFixtureState(fixture, {
+      feature_desc: 'decide-entry-fixture', track: 'technical', complexity_tier: 'M', worktree: 'done', memory: 'done',
+    });
+    await conductorFor(fixture, { run: async () => ({ success: false, output: 'acceptance sentinel' }) }).run();
+    state = await readState(fixture.statePath);
+    expect(state.ok && state.value.plan_review).not.toBe('done');
+    expect(await pathExists(fixture.root, '.pipeline/HALT')).toBe(true);
   });
 
   it('Small tier skips its optional DECIDE artifacts and first dispatches BUILD', async () => {
@@ -85,13 +127,11 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       run: async (step) => {
         ran.push(step);
         haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
-        return step === 'coverage_binding'
-          ? { success: true }
-          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
-    expect(ran).toEqual(['coverage_binding', 'build']);
+    expect(ran).toEqual(['build']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.architecture_diagram).toBe('skipped');
@@ -117,13 +157,11 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     await conductorFor(fixture, {
       run: async (step) => {
         ran.push(step);
-        return step === 'coverage_binding'
-          ? { success: true }
-          : { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
       },
     }).run();
 
-    expect(ran).toEqual(['coverage_binding', 'acceptance_specs']);
+    expect(ran).toEqual(['acceptance_specs']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.architecture_diagram).toBe('done');

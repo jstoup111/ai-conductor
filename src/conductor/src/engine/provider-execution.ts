@@ -14,7 +14,7 @@ import type {
   HarnessConfig,
   ProviderSelection,
 } from '../types/config.js';
-import { resolveProviderCandidates } from './provider-selection.js';
+import { normalizeProviderSelection, resolveProviderCandidates } from './provider-selection.js';
 import type {
   ProviderRuntime,
   ProviderRuntimeSet,
@@ -48,9 +48,14 @@ import {
   type ProviderSetupExhaustion,
 } from './provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
+import {
+  transcriptCaptureSource,
+  type TranscriptCaptureSource,
+} from './self-host/transcript-harvest.js';
 import type { SelfHostProviderId } from './self-host/provider-home.js';
 import {
   CODEX_DISPLAY_NAME,
+  DEFAULT_PROVIDER,
   findBuiltInProviderDescriptor,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
@@ -60,6 +65,7 @@ import {
   UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
 } from '../execution/managed-session-preparation.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
+import type { ConductorEvent, ProviderStartIdentity } from '../types/events.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -166,7 +172,7 @@ export interface PreparedCandidateOperationContext {
   /** Candidate-local review policy may tighten prompt, cwd, or access after preparation. */
   invoke(
     overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
-    onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+    onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>,
   ): Promise<InvokeResult>;
   /** Candidate-owned cleanup, always run from the provider execution finally. */
   onTeardown(teardown: () => Promise<void>): void;
@@ -257,11 +263,17 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
-  identity?: { readonly runId: string | undefined; readonly attempt: number; readonly member?: string },
+  identity?: TranscriptCaptureSource,
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
+  /**
+   * Optional configuration source for native model/effort resolution.  The
+   * lifecycle step remains `step`; auxiliary work can therefore inherit a
+   * different step's policy without manufacturing another lifecycle session.
+   */
+  nativeConfigStep?: StepName;
   configuredProviders: readonly string[];
   preferredProvider?: ProviderSelection;
   runtimes: ProviderRuntimeSet;
@@ -269,6 +281,8 @@ export interface ExecuteProviderCandidatesInput {
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
+  /** Self-host transcript capture identity, independent of escalation. */
+  captureAttempt?: number;
   /** Run identity held by the enclosing step runner for self-host scratch homes. */
   runId?: string;
   /** Feature-owned worktree identity for schema-only Codex scratch. */
@@ -302,6 +316,14 @@ export interface ExecuteProviderCandidatesInput {
   onAttempt?: (
     step: StepName,
     attempt: ProviderAttemptMetadata,
+  ) => void | Promise<void>;
+  onCandidateStart?: (
+    step: StepName,
+    candidate: {
+      provider: ProviderStartIdentity;
+      model?: string;
+      executionContext?: ExecutionContext;
+    },
   ) => void | Promise<void>;
   /** Best-effort error reporting for attempt telemetry; never affects execution. */
   onTelemetryError?: (
@@ -346,12 +368,56 @@ export interface ProviderExecutionContext {
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
+  /** Settle a failed auxiliary capture before any later auxiliary dispatch can prune it. */
+  onAuxiliaryAttemptFailed?: (
+    identity: AuxiliaryAttemptFailureIdentity,
+    executionContext?: ExecutionContext,
+  ) => void | Promise<void>;
+  onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
   diagnosticLog?: (message: string) => void;
   /** Immutable identity established by the daemon before provider dispatch. */
   managedSessionContext?: ManagedSessionContext;
   prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
+}
+
+/**
+ * A failed auxiliary dispatch identifies its capture without claiming which
+ * lifecycle owner created it.  The conductor owns that resolution because it
+ * alone has the issuing execution context.
+ */
+export interface AuxiliaryAttemptFailureIdentity {
+  readonly step: StepName;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly auxiliaryMember: string;
+}
+
+/**
+ * Maps provider execution observations onto the single conductor event spine.
+ * Candidate starts are intentionally fire-and-forget: a slow renderer or
+ * persister must never delay the provider process entering its invocation.
+ */
+export function providerExecutionEventCallbacks(
+  eventTarget: { emit(event: ConductorEvent): unknown },
+): Pick<ProviderExecutionContext, 'onAttempt' | 'onCandidateStart' | 'warn'> {
+  return {
+    onAttempt: async (step, { executionContext, ...attempt }) => {
+      await eventTarget.emit({
+        type: 'provider_attempt', step, ...attempt,
+        ...(executionContext ? { executionContext } : {}),
+      });
+    },
+    onCandidateStart: (step, candidate) => {
+      void Promise.resolve(
+        eventTarget.emit({ type: 'provider_attempt_started', step, ...candidate }),
+      ).catch(() => {});
+    },
+    warn: async (_message, transition) => {
+      await eventTarget.emit(transition);
+    },
+  };
 }
 
 /**
@@ -401,6 +467,11 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     provider, capability: 'read-only-review-mode',
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider read-only review mode is unavailable.',
     recoveryAction: 'Install or update the provider so its read-only review mode is available, then re-queue this feature.',
+  };
+  if (result.systemPromptUndeliverable === true) return {
+    provider, capability: 'system-prompt-delivery',
+    reason: result.output ?? 'Provider cannot receive the engine system prompt.',
+    recoveryAction: 'Declare systemPromptCapability on the provider and deliver InvokeOptions.systemPrompt, then re-queue this feature.',
   };
   if (result.providerUnavailable === true) return {
     provider, capability: 'synchronous-spawn-permit',
@@ -607,7 +678,8 @@ export interface InvokeProviderCandidateInput {
   modelFallbackLadder?: readonly string[];
   /** Allocate invocation-only resources after any per-model cache lookup. */
   prepareInvocationOptions?: (options: InvokeOptions) => Promise<InvokeOptions>;
-  onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>;
+  onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>;
+  onCandidateStart?: (model: string | undefined) => void | Promise<void>;
 }
 
 interface SessionPolicySuppression {
@@ -627,6 +699,7 @@ export async function invokeProviderCandidate({
   modelFallbackLadder,
   onModelRung,
   prepareInvocationOptions,
+  onCandidateStart,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
@@ -670,8 +743,18 @@ export async function invokeProviderCandidate({
   };
   // Each model-fallback-ladder attempt also gets its own fresh session.
   const prepareFallback = async () => ({ sessionId: randomUUID(), resume: false });
-  const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> =>
-    runtime.provider.invoke(prepareInvocationOptions ? await prepareInvocationOptions(rungOptions) : rungOptions);
+  const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> => {
+    const preparedOptions = prepareInvocationOptions
+      ? await prepareInvocationOptions(rungOptions)
+      : rungOptions;
+    try {
+      const result = onCandidateStart?.(rungOptions.model);
+      if (result) void result.catch(() => {});
+    } catch {
+      // Provider-start telemetry is observational and cannot affect invocation.
+    }
+    return runtime.provider.invoke(preparedOptions);
+  };
   const invocation = modelFallbackLadder
     ? await new ModelAvailability(
         modelFallbackLadder,
@@ -682,11 +765,11 @@ export async function invokeProviderCandidate({
         invocationOptions,
         prepareFallback,
         (rungOptions) => onModelRung
-          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, () => invokeModel(rungOptions))
+          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, (overrides) => invokeModel({ ...rungOptions, ...overrides }))
           : invokeModel(rungOptions),
       )
     : onModelRung
-      ? { result: await onModelRung({ providerKey, ...resolved }, () => invokeModel(invocationOptions)), model: resolved.model }
+      ? { result: await onModelRung({ providerKey, ...resolved }, (overrides) => invokeModel({ ...invocationOptions, ...overrides })), model: resolved.model }
       : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback, invokeModel);
   return {
     result: invocation.result,
@@ -795,6 +878,7 @@ export function buildProviderAttemptMetadata({
  */
 export async function executeProviderCandidates({
   step,
+  nativeConfigStep,
   configuredProviders,
   preferredProvider: stepSelection,
   runtimes,
@@ -802,6 +886,7 @@ export async function executeProviderCandidates({
   config,
   tier,
   attempt = 1,
+  captureAttempt,
   runId,
   nativeSchemaScratch,
   executionContext,
@@ -817,6 +902,7 @@ export async function executeProviderCandidates({
   taskAttribution: attributionInput,
   providerAvailability,
   onAttempt,
+  onCandidateStart,
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
@@ -825,6 +911,8 @@ export async function executeProviderCandidates({
   options,
   optionsForCandidate,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
+  const resolvedNativeConfigStep = nativeConfigStep ?? step;
+  const inheritedProvider = normalizeProviderSelection(config?.llm_provider)[0] ?? DEFAULT_PROVIDER;
   const substitutionPolicy = config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution;
   const candidates = resolveProviderCandidates({
     configuredProviders,
@@ -849,6 +937,18 @@ export async function executeProviderCandidates({
     effort: EffortLevel | undefined;
   } | undefined;
   let lastUnavailableResult: InvokeResult | undefined;
+  // Auxiliary rubric captures and their terminal settlement share this
+  // closed identity. A rubric can only inhabit `member`, never `step`.
+  const selfHostCaptureIdentity = runId === undefined
+    ? undefined
+    : transcriptCaptureSource({
+      runId,
+      attempt: captureAttempt ?? attempt,
+      owner: auxiliaryMember === undefined
+        ? { kind: 'registered-step', step }
+        : { kind: 'configured-group-member', parentGroup: step, member: auxiliaryMember },
+      ...(auxiliaryMember === undefined ? {} : { auxiliaryMember }),
+    });
 
   // A fallback may become the actual candidate only after another provider has
   // failed.  Capture every candidate-local policy baseline before that can
@@ -858,13 +958,13 @@ export async function executeProviderCandidates({
     for (const [index, providerKey] of candidates.entries()) {
       const runtime = runtimes.get(providerKey);
       const resolved = resolveProviderCandidateNativeConfig({
-        step, candidateIndex: index, preferredProvider, inheritedProvider: configuredProviders[0],
+        step: resolvedNativeConfigStep, candidateIndex: index, preferredProvider, inheritedProvider,
         runtime, config, tier, attempt, escalate, modelOverride, effortOverride,
       });
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
       let prepared: SelfHostInvocation | undefined;
       try {
-        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
         await prepareCandidateBaseline({ candidate, prepared });
       } catch (error) {
         // Normal setup-unavailable candidates will be represented by the real
@@ -879,10 +979,10 @@ export async function executeProviderCandidates({
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
     const resolved = resolveProviderCandidateNativeConfig({
-      step,
+      step: resolvedNativeConfigStep,
       candidateIndex: index,
       preferredProvider,
-      inheritedProvider: configuredProviders[0],
+      inheritedProvider,
       runtime,
       config,
       tier,
@@ -965,7 +1065,7 @@ export async function executeProviderCandidates({
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     const invokeProvider = (
       overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
-      onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+      onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>,
     ): Promise<InvokeResult> => {
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
@@ -1014,6 +1114,13 @@ export async function executeProviderCandidates({
             ? modelFallbackLadder
             : resolved.modelFallbackLadder,
           onModelRung,
+          onCandidateStart: (model) => onCandidateStart?.(step, {
+            provider: providerKey.trim()
+              ? { kind: 'known', id: providerKey }
+              : { kind: 'unknown' },
+            ...(model === undefined ? {} : { model }),
+            ...(executionContext === undefined ? {} : { executionContext }),
+          }),
         });
         return invocation.result;
       })();
@@ -1032,7 +1139,7 @@ export async function executeProviderCandidates({
           ? undefined
           : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination
@@ -1056,7 +1163,7 @@ export async function executeProviderCandidates({
                 provider: providerKey,
                 context: ownedCandidateOptions.managedSessionContext,
                 readOnlyReview: true,
-                ...(selfHost?.executable ? { executable: selfHost.executable } : {}),
+                ...(selfHost?.executable ? { executable: selfHost.executable, executableArgs: selfHost.args } : {}),
               });
             } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
               throw new ProviderSetupUnavailableError({
@@ -1228,7 +1335,10 @@ export async function executeProviderCandidates({
       };
     }
     // A prepared cache hit or cancellation did not consult provider availability.
-    if (result.providerUnavailable === true) {
+    if (
+      result.providerUnavailable === true ||
+      result.systemPromptUndeliverable === true
+    ) {
       setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     }
     const invokedModel = invocation?.invokedModel;
@@ -1408,6 +1518,10 @@ export interface ExecuteAuxiliaryProviderCandidatesInput<MemberId extends string
     'modelOverride' | 'effortOverride' | 'modelFallbackLadder' | 'auxiliaryMember'> {
   memberId: MemberId;
   policy: ResolvedBuildReviewRubricPolicy;
+  /** Allocates a capture-only dispatch sequence; it must not affect escalation. */
+  nextCaptureAttempt?: () => number;
+  /** Lifecycle-owned settlement for an auxiliary capture that failed this dispatch. */
+  onAuxiliaryAttemptFailed?: ProviderExecutionContext['onAuxiliaryAttemptFailed'];
 }
 
 export async function executeAuxiliaryProviderCandidates<MemberId extends string>(
@@ -1418,17 +1532,34 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
     : [input.policy.llm_provider];
   let last: ProviderExecutionResult | undefined;
   for (let attempt = 1; attempt <= input.policy.max_retries; attempt += 1) {
+    const captureAttempt = input.nextCaptureAttempt?.() ?? attempt;
     const result = await executeProviderCandidates({
       ...input,
       configuredProviders,
       preferredProvider: input.policy.llm_provider,
       attempt,
       escalate: input.policy.escalate,
+      // Overrides apply only to candidate zero; fallback candidates resolve in
+      // nativeConfigStep through resolveFallbackProviderNativeStepConfig.
       modelOverride: input.policy.model,
       effortOverride: input.policy.effort,
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
+      captureAttempt,
     });
+    if (!result.success && input.runId !== undefined) {
+      const failureIdentity: AuxiliaryAttemptFailureIdentity = {
+        step: input.step,
+        runId: input.runId,
+        attempt: captureAttempt,
+        auxiliaryMember: input.memberId,
+      };
+      if (input.executionContext === undefined) {
+        await input.onAuxiliaryAttemptFailed?.(failureIdentity);
+      } else {
+        await input.onAuxiliaryAttemptFailed?.(failureIdentity, input.executionContext);
+      }
+    }
     // A setup-only exhaustion is terminal for this logical dispatch: retrying
     // repeats the same verified capability checks without ever invoking a
     // provider.

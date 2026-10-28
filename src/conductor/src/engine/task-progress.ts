@@ -1,5 +1,5 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
-import { isAbsolute, join, relative } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { execa } from 'execa';
 import {
   listCommitsWithTrailers,
@@ -8,13 +8,14 @@ import {
   parsePlanTaskVerifyOnly,
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
+import type { ChildId } from './child-context.js';
+import { resolveFeaturePlanPath } from './artifacts.js';
+import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
+import { loadSliceTopology } from './slice-topology.js';
 import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  coverageBindingEnvelopePath,
-  parseCoverageBindingEnvelope,
-  projectChildOwnership,
-} from './coverage-binding-envelope.js';
-import { parseChildId, type ChildId } from './child-context.js';
+  readCommittedRemediationTaskChildren,
+  resolveRemediationTaskChild,
+} from './routing/owner-derivation.js';
 import {
   createRepairObligationStore,
   repairPlanIdentity,
@@ -27,6 +28,8 @@ import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from '
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { readGitBlobs } from './git-blob-batch.js';
 import {
+  parseDoneWhenCloseSource,
+  classifyCitationProvenance,
   parseDoneWhenTestReference,
   verifyDoneWhenTestReference,
 } from './done-when-test-reference.js';
@@ -92,9 +95,22 @@ export type ChildTaskScope =
   | { kind: 'available'; taskIds: string[] }
   | { kind: 'refused'; reason: string };
 
+/** Resolve task scope from the feature branch, falling back to its active plan identity. */
+export async function resolveTaskScopeSlug(projectRoot: string): Promise<string | undefined> {
+  try {
+    const head = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: projectRoot, reject: false });
+    const slug = head.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
+    if (slug !== undefined) return slug;
+  } catch {
+    // Non-Git fixture and operator command paths retain the active-plan fallback.
+  }
+  const planPath = await resolveFeaturePlanPath(projectRoot, undefined);
+  return planPath === undefined ? undefined : basename(planPath, '.md');
+}
+
 /**
  * The authoritative task set for one stacked BUILD child.  Plan slices are
- * sealed in coverage-binding; remediation tasks are additive and belong only
+ * derived from the sealed plan; remediation tasks are additive and belong only
  * to the child recorded at append time.  A present remediation id without
  * that attribution is unsafe to assign speculatively, so it refuses rather
  * than silently dropping it.
@@ -103,57 +119,60 @@ export async function resolveChildTaskScope(
   projectRoot: string,
   child: ChildId,
 ): Promise<ChildTaskScope> {
-  let envelope;
-  try {
-    envelope = parseCoverageBindingEnvelope(
-      JSON.parse(await readFile(coverageBindingEnvelopePath(projectRoot), 'utf8')),
-    );
-  } catch {
-    envelope = null;
-  }
-  if (
-    envelope === null ||
-    !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
-    envelope.sliceMembership === undefined
-  ) {
+  const slug = await resolveTaskScopeSlug(projectRoot);
+  if (slug === undefined) {
     return {
       kind: 'refused',
-      reason: `child ${child} task membership is unavailable: coverage-binding slice membership is missing or invalid`,
+      reason: `child ${child} task membership is unavailable: feature identity is unavailable`,
+    };
+  }
+  const topology = await loadSliceTopology(projectRoot, slug);
+  if (topology.kind === 'unavailable') {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: slice topology is unavailable (${topology.cause})`,
+    };
+  }
+  if (topology.kind === 'unsliced') {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: slice topology has no child task membership`,
     };
   }
 
   const state = await readEngineState(join(projectRoot, '.pipeline', 'engine-state.json'));
-  if (!state.ok) {
-    return {
-      kind: 'refused',
-      reason: `child ${child} task membership is unavailable: engine state is unreadable (${state.message})`,
-    };
-  }
-  const rawRecorded = state.value.appendedRemediationTaskIds;
-  if (rawRecorded !== undefined && (!Array.isArray(rawRecorded) || !rawRecorded.every((id) => typeof id === 'string' && id.length > 0))) {
-    return {
-      kind: 'refused',
-      reason: `child ${child} task membership is unavailable: appended remediation task ids are invalid`,
-    };
-  }
-  const recorded = (rawRecorded ?? []) as string[];
-  const rawChildren = state.value.appendedRemediationTaskChildren;
+  // This state is a reconstruction cache, not rem-task authority. A committed
+  // Child line remains readable after a worktree recreation or cache damage.
+  const rawRecorded = state.ok ? state.value.appendedRemediationTaskIds : undefined;
+  const recorded = Array.isArray(rawRecorded)
+    ? rawRecorded.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : [];
+  const rawChildren = state.ok ? state.value.appendedRemediationTaskChildren : undefined;
   const children =
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
       ? rawChildren as Record<string, unknown>
       : undefined;
-  for (const id of recorded) {
-    const owner = typeof children?.[id] === 'number' ? parseChildId(children[id] as number) : undefined;
-    if (owner === undefined) {
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot, slug);
+  // A `rem-` prefix alone does not prove engine ownership: older plans may
+  // carry an ordinary remediation task with that spelling. A durable Child
+  // line proves a recreated worktree's engine task; otherwise only the
+  // engine-state ledger makes the missing attribution a refusal.
+  const remediationIds = [...new Set([...recorded, ...Object.keys(committedChildren)])];
+  const remediationOwners = new Map<string, ChildId>();
+  for (const id of remediationIds) {
+    const resolved = await resolveRemediationTaskChild(projectRoot, id, children?.[id], slug);
+    if (resolved.kind === 'unreadable') {
       return {
         kind: 'refused',
         reason: `child ${child} task membership is unavailable: remediation task ${id} has no recorded child`,
       };
     }
+    remediationOwners.set(id, resolved.child);
   }
 
-  const owned = projectChildOwnership(envelope, child).taskIds;
-  const remediation = recorded.filter((id) => children?.[id] === child);
+  const owned = Object.entries(topology.sliceMembership.taskSlices)
+    .flatMap(([id, owner]) => owner === child ? [id] : []);
+  const remediation = [...remediationOwners].flatMap(([id, owner]) => owner === child ? [id] : []);
   return { kind: 'available', taskIds: [...new Set([...owned, ...remediation])] };
 }
 
@@ -249,7 +268,14 @@ export async function resolveTaskIdsWithDiagnostics(
     let allOpenObligationsEvidenced = true;
     for (const obligation of obligations) {
       if (obligation.tasks[canonicalId].status === 'resolved') continue;
-      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(projectRoot, obligation.baseline.head);
+      // Routed obligations are bound to their host branch.  Never let a leaf
+      // commit satisfy a host repair merely because the current checkout is
+      // on the leaf.
+      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(
+        projectRoot,
+        obligation.baseline.head,
+        obligation.baseline.branch,
+      );
       if (strictRange.kind !== 'available') {
         allOpenObligationsEvidenced = false;
         unavailableReasons.set(planId, strictRange.reason);
@@ -385,7 +411,7 @@ export interface DoneWhenUnverifiedInput {
 export interface DoneWhenEvidenceRecord {
   check: string;
   evidence: string;
-  source: 'verified' | 'reported' | 'verify-only' | 'unverified';
+  source: 'verified' | 'reported' | 'verify-only' | 'unverified' | 'pending-judgement' | 'judged' | 'operator-accepted';
   reason?: string;
 }
 
@@ -624,6 +650,42 @@ export async function completeTaskDoneWhen(
       message: `[task-cli] task id "${id}" not found in task-status.json`,
     };
   }
+  if (Array.isArray(task.doneWhen)) {
+    for (const rawClose of task.doneWhen) {
+      if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) continue;
+      const source = parseDoneWhenCloseSource((rawClose as Record<string, unknown>).source);
+      if (source instanceof Error) {
+        return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${source.message}` };
+      }
+    }
+  }
+
+  // A citation is mechanically verified only when its named title was added
+  // in the task's recorded start window.  Any missing boundary or git error
+  // deliberately falls through to bounded judgement rather than refusing an
+  // otherwise valid close.
+  const taggedSources = new Map<number, 'verified' | 'pending-judgement'>();
+  for (const { index } of taggedChecks) {
+    if (unverifiedByIndex.has(index)) continue;
+    taggedSources.set(index, 'pending-judgement');
+    const startHead = typeof task.startHead === 'string' ? task.startHead : undefined;
+    const reference = parseDoneWhenTestReference(evidenceByIndex.get(index)!);
+    if (!startHead || !reference) continue;
+    try {
+      const ancestor = await execa('git', ['merge-base', '--is-ancestor', startHead, 'HEAD'], {
+        cwd: projectRoot, reject: false,
+      });
+      if (ancestor.exitCode !== 0) continue;
+      const diff = await execa('git', ['diff', startHead, 'HEAD', '--', reference.path], {
+        cwd: projectRoot, reject: false,
+      });
+      if (diff.exitCode === 0 && classifyCitationProvenance({
+        path: reference.path, title: reference.title, diffText: diff.stdout,
+      }) === 'task-added') taggedSources.set(index, 'verified');
+    } catch {
+      // pending-judgement is the safe, non-blocking fallback.
+    }
+  }
 
   const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => {
     const checkIndex = index + 1;
@@ -642,12 +704,35 @@ export async function completeTaskDoneWhen(
         ? 'prove-closed'
         : evidenceByIndex.get(checkIndex)!,
       source: check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
-        ? 'verified'
+        ? taggedSources.get(checkIndex) ?? 'pending-judgement'
         : verifyOnly ? 'verify-only' : 'reported',
     };
   });
 
+  // A Done-when citation refusal is narrower than an ordinary repair
+  // obligation: only the check that the judge refused can settle it, and the
+  // replacement must be mechanically verified.  Re-closing with another
+  // pending citation (or an explicit unverified disposition) must leave the
+  // refusal open for its bounded retry/demotion path.
+  const previouslyRefusedCitationChecks = new Set(
+    Array.isArray(task.doneWhen)
+      ? task.doneWhen.flatMap((rawClose, index) => {
+        if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) return [];
+        const close = rawClose as Record<string, unknown>;
+        const source = parseDoneWhenCloseSource(close.source);
+        if (source instanceof Error) return [];
+        return source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
+      })
+      : [],
+  );
+  const refusedCitationsReverified = previouslyRefusedCitationChecks.size > 0 &&
+    [...previouslyRefusedCitationChecks].every((index) => doneWhenRecords[index - 1]?.source === 'verified');
+
   for (const obligationId of openObligationIds) {
+    const obligation = standing.kind === 'live'
+      ? standing.live.find(({ id: candidateId }) => candidateId === obligationId)
+      : undefined;
+    if (obligation?.source.authority === 'done-when-citation' && !refusedCitationsReverified) continue;
     const closure = await repairs.close({
       planPath: activePlanPath,
       taskId: id,

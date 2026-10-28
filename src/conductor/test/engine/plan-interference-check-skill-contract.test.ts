@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:18, task:19, task:20
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +10,7 @@ const planSkillPath = fileURLToPath(
 );
 
 const nonInterferenceItem =
-  /tasks do not invalidate each other's fixtures or assertions[\s\S]*?\/coherence-check[\s\S]*?Medium and Large[\s\S]*?Small[\s\S]*?no required step/i;
+  /tasks do not invalidate each other's fixtures or assertions[\s\S]*?plan review[\s\S]*?Medium and Large[\s\S]*?Small[\s\S]*?no required step/i;
 
 function verificationSections(skill: string): string[] {
   const starts = [...skill.matchAll(/^## Verification$/gm)]
@@ -43,7 +43,7 @@ describe('plan skill non-interference contract', () => {
     }
   });
 
-  it('assigns the required task-versus-task sweep only to coherence-check', async () => {
+  it('assigns the required task-versus-task sweep to plan review', async () => {
     const skillNames = await readdir(skillsPath);
     const skillTexts = await Promise.all(
       skillNames.map(async (name) => [name, await readSkill(name)] as const),
@@ -53,15 +53,14 @@ describe('plan skill non-interference contract', () => {
     );
 
     expect(taskPairReferences.map(([name]) => name).sort())
-      .toEqual(['coherence-check', 'conflict-check']);
+      .toEqual(['coherence-check', 'conflict-check', 'plan-review']);
 
-    const coherenceCheck = taskPairReferences.find(([name]) => name === 'coherence-check')?.[1] ?? '';
-    const conflictCheck = taskPairReferences.find(([name]) => name === 'conflict-check')?.[1] ?? '';
+    const planReview = taskPairReferences.find(([name]) => name === 'plan-review')?.[1] ?? '';
     const planSkill = await readFile(planSkillPath, 'utf8');
 
-    expect(coherenceCheck).toMatch(/Task-versus-task[\s\S]*?checked in both directions/i);
-    expect(conflictCheck).toMatch(/task↔task[\s\S]*?\/coherence-check/i);
+    expect(planReview).toMatch(/task-versus-task[\s\S]*?other direction/i);
+    expect(planReview).toMatch(/Cross-layer and task versus task[\s\S]*?plan review at Medium and Large/i);
     expect(planSkill).toMatch(nonInterferenceItem);
-    expect(planSkill).toMatch(/\/coherence-check[\s\S]*?Medium and Large/i);
+    expect(planSkill).toMatch(/plan review[\s\S]*?Medium and Large/i);
   });
 });

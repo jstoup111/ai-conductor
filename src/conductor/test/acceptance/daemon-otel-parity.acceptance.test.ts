@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:4, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -118,7 +118,6 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   build_no_progress: [{ type: 'build_no_progress', step: 'build', quietMinutes: 1, resolved: 1, total: 2, activity: 'quiet' }],
   build_active_stall: [{ type: 'build_active_stall', step: 'build', minutes: 45, resolved: 1, total: 2, action: 'warn' }],
   build_stall: [{ type: 'build_stall', step: 'build', reason: 'no_task_progress', resolvedBefore: 1, resolvedAfter: 1 }],
-  pipeline_closeout: [{ type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1, endedAt: 2, ts: 2 }],
 };
 function eventSequence(type: ConductorEvent['type']): ConductorEvent[] {
   const events = eventSequences[type];
@@ -202,7 +201,7 @@ async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: Co
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-parity-')); dirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a'); fixture.events = events; fixture.filteredType = filteredType;
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\notel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   const exporter = new InMemorySpanExporter();
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   buildExporters
@@ -237,7 +236,7 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   fixture.postMetricEvents = [{ type: 'step_completed', step: 'build', status: 'done' }];
   fixture.metricExportAttempts = 3;
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\notel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   buildExporters.mockReturnValue({ spanExporter: new InMemorySpanExporter(), metricExporter });
   await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
   const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([

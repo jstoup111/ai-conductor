@@ -108,7 +108,7 @@ describe('custom build-review policy event spine', () => {
     for (const type of ['build_review_policy_resolved', 'build_review_policy_failed', 'build_review_cache_hit', 'build_review_rubric_result', 'build_review_outer_verdict'] as const) {
       events.on(type, (event) => renderDaemonEvent(event, (line) => lines.push(line)));
     }
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }),
       supportsSessionResume: false,
@@ -126,7 +126,7 @@ describe('custom build-review policy event spine', () => {
         if (args[0] === 'show') return { exitCode: 0, stdout: 'export const value = 0;\n', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       },
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),

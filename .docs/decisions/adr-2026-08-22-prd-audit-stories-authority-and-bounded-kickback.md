@@ -67,6 +67,11 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > gaps remain explicit and blocking; no fabricated criterion or new repair authority
    > is introduced. A malformed/absent result envelope is a mechanical no-verdict fault.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, refusal rework admitted under the #2931
+> amendment is placed in a host child by the engine's residue routing call, and appended there
+> through the same seam and caps (`adr-2026-10-12-routed-whole-feature-repair` decisions 3 and 9).
+
+
 4. **Scope-as-intent.** `OVER_SCOPE` judges shipped behavior against the plan and intent (PRD
    Goals/Non-Goals and In/Out Scope, else stories + plan outcome). Within intent → self-accepted and
    recorded as a widening; outside intent, not user-visible → recorded, ships; outside intent,
@@ -81,6 +86,11 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > longer flags the criterion. See adr-2026-08-24-over-scope-decision-block-and-durable-refusals.
 > **Amended 2026-09-07 by #2429:** Explicit refusal revision and NC relationship authority now follow adr-2026-09-07-durable-prd-widening-decision-reconciliation D1-D4/D8. An old cleared acceptance cannot override a newer refusal; an explicit revision names the prior decision. The report-local NC key remains presentation, and valid original decisions are captured before current-report reconciliation. No NC case becomes a BUILD task, and the existing FIXABLE/PLAN_GAP routing and allowances below remain unchanged.
 > **Amended 2026-10-03 by #2931:** An operator-*refused* finding, NC or story-criterion, may now become bounded removal/rework through the existing remediation append seam, sharing decision 5's `gates.prd_audit` lap and growth caps. A finding that is not refused still never becomes work. See adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the bounded rework a refused finding
+> becomes is routed to a host child as residue and charged once through the round receipt
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 3 and 10).
+
 
 5. **Bounded kickback.** `FIXABLE` findings route to BUILD through the existing remediation append
    seam — the only plan appender — under engine-enforced caps: **one lap per feature**, at most
@@ -103,6 +113,20 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > and 25% bounds are unchanged; only their enforcement point moves. A halt with no appended or
    > bound repair keeps the prior behavior.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature (the cursor reports durable children),
+> FIXABLE work is routed after admission to the child that owns its task. Every host's rem-* blocks
+> are allocated and frozen at admission. Each block is appended on its host child at region entry,
+> not on the leaf. The lap and the declared growth are charged once, at the first host's BUILD
+> dispatch, by the route record's settlement compare-and-swap after the cap check
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 2, 9 and 10). N=1 is unchanged.
+
+> **Amended 2026-10-25 by #2413:** The lap allowance is no longer one lap per feature. It is
+> derived from the feature's complexity tier: Small 2, Medium 3, Large 4, with a feature that has
+> no recorded tier treated as Medium. `prd_audit.max_remediation_laps` may set a positive integer
+> (every tier) or a map of `S`/`M`/`L` to positive integers (unset tiers keep their default). An
+> operator `kickback-budget raise` still takes precedence. The 5-task and 25% growth caps, the
+> halt class, and the enforcement point are unchanged.
+
 6. **Growth ledger.** The kickback ledger gains a per-feature `growth` record:
    `{authored, added, byGate, remaining}`; pre-existing `rem-*` tasks found in a plan at first read
    count toward `authored`. Surfaced by `conduct-ts` status output and emitted on the spine.
@@ -120,6 +144,12 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > `pendingRepair` fails closed (adr-2026-08-31-kickback-ledger-read-fails-closed D1): the
    > `prd_audit` and `architecture_review_as_built` allowances and the growth allowance read as
    > exhausted, and that invalidity is scoped to those gates and the growth record.
+
+> **Amended 2026-10-12 by #2944:** For a stacked feature, the round receipt in the route record is
+> the charge authority. The ledger is written after that commit point and reconciled by receipt id.
+> `authored` is stored on first record and never re-derived. The pending-task exclusion reads the
+> frozen allocation rather than the active plan (`adr-2026-10-12-routed-whole-feature-repair`
+> decision 10). N=1 is unchanged.
 
 7. **PLAN_GAP.** Happy-path criterion unmet with no owning task → HALT (class `plan-gap`); negative/
    edge criterion → recorded in the verdict and the shipped record, ships, unless configuration

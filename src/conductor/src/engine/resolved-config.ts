@@ -21,10 +21,11 @@ import { DEFAULT_PROVIDER, providerDescriptor } from '../execution/provider-cata
 import { selectFallbackLadder } from './model-availability.js';
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
-import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
+import { BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED, BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import { resolveBuildReviewCustomContract } from './build-review-policy-resolver.js';
 import { resolveBuildReviewContractCatalog, type RubricContractDescriptor } from './build-review-contract.js';
 import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js';
+import type { BuildReviewSeverity } from './build-review-domain.js';
 import type { BuildReviewCustomFindingIdentity } from './build-review-finding-identity.js';
 import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
 
@@ -46,10 +47,12 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   conflict_check: 3,
   plan: 3,
   coherence_check: 3,
+  // max_retries is the total attempt budget: one dispatch, no auto-retry,
+  // so a blocking round 1 never auto-dispatches round 2 before the author edits.
+  plan_review: 1,
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
-  coverage_binding: 3,
   acceptance_specs: 3,
   build: 3,
   build_review: 3,
@@ -76,10 +79,10 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   conflict_check: 'conditional',
   plan: 'manual',
   coherence_check: 'conditional',
+  plan_review: 'conditional',
   architecture_diagram: 'auto',
   architecture_review: 'conditional',
   worktree: 'auto',
-  coverage_binding: 'auto', // engine-native gate; the judge config is resolved separately
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
@@ -124,16 +127,6 @@ export function resolveDaemonConcurrency(config?: HarnessConfig): number {
  * by default — the intended behavior change, documented as a migration note.
  */
 export const DEFAULT_STEP_ESCALATE = true;
-
-/** Resolve the default-off coverage-binding judge configuration. */
-export function resolveCoverageBindingConfig(
-  config: Pick<HarnessConfig, 'coverage_binding'> | undefined,
-): { judgeEnabled: boolean; batchSize: number } {
-  return {
-    judgeEnabled: config?.coverage_binding?.judge?.enabled ?? false,
-    batchSize: config?.coverage_binding?.judge?.batch_size ?? 8,
-  };
-}
 
 /** Resolve the project-only feature applicability opt-in. */
 export function resolveFeatureApplicabilityConfig(
@@ -752,6 +745,8 @@ export interface ResolvedBuildReviewRubricPolicy {
   readonly max_retries: number;
   readonly escalate: boolean;
   readonly min_confidence: number;
+  /** Absent preserves legacy behavior; no severity threshold is defaulted. */
+  readonly min_severity?: BuildReviewSeverity;
 }
 
 /** An enabled built-in rubric published for build-review execution. */
@@ -829,20 +824,7 @@ export function resolveBuildReviewCustomCatalog(
 const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'high'>> = {
   testQuality: 'high',
   security: 'high',
-};
-
-/**
- * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always
- * wins. Test quality is opt-in: its scoped-run preflight classifies test output
- * with framework-specific patterns, and on frameworks it does not recognize
- * (e.g. RSpec, #1682) every run — pass or fail — becomes an unretriable
- * infrastructure failure, so the rubric can never return a verdict and the
- * gate deadlocks. Projects whose framework the preflight understands enable
- * it explicitly (this repository does, in `.ai-conductor/config.yml`).
- */
-const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
-  testQuality: false,
-  security: false,
+  implementationQuality: 'medium',
 };
 
 function freezeProviderSelection(selection: ProviderSelection): ProviderSelection {
@@ -942,13 +924,14 @@ export function resolveBuildReviewConfig(
       max_retries: resolvedNeutral.max_retries,
       escalate: resolvedNeutral.escalate,
       min_confidence: rubric?.min_confidence ?? 0,
+      ...(rubric?.min_severity === undefined ? {} : { min_severity: rubric.min_severity }),
     });
   };
   const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
     rubricId,
     resolveRubricPolicy(
       block?.rubrics?.[rubricId],
-      DEFAULT_RUBRIC_ENABLED[rubricId],
+      BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId],
       DEFAULT_RUBRIC_EFFORT[rubricId],
     ),
   ])) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;

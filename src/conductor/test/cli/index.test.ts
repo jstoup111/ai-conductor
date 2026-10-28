@@ -1,8 +1,10 @@
-// Covers: task:3, task:10, task:12, task:21
+// Covers: task:2, task:3, task:10, task:12, task:21
 
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
-import { stat } from 'node:fs/promises';
+import { Command } from 'commander';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   parseArgs,
@@ -13,7 +15,106 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectBuildReviewResolveCaseCommand,
 } from '../../src/cli.js';
+import { DAEMON_RUN_FLAGS } from '../../src/engine/daemon-command.js';
+import { detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
+import { detectDaemonObserveCommand } from '../../src/engine/daemon-observe-cli.js';
+import { PRE_DISPATCH_COMMANDS } from '../../src/cli-pre-dispatch.js';
+import { renderCanonicalFullHelp } from '../../src/index.js';
+
+const OPERATOR_FACING_COMMANDS = [
+  'shipped-record',
+  'docs-prune',
+  'kpi',
+  'memory',
+  'brain',
+  'intake-loop',
+  'render-diagrams',
+  'build-auth-status',
+  'transcripts',
+  'shipment-evidence',
+] as const;
+
+const HIDDEN_PRE_DISPATCH_COMMANDS = [
+  'scoped-run',
+  'halt-clear',
+  'missing-reseal-reason',
+  'test-suite',
+  'finish-record',
+  'manual-test-record',
+  'derive-feedback',
+  'github-boundary-audit',
+  'github-operation',
+  'scope-check',
+  'task-membership-check',
+  'round-stamp',
+] as const;
+
+const VISIBLE_PRE_DISPATCH_COMMANDS = [
+  'render-diagrams',
+  'rate-card',
+  'overlap-scan',
+  'version',
+  'update',
+  'build-review',
+  'done-when',
+  'build-tail',
+  'decide-grant',
+  'kickback-budget',
+  'rewind',
+  'reseal',
+  'memory',
+  'register',
+  'create',
+  'config',
+  'engineer',
+  'intake-loop',
+  'brain',
+  'shipped-record',
+  'docs-prune',
+  'transcripts',
+  'shipment-evidence',
+  'task',
+  'evidence',
+  'kpi',
+  'build-auth-status',
+  'halt-issues',
+  'plan-protected-targets',
+  'monitor',
+  'daemon',
+] as const;
+
+function expectVisibleOperatorCommands(program = createProgram()): void {
+  const commandNames = program.commands.map((command) => command.name());
+  for (const command of OPERATOR_FACING_COMMANDS) {
+    expect(commandNames, `missing visible command: ${command}`).toContain(command);
+  }
+}
+
+function fullHelpSection(help: string, path: string): string {
+  const header = `ai-conductor ${path}\n`;
+  const start = help.indexOf(header);
+  expect(start, `missing full-reference section: ${path}`).toBeGreaterThanOrEqual(0);
+  const nextSection = help.indexOf(`\n\n${'─'.repeat(72)}\n`, start + header.length);
+  return help.slice(start, nextSection === -1 ? undefined : nextSection);
+}
+
+function missingDaemonRunFlags(
+  flags: readonly string[],
+  daemon: Command,
+): string[] {
+  const declared = new Set(daemon.options.map((option) => option.long));
+  return flags.filter((flag) => !declared.has(flag));
+}
+
+/** Commander keeps these declaration details as runtime fields, but omits them from its public types. */
+function commanderInternals(command: Command | undefined): {
+  _hidden?: boolean;
+  _actionHandler?: unknown;
+} | undefined {
+  return command as (Command & { _hidden?: boolean; _actionHandler?: unknown }) | undefined;
+}
 
 describe('CLI', () => {
   it('detects only the explicit read-only build-review findings grammar', () => {
@@ -36,6 +137,11 @@ describe('CLI', () => {
     expect(detectBuildReviewRecordReducedCoverageCommand([
       'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
     ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
+  });
+  it('accepts the child-scoped resolve-case command rendered in build-review halts', () => {
+    expect(detectBuildReviewResolveCaseCommand([
+      'node', 'conduct', 'build-review', 'resolve-case', '--feature', 'review-rubrics', '--child', '2', '--case', 'case-open', '--rationale', 'known risk',
+    ])).toEqual({ kind: 'resolve-case', feature: 'review-rubrics', child: '2', caseId: 'case-open', rationale: 'known risk' });
   });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);
@@ -297,6 +403,87 @@ describe('CLI', () => {
     });
   });
 
+  describe('operator-facing command reference', () => {
+    it('lists each operator-facing command with a one-line description in canonical help', () => {
+      const help = renderCanonicalFullHelp();
+      expectVisibleOperatorCommands();
+      for (const command of OPERATOR_FACING_COMMANDS) {
+        expect(help).toMatch(new RegExp(`^  ${command}\\b\\s+.+$`, 'm'));
+      }
+    });
+
+    it('gives every operator-facing command a full-reference section with its declared interface', () => {
+      const help = renderCanonicalFullHelp();
+      const commandOptions: Record<(typeof OPERATOR_FACING_COMMANDS)[number], string[]> = {
+        'shipped-record': ['--slug', '--pr'],
+        'docs-prune': [],
+        kpi: [],
+        memory: ['setup'],
+        brain: ['start', 'stop', 'status'],
+        'intake-loop': ['--continuous', '--once', '--interval-ms'],
+        'render-diagrams': ['--check'],
+        'build-auth-status': [],
+        transcripts: ['--show'],
+        'shipment-evidence': ['--pr', '--event', 'reconcile', 'audit'],
+      };
+      for (const [command, options] of Object.entries(commandOptions)) {
+        const section = fullHelpSection(help, command);
+        for (const option of options) expect(section).toContain(option);
+      }
+      expect(fullHelpSection(help, 'memory setup')).toContain('[dir]');
+      expect(fullHelpSection(help, 'shipment-evidence reconcile')).toContain('--shipped');
+      expect(fullHelpSection(help, 'shipment-evidence audit')).toContain('--report');
+    });
+
+    it('names a missing operator-facing command in the visible-command fixture check', () => {
+      const program = new Command();
+      for (const command of OPERATOR_FACING_COMMANDS.filter((command) => command !== 'memory')) {
+        program.command(command);
+      }
+      expect(() => expectVisibleOperatorCommands(program)).toThrow('missing visible command: memory');
+    });
+
+    it('keeps previously visible recovery and timing commands in the top-level list', () => {
+      const commandNames = createProgram().commands.map((command) => command.name());
+      expect(commandNames).toEqual(expect.arrayContaining(['kickback-budget', 'build-tail']));
+    });
+  });
+
+  describe('engine-internal command catalog', () => {
+    it('declares the four named engine-internal commands as hidden', () => {
+      const commands = createProgram().commands;
+      for (const name of ['test-suite', 'finish-record', 'manual-test-record', 'derive-feedback']) {
+        expect(commanderInternals(commands.find((command) => command.name() === name))?._hidden, name).toBe(true);
+      }
+    });
+
+    it('declares every formerly undeclared pre-dispatch top-level command as hidden', () => {
+      const commands = createProgram().commands;
+      const declaredHiddenCommands = [...new Set(
+        PRE_DISPATCH_COMMANDS
+          .map(({ commandPath }) => commandPath[0])
+          .filter((name) => !VISIBLE_PRE_DISPATCH_COMMANDS.includes(
+            name as (typeof VISIBLE_PRE_DISPATCH_COMMANDS)[number],
+          )),
+      )].sort();
+      expect(declaredHiddenCommands).toEqual([...HIDDEN_PRE_DISPATCH_COMMANDS].sort());
+      for (const name of HIDDEN_PRE_DISPATCH_COMMANDS) {
+        expect(commanderInternals(commands.find((command) => command.name() === name))?._hidden, name).toBe(true);
+      }
+      for (const name of [...VISIBLE_PRE_DISPATCH_COMMANDS, ...OPERATOR_FACING_COMMANDS]) {
+        expect(commanderInternals(commands.find((command) => command.name() === name))?._hidden, name).not.toBe(true);
+      }
+    });
+
+    it('omits hidden commands from canonical full help listings and sections', () => {
+      const help = renderCanonicalFullHelp();
+      for (const name of HIDDEN_PRE_DISPATCH_COMMANDS) {
+        expect(help).not.toMatch(new RegExp(`^  ${name}\\b`, 'm'));
+        expect(help).not.toContain(`ai-conductor ${name}\n`);
+      }
+    });
+  });
+
   describe('root-level program description names both loops', () => {
     it('mentions daemon, engineer, and points to `engineer --help`', () => {
       const rootHelp = createProgram().helpInformation();
@@ -317,11 +504,121 @@ describe('CLI', () => {
         expect(help).toContain(`ai-conductor daemon ${verb}`);
       }
     });
+
+    // Covers: task:9
+    it('lists every daemon run flag and describes --all as including completed features', () => {
+      expect(help).toContain('--no-watch');
+      expect(help).toContain('--completed');
+      expect(help).toMatch(/--all[\s\S]*including completed features/i);
+    });
+
+    // Covers: task:9
+    it('declares every parser-recognized daemon run flag', () => {
+      const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
+      expect(daemon).toBeDefined();
+      expect(missingDaemonRunFlags(DAEMON_RUN_FLAGS, daemon!)).toEqual([]);
+    });
+
+    // Covers: task:9
+    it('names an undeclared daemon run flag in the parity fixture', () => {
+      const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
+      expect(daemon).toBeDefined();
+      expect(missingDaemonRunFlags(['--no-such-run-flag'], daemon!)).toEqual(['--no-such-run-flag']);
+    });
+
+    // Covers: task:10
+    it('lists the logs flags, including the --repo=<path> spelling', () => {
+      const logs = fullHelpSection(help, 'daemon logs');
+      expect(logs).toContain('-f, --follow');
+      expect(logs).toContain('-n, --lines <n>');
+      expect(logs).toMatch(/--repo <path>[\s\S]*--repo=<path>/);
+      expect(logs).toContain('--all');
+    });
+
+    // Covers: task:10
+    it('documents fleet selectors without adding commander action handlers or --names', () => {
+      const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
+      expect(daemon).toBeDefined();
+      for (const verb of ['pause', 'resume', 'restart']) {
+        const section = fullHelpSection(help, `daemon ${verb}`);
+        expect(section).toContain(`[repos...]`);
+        expect(section).toMatch(/named\s+subset/i);
+        expect(section).toMatch(/--all[\s\S]*every registered repo/i);
+
+        const command = daemon!.commands.find((candidate) => candidate.name() === verb);
+        expect(commanderInternals(command)?._actionHandler).toBeNull();
+        expect(command?.options.map((option) => option.long)).not.toContain('--names');
+      }
+    });
+
+    // Covers: task:10
+    it('parses logs -n exactly as --lines', () => {
+      const short = detectDaemonObserveCommand(['node', 'conduct', 'daemon', 'logs', '-n', '50']);
+      const long = detectDaemonObserveCommand(['node', 'conduct', 'daemon', 'logs', '--lines', '50']);
+      expect(short).toMatchObject({ kind: 'logs', lines: 50 });
+      expect(short).toEqual(long);
+    });
+
+    // Covers: task:10
+    it('leaves bare daemon restart on its pre-selector result shape', () => {
+      expect(detectDaemonSupervisorCommand(['node', 'conduct', 'daemon', 'restart'])).toEqual({ verb: 'restart' });
+    });
   });
 
   // The inline pipeline now runs under an explicit `inline` subcommand; detectInline
   // strips that token so parseArgs sees just the feature + flags.
   describe('detectInline', () => {
+    it('rejects the retired closeout-event command without changing its sibling ledger', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'retired-closeout-command-'));
+      const ledger = join(projectRoot, '.pipeline', 'pipeline-events.jsonl');
+      try {
+        await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+        await writeFile(ledger, '{"type":"kickback_budget_adjustment_authorized","adjustmentId":"kept"}\n');
+        const before = await readFile(ledger, 'utf8');
+
+        const result = await execa(
+          process.execPath,
+          ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'closeout-event', 'start', 'simplify'],
+          { cwd: projectRoot, reject: false, all: true },
+        );
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.all).toContain("error: unknown command 'closeout-event'");
+        expect(await readFile(ledger, 'utf8')).toBe(before);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a stale evaluator closeout invocation without appending either event ledger', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'retired-evaluator-closeout-'));
+      const pipelineDir = join(projectRoot, '.pipeline');
+      const siblingLedger = join(pipelineDir, 'pipeline-events.jsonl');
+      const canonicalLedger = join(pipelineDir, 'events.jsonl');
+      try {
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(siblingLedger, '{"type":"pipeline_closeout_started","obligation":"evaluator","ts":10}\n');
+        await writeFile(canonicalLedger, '{"type":"step_started","step":"build","index":0}\n');
+        const [siblingBefore, canonicalBefore] = await Promise.all([
+          readFile(siblingLedger, 'utf8'), readFile(canonicalLedger, 'utf8'),
+        ]);
+
+        const result = await execa(
+          process.execPath,
+          ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'closeout-event', 'start', 'evaluator'],
+          { cwd: projectRoot, reject: false, all: true },
+        );
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.all).toContain("error: unknown command 'closeout-event'");
+        expect(result.all).not.toMatch(/uncaught|TypeError|ReferenceError/i);
+        await expect(Promise.all([readFile(siblingLedger, 'utf8'), readFile(canonicalLedger, 'utf8')]))
+          .resolves.toEqual([siblingBefore, canonicalBefore]);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
     it('recognizes `inline` and strips it from argv', () => {
       const { isInline, rest } = detectInline(['node', 'conduct', 'inline', 'URL shortener']);
       expect(isInline).toBe(true);

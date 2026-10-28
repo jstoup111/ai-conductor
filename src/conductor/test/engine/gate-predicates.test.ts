@@ -302,7 +302,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     expect(r.routeClass).toBe('absent');
   });
 
-  it('passes on a fresh valid PASS verdict', async () => {
+  it('passes a fresh legacy scalar PASS that omits later-added rubric flags', async () => {
     await verdict({ verdict: 'PASS', rubric: { testQuality: false } });
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });

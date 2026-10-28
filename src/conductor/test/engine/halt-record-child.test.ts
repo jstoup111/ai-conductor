@@ -15,14 +15,15 @@ import {
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { escalateBuildFailure } from '../../src/engine/build-failure-escalation.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '../../src/engine/remote-git-operations.js';
 
 const scratchRoots: string[] = [];
+const leaseTip = 'a'.repeat(40);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -72,7 +73,10 @@ describe('child halt records', () => {
       .resolves.toEqual({ status: 'written' });
 
     await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.toContain('Child: 2\n');
-    expect(remote.calls).toEqual([['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo', '--force-with-lease']]);
+    expect(remote.calls).toEqual([[
+      'push', 'origin', 'HEAD:refs/heads/feat/daemon-demo',
+      `--force-with-lease=refs/heads/feat/daemon-demo:${leaseTip}`,
+    ]]);
   });
 
   it('keeps the N=1 record byte shape and publishes it', async () => {
@@ -83,7 +87,10 @@ describe('child halt records', () => {
       .resolves.toEqual({ status: 'written' });
 
     await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.not.toContain('\nChild:');
-    expect(remote.calls).toEqual([['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo', '--force-with-lease']]);
+    expect(remote.calls).toEqual([[
+      'push', 'origin', 'HEAD:refs/heads/feat/daemon-demo',
+      `--force-with-lease=refs/heads/feat/daemon-demo:${leaseTip}`,
+    ]]);
   });
 
   it('refuses escalation from a child branch before any push or PR creation', async () => {
@@ -125,6 +132,9 @@ function recordingRemote(): { calls: string[][]; options: HaltRecordRemoteOption
   return {
     calls,
     options: {
+      git: async (args: string[]) => ({
+        stdout: args[0] === 'rev-parse' ? `${leaseTip}\n` : '',
+      }),
       remoteGit: async (args: readonly string[], _dependencies: RemoteGitOperationDependencies): Promise<RemoteGitExecutionResult> => {
         calls.push([...args]);
         return { kind: 'executed', targets: [] };
@@ -152,7 +162,7 @@ async function currentBranch(worktree: string): Promise<string> {
 }
 
 async function sealChildren(worktree: string, positions: readonly number[]): Promise<void> {
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeSliceTopologyFixture(worktree, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

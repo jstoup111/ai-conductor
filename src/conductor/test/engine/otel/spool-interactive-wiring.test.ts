@@ -66,7 +66,10 @@ async function closedEndpoint(): Promise<string> {
 }
 
 async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {
-  for (let turn = 0; turn < 1_000 && !(await predicate()); turn += 1) {
+  // Poll by wall-clock deadline, not a fixed turn count: the awaited state
+  // follows real loopback HTTP, which a loaded CI runner can delay past any
+  // fixed number of event-loop turns. The deadline only fails the test.
+  for (const deadline = Date.now() + 5_000; !(await predicate()) && Date.now() < deadline;) {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 }

@@ -50,6 +50,14 @@ worktree yet** — and (FR-5) leaves machine-halt semantics untouched.
    (FR-6). *(Amended at conflict-check: the original enumerated chain omitted GATED from the
    owner-gated dashboard spec — stated as "PARKED strictly first" to stay robust to sibling
    group additions.)*
+
+   > **Amended 2026-10-24 by #1332:** "Outranks every existing group" and "PARKED strictly first"
+   > now govern **bucket precedence** only: a parked slug is still excluded from every other group
+   > and shows once, as PARKED. They no longer fix **display position**. The startup dashboard
+   > renders groups that need action first, then active groups, then inert groups, so PARKED
+   > renders after them. In the compact console render, PARKED is a count line plus only the rows
+   > annotated `orphan` or `merged-ready`. The full render in `daemon.log` and under `--all` still
+   > lists every parked row.
 6. **Canonical home:** the marker path constant + read/write/remove helpers live in one module
    (the `halt-marker.ts` single-source pattern); sweep, deps, dashboard, and CLI all import it —
    no re-spelled paths.

@@ -5,6 +5,7 @@ import { join, relative } from 'node:path';
 import { AUDIT_TRAIL_DIRECTORY } from './audit-trail.js';
 import { BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY } from './build-review-artifacts.js';
 import { BUILD_REVIEW_CACHE_DIRECTORY } from './build-review-cache.js';
+import { BUILD_REVIEW_REJECTION_DIRECTORY } from './build-review-rejection-retention.js';
 import { FEATURE_EVENT_LOG_PATH } from './event-persister.js';
 import { providerLifecycleEpisodeRelativePath } from './provider-lifecycle-store.js';
 import { STEP_HEARTBEAT_PATH } from './step-heartbeat.js';
@@ -31,6 +32,7 @@ export const BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES: readonly string[] = Object.fr
   STEP_HEARTBEAT_PATH,
   BUILD_REVIEW_CACHE_DIRECTORY,
   BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,
+  BUILD_REVIEW_REJECTION_DIRECTORY,
   providerLifecycleEpisodeRelativePath('build_review'),
 ].map(pipelineRelative));
 

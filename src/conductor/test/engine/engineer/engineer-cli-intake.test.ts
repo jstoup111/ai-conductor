@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:9
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -18,6 +18,8 @@ import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import type { InteractiveGithubOperationConfirmation } from '../../../src/engine/github-operation-approval.js';
 import type { GithubIssueTarget } from '../../../src/engine/github-operations.js';
@@ -213,6 +215,29 @@ describe('engineer land tracker write-back (Task 11)', () => {
       '| criterion | Story 1 happy: Given X, when Y, then Z. | task-1 | covered | Jira write-backs are no-ops. | diff-local |',
       '| criterion | Story 1 negative: Given invalid input, when Y, then it is refused. | task-1 | covered | The ledger advances after the no-op. | diff-local |', '',
     ].join('\n'));
+    const planText = await readFile(join(worktree, '.docs', 'plans', 'jira-writeback.md'), 'utf8');
+    const storiesText = await readFile(join(worktree, '.docs', 'stories', 'jira-writeback.md'), 'utf8');
+    const coherenceText = await readFile(join(worktree, '.docs', 'coherence', 'jira-writeback.md'), 'utf8');
+    const reviewedDigest = computeReviewedDigest({
+      planText,
+      storiesText,
+      adrTexts: {},
+      artifactTexts: { '.docs/coherence/jira-writeback.md': coherenceText },
+      changedPaths: [...await resolveIdeaFiles(worktree, repoPath)],
+    });
+    await mkdir(join(worktree, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(
+      join(worktree, '.docs', 'plan-review', 'jira-writeback.md'),
+      renderPlanReviewArtifact({
+        round: 1,
+        authoringHost: 'claude',
+        reviewerProvider: 'codex',
+        independence: 'cross-provider',
+        findings: [],
+        dispositions: [],
+        reviewedDigest,
+      }),
+    );
 
     const sourceRef = 'ENG-42';
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
@@ -787,7 +812,7 @@ describe('engineer forget (T23, FR-40)', () => {
 describe('engineer claim: priority-banded ordering (#461)', () => {
   /** Fake `gh` runner keyed by `owner/repo#N`, serving both the blocker
    *  endpoint (`createBlockerResolver`) and the label endpoint
-   *  (`ghIssueLabelReader`) from the SAME injected function — mirroring how
+   *  (the ordering source) from the SAME injected function — mirroring how
    *  the real CLI wires one `gh` for both concerns. */
   function createFakeGh(
     fixtures: {
@@ -1021,5 +1046,26 @@ describe('engineer claim: priority-banded ordering (#461)', () => {
     // The banded walk actually read labels — not just deferral-by-luck.
     const labelCalls = calls.filter((c) => c.some((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a)));
     expect(labelCalls.length).toBeGreaterThan(0);
+  });
+
+  it('defers an unavailable Jira idea and claims an unblocked unlabeled GitHub idea', async () => {
+    await seedInbox([
+      { sourceRef: 'PROJ-9', receivedAt: '2026-07-01T00:00:00.000Z', text: 'Jira, oldest' },
+      { sourceRef: 'acme/app#2', receivedAt: '2026-07-02T00:00:00.000Z', text: 'GitHub, unlabeled' },
+    ]);
+    const { run } = createFakeGh();
+    const { out, opts } = captureOut();
+
+    await dispatchEngineer({ kind: 'claim' }, opts({ gh: run }));
+    await dispatchEngineer({ kind: 'claim' }, opts({ gh: run }));
+
+    expect(out.map((line) => JSON.parse(line))).toMatchObject([
+      { kind: 'claim', sourceRef: 'acme/app#2' },
+      {
+        kind: 'claim',
+        allBlocked: true,
+        entries: [{ sourceRef: 'PROJ-9', verdict: { kind: 'indeterminate', detail: 'no ordering adapter for jira reference PROJ-9' } }],
+      },
+    ]);
   });
 });

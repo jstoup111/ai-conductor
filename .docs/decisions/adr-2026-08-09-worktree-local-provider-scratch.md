@@ -146,6 +146,8 @@ make "dead" decidable. Liveness is a signal-0 probe of the recorded process id, 
 identically on Linux and macOS and needs no platform branch — this is what satisfies the
 "no systemd, launchd, or cron" requirement.
 
+> **Amended 2026-10-10 by #611:** A home's session transcript does have post-attempt value: it is the only record of why a failed, stalled, or zero-progress dispatch did what it did. Under `adr-2026-10-10-retain-self-host-provider-transcripts`, every retirement path (including this sweep) first harvests the provider's allowlisted transcript files into `.pipeline/transcripts/`; the home itself remains attempt-scoped and is still deleted immediately, so the liveness-not-age rationale stands.
+
 **Why the sweep fails toward retention.** A home whose lease is missing, unreadable, or
 whose liveness cannot be established is **retained**, and the reason is reported. Deleting a
 live provider home corrupts an in-flight attempt; retaining a dead one costs disk until the

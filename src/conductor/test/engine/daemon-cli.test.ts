@@ -1,4 +1,4 @@
-// Covers: task:9, task:14
+// Covers: task:3, task:9, task:14
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon must
 // write `.daemon/gated.json` on EVERY discovery pass — populated, explicitly
@@ -482,21 +482,6 @@ describe('daemon state-store command boundary (Task 17)', () => {
   });
 });
 
-describe('daemon closeout rendering', () => {
-  it('logs the closeout obligation and elapsed milliseconds', () => {
-    const lines: string[] = [];
-
-    renderDaemonEvent({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 100,
-      endedAt: 140,
-      ts: 140,
-    }, (line) => lines.push(line));
-
-    expect(lines).toEqual(['· ✓ closeout evaluator (40ms)']);
-  });
-});
 
 describe('protected artifact rotation rendering', () => {
   // Covers: task:9
@@ -571,6 +556,23 @@ let root: string;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'daemon-cli-gated-snapshot-'));
   daemonDir = join(root, '.daemon');
+});
+
+describe('daemon event rendering', () => {
+  it('prints no closeout obligation line for a completed build review stream', () => {
+    const lines: string[] = [];
+    const log = (line: string) => lines.push(line);
+
+    renderDaemonEvent({ type: 'step_started', step: 'build', index: 0 }, log);
+    renderDaemonEvent({ type: 'gate_verdict', step: 'build', satisfied: true }, log);
+    renderDaemonEvent({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    }, log);
+    renderDaemonEvent({ type: 'step_completed', step: 'build', status: 'done' }, log);
+    renderDaemonEvent({ type: 'feature_complete' }, log);
+
+    expect(lines.join('\n')).not.toMatch(/\bcloseout\s+\w+/i);
+  });
 });
 
 afterEach(async () => {
@@ -1032,6 +1034,23 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(handlerBody).not.toContain('process.exit');
     // The handler must request the drain-then-release teardown instead.
     expect(handlerBody).toContain('teardown.requestStop()');
+  });
+
+  it('fans SIGTERM out to child executors before beginning the daemon lock drain', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    const handlerMatch = src.match(
+      /const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/,
+    );
+    expect(handlerMatch).not.toBeNull();
+    const handlerBody = handlerMatch![1];
+
+    // stopAll resolves only after its scaled grace window and SIGKILL fallback,
+    // so awaiting it before requestStop keeps the lock-release path behind
+    // child teardown.
+    expect(handlerBody).toContain('await stopChildExecutors?.()');
+    expect(handlerBody.indexOf('await stopChildExecutors?.()')).toBeLessThan(
+      handlerBody.indexOf('teardown.requestStop()'),
+    );
   });
 
   it('runDaemon is invoked with a shouldStop dep wired to the teardown controller', () => {

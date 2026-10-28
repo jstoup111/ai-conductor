@@ -4,28 +4,28 @@ import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS, validateConfig } from '../../src/engine/config.js';
 
 describe('stacked_prs config block', () => {
-  it('leaves an absent block undefined', () => {
+  it('materializes the dark-launch routing flag when the block is absent', () => {
     const result = validateConfig({});
 
-    expect(result.ok && result.config.stacked_prs).toBeUndefined();
+    expect(result.ok && result.config.stacked_prs).toEqual({ route_whole_feature_fixes: true });
   });
 
   it('defaults enabled to false and max_slices to 1 when the block is present but empty', () => {
     const result = validateConfig({ stacked_prs: {} });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: 1 });
+    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: 1, route_whole_feature_fixes: true });
   });
 
   it('preserves enabled: true and defaults max_slices to 1', () => {
     const result = validateConfig({ stacked_prs: { enabled: true } });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: true, max_slices: 1 });
+    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: true, max_slices: 1, route_whole_feature_fixes: true });
   });
 
   it.each([1, 5, 6, 7, 9])('accepts max_slices %i', (maxSlices) => {
     const result = validateConfig({ stacked_prs: { max_slices: maxSlices } });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: maxSlices });
+    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: maxSlices, route_whole_feature_fixes: true });
   });
 
   it.each([6, 7])('warns when max_slices is %i', (maxSlices) => {
@@ -72,7 +72,15 @@ describe('stacked_prs config block', () => {
     expect(result.error.message).toMatch(/stacked_prs.*must be an object/i);
   });
 
-  it('declares enabled and max_slices as consumer keys', () => {
-    expect(CONFIG_CONSUMER_KEY_SETS.stacked_prs).toEqual(['enabled', 'max_slices']);
+  it('rejects a non-boolean routing flag by its named path', () => {
+    const result = validateConfig({ stacked_prs: { route_whole_feature_fixes: 'yes' } });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toMatch(/stacked_prs\.route_whole_feature_fixes.*boolean/i);
+  });
+
+  it('declares enabled, max_slices and the routing flag as consumer keys', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS.stacked_prs).toEqual(['enabled', 'max_slices', 'route_whole_feature_fixes']);
   });
 });

@@ -23,6 +23,7 @@ interface Surface {
   label: string;
   exclude: readonly string[];
   excludeDirectoryBasenames?: readonly string[];
+  semanticEmptyJson?: readonly string[];
   manifest: readonly Entry[];
 }
 interface Entry { path: string; digest: string; }
@@ -58,6 +59,13 @@ export interface LiveBoundarySnapshot {
  *                — generated versioned distribution snapshots. Scoped to this
  *                  exact subtree so same-named source directories elsewhere
  *                  remain fingerprinted.
+ *   `src/conductor/.vitest-tmp`
+ *                — Vitest's disposable per-run storage (`scripts/vitest-temp.mjs`).
+ *                  Any test run in the live checkout creates, sweeps, and removes
+ *                  `ai-conductor-vitest-run-*` roots here, so a run that started
+ *                  before the baseline and finished during a build halted it as
+ *                  drift (a run root's removed `.owner` marker). Scoped
+ *                  to this exact subtree like `dist-versions`.
  *   `node_modules` — dependency and tool-cache trees at any nesting depth. The
  *                    exact directory basename is excluded; lookalikes remain
  *                    fingerprinted, and `.gitignore` is deliberately not used.
@@ -71,7 +79,7 @@ export interface LiveBoundarySnapshot {
  */
 export const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
-  'src/conductor/dist-versions',
+  'src/conductor/dist-versions', 'src/conductor/.vitest-tmp',
 ];
 const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_modules'];
 
@@ -124,6 +132,11 @@ const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_mod
  * fingerprinted: no churn was observed for them, and the latter two are
  * config-like — a self-host process rewriting harness config in the operator
  * home is exactly what this surface exists to catch.
+ *
+ * #3096: `remote-settings.json` is policy config like `policy-limits.json`,
+ * but two 2026-10-10 self-host halts found Claude refreshing its semantically
+ * empty root file between zero bytes and `{}`. It is normalized rather than
+ * excluded, so managed-settings content stays fingerprinted.
  */
 const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'history.jsonl',                    // append-only prompt/response log for every session on the machine
@@ -170,6 +183,15 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
                                        // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
                                        // Only the stamp is excluded: `policy-limits.json` itself is
                                        // policy config and stays fingerprinted.
+  'policy-limits.json.stamp.json.tmp.*', // atomic-write temp files the same refresh leaves behind
+  'policy-limits.json.signature.json',     // signature sidecar the CLI rewrites on its policy-limits
+  'policy-limits.json.signature-iat.json', // refresh; verified 2026-10-20 as the sole diff behind 4
+                                           // false halts across two self-host features (#3323).
+                                           // `policy-limits.json` itself stays fingerprinted.
+  'remote-settings.json.synced-at',   // epoch-ms stamp the CLI rewrites on every remote-settings
+                                       // sync; verified 2026-10-14 as the sole diff ("changed
+                                       // remote-settings.json.synced-at") behind 2 false halts.
+                                       // `remote-settings.json` itself stays fingerprinted (#3096).
 ];
 
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
@@ -252,12 +274,22 @@ const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: Readonly<Record<SelfHostProvi
   [PI_PROVIDER]: [],
 };
 
+const PROVIDER_STATE_SEMANTIC_EMPTY_JSON: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
+  [CLAUDE_PROVIDER]: ['remote-settings.json'],
+  [CODEX_PROVIDER]: [],
+  [PI_PROVIDER]: [],
+};
+
 function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
   return provider ? PROVIDER_STATE_VOLATILE[provider.id] : [];
 }
 
 function providerStateVolatileDirectoryBasenames(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
   return provider ? PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES[provider.id] : ['.in_use'];
+}
+
+function providerStateSemanticEmptyJson(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
+  return provider ? PROVIDER_STATE_SEMANTIC_EMPTY_JSON[provider.id] : [];
 }
 
 /**
@@ -324,10 +356,22 @@ async function entryContent(file: string): Promise<Buffer | string> {
   });
 }
 
+function isSemanticEmptyJson(bytes: Buffer): boolean {
+  const text = bytes.toString('utf8').trim();
+  if (text === '') return true;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && Object.keys(parsed).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function manifest(
   root: string,
   exclude: readonly string[],
   excludeDirectoryBasenames: readonly string[] = [],
+  semanticEmptyJson: readonly string[] = [],
 ): Promise<Manifest> {
   const startedAt = performance.now();
   // Filter DURING the walk: an excluded subtree is never descended into, so
@@ -357,7 +401,10 @@ async function manifest(
   const entries = await Promise.all(files.map(async file => {
     const path = relative(root, file);
     const bytes = await entryContent(file);
-    return { path, digest: createHash('sha256').update(bytes).digest('hex') };
+    const digest = Buffer.isBuffer(bytes) && semanticEmptyJson.includes(path) && isSemanticEmptyJson(bytes)
+      ? createHash('sha256').update('semantic-empty-json').digest('hex')
+      : createHash('sha256').update(bytes).digest('hex');
+    return { path, digest };
   }));
   const filteredEntries = entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path));
   return {
@@ -380,6 +427,7 @@ export async function fingerprintLiveBoundary(args: {
     ...(args.selectedAuthPaths ?? []),
   ];
   const excludeDirectoryBasenames = providerStateVolatileDirectoryBasenames(provider);
+  const semanticEmptyJson = providerStateSemanticEmptyJson(provider);
   const liveCheckout = await manifest(
     args.liveCheckout,
     LIVE_CHECKOUT_VOLATILE,
@@ -389,6 +437,7 @@ export async function fingerprintLiveBoundary(args: {
     args.unrelatedProviderState,
     excluded,
     excludeDirectoryBasenames,
+    semanticEmptyJson,
   );
   return { surfaces: [
     {
@@ -403,12 +452,29 @@ export async function fingerprintLiveBoundary(args: {
       label: 'provider state',
       exclude: excluded,
       excludeDirectoryBasenames,
+      semanticEmptyJson,
       manifest: providerState.entries,
     },
   ], measurements: [
     { label: 'live checkout', elapsedMs: liveCheckout.elapsedMs, fileCount: liveCheckout.fileCount },
     { label: 'provider state', elapsedMs: providerState.elapsedMs, fileCount: providerState.fileCount },
   ] };
+}
+
+/**
+ * True iff `path` was removed from a Claude plugin-cache version directory that the
+ * BASELINE already marked orphaned (`plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at`).
+ * The CLI stamps that marker on a superseded version and later garbage-collects the whole
+ * directory. Verified 2026-10-13 as the sole diff ("0 added, 22 removed": every file of
+ * `plugins/cache/claude-plugins-official/skill-creator/fbe07fb6ce7d/`, `.orphaned_at`
+ * included) behind a false halt of source-grounded-plan-defects-pass-every-decide-gat.
+ * Only removals qualify, and only from a version already orphaned before the dispatch:
+ * an addition or rewrite of plugin content, or removal of a live version, still halts.
+ */
+function isOrphanedPluginRemoval(path: string, baseline: ReadonlySet<string>): boolean {
+  const segments = path.split('/');
+  if (segments.length < 6 || segments[0] !== 'plugins' || segments[1] !== 'cache') return false;
+  return baseline.has(`${segments.slice(0, 5).join('/')}/.orphaned_at`);
 }
 
 /** Most paths named in a halt reason before it collapses to a bare count. */
@@ -501,9 +567,15 @@ export async function verifyLiveBoundary(
       surface.root,
       surface.exclude,
       surface.excludeDirectoryBasenames ?? [],
+      surface.semanticEmptyJson ?? [],
     )).entries;
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
+      if (surface.label === 'provider state') {
+        const baseline = new Set(surface.manifest.map(entry => entry.path));
+        diff.removed = diff.removed.filter(path => !isOrphanedPluginRemoval(path, baseline));
+        if (diff.added.length + diff.removed.length + diff.changed.length === 0) continue;
+      }
       if (surface.label === 'live checkout') {
         if (containmentVerdict.contained) {
           containedDrift = {

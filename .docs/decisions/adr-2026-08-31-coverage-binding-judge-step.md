@@ -56,6 +56,29 @@ Two facts fix the design space:
 
 ## Decision
 
+> **Amended 2026-10-10 by #3164:** The pre-BUILD judge is retired and `coverage_binding` is a
+> no-op step. With the judge enabled, it caused 38% of halts, and its refusals had no operator lever.
+> It was already disabled in this repository on 2026-10-06 (#3014). The step keeps its id, position,
+> phase, completion artifact, config keys, and event types, so existing configs, ledgers, and resume
+> state still load. It never dispatches a provider, builds no claims, never reopens tasks, and never
+> halts on plan content.
+> - **Retired:** D5, D6, D7 (the default and its named exit; `coverage_binding.judge.enabled` is still
+>   validated but ignored), D8, D12–D15 (`batch_size` is still validated but ignored), D17, D18, D19,
+>   D21, D22, D23, and the 2026-10-04 amendments to D18 and D21. The `CoverageBindingPayloadError`
+>   retry lane is removed.
+> - **Narrowed:** D4. The step still sits between `coherence_check` and `acceptance_specs`. Its only
+>   remaining refusal is the started-stack position-immutability guard
+>   (`adr-2026-10-03-stacked-child-plans-identity-and-state`). D9, D20, and D24: of their events, only
+>   `coverage_binding_disabled` (every run) and `coverage_binding_invalidated` (D16) are still
+>   emitted. The other `coverage_binding_*` variants stay in the union and sink registry so existing
+>   ledgers still parse.
+> - **Unchanged:** D1–D3, D10, and D11 (land-time carriers and gates), and D16 (a DECIDE reseal voids
+>   the envelope; the re-run is the no-op). The step keeps recording topology:
+>   `adr-2026-09-29-plan-slice-manifest` D6 slice membership and
+>   `adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility` D6 story ownership. Stacked
+>   delivery reads both. It writes them in an entry-free `disabled` envelope, plus the code stamp
+>   that rebase preservation reads.
+
 **D1 — One criterion-claim contract, two carriers.** A criterion coverage claim is the tuple
 `(criterion text, cited task id(s), verbatim quote, disposition?)`. At M/L it is carried by the
 coherence artifact's 6-cell `criterion` row (unchanged shape). At S it is carried by the plan's
@@ -102,6 +125,8 @@ track skip. It is declared `phase: 'BUILD'` so the daemon executes it rather tha
 from the spec's carrier (coherence artifact at M/L, plan table at S) joined to each cited task's
 `Done when` checks. Nothing else — no diff, no transcript, no stories prose beyond the criterion
 text — reaches the judge.
+
+> **Amended 2026-10-23 by #3365:** The `coverage_binding` step is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 1). Decisions D4–D9 and D12–D24, which govern the step, its judge, its envelope, its batching, its void, and its events, are retired with it. D1–D3, D10, and D11 govern the land-time criterion contract and the coherence gate, and they stand unchanged. `skills/coverage-binding/SKILL.md` remains the policy for the plan-time coverage judgement.
 
 **D5 — The judge is a fresh one-shot dispatch with a closed, engine-stamped verdict.** For each
 claim the engine dispatches one fresh session (the `build_review` grader pattern: fresh id, no

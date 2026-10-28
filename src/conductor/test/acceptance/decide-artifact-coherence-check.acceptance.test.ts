@@ -49,13 +49,28 @@ import { promisify } from 'node:util';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
 import { slugify } from '../../src/engine/engineer/spec-branch.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
 
 // gh runner that resolves an owner so the fail-closed identity gate passes and
 // execution reaches the (new) coherence rung. Coherent path must be silent.
-const resolvingGh: GhRunner = async () => ({ stdout: 'bob\n' });
+const resolvingGh: GhRunner = async (args) => {
+  // This fixture reaches landSpec with a GitHub source ref.  Supply the
+  // tracker reads introduced by the dependency proposal gate while preserving
+  // its original owner-resolution behavior.
+  if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+    return { stdout: JSON.stringify({ body: '' }) };
+  }
+  if (args[0] === 'api' && args[1]?.includes('/dependencies/blocked_by')) {
+    return { stdout: '[]' };
+  }
+  if (args[0] === 'issue' && args[1] === 'list') {
+    return { stdout: '[]' };
+  }
+  return { stdout: 'bob\n' };
+};
 
 const SOURCE_REF = 'acme/app#539';
 const OUTCOME_BULLETS = ['- The duplicate-spec class dies at land.', '- An unmapped outcome blocks the spec.'];
@@ -190,6 +205,10 @@ const APPROVED_ADR = [
   '',
   '1. **Keep coherence validation at land time.**',
   '',
+  '## Assumptions',
+  '',
+  'No load-bearing assumptions.',
+  '',
 ].join('\n');
 
 const ATX_APPROVED_ADR = [
@@ -202,6 +221,10 @@ const ATX_APPROVED_ADR = [
   '### 1. Keep coherence validation at land time.',
   '',
   '### 2. Refuse uncovered decisions.',
+  '',
+  '## Assumptions',
+  '',
+  'No load-bearing assumptions.',
   '',
 ].join('\n');
 
@@ -322,6 +345,32 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
       join(dir, '.pipeline', 'intake-outcomes.md'),
       [`Source-Ref: ${SOURCE_REF}`, '', '## Desired outcome', ...OUTCOME_BULLETS, ''].join('\n'),
     );
+  }
+
+  // M/L land fixtures must carry the clean DECIDE review artifact required by
+  // the plan-review rung. This keeps each coherence assertion at its intended
+  // land boundary rather than failing earlier on an unrelated missing review.
+  if (tier !== 'S') {
+    const planText = plan.replace('.docs/stories/coherence-demo.md', `.docs/stories/${stem}.md`);
+    const coherenceText = coherence === null
+      ? ''
+      : (stageOutcomes ? coherence : coherence.split('\n').filter((line) => !line.trimStart().startsWith('| outcome')).join('\n'));
+    await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plan-review', `${stem}.md`), renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest: computeReviewedDigest({
+        planText,
+        storiesText: stories,
+        adrTexts: { 'adr-2026-09-08-coherence': adr },
+        artifactTexts: { [`.docs/coherence/${stem}.md`]: coherenceText },
+        changedPaths: ['.docs/decisions/adr-2026-09-08-coherence.md'],
+      }),
+    }), 'utf8');
   }
 
   return dir;

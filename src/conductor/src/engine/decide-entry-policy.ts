@@ -109,7 +109,7 @@ export interface DecideEntryHalt {
 
 export type DecideEntryDisposition =
   | { kind: 'enter'; grantedBy: string }
-  | { kind: 'fast-forward'; as: 'done' | 'skipped' }
+  | { kind: 'fast-forward'; as: 'done' | 'skipped'; reason?: string }
   | { kind: 'halt'; halt: DecideEntryHalt };
 
 /**
@@ -140,6 +140,7 @@ export function decideEntryDisposition(input: {
   daemon: boolean;
   tier: ComplexityTier | undefined;
   hasContract: boolean;
+  artifactPresent: boolean;
   satisfied: boolean | 'unknown';
   grant: OperatorGrant | null;
   sourceGate: StepName | 'forward-walk' | 'resume-clamp';
@@ -181,6 +182,17 @@ export function decideEntryDisposition(input: {
     input.grant?.step === input.target
   ) {
     return { kind: 'enter', grantedBy: input.grant.grantedBy };
+  }
+
+  if (
+    targetStep.absentArtifactDisposition === 'skipped' &&
+    !input.artifactPresent
+  ) {
+    return {
+      kind: 'fast-forward',
+      as: 'skipped',
+      reason: targetStep.absentArtifactReason ?? 'artifact-absent',
+    };
   }
 
   return halt(

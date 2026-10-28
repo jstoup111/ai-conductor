@@ -58,12 +58,12 @@ As the operator, I want an interrupted repair to resume with its finding and acc
 - Given a repair whose current closure was durably accepted before interruption, when the process resumes, then that repair remains resolved rather than being reopened by replay of the same admitted round.
 
 #### Negative Paths
-- Given an interruption between admission persistence, lap settlement, restaging, and dispatch, when recovery runs, then it does not omit outstanding work, advance the original evidence boundary, duplicate a charge, or create a second obligation for that same effect.
+- Given an interruption between admission persistence, lap settlement, restaging, and dispatch, when recovery runs, then it does not omit outstanding work, advance the original evidence boundary (except a verified stacked reroute, which re-targets the boundary to the new host in one transaction), duplicate a charge, or create a second obligation for that same effect.
 - Given a later genuinely distinct admitted repair for the same task, when it is reopened, then the previous repair's closure does not close the new one and replay deduplication does not suppress the new work.
 - Given a task id reused in another active plan, when recovery evaluates current work, then completion or repair state from the previous plan does not resolve or reopen the new plan's task.
 
 ### Done When
-- [ ] Before/after interruption observations show one obligation, one original boundary, one admitted-round charge, and retained finding context.
+- [ ] Before/after interruption observations show one obligation, one original boundary (except a verified stacked reroute, which re-targets the boundary to the new host in one transaction), one admitted-round charge, and retained finding context.
 - [ ] Reconstructed state shows the open repair unresolved and an untouched completed sibling resolved.
 - [ ] A completed repair stays completed on replay; a distinct later repair stays open until it has current evidence.
 

@@ -4,6 +4,7 @@ import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
   PLAN_GAP_HALT_CLASS,
+  STACK_TIP_DIVERGED_HALT_CLASS,
   type HaltDisposition,
 } from './halt-marker.js';
 import {
@@ -30,11 +31,16 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
-import { resolveActiveChild } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChild } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { listExistingChildren } from './child-context.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
+import { runRestack } from './restack/restack-executor.js';
+import { routedRoundOpen } from './routing/round-admission.js';
+import { emitRestackRefused } from './restack/restack-events.js';
+import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
@@ -46,6 +52,8 @@ import {
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
+
+const WHOLE_FEATURE_KICKBACK_GATES = new Set(['prd_audit', 'architecture_review_as_built', 'manual_test']);
 
 /** What an automatic path decided about one worktree's live halt classification. */
 export interface HaltRetentionDecision {
@@ -64,6 +72,7 @@ export interface HaltRetentionDecision {
 export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   'needs-human',
   PLAN_GAP_HALT_CLASS,
+  STACK_TIP_DIVERGED_HALT_CLASS,
   OVER_SCOPE_HALT_CLASS,
   KICKBACK_CAP_HALT_CLASS,
 ]);
@@ -258,12 +267,34 @@ export async function consumeResumeAuthorizations(
       }
       const path = deps.worktreePath(slug);
       const children = await listExistingChildren(path);
-      const child = children.length === 0 ? undefined : await (async () => {
+      const activeChild = children.length === 0 ? undefined : await (async () => {
         const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
-        if (activeChild.kind !== 'active') throw new Error(`active child cursor is ${activeChild.kind}`);
-        return activeChild.child;
+        if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
+          throw new Error(`active child cursor is ${activeChild.kind}`);
+        }
+        return activeChild;
       })();
-      const ledger = await readKickbackLedger(path, child);
+      const flatLedger = await readKickbackLedger(path);
+      const execution = activeChild === undefined ? undefined : resolveExecutionChild(activeChild, slug);
+      const executionChild = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
+      // A restack cap belongs to the cursor range (normally the leaf), even
+      // while a routed host temporarily owns the BUILD region.
+      const cursorChild = activeChild === undefined ? undefined : activeChild.child;
+      const executionLedger = executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
+      const cursorLedger = cursorChild === undefined || cursorChild === executionChild
+        ? executionLedger
+        : await readKickbackLedger(path, cursorChild);
+      const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      const liveGate = [flatLedger, executionLedger, cursorLedger].flatMap((ledger) => Object.entries(ledger.gates))
+        .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
+      const ledger = liveGate === 'restack'
+        ? cursorLedger
+        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+          ? executionLedger
+          : flatLedger;
+      const ledgerChild = liveGate === 'restack' ? cursorChild
+        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate) ? executionChild
+          : undefined;
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
@@ -305,7 +336,7 @@ export async function consumeResumeAuthorizations(
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and
       // the authorization exactly as they were, so the next iteration retries.
       if ((await deps.clearHalt(slug)) === 'partial') continue;
-      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, child)) {
+      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, ledgerChild)) {
         await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
@@ -693,6 +724,9 @@ export function makeRekickBuildPreVerify(
       projectRoot: worktreePath,
       planPath,
       featureDesc,
+      // The unverified Done-when nudge prompts a BUILD dispatch; it is not
+      // evidence. Matches the foreground `preVerifyRebaseGate`.
+      unverifiedDoneWhenNudgeSpent: true,
       ...(definition.name === 'test_suite'
         ? {
             fullSuiteInspect: async () => {
@@ -793,29 +827,15 @@ export async function resumeRebaseFirst(opts: {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
   if (!(await exists(sentinel))) return 'skipped';
 
+  // An open routed round owns the stack.  Keep the sentinel so its eventual
+  // close can perform the deferred refresh instead of silently losing it.
+  if (opts.slug && await routedRoundOpen(opts.worktreePath, opts.slug)) {
+    await opts.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+    return 'skipped';
+  }
+
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
-
-  // A non-leaf child is a pinned, independently reviewed increment. Rebasing
-  // the worktree at this boundary would move its in-progress branch (and can
-  // strand its predecessor refs) before the region closes. The cursor is the
-  // sole authority for whether that stack state exists; an ordinary feature
-  // keeps the established play-forward path below.
-  const activeChild = await resolveActiveChild(opts.worktreePath, opts.slug ?? basename(opts.worktreePath));
-  if (activeChild.kind === 'active' && !activeChild.isLeaf) {
-    await opts.events.emit({
-      type: 'rebase_skipped_for_stack',
-      child: activeChild.child,
-      reason: 'active child is not the leaf',
-    });
-    opts.log?.(
-      `re-kick ${basename(opts.worktreePath)}: rebase skipped — active child ${activeChild.child} is not the leaf`,
-    );
-    // The sentinel was deliberately consumed: the child gate loop resumes at
-    // its existing overlay state, and retries the rebase only after the leaf
-    // becomes active.
-    return 'rebased';
-  }
 
   // Check and verify merged history BEFORE rebasing. Merge state alone is never
   // completion evidence: every refusal and unavailable dependency parks the
@@ -840,6 +860,86 @@ export async function resumeRebaseFirst(opts: {
   }
 
   const git = makeGitRunner(opts.worktreePath);
+
+  // A stacked feature is one history.  Re-kick must therefore replay its
+  // complete durable stack even when the active region is an intermediate
+  // child; a single-branch rebase would leave its successors based on the old
+  // tip.  The executor owns child-region verdict writes and refusal HALTs.
+  const stackSlug = opts.slug ?? basename(opts.worktreePath);
+  const durableChildState = await hasDurableChildState(opts.worktreePath, stackSlug, { git });
+  if (durableChildState === 'git-error') {
+    await writeHalt(opts.worktreePath, [], 'cannot inspect durable stack state before re-kick', opts.events);
+    return 'halted';
+  }
+  if (durableChildState) {
+    if (await publishedStackRefusal(opts.worktreePath, stackSlug, { git })) {
+      await opts.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: published stack left at its current base`);
+      return 'rebased';
+    }
+    const [target, previous, oldBase] = await Promise.all([
+      git(['rev-parse', '--verify', opts.localBase]),
+      git(['rev-parse', '--verify', 'HEAD']),
+      git(['merge-base', 'HEAD', opts.localBase]),
+    ]);
+    if (target.exitCode !== 0 || previous.exitCode !== 0 || oldBase.exitCode !== 0) {
+      await writeHalt(opts.worktreePath, [], 'cannot resolve the stacked re-kick base tuple', opts.events);
+      return 'halted';
+    }
+    const targetSha = target.stdout.trim();
+    const previousSha = previous.stdout.trim();
+    const contained = await git(['merge-base', '--is-ancestor', targetSha, previousSha]);
+    let stackedOutcome: RebaseOutcome;
+    if (contained.exitCode === 0) {
+      stackedOutcome = { kind: 'noop', baseSha: targetSha, allChangedPaths: [] };
+    } else {
+      const restacked = await runRestack({
+        worktree: opts.worktreePath,
+        slug: stackSlug,
+        cause: 'base-refresh',
+        newDefault: targetSha,
+        events: opts.events,
+        git,
+        resolver: opts.resolveConflict,
+        resolverCap: opts.resolveAttempts,
+      });
+      if (restacked.kind !== 'applied') {
+        if (restacked.kind === 'unavailable') {
+          await writeHalt(opts.worktreePath, [], `stack base refresh unavailable: ${restacked.detail}`, opts.events);
+        }
+        return 'halted';
+      }
+      const [head, delta, featureSurface] = await Promise.all([
+        git(['rev-parse', '--verify', 'HEAD']),
+        git(['diff', '--name-only', oldBase.stdout.trim(), targetSha]),
+        git(['diff', '--name-only', oldBase.stdout.trim(), previousSha]),
+      ]);
+      if (head.exitCode !== 0 || delta.exitCode !== 0 || featureSurface.exitCode !== 0) {
+        await writeHalt(opts.worktreePath, [], 'cannot inspect completed stacked re-kick', opts.events);
+        return 'halted';
+      }
+      const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+      stackedOutcome = {
+        kind: 'changed',
+        baseSha: targetSha,
+        changedCodePaths: allChangedPaths.filter((path) => /(?:^|\/)(?:src|test)\//.test(path) || /\.(?:[cm]?[jt]sx?)$/.test(path)),
+        allChangedPaths,
+        featureSurface: featureSurface.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+        documentInputs: [],
+        replay: {
+          preRebaseHead: previousSha,
+          mergeBase: oldBase.stdout.trim(),
+          target: targetSha,
+          completedHead: head.stdout.trim(),
+        },
+      };
+    }
+    await recordRebaseStepCompletion(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), stackedOutcome);
+    await emitRebaseEvent(opts.events, stackedOutcome);
+    opts.log?.(`re-kick ${basename(opts.worktreePath)}: refreshed complete stack onto latest before resuming gate`);
+    return 'rebased';
+  }
+
   const translateAfterRebase =
     opts.translateAfterRebase ??
     ((
@@ -942,6 +1042,7 @@ export async function resumeRebaseFirst(opts: {
           [],
           `completed BUILD evidence is unavailable after rebase: ${detail}; recover .pipeline task evidence before resuming`,
           opts.events,
+          'completed-rebase',
         );
         return 'halted';
       }
@@ -951,6 +1052,7 @@ export async function resumeRebaseFirst(opts: {
           [],
           `completed BUILD evidence is unavailable after rebase: ${buildEvidence.reason ?? 'completion predicate did not confirm the recorded BUILD'}; recover .pipeline task evidence before resuming`,
           opts.events,
+          'completed-rebase',
         );
         return 'halted';
       }

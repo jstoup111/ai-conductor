@@ -4,18 +4,28 @@ import { join } from 'node:path';
 import type { ConductorEvent } from '../types/events.js';
 import { createConductStateLease } from './conduct-state-lease.js';
 
-export type PipelineCloseoutEvent = Extract<ConductorEvent, { type: 'pipeline_closeout' }>;
+/** The only externally-written events admitted from the sibling pipeline ledger. */
+export const ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES = [
+  'build_review_disposition_accepted',
+  'build_review_reduced_coverage_accepted',
+  'build_review_disposition_refused',
+  'build_review_outer_verdict',
+  'github_operation_failed',
+  'kickback_budget_adjustment_authorized',
+] as const satisfies readonly ConductorEvent['type'][];
+
+export type AdmittedExternalPipelineEventType =
+  (typeof ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES)[number];
 export type BuildReviewExternalEvent = Extract<ConductorEvent,
-  { type:
-    | 'build_review_disposition_accepted'
-    | 'build_review_reduced_coverage_accepted'
-    | 'build_review_disposition_refused'
-    | 'build_review_outer_verdict' }> & { ts: string };
-export type KickbackBudgetExternalEvent = Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>;
+  { type: Exclude<AdmittedExternalPipelineEventType, 'kickback_budget_adjustment_authorized' | 'github_operation_failed'> }> & { ts: string };
+export type GithubOperationFailedExternalEvent = Extract<ConductorEvent,
+  { type: 'github_operation_failed' }> & { ts: string };
 export type ExternalPipelineEvent =
-  | PipelineCloseoutEvent
   | BuildReviewExternalEvent
-  | KickbackBudgetExternalEvent;
+  | GithubOperationFailedExternalEvent
+  | Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>;
+export type KickbackBudgetExternalEvent = Extract<ExternalPipelineEvent,
+  { type: 'kickback_budget_adjustment_authorized' }>;
 
 function pipelineEventPath(projectRoot: string): string {
   return join(projectRoot, '.pipeline', 'pipeline-events.jsonl');

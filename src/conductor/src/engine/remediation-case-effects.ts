@@ -8,6 +8,8 @@ import {
 import { orderBuildReviewActionCases } from './build-review-adjudication.js';
 import {
   chargeBuildReviewEffectInLedger,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  recordKickbackCapEvidence,
   type BumpKickbackGateInput,
 } from './kickback-ledger.js';
 import type { ChildId } from './child-context.js';
@@ -18,8 +20,11 @@ import {
   type RemediationCaseFeatureIdentity,
   type RemediationCaseRecord,
   type RemediationCaseStoreState,
+  type RemediationCaseTransitionViolation,
   RemediationCaseStore,
+  appendRemediationCaseOutbox,
 } from './remediation-case-store.js';
+import { retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 
 export type RemediationEffectResult =
   | { readonly ok: true; readonly status: 'applied' | 'already-applied'; readonly effectId: string }
@@ -45,8 +50,9 @@ type DeferralCase = RemediationCaseRecord & {
 };
 
 export type PersistBuildReviewDecisionStopResult =
-  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted'; readonly caseId: string }
-  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` };
+  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted' | 'already-resolved'; readonly caseId: string }
+  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}`; readonly violation?: never }
+  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly violation: RemediationCaseTransitionViolation };
 
 /** The shared lifecycle vocabulary for reducers and effect execution. */
 export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
@@ -62,16 +68,29 @@ export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolea
 }
 
 function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return left.id === right.id && left.domain === right.domain && left.disposition === 'escalate' &&
-    right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
-    left.confidence === right.confidence && left.resolution === right.resolution &&
+  return left.id === right.id && left.disposition === 'escalate' && right.disposition === 'escalate' &&
     left.effect.kind === 'none' && right.effect.kind === 'none' &&
     left.escalation?.owner === right.escalation?.owner &&
-    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && left.sources.length === right.sources.length &&
-    left.sources.every((source, index) => {
-      const other = right.sources[index];
-      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;
-    });
+    sameSourceOutcomes(left, right);
+}
+
+function sameSourceOutcomes(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return left.sources.length === right.sources.length && left.sources.every((source) =>
+    right.sources.some((other) => source.sourceId === other.sourceId && source.outcome === other.outcome),
+  );
+}
+
+function sameDecisionStopOwnerOrConsistency(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  // D5.7 defines an unbound stop's convergence key as its owner and source
+  // set. This deliberately treats two ownerless consistency stops as having
+  // the same owner, while never letting matching consistency prose bridge an
+  // owner mismatch.
+  return left.escalation?.owner === right.escalation?.owner;
+}
+
+function sameSourceIds(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  const ids = (record: RemediationCaseRecord) => [...new Set(record.sources.map((source) => source.sourceId))].sort();
+  return JSON.stringify(ids(left)) === JSON.stringify(ids(right));
 }
 
 /**
@@ -85,6 +104,19 @@ export async function persistBuildReviewDecisionStop(input: {
   if (!isBuildReviewDecisionStop(input.record)) return { ok: false, reason: 'invalid-decision-stop' };
   const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) => {
     const existing = state.cases.find((record) => record.id === input.record.id);
+    if (existing && !isOpenRemediationCase(existing)) {
+      // A judgement can name a settled case as its existing case. Re-raising
+      // exactly the sources that settlement already decided changes nothing;
+      // anything else is new blocking state and must not overwrite history.
+      if (sameSourceIds(existing, input.record)) {
+        return { value: { ok: true as const, status: 'already-resolved' as const, caseId: existing.id } };
+      }
+      const record = { ...input.record, id: randomUUID() };
+      return {
+        value: { ok: true as const, status: 'persisted' as const, caseId: record.id },
+        nextState: { ...state, cases: [...state.cases, record] },
+      };
+    }
     if (existing) {
       return {
         value: sameDecisionStop(existing, input.record)
@@ -92,12 +124,22 @@ export async function persistBuildReviewDecisionStop(input: {
           : { ok: false as const, reason: 'conflicting-case-id' as const },
       };
     }
+    const converged = state.cases.find((record) =>
+      isBuildReviewDecisionStop(record) && record.disposition === 'escalate' &&
+      sameDecisionStopOwnerOrConsistency(record, input.record) && sameSourceOutcomes(record, input.record),
+    );
+    if (converged) {
+      return { value: { ok: true as const, status: 'already-persisted' as const, caseId: converged.id } };
+    }
     return {
       value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id },
       nextState: { ...state, cases: [...state.cases, input.record] },
     };
   });
-  return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
+  if (mutation.ok) return mutation.value;
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: `case store ${mutation.reason}` };
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {
@@ -129,6 +171,184 @@ export function hasReservedOrFailedRemediationEffect(record: RemediationCaseReco
 export function isBuildReviewSettlementObligationCase(record: RemediationCaseRecord): boolean {
   return isOpenRemediationCase(record)
     && (isBuildReviewDecisionStop(record) || isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
+}
+
+export const STRANDED_ACTION_RESERVATION_DIAGNOSTIC = 'stranded reservation: tasks never published';
+export const STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC = 'stranded reservation: deferral never filed';
+
+export type SettleStrandedActionReservationsResult =
+  | { readonly ok: true; readonly settled: readonly { readonly caseId: string; readonly effectId: string }[] }
+  | { readonly ok: false; readonly reason: string; readonly violation?: RemediationCaseTransitionViolation };
+
+/**
+ * Settle action reservations a previous lap made but never published.
+ *
+ * Reconciliation reserves an action effect before the effect boundary
+ * publishes its tasks, and the tasks exist only in that lap's judgement. A lap
+ * that stopped in between left a reservation no later lap can apply, and the
+ * reducer halts on it forever. Run at lap start, before this lap reconciles,
+ * every reserved effect is an earlier lap's; one is stranded only when the
+ * published order does not carry its case and none of its sources is live
+ * this lap. A live source is still current work: the judge can resume or
+ * converge on the case and the effect boundary applies it, so it is left alone.
+ *
+ * The stranded case is retired exactly as an operator-retired reservation is:
+ * resolved, with its never-completed effect recorded as failed rather than
+ * falsely applied. Resolved rows block neither the reducer nor settlement.
+ */
+export async function settleStrandedBuildReviewActionReservations(input: {
+  readonly store: RemediationCaseStore;
+  /** This lap's reported, unsuppressed rubric-namespaced source ids. */
+  readonly liveSourceIds: ReadonlySet<string>;
+  /** Absence is authoritative only for a mechanically complete lap. */
+  readonly mechanicallyHealthy: boolean;
+  /** Current durable operator authority; invalidated origins are excluded. */
+  readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+  /**
+   * Case ids the published work order carries, read under the store lease
+   * that serializes every order writer. `undefined` (an unreadable order)
+   * proves nothing, so nothing is settled.
+   */
+  readonly readPublishedCaseIds: (actionEffectIds: readonly string[]) => Promise<ReadonlySet<string> | undefined>;
+  readonly lapId: string;
+}): Promise<SettleStrandedActionReservationsResult> {
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
+    const candidates = state.cases.filter((record): record is ActionCase =>
+      isActionCase(record) && record.effect.status === 'reserved'
+      && retiresOpenBuildReviewCase(record, {
+        liveSourceIds: input.liveSourceIds,
+        effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds,
+        mechanicallyHealthy: input.mechanicallyHealthy,
+      }));
+    if (candidates.length === 0) return { value: [] };
+    const published = await input.readPublishedCaseIds(
+      state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : []));
+    if (published === undefined) return { value: [] };
+    const settled = candidates
+      .filter((record) => !published.has(record.id))
+      .map((record) => ({ caseId: record.id, effectId: record.effect.id }));
+    if (settled.length === 0) return { value: [] };
+    const stranded = new Set(settled.map(({ caseId }) => caseId));
+    const events = settled.map(({ caseId }) => {
+      const eventId = randomUUID();
+      return { eventId, occurredAt: new Date().toISOString(), event: {
+        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+        lapId: input.lapId, caseId, resolution: 'resolved' as const,
+      } };
+    });
+    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+    return {
+      value: settled,
+      nextState: {
+        ...upgraded,
+        cases: upgraded.cases.map((record) => stranded.has(record.id)
+          ? retireOpenBuildReviewCase(record)
+          : record),
+        outbox: [...upgraded.outbox, ...events.slice(1)],
+      },
+    };
+  });
+  if (mutation.ok) return { ok: true, settled: mutation.value };
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: mutation.reason };
+}
+
+/**
+ * An open case whose effect already failed (for example an action charged past
+ * the kickback budget) is terminal for that effect, yet the reducer halts on
+ * it every lap. Once its sources are absent from a mechanically complete lap,
+ * its finding is gone: resolve the case and keep the failure diagnostic.
+ */
+export async function resolveAbsentFailedBuildReviewCases(input: {
+  readonly store: RemediationCaseStore;
+  /** This lap's reported, unsuppressed rubric-namespaced source ids. */
+  readonly liveSourceIds: ReadonlySet<string>;
+  readonly lapId: string;
+  readonly mechanicallyHealthy: boolean;
+}): Promise<SettleStrandedActionReservationsResult> {
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
+    const settled = state.cases.flatMap((record) =>
+      record.effect.kind === 'action' && retiresOpenBuildReviewCase(record, {
+        liveSourceIds: input.liveSourceIds,
+        effectiveAcceptedSourceIds: new Set(),
+        mechanicallyHealthy: input.mechanicallyHealthy,
+        allowAppliedByAbsence: false,
+      })
+        ? [{ caseId: record.id, effectId: record.effect.id }]
+        : []);
+    if (settled.length === 0) return { value: [] };
+    const retired = new Set(settled.map(({ caseId }) => caseId));
+    const events = settled.map(({ caseId }) => {
+      const eventId = randomUUID();
+      return { eventId, occurredAt: new Date().toISOString(), event: {
+        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+        lapId: input.lapId, caseId, resolution: 'resolved' as const,
+      } };
+    });
+    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+    return {
+      value: settled,
+      nextState: {
+        ...upgraded,
+        cases: upgraded.cases.map((record) => retired.has(record.id) ? retireOpenBuildReviewCase(record) : record),
+        outbox: [...upgraded.outbox, ...events.slice(1)],
+      },
+    };
+  });
+  if (mutation.ok) return { ok: true, settled: mutation.value };
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: mutation.reason };
+}
+
+/**
+ * A deferral reserved by an earlier lap that never filed its issue (for
+ * example a run without a filing capability) can never be applied, and the
+ * reducer halts on it every lap. Settle it once its sources are absent from a
+ * mechanically complete lap, the same evidence the action settlement uses.
+ */
+export async function settleStrandedBuildReviewDeferralReservations(input: {
+  readonly store: RemediationCaseStore;
+  /** This lap's reported, unsuppressed rubric-namespaced source ids. */
+  readonly liveSourceIds: ReadonlySet<string>;
+  readonly lapId: string;
+}): Promise<SettleStrandedActionReservationsResult> {
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
+    const settled = state.cases.flatMap((record) =>
+      isOpenRemediationCase(record) && record.effect.kind === 'deferral' && record.effect.status === 'reserved'
+        && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId))
+        ? [{ caseId: record.id, effectId: record.effect.id }]
+        : []);
+    if (settled.length === 0) return { value: [] };
+    const stranded = new Set(settled.map(({ caseId }) => caseId));
+    const events = settled.map(({ caseId }) => {
+      const eventId = randomUUID();
+      return { eventId, occurredAt: new Date().toISOString(), event: {
+        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+        lapId: input.lapId, caseId, resolution: 'resolved' as const,
+      } };
+    });
+    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+    return {
+      value: settled,
+      nextState: {
+        ...upgraded,
+        cases: upgraded.cases.map((record) => stranded.has(record.id) && record.effect.kind === 'deferral'
+        ? {
+          ...record,
+          resolution: 'resolved',
+          effect: { id: record.effect.id, kind: 'deferral', status: 'failed', diagnostic: STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC },
+        }
+        : record),
+        outbox: [...upgraded.outbox, ...events.slice(1)],
+      },
+    };
+  });
+  if (mutation.ok) return { ok: true, settled: mutation.value };
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: mutation.reason };
 }
 
 function replaceCases(
@@ -250,8 +470,23 @@ export async function applyBuildReviewActionEffects(input: {
       // work is blocked or how close the counters are. Name both.
       const blocked = pending.map((record) => `${record.id} (effect ${record.effect.id})`).join(', ');
       const scope = charged.cumulativeExhausted ? 'cumulative' : 'per-gate';
-      const diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
+      let diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
         `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
+      // `kickback-budget raise --gate build_review` moves the cumulative limit,
+      // and admits a halt only when the ledger's cap evidence names the
+      // generation the HALT body repeats. This diagnostic becomes that body.
+      // A failed evidence write still halts; it only leaves the halt without
+      // the raise recovery, which is the pre-existing behaviour.
+      if (charged.cumulativeExhausted) {
+        try {
+          const capEntry = await recordKickbackCapEvidence(input.projectRoot, 'build_review', {
+            consumed: charged.entry.cumulative,
+            limit: charged.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+            latestReason: charged.entry.lastReason ?? '',
+          }, input.child);
+          diagnostic += `\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`;
+        } catch { /* halt without recovery evidence */ }
+      }
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     const next = replaceCases(state, (record) => isSettling(record)

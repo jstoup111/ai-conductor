@@ -80,6 +80,12 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    escalation pair (adr-2026-07-13) is re-armed for this gate so a zero-progress lap escalates
    instead of looping.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, a `blocked-remediable` finding is routed
+> after admission. A task-bound finding goes to the child owning its cited task. An ADR-only
+> citation goes through the engine's residue routing call. The leaf is navigated back to the host
+> region sentinel, and the host child builds the fix. `blocked-design` still halts exactly as here
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 1–4 and 8).
+
 4. **Termination.** The gate gets its own remediation lap cap, default **1**
    (operator-configurable, config key under `architecture_review_as_built`), and its appended
    tasks draw on the **shared** plan-growth allowance
@@ -95,6 +101,18 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    > amended). A second lap or an exceeded allowance halts `kickback-cap` at that dispatch, after
    > the repair tasks are appended and pending.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature the lap and growth are charged once per
+> routing round, at the first host's BUILD dispatch, from the route record's receipt
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 10). The cap and its halt are unchanged.
+
+> **Amended 2026-10-25 by #2413:** The default lap cap is no longer 1. It is derived from the
+> feature's complexity tier: Small 2, Medium 3, Large 4, with a feature that has no recorded tier
+> treated as Medium. `architecture_review_as_built.max_remediation_laps` may set a positive
+> integer (every tier) or a map of `S`/`M`/`L` to positive integers (unset tiers keep their
+> default). An operator `kickback-budget raise` still takes precedence. Exhausting the allowance
+> halts `kickback-cap` as before, and the halt names the tier and allowance it was measured
+> against.
+
 5. **One appender, restated (amends adr-2026-08-22-one-owner-per-review-question).** The
    binding principle becomes: *a gate may fail a lap or halt, and only the
    `planRemediation` → remediation-append seam may append plan tasks — with `prd_audit` and
@@ -109,6 +127,12 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    > without an in-cap settlement or a consumed operator raise, and the seam remains the only
    > appender. This also qualifies adr-2026-08-22-one-owner-per-review-question's "only under its
    > cap" as restated here.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the seam also writes the frozen blocks on
+> the host child's branch. It is the same appender, writes only ids in the route record's frozen
+> allocation produced by `planRemediation`, and refuses any other id
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 
 6. **Observability and lifecycle.** Per-finding classification and each remediation outcome
    are projected into the verdict artifact and the shipped record through the existing
@@ -142,6 +166,11 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    > stays pending until projection or a fresh session. It cannot project early, because as-built
    > cannot pass before that repair's BUILD runs.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, pending findings and their charges are
+> carried durably by the ref-backed route record and its frozen allocation. They survive worktree
+> recreation, not only process restart (`adr-2026-10-12-routed-whole-feature-repair` decisions 6 and
+> 10).
+
 8. **The bounded route is a fallback, never a preemption (added 2026-08-26 by operator
    amendment).** `adr-2026-07-10-validation-group-join` decision 3 is unchanged and keeps
    primacy: when a validation-group join carries a `manual_test` FAIL alongside review gaps,
@@ -164,6 +193,10 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    as-built-only path is decision 4's gate-local durable budget the sole authority — which is
    why the process-local `remediationRounds` pre-cap was removed from that branch and from
    that branch alone.
+
+> **Amended 2026-10-12 by #2944:** The consolidated `manual_test` kickback keeps priority. In a
+> stacked mixed round, its FAIL obligation routes to the earliest task-owned host, and the FAIL rows
+> ride every host's retry hint (`adr-2026-10-12-routed-whole-feature-repair` decision 3).
 
 9. **Findings owned by existing plan tasks append nothing and charge no growth (added
    2026-08-31 by #2119).** The remediation planner may disposition a `REMEDIABLE` (or
@@ -261,6 +294,16 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
 > existing no-plan handling; they are never substantive verdicts. An `existing-task` disposition
 > for a finding whose governing reference is a plan task must bind that task. See
 > adr-2026-09-07-durable-prd-widening-decision-reconciliation D6.4.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the `existing-task` restage and its
+> tree-hash baseline are taken at the host child's region entry, before its BUILD dispatch, and fail
+> closed. They are not taken before the leaf's rewind. A repair that ends as a no-op takes the
+> no-commit exit (`adr-2026-10-12-routed-whole-feature-repair` decisions 11 and 13).
+
+> **Amended 2026-10-23 by #3212:** Only tip equality selects the no-commit exit. A no-op repair
+> whose host tip differs from its closure, because it appended rem blocks or committed anything,
+> exits through the restack. Tree equality is no-op evidence only
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 13).
 
 ## Consequences
 

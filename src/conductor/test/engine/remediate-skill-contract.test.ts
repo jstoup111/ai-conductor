@@ -1,8 +1,19 @@
-import { readFile } from 'node:fs/promises';
+// Covers: task:9, task:14, task:22, task:24
+import { cp, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 const remediateSkillPath = new URL('../../../../skills/remediate/SKILL.md', import.meta.url);
+const remediateSkillDirectory = fileURLToPath(new URL('../../../../skills/remediate/', import.meta.url));
+const candidateRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(candidateRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function section(skill: string, heading: string): string {
   return skill.match(new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`))?.[1] ?? '';
@@ -88,8 +99,66 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/must not mint.*durable.*case.*effect.*id/i);
     expect(caseMode).toMatch(/engine.*stamps.*durable.*ids/i);
     expect(caseMode).toMatch(/never assert or create operator\s+acceptance/i);
+    expect(caseMode).toMatch(/same-substance finding may be bound\s+by `existingCaseId` to a prior case marked `operatorAccepted`/i);
     expect(caseMode).toMatch(/do not.*apply.*effect/i);
     expect(caseMode).toMatch(/do not append[\s\S]*approved plan/i);
     expect(caseMode).toMatch(/write.*only.*`\.pipeline\/remediation\.json`/is);
+  });
+
+  it('states case-v2 index-only admission and its one-round expansion boundary', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+
+    expect(caseMode).toMatch(/`planContract\.index` lists every (?:active-)?plan task without (?:its )?body/i);
+    expect(caseMode).toMatch(/`admittedTaskIds` must name supplied task bodies/i);
+    expect(caseMode).toMatch(/index-only task.*at most one.*engine.*expansion round.*unsupplied admission.*halts/is);
+  });
+
+  it('allows distinctFrom to name provenance candidates through the shared skill only', async () => {
+    const [skill, files] = await Promise.all([
+      readFile(remediateSkillPath, 'utf8'),
+      readdir(remediateSkillDirectory, { recursive: true }),
+    ]);
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+
+    expect(caseMode).toMatch(
+      /An entry may name either a provenance\s+candidate of the row or a resolved act owner of a row source;\s+an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate\./,
+    );
+    expect(files.filter((file) => file.endsWith('SKILL.md'))).toEqual(['SKILL.md']);
+  });
+
+  it('treats bounded prior-source finding digests as binding context rather than report text', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+    const normalizedCaseMode = caseMode.replace(/\s+/g, ' ');
+
+    expect(caseMode).toMatch(/prior source.*`finding`.*bounded digest/is);
+    expect(normalizedCaseMode).toContain(
+      '`rubric`, `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`',
+    );
+    expect(caseMode).toMatch(/`finding` digest as binding context.*equivalent re-raise/is);
+    expect(caseMode).toMatch(/never report text/i);
+  });
+
+  it('renders the same shared remediate skill in Claude and Codex candidates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediate-skill-candidates-'));
+    candidateRoots.push(root);
+    const worktreeRoot = join(root, 'worktree');
+    await cp(remediateSkillDirectory, join(worktreeRoot, 'skills', 'remediate'), { recursive: true, dereference: true });
+
+    const [claude, codex] = await Promise.all(
+      ['claude', 'codex'].map((provider) => provisionProviderHome({
+        provider: { id: provider as 'claude' | 'codex' }, worktreeRoot, baseDir: root,
+      })),
+    );
+    try {
+      const skill = await readFile(remediateSkillPath, 'utf8');
+      await expect(Promise.all([
+        readFile(join(claude.homeDir, 'skills', 'remediate', 'SKILL.md'), 'utf8'),
+        readFile(join(codex.homeDir, 'skills', 'remediate', 'SKILL.md'), 'utf8'),
+      ])).resolves.toEqual([skill, skill]);
+    } finally {
+      await Promise.all([claude.teardown(), codex.teardown()]);
+    }
   });
 });
