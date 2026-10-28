@@ -1297,7 +1297,8 @@ export async function executeProviderCandidates({
     } catch (error) {
       // A teardown that throws after the provider ran must not erase what the
       // provider billed: the completed invocation's usage stays on the attempt.
-      const billedUsage = (invocation as { result?: InvokeResult } | undefined)?.result?.tokenUsage;
+      const completedInvocation = (invocation as { result?: InvokeResult } | undefined)?.result;
+      const billedUsage = completedInvocation?.tokenUsage;
       if (nativeSchemaScratchFailure === undefined) {
         if (billedUsage !== undefined) {
           const abandoned = buildProviderAttemptMetadata({
@@ -1333,6 +1334,12 @@ export async function executeProviderCandidates({
           ? nativeSchemaScratchFailure.message
           : String(nativeSchemaScratchFailure)}`,
         ...(billedUsage ? { tokenUsage: billedUsage } : {}),
+        ...(completedInvocation?.observedIntervals
+          ? { observedIntervals: completedInvocation.observedIntervals }
+          : {}),
+        ...(completedInvocation === undefined
+          ? { executionDisposition: 'not-started' as const }
+          : {}),
       };
     }
     // A prepared cache hit or cancellation did not consult provider availability.

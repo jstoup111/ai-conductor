@@ -50,6 +50,7 @@ import { ProviderSetupUnavailableError } from '../../src/execution/provider-setu
 import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
 import type { ManagedGhObservationCoverage } from '../../src/execution/managed-session-preparation.js';
 import * as managedSessionPreparation from '../../src/execution/managed-session-preparation.js';
+import * as providerScratch from '../../src/engine/self-host/provider-scratch.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -885,25 +886,59 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).toHaveBeenCalled();
   });
 
-  it('records the billed usage of an invocation whose candidate teardown then throws', async () => {
+  // Covers: task:5
+  it('records a scratch-home acquisition failure as not started without invoking the provider', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const acquire = vi.spyOn(providerScratch, 'acquireScratchHome').mockRejectedValueOnce(new Error('scratch permission denied'));
+
+    try {
+      const result = await executeProviderCandidates({
+        step: 'build', configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        runId: 'task-5-acquire',
+        nativeSchemaScratch: { worktreeRoot: '/workspace/feature', repository: 'acme/repo', featureSlug: 'feature' },
+        options: { prompt: 'build', cwd: '/workspace/feature', nativeSchema: { type: 'object' } },
+      });
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(result.attempts).toEqual([expect.objectContaining({
+        provider: 'codex', invoked: false, outcome: 'failure', reason: expect.stringContaining('scratch permission denied'),
+      })]);
+    } finally {
+      acquire.mockRestore();
+    }
+  });
+
+  // Covers: task:5
+  it('keeps invocation intervals and billed usage when schema scratch teardown fails', async () => {
     const billed = { input: 900, output: 120, costUsd: 1.75, costSource: 'provider' as const };
-    const codexInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0, tokenUsage: billed }));
+    const interval = { startedAtMs: 10_000, durationMs: 1_500 };
+    const codexInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0, tokenUsage: billed, observedIntervals: [interval] }));
     const onAttempt = vi.fn();
-    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const acquire = vi.spyOn(providerScratch, 'acquireScratchHome').mockResolvedValueOnce('/tmp/task-5-scratch');
+    const release = vi.spyOn(providerScratch, 'releaseScratchHome').mockResolvedValueOnce({ kind: 'failed', error: 'cleanup failed' });
 
-    await expect(executeProviderCandidates({
-      step: 'build', configuredProviders: ['codex'],
-      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke })]),
-      sessions: new ProviderSessionScope(vi.fn()),
-      prepareCandidateSelfHost: async () => ({ executable: 'fake', env: {}, args: [], teardown: async () => { throw new Error('cleanup failed'); } }),
-      onAttempt,
-      options: { prompt: 'build', cwd: '/workspace' },
-    })).rejects.toThrow('cleanup failed');
+    try {
+      const result = await executeProviderCandidates({
+        step: 'build', configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke: codexInvoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        runId: 'task-5-teardown',
+        nativeSchemaScratch: { worktreeRoot: '/workspace/feature', repository: 'acme/repo', featureSlug: 'feature' },
+        onAttempt,
+        options: { prompt: 'build', cwd: '/workspace/feature', nativeSchema: { type: 'object' } },
+      });
 
-    expect(onAttempt).toHaveBeenCalledTimes(1);
-    expect(onAttempt).toHaveBeenCalledWith('build', expect.objectContaining({
-      provider: 'codex', invoked: true, outcome: 'failure', tokenUsage: billed,
-    }));
+      expect(result.success).toBe(false);
+      expect(onAttempt).toHaveBeenCalledTimes(1);
+      expect(onAttempt).toHaveBeenCalledWith('build', expect.objectContaining({
+        provider: 'codex', invoked: true, outcome: 'failure', tokenUsage: billed, observedIntervals: [interval],
+      }));
+    } finally {
+      release.mockRestore();
+      acquire.mockRestore();
+    }
   });
 
   it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
