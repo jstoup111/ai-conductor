@@ -44,7 +44,7 @@ function projection(rubric: typeof BUILD_REVIEW_RUBRIC_IDS[number]) {
 
 export async function captureRubricPrompt(
   rubric: typeof BUILD_REVIEW_RUBRIC_IDS[number],
-  stepId = `severity-${rubric}`,
+  stepId = `prompt-${rubric}`,
 ): Promise<string> {
   const invoke = vi.fn().mockResolvedValue({ success: false, exitCode: 0 });
   const runner = new DefaultStepRunner({ invoke }, stepId, '/tmp/project');

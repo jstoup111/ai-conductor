@@ -18,7 +18,7 @@ import {
   BUILD_REVIEW_RUBRIC_IDS,
   getBuildReviewRubricDescriptor,
 } from '../../src/engine/build-review-registry.js';
-import { captureRubricPrompt } from './build-review-severity-prompt-helper.js';
+import { captureRubricPrompt } from './build-review-prompt-capture.js';
 
 describe('build_review built-in severity prompt source', () => {
   it.each(BUILD_REVIEW_RUBRIC_IDS)('%s renders severity definitions from the engine rather than its SKILL.md', async (rubric) => {

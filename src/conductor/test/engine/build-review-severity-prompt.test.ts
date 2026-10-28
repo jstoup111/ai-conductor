@@ -8,7 +8,7 @@ import {
   BUILD_REVIEW_RUBRIC_IDS,
 } from '../../src/engine/build-review-registry.js';
 import type { CapturedReviewPolicyBundle } from '../../src/engine/build-review-policy-bundle.js';
-import { captureRubricPrompt } from './build-review-severity-prompt-helper.js';
+import { captureRubricPrompt } from './build-review-prompt-capture.js';
 
 const customPolicyBundle: CapturedReviewPolicyBundle = {
   policy: {
