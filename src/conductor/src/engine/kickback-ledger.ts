@@ -1815,9 +1815,13 @@ export async function applyKickbackBudgetAdjustment(
     const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
     const growth = allowance === 'growth';
     const restack = allowance === 'restacks';
+    // A restack limit is per originating child in the `cascades` ref; the cap
+    // evidence snapshots that child's limit. The ledger entry is shared by
+    // every originating child, so it never stores a restack limit (#3475).
     const beforeLimit = growth
       ? (ledger.effectiveGrowthCap ?? entry.capEvidence!.limit)
-      : remediation ? (entry.effectiveLapCap ?? entry.capEvidence!.limit) : (entry.effectiveLimit ?? defaultLimit);
+      : remediation ? (entry.effectiveLapCap ?? entry.capEvidence!.limit)
+        : restack ? entry.capEvidence!.limit : (entry.effectiveLimit ?? defaultLimit);
     const beforeConsumed = growth
       ? (ledger.growth?.added ?? 0)
       : restack
@@ -1827,7 +1831,7 @@ export async function applyKickbackBudgetAdjustment(
     const next: KickbackGateEntry = {
       ...entry,
       adjustmentsKnown: true,
-      ...(growth
+      ...(growth || restack
         ? {}
         : remediation
         ? { effectiveLapCap: raised, laps: adjustment.kind === 'reset' ? 0 : entry.laps ?? 0 }
@@ -1874,7 +1878,7 @@ function capEvidenceAgreesWithAdjustment(
     ? (ledger.effectiveGrowthCap ?? evidence.limit)
     : remediation
       ? (entry.effectiveLapCap ?? evidence.limit)
-      : (entry.effectiveLimit ?? defaultLimit ?? adjustment.beforeLimit);
+      : restack ? evidence.limit : (entry.effectiveLimit ?? defaultLimit ?? adjustment.beforeLimit);
   // Pre-allowance plan-growth evidence was persisted with the growth count in
   // `consumed`.  Task 1 deliberately reads it as the safe `laps` default, but
   // the original snapshot remains a valid legacy recovery when it exactly

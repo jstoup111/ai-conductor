@@ -237,6 +237,60 @@ describe('restack kickback budget storage', () => {
     });
   });
 
+  it('raises a second originating child after an earlier raise for a different child (#3475)', async () => {
+    const subject = await realCascadeCapCliFixture();
+    const raise = async (originating: string) => {
+      const printed: string[] = [];
+      const code = await dispatchKickbackBudgetCommand(
+        {
+          kind: 'kickback-budget', action: 'raise', feature: 'demo', gate: 'restack',
+          child: originating, by: 1, rationale: `repair the stopped cascade from child ${originating}`, format: 'human',
+        },
+        {
+          cwd: subject.root,
+          resolveMainRoot: async () => subject.root,
+          isInteractive: () => true,
+          resolveOperator: () => 'operator',
+          print: (message) => { printed.push(message); },
+        },
+      );
+      return { code, printed: printed.join('\n') };
+    };
+
+    // Child 1 exhausts its cap first and the operator raises it 3 -> 4.
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    await expect(raise('1')).resolves.toMatchObject({ code: 0 });
+
+    // Child 2 has since originated three cascades of its own.
+    const afterFirst = await readCascadeCounts(subject.repo, 'demo');
+    if (afterFirst.kind !== 'counts') throw new Error('unreadable cascades');
+    const blob = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ ...afterFirst.counts, counts: { ...afterFirst.counts.counts, 2: 3 } }),
+    })).stdout.trim();
+    await makeGitRunner(subject.repo)(['update-ref', cascadesRefFor('demo'), blob]);
+
+    // Child 1's raise must not change the limit enforced for child 2, and the
+    // halt reports the 3/3 budget that actually refused.
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [child(2)],
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('originating child 2 reached 3/3 cascades');
+    expect(halt).toContain('Kickback budget (restack): 3/3 consumed; 0 remaining');
+
+    const second = await raise('2');
+    expect(second.printed).not.toContain('refused');
+    expect(second.code).toBe(0);
+    expect(second.printed).toContain('Kickback budget (restack): 3/4 consumed; 1 remaining');
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts',
+      counts: { counts: { 1: 3, 2: 3 }, limits: { 1: 4, 2: 4 } },
+    });
+  });
+
   it('raises the cascade budget after recreating the halted feature worktree without child 1 state', async () => {
     const subject = await realCascadeCapCliFixture();
 

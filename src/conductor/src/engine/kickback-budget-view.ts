@@ -89,7 +89,13 @@ export function kickbackBudgetView(
 ): KickbackBudgetView {
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
   const restack = gate === 'restack';
-  const limit = remediation ? (entry?.effectiveLapCap ?? fallbackLimit) : (entry?.effectiveLimit ?? fallbackLimit);
+  // A restack limit belongs to the originating child named by the live cap
+  // evidence: its snapshot, or the raise bound to that halt (#3475).
+  const restackLimit = [...(entry?.adjustments ?? [])].reverse()
+    .find((item) => item.haltGeneration === entry?.capEvidence?.haltGeneration)
+    ?.afterLimit ?? entry?.capEvidence?.limit ?? fallbackLimit;
+  const limit = remediation ? (entry?.effectiveLapCap ?? fallbackLimit)
+    : restack ? restackLimit : (entry?.effectiveLimit ?? fallbackLimit);
   // Cascade counts are ref-backed by child, not accumulated in the ledger.
   // The cap evidence snapshots the exact count which raised this halt.
   const consumed = restack ? (entry?.capEvidence?.consumed ?? 0) : remediation ? (entry?.laps ?? 0) : (entry?.cumulative ?? 0);
