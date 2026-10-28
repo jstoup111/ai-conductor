@@ -35,13 +35,6 @@ Concretely:
 
 1. `inspectSeal` returns the tolerated self-amendments on the success verdict
    (`{ ok: true, seal, selfAmendments: [...] }`) rather than silently `continue`-ing.
-
-   > **Amended 2026-10-28 by #3418:** for a feature with an artifact manifest, a reported
-   > self-amendment is a changed listed artifact of a protected kind (plan, stories, prd,
-   > architecture, decision), wherever it lives, not a file whose stem names the feature. The
-   > manifest itself is never a self-amendment. Features without a manifest are unchanged. See
-   > `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest` decision 4.
-
 2. `conductor.ts` emits a visible, non-fatal advisory naming each amended path when that list is
    non-empty, so the amendment is never invisible to an operator reading the log.
 3. The `build_review` grader prompt gains an explicit sub-rule under its existing **Scope**
