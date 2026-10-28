@@ -404,6 +404,23 @@ describe('appendTimingSection', () => {
     )).toBe(true);
   });
 
+  it('keeps an unreadable-ledger partial Time block reason-free', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'shipped-record-unreadable-timing-'));
+    try {
+      await mkdir(join(directory, '.pipeline'), { recursive: true });
+      await writeFile(join(directory, '.pipeline', 'events.jsonl'), 'not json\n', 'utf8');
+
+      const rendered = appendTimingSection(
+        renderShippedRecordWithCost(fields, rollup),
+        await computeTimingRollup(directory),
+      );
+
+      expect(rendered.endsWith('\n## Time\nstate: partial\n')).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('escapes NUL delimiters in a partial reason before writing Markdown', () => {
     const rendered = appendTimingSection(
       renderShippedRecordWithCost(fields, rollup),

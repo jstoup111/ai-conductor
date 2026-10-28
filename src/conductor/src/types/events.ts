@@ -105,6 +105,15 @@ export type DispatchKind = 'initial' | 'resume' | 'rekick';
 export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
 export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
 
+/** Bounded partial-timing causes safe to attach to feature-level telemetry. */
+export type TimingReasonClass =
+  | 'empty-active-union'
+  | 'active-evidence-incomplete'
+  | 'open-executions'
+  | 'provider-outside-active-union'
+  | 'provider-evidence-incomplete'
+  | 'ledger-unreadable';
+
 /** Closed daemon-maintenance phases so the persisted timing vocabulary remains bounded. */
 export type MaintenancePhase =
   | 'startup-refresh'
@@ -609,7 +618,11 @@ type ConductorEventBody =
       slug: string;
       tier?: ComplexityTier;
       runStartedAt?: number;
-      active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
+      active: {
+        state: 'exact' | 'partial' | 'unavailable';
+        activeMs?: number;
+        reason?: TimingReasonClass;
+      };
     }
   /** A foreground monitor presented one halted feature to the operator. */
   | { type: 'monitor_item_offered'; project: string; feature: string }

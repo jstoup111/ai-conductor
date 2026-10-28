@@ -38,6 +38,17 @@ import { hasDurableChildState } from './child-cursor.js';
 import { acquireFeatureDispatchLease, type FeatureDispatchLease } from './feature-dispatch-lease.js';
 import { isOperatorParked } from './park-marker.js';
 
+function timingReasonClass(reason: string | undefined): import('../types/events.js').TimingReasonClass {
+  if (reason?.startsWith('open-executions:')) return 'open-executions';
+  if (
+    reason === 'empty-active-union' ||
+    reason === 'active-evidence-incomplete' ||
+    reason === 'provider-outside-active-union' ||
+    reason === 'provider-evidence-incomplete'
+  ) return reason;
+  return 'ledger-unreadable';
+}
+
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
  * `.pipeline/DONE` / `.pipeline/HALT` markers the conductor writes.
@@ -483,7 +494,11 @@ export function makeRunFeature(
           active: rollup.state === 'measured'
             ? { state: 'exact', activeMs: rollup.activeMs }
             : rollup.state === 'partial'
-              ? { state: 'partial', ...(rollup.activeMs === undefined ? {} : { activeMs: rollup.activeMs }) }
+              ? {
+                  state: 'partial',
+                  ...(rollup.activeMs === undefined ? {} : { activeMs: rollup.activeMs }),
+                  reason: timingReasonClass(rollup.reason),
+                }
               : { state: 'unavailable' },
         });
       };

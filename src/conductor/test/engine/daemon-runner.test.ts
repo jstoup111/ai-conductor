@@ -99,6 +99,7 @@ import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { journalRefFor, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
 import type { RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-rekick.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 
 // Covers: task:1
 
@@ -374,6 +375,136 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     ]);
     for (const event of emitted) {
       expect(Object.hasOwn(event, 'tier')).toBe(expectedTier !== undefined);
+    }
+  });
+
+  it.each([
+    {
+      name: 'provider evidence is incomplete',
+      events: [
+        { type: 'provider_attempt', step: 'plan', invoked: true },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', activeMs: 100, reason: 'provider-evidence-incomplete' },
+    },
+    {
+      name: 'the active union is empty',
+      events: [{ type: 'step_completed', step: 'plan' }],
+      expected: { state: 'partial', reason: 'empty-active-union' },
+    },
+    {
+      name: 'active evidence is incomplete',
+      events: [
+        { type: 'step_completed', step: 'explore' },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', reason: 'active-evidence-incomplete' },
+    },
+    {
+      name: 'provider time falls outside the active union',
+      events: [
+        { type: 'provider_attempt', step: 'plan', invoked: true, observedIntervals: [{ startedAtMs: 200, durationMs: 20 }] },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', reason: 'provider-outside-active-union' },
+    },
+    {
+      name: 'executions remain open',
+      events: [
+        { type: 'step_started', step: 'build' },
+        { type: 'parallel_started', step: 'wiring_check', branches: ['wiring_check'] },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', reason: 'open-executions' },
+    },
+  ])('emits the bounded timing reason when $name', async ({ events: timingEvents, expected }) => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-'));
+    try {
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(worktreePath, '.pipeline', 'events.jsonl'),
+        `${timingEvents.map((event) => JSON.stringify(event)).join('\n')}\n`,
+        'utf8',
+      );
+      await writeFile(join(worktreePath, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
+      const events = new ConductorEventEmitter();
+      const emitted: Array<Record<string, unknown>> = [];
+      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(), rootEvents: events,
+        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        stop: () => {},
+      });
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect(emitted[0]?.active).toEqual(expected);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('labels an unreadable timing ledger at the feature_shipped boundary', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-unreadable-'));
+    try {
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreePath, '.pipeline', 'events.jsonl'), 'not json\n', 'utf8');
+      const events = new ConductorEventEmitter();
+      const emitted: Array<Record<string, unknown>> = [];
+      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(), rootEvents: events,
+        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        stop: () => {},
+      });
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect({ rollup: await computeTimingRollup(worktreePath), active: emitted[0]?.active }).toEqual({
+        rollup: { state: 'partial' },
+        active: { state: 'partial', reason: 'ledger-unreadable' },
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('omits the timing reason for a measured feature shipment', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-measured-'));
+    try {
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(worktreePath, '.pipeline', 'events.jsonl'),
+        `${JSON.stringify({ type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } })}\n`,
+        'utf8',
+      );
+      await writeFile(join(worktreePath, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
+      const events = new ConductorEventEmitter();
+      const emitted: Array<Record<string, unknown>> = [];
+      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(), rootEvents: events,
+        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        stop: () => {},
+      });
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect(emitted[0]?.active).toEqual({ state: 'exact', activeMs: 100 });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
     }
   });
 
