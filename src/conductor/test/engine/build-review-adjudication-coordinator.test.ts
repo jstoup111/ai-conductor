@@ -455,7 +455,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, judge), emit: async (event) => {
         events.push(event);
         if (event.type === 'remediation_adjudication_started') {
-          timeline.push(`started:${'bindingCorrectionCaseIds' in event ? event.bindingCorrectionCaseIds.join(',') : 'none'}`);
+          timeline.push(`started:${event.bindingCorrectionCaseIds?.join(',') ?? 'none'}`);
         }
       },
     });

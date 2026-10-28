@@ -855,7 +855,7 @@ describe('remediation case reconciler', () => {
 
   // Covers: task:1
   it('keeps the transition refusals and attempted-action refute/defer admissions', async () => {
-    const rejectedRecords = [
+    const rejectedRecords: ReadonlyArray<readonly [RemediationCaseRecord, readonly string[]]> = [
       [durableAction(), []],
       [durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } }), ['case-1']],
       [durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'work order failed' } }), ['case-1']],
