@@ -330,7 +330,9 @@ describe('Conductor routed acceptance verify-green path', () => {
     }));
     const events = new ConductorEventEmitter();
     const observed: unknown[] = [];
-    events.on('routing_rounds_stalled', (event) => observed.push(event));
+    events.on('routing_rounds_stalled', (event) => {
+      observed.push(event);
+    });
     mocks.routedExitContinuation = async () => ({
       kind: 'continued',
       next: {
