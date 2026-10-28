@@ -1224,13 +1224,17 @@ describe('build-review accept', () => {
     it('accepts a current test-quality finding through the real disposition store and reports it accepted', async () => {
     const print = vi.fn();
     const appendEvent = vi.fn();
+    const readAggregate = vi.fn(async () => JSON.stringify(testQualityAggregate));
 
     await expect(dispatchBuildReviewAccept(
       { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' },
-      deps({ print, appendEvent }),
+      deps({ print, appendEvent, readFile: readAggregate }),
     )).resolves.toBe(0);
 
     expect(print).toHaveBeenCalledWith(`build-review accept: accepted ${testQualityIdentity.id} for lap lap-current.`);
+    expect(readAggregate).toHaveBeenCalledTimes(2);
+    expect(readAggregate).toHaveBeenNthCalledWith(1, '/main/.worktrees/review-rubrics/.pipeline/build-review.json');
+    expect(readAggregate).toHaveBeenNthCalledWith(2, '/main/.worktrees/review-rubrics/.pipeline/build-review.json');
     expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', expect.objectContaining({
       type: 'build_review_disposition_accepted', findingId: testQualityIdentity.id,
     }));
