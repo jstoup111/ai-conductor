@@ -723,13 +723,9 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         });
         const detail = `commit ${resumed.commit}; paths: ${resumed.paths.join(', ')}${resumed.detail === undefined ? '' : `\n${resumed.detail}`}`;
         const range = journal.journal.ranges.find((candidate) => candidate.child === resumed.child)!;
-        const tree = journal.journal.cause === 'feature-repair'
-          ? await runGit(git, ['rev-parse', '--verify', `${resumed.newParent}^{tree}`])
-          : undefined;
-        const replayParentTree = tree?.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
         await haltRecordedRestackConflict({
           worktree: options.worktree, slug: options.slug, journal, range,
-          replayParent: resumed.newParent, replayParentTree,
+          replayParent: resumed.newParent,
           candidateSubjects: resumed.candidateSubjects, commit: resumed.commit, paths: resumed.paths,
           detail, events: options.events, git,
         });

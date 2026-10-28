@@ -503,16 +503,8 @@ async function haltUnresolvedConflict(
   const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`;
   if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
   else {
-    let replayParentTree: CommitSha | undefined;
-    if (journal.journal.cause === 'feature-repair') {
-      try {
-        replayParentTree = await requiredSha(git, `${newParent}^{tree}`, 'conflict replay parent tree');
-      } catch {
-        // The shared halt helper turns an unavailable tree into durable hand-off detail.
-      }
-    }
     await haltRecordedRestackConflict({
-      worktree, slug, journal, range, replayParent: newParent, replayParentTree,
+      worktree, slug, journal, range, replayParent: newParent,
       candidateSubjects: await replayCandidateSubjects(git, candidates),
       commit: conflict.commit, paths: conflict.paths, detail, events, git,
     });

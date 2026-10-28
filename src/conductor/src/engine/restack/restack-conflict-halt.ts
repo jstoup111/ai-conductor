@@ -3,16 +3,15 @@ import type { GitRunner } from '../rebase.js';
 import { writeConflictRecord } from './restack-conflict-record.js';
 import { type StoredRestackJournal } from './restack-journal.js';
 import { haltRestackConflict } from './restack-move.js';
-import type { ChildRange, CommitSha } from './restack-types.js';
+import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
 
 interface HaltRecordedRestackConflictOptions {
   readonly worktree: string;
   readonly slug: string;
   readonly journal: StoredRestackJournal;
   readonly range: ChildRange;
-  /** The parent and tree used by the failed replay, not the range's old parent. */
+  /** The parent used by the failed replay, not the range's old parent. */
   readonly replayParent: CommitSha;
-  readonly replayParentTree?: CommitSha;
   /** Subjects preserve the resolver's ordered replay todo in the durable hand-off. */
   readonly candidateSubjects: readonly string[];
   readonly commit: CommitSha;
@@ -32,14 +31,16 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
   let recordFailure = '';
   if (journal.journal.cause === 'feature-repair') {
     try {
-      if (!options.replayParentTree) throw new Error('cannot read replay parent tree');
+      const tree = await options.git(['rev-parse', '--verify', `${options.replayParent}^{tree}`]);
+      const replayParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+      if (!replayParentTree) throw new Error('cannot read replay parent tree');
       const written = await writeConflictRecord(options.worktree, options.slug, {
         opId: journal.journal.opId,
         child: range.child,
         oldParent: range.oldParent,
         oldTip: range.oldTip,
         newParent: options.replayParent,
-        newParentTree: options.replayParentTree,
+        newParentTree: replayParentTree,
         candidateSubjects: options.candidateSubjects,
         commit: options.commit,
         paths: options.paths,
