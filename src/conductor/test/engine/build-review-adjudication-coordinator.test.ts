@@ -403,7 +403,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   const customAggregate = customMixedAggregate();
   const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
 
-  // Covers: S2.1, S2.2, S2.3, task:4
+  // Covers: S2.1, S2.2, S2.3, task:4, task:7
   it('re-judges one refused binding without mutating durable state before the correction', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
@@ -426,6 +426,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const contexts: unknown[] = [];
     const snapshots: string[][] = [];
     const events: RemediationCaseLifecycleEvent[] = [];
+    const timeline: string[] = [];
     const rejected: RemediationCaseJudgement = {
       mode: 'case-v1', domain: 'build_review',
       sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-A' }],
@@ -446,11 +447,17 @@ describe('coordinateBuildReviewAdjudication', () => {
         readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8'),
         readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8').catch(() => ''),
       ]));
+      timeline.push(`judge:${contexts.length}`);
       return contexts.length === 1 ? rejected : refuted;
     });
 
     const result = await coordinateBuildReviewAdjudication({
-      ...input(root, judge), emit: async (event) => { events.push(event); },
+      ...input(root, judge), emit: async (event) => {
+        events.push(event);
+        if (event.type === 'remediation_adjudication_started') {
+          timeline.push(`started:${'bindingCorrectionCaseIds' in event ? event.bindingCorrectionCaseIds.join(',') : 'none'}`);
+        }
+      },
     });
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
@@ -458,6 +465,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(contexts[0]).not.toHaveProperty('bindingCorrections');
     expect(contexts[1]).toMatchObject({ bindingCorrections: [{ caseRef: 'rejected-A', existingCaseId: 'case-A', disposition: 'reject', bindableDispositions: ['act', 'defer', 'refute'] }] });
     expect(snapshots[1]).toEqual(snapshots[0]);
+    const started = events.filter((event) => event.type === 'remediation_adjudication_started');
+    expect(started[0]).not.toHaveProperty('bindingCorrectionCaseIds');
+    expect(started[1]).toMatchObject({ bindingCorrectionCaseIds: ['case-A'] });
+    expect(timeline.slice(0, 4)).toEqual(['started:none', 'judge:1', 'started:case-A', 'judge:2']);
     expect(events.map((event) => event.type)).not.toContain('remediation_adjudication_failed');
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'case-A', disposition: 'refute', resolution: 'resolved' })] } });
   });
@@ -1743,25 +1754,29 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(charge).not.toHaveBeenCalled();
   });
 
-  it('dispatches one complete current-source/history judgement and returns its closed action route', async () => {
+  // Covers: task:7
+  it('omits binding-correction ids from every ordinary adjudication start', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async (context: unknown) => {
       expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ findingId })], priorCases: [] });
       return actionJudgement();
     });
-    const events: string[] = [];
+    const events: ConductorEvent[] = [];
 
     const result = await coordinateBuildReviewAdjudication({
       ...input(root, judge),
-      emit: async (event) => { events.push(event.type); },
+      emit: async (event) => { events.push(event); },
     });
 
     expect(result).toMatchObject({ ok: true, route: 'build', trace: expect.stringContaining('case-durable') });
     expect(judge).toHaveBeenCalledTimes(1);
-    expect(events).toEqual([
+    expect(events.map((event) => event.type)).toEqual([
       'remediation_adjudication_started', 'remediation_case_reconciled', 'remediation_effect_reserved',
       'remediation_effect_applied', 'remediation_adjudication_completed',
     ]);
+    const started = events.filter((event) => event.type === 'remediation_adjudication_started');
+    expect(started).toHaveLength(1);
+    expect(started[0]).not.toHaveProperty('bindingCorrectionCaseIds');
   });
 
   it.each([

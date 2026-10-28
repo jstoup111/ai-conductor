@@ -946,6 +946,8 @@ type ConductorEventBody =
       lapId: string;
       /** The index-only task bodies added for the bounded second adjudication round. */
       expansionTaskIds?: readonly string[];
+      /** Case ids whose refused bindings caused this one correction round. */
+      bindingCorrectionCaseIds?: readonly string[];
     }
   | {
       /** A valid remediation judgement was fully reconciled for one build-review lap. */

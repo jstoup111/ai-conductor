@@ -981,6 +981,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     await input.emit?.({
       type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId,
       ...(expansionTaskIds === undefined ? {} : { expansionTaskIds }),
+      ...(bindingCorrections === undefined ? {} : {
+        bindingCorrectionCaseIds: [...new Set(bindingCorrections.map((correction) => correction.existingCaseId))]
+          .sort((left, right) => left.localeCompare(right)),
+      }),
     });
     let judgement: RemediationCaseJudgement;
     try {
