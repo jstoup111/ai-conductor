@@ -20,7 +20,8 @@ import { readState } from './state.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
-import { applyCascadeAdjustment, MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts } from './restack/cascade-cap.js';
+import { applyCascadeAdjustment, readCascadeCounts } from './restack/cascade-cap.js';
+import { RESTACK_CASCADE_TIER_DEFAULTS } from './restack/cascade-allowance.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
@@ -61,7 +62,7 @@ async function defaultsFor(worktree: string): Promise<BudgetDefaults> {
     allowances,
     limits: Object.fromEntries(
     [...GATES].map((gate) => [
-      gate, gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config, tier),
+      gate, gate === 'restack' ? RESTACK_CASCADE_TIER_DEFAULTS.M : kickbackBudgetFallbackLimit(gate, config, tier),
     ]),
     ),
   };
@@ -157,7 +158,7 @@ async function applyRestackCascadeAdjustment(
     afterConsumed: adjustment.afterConsumed,
     beforeLimit: adjustment.beforeLimit,
     afterLimit: adjustment.afterLimit,
-  });
+  }, RESTACK_CASCADE_TIER_DEFAULTS.M);
   if (changed.kind === 'stale') throw new Error('cascade counts changed concurrently; no resume authorization was installed');
   if (changed.kind === 'unreadable') throw new Error(changed.detail);
 }
@@ -342,7 +343,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       const allowance = entry.capEvidence.allowance ?? 'laps';
       const growth = allowance === 'growth';
       const currentLimit = gate === 'restack'
-        ? (cascadeState!.counts.limits?.[String(restackChild!)] ?? MAX_RESTACK_CASCADES_PER_CHILD)
+        ? (cascadeState!.counts.limits?.[String(restackChild!)] ?? RESTACK_CASCADE_TIER_DEFAULTS.M)
         : growth
         ? (ledger.effectiveGrowthCap ?? entry.capEvidence.limit)
         : remediation ? (entry.effectiveLapCap ?? entry.capEvidence.limit) : (entry.effectiveLimit ?? defaults[gate]);

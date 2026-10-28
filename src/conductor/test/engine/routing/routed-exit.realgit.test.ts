@@ -9,7 +9,8 @@ import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import { cascadesRefFor, MAX_RESTACK_CASCADES_PER_CHILD } from '../../../src/engine/restack/cascade-cap.js';
+import { cascadesRefFor } from '../../../src/engine/restack/cascade-cap.js';
+import { RESTACK_CASCADE_TIER_DEFAULTS } from '../../../src/engine/restack/cascade-allowance.js';
 import { journalRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRevalidationQueue, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
@@ -528,7 +529,7 @@ describe('routed exit (real local Git)', () => {
   it('keeps the marker and names the runbook when the routed exit reaches the cascade cap', async () => {
     const subject = await fixture(true);
     await subject.gitRunner(['update-ref', cascadesRefFor('demo'), await blob(subject.gitRunner, {
-      version: 1, counts: { '1': MAX_RESTACK_CASCADES_PER_CHILD },
+      version: 1, counts: { '1': RESTACK_CASCADE_TIER_DEFAULTS.M },
     })]);
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host })).resolves.toMatchObject({ kind: 'halted' });
     expect(await refExists(subject.gitRunner, repairMarkerRefFor('demo'))).toBe(true);

@@ -100,7 +100,27 @@ describe('restack cascade cap (real local Git)', () => {
     const blob = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
     await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
     await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'unreadable', ref: cascadesRefFor('demo') });
-    await expect(checkCascadeCap(subject.repo, 'demo', [child(1)])).resolves.toMatchObject({ kind: 'exhausted', child: 1, count: 3, limit: 3 });
+    await expect(checkCascadeCap(subject.repo, 'demo', [child(1)], 8)).resolves.toMatchObject({
+      kind: 'exhausted', child: 1, count: 8, limit: 8, detail: expect.stringContaining(cascadesRefFor('demo')),
+    });
+  });
+
+  it('uses the caller-provided default and reports whether an exhausted limit was raised', async () => {
+    const subject = await fixture();
+    await writeCascadeCounts(subject.repo, { 1: 7 });
+    await expect(checkCascadeCap(subject.repo, 'demo', [child(1)], 8)).resolves.toMatchObject({
+      kind: 'clear', limit: 8,
+    });
+
+    await writeCascadeCounts(subject.repo, { 1: 8, 2: 0 });
+    await expect(checkCascadeCap(subject.repo, 'demo', [child(1), child(2)], 8)).resolves.toEqual({
+      kind: 'exhausted', child: child(1), count: 8, limit: 8, raised: false,
+    });
+
+    await writeCascadeCounts(subject.repo, { 1: 5 }, { 1: 5 });
+    await expect(checkCascadeCap(subject.repo, 'demo', [child(1)], 8)).resolves.toEqual({
+      kind: 'exhausted', child: child(1), count: 5, limit: 5, raised: true,
+    });
   });
 
   it('halts before journal creation when an originating child reaches its cap, persisting child-scoped evidence and the refusal event', async () => {
