@@ -8,6 +8,7 @@ import {
 } from './artifacts.js';
 import { resolvePlanTaskReference } from './plan-task-parse.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
+import type { FeatureOwnership } from './feature-ownership.js';
 import type { RemediationProjectionSource } from './remediation-projection.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 
@@ -183,6 +184,7 @@ export function resolveExistingTaskBindingsForAdmission(
 export function remediationGapTargetsAnotherFeatureSealedArtifact(
   gap: RemediationGap,
   activePlanStem: string,
+  ownership: FeatureOwnership = { kind: 'legacy' },
 ): {
   artifact: string;
   directingClause: string;
@@ -196,7 +198,7 @@ export function remediationGapTargetsAnotherFeatureSealedArtifact(
   // same directed-edit clause test the rationale already uses: only a
   // protected path with an edit verb in its own preceding clause is a target.
   const taskTarget = gap.tasks
-    .map((task) => directedProtectedTarget(task.title, activePlanStem))
+    .map((task) => directedProtectedTarget(task.title, activePlanStem, ownership))
     .find((target) => target !== undefined);
   if (taskTarget) {
     return {
@@ -209,7 +211,7 @@ export function remediationGapTargetsAnotherFeatureSealedArtifact(
   // Rationale is prose rather than a plan Files declaration. Treat it as a
   // target only when it both names a resolvable protected artifact and directs
   // an edit; a context-only citation must not re-route source work.
-  const rationaleTarget = directedProtectedTarget(gap.rationale, activePlanStem);
+  const rationaleTarget = directedProtectedTarget(gap.rationale, activePlanStem, ownership);
   return rationaleTarget === undefined
     ? undefined
     : {
@@ -227,11 +229,13 @@ export function remediationGapTargetsAnotherFeatureSealedArtifact(
 export function directedProtectedTarget(
   prose: string,
   activePlanStem: string,
+  ownership: FeatureOwnership = { kind: 'legacy' },
 ): { path: string; clause: string } | undefined {
+  const pathPattern = ownership.kind === 'manifest'
+    ? /(?:^|[\s`])((?:\.\/)?\.docs\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.md)\b/g
+    : /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g;
   const prosePaths = Array.from(
-    prose.matchAll(
-      /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
-    ),
+    prose.matchAll(pathPattern),
   );
   if (prosePaths.length === 0) return undefined;
   const action = /\b(?:amend|change|delete|edit|remove|rewrite|update)\b/i;
@@ -250,6 +254,13 @@ export function directedProtectedTarget(
     return action.test(beforePath.slice(clauseStart + 1)) ? [{ path, clause }] : [];
   });
   if (directedPaths.length === 0) return undefined;
+  if (ownership.kind === 'manifest') {
+    const ownedPaths = new Set<string>(ownership.ownedPaths);
+    const target = directedPaths.find(({ path }) => !ownedPaths.has(path.replace(/^\.\//, '')));
+    return target === undefined
+      ? undefined
+      : { path: target.path, clause: normalizeDirectingClause(target.clause) };
+  }
   const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.map(({ path }) => path).join(', ')}`;
   const target = scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
   const targetClause = target === undefined

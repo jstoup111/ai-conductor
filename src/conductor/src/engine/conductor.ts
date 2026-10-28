@@ -4253,8 +4253,23 @@ export class Conductor {
       directingSource: 'task title' | 'rationale';
     }>();
     if (planPath) {
+      const ownershipSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      const currentCommit = ownershipSlug === undefined
+        ? undefined
+        : await currentCommitSha(this.projectRoot);
+      const remediationOwnership = ownershipSlug === undefined || currentCommit === undefined
+        ? { kind: 'legacy' as const }
+        : await computeFeatureOwnership(
+            worktreeFeatureOwnershipSource(this.projectRoot),
+            ownershipSlug,
+            this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
+          );
       for (const gap of plan.gaps) {
-        const target = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
+        const target = remediationGapTargetsAnotherFeatureSealedArtifact(
+          gap,
+          planStem(planPath),
+          remediationOwnership,
+        );
         if (target) sealedArtifactsByGapId.set(gap.id, target);
       }
     }
