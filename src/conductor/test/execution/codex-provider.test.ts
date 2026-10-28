@@ -283,17 +283,47 @@ describe('CodexProvider', () => {
     }
   });
 
+  // Covers: task:6
   it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
     const guardPath = '/prepared/.pipeline/bin/git';
     const priorPath = process.env.PATH;
+    mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('spawn boundary reached'), stderr: '', exitCode: 0, failed: false } as any);
+    await expect(provider.invoke(baseOptions)).resolves.toMatchObject({ success: true });
+    expect(mockExeca).toHaveBeenCalledOnce();
+    mockExeca.mockClear();
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(`git guard repair failed: ${guardPath}`));
 
     const result = await provider.invoke({ ...baseOptions, cwd: '/prepared' });
 
     expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
-    expect(result).toEqual({ success: false, output: `git guard repair failed: ${guardPath}`, exitCode: 1 });
+    expect(result).toEqual({
+      success: false,
+      output: `git guard repair failed: ${guardPath}`,
+      exitCode: 1,
+      executionDisposition: 'not-started',
+    });
     expect(mockExeca).not.toHaveBeenCalled();
     expect(process.env.PATH).toBe(priorPath);
+  });
+
+  // Covers: task:6
+  it('marks a native schema setup failure as not started before launch', async () => {
+    mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('spawn boundary reached'), stderr: '', exitCode: 0, failed: false } as any);
+    await expect(provider.invoke(baseOptions)).resolves.toMatchObject({ success: true });
+    expect(mockExeca).toHaveBeenCalledOnce();
+    mockExeca.mockClear();
+
+    const result = await provider.invoke({
+      ...baseOptions,
+      nativeSchema: { type: 'object', properties: { answer: { type: 'string' } } },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      executionDisposition: 'not-started',
+      output: expect.stringContaining('native schema setup failed'),
+    });
+    expect(mockExeca).not.toHaveBeenCalled();
   });
 
   it.each([

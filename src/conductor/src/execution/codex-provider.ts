@@ -341,10 +341,17 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
-    if (options.abortSignal?.aborted) return abortedInvocationResult();
+    if (options.abortSignal?.aborted) {
+      return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
+    }
     let guardDir: string | null;
     try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     const repl = options.interactive === true;
     const jsonOutput = !repl;
@@ -367,6 +374,7 @@ export class CodexProvider implements LLMProvider {
           success: false,
           output: `${codexDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
           exitCode: 1,
+          executionDisposition: 'not-started',
         };
       }
     }
