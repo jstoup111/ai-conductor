@@ -305,8 +305,17 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
 
 function describeInvalidRemediationJudgement(
   reason: string,
-  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] },
+  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] }
+    | { readonly bindings: readonly { readonly existingCaseId: string; readonly disposition: string; readonly bindableDispositions: readonly string[] }[] },
 ): string {
+  if (reason === 'inadmissible-case-binding' && rejection !== undefined && 'bindings' in rejection) {
+    const bindings = rejection.bindings.map((binding) =>
+      `case ${binding.existingCaseId} bound as ${binding.disposition}; bindable: ${binding.bindableDispositions.join(', ')}`,
+    );
+    return bindings.length === 0
+      ? `invalid remediation judgement ${reason}`
+      : `invalid remediation judgement ${reason} (${bindings.join('; ')})`;
+  }
   if (reason !== 'unknown-admission-task' || rejection === undefined) {
     return `invalid remediation judgement ${reason}`;
   }
@@ -1053,7 +1062,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
     return failUnlessAccepted(describeInvalidRemediationJudgement(
       classification?.kind === 'other' ? classification.reason : graph.reason,
-      graph.reason === 'unknown-admission-task' ? graph : undefined,
+      graph.reason === 'unknown-admission-task' || graph.reason === 'inadmissible-case-binding' ? graph : undefined,
     ), { settleAbsentAttempted: true });
   }
   if (!accepted) return failUnlessAccepted('invalid remediation judgement unknown-admission-task', { settleAbsentAttempted: true });
