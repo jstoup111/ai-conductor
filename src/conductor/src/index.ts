@@ -93,6 +93,7 @@ import {
   detectStackRoundsCommand,
   dispatchStackRoundsIfDetected,
   detectStackOwnersCommand,
+  detectStackRestackResolveCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -109,6 +110,7 @@ import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchStackLandCommand } from './engine/stack-land-cli.js';
 import * as stackRoundsCli from './engine/stack-rounds-cli.js';
 import { dispatchStackOwnersCommand } from './engine/stack-owners-cli.js';
+import { dispatchStackRestackResolve } from './engine/stack-restack-resolve-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
 import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
@@ -1011,6 +1013,12 @@ async function dispatchCliCommand(): Promise<void> {
   const stackOwnersCmd = detectStackOwnersCommand(process.argv);
   if (stackOwnersCmd) {
     process.exitCode = await dispatchStackOwnersCommand(stackOwnersCmd);
+    return;
+  }
+
+  const stackRestackResolveCmd = detectStackRestackResolveCommand(process.argv);
+  if (stackRestackResolveCmd) {
+    process.exitCode = await dispatchStackRestackResolve(stackRestackResolveCmd);
     return;
   }
 

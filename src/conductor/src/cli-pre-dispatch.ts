@@ -62,6 +62,7 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectStackLandCommand', commandPath: ['stack', 'land'], helpOwner: 'router' },
   { detector: 'detectStackRoundsCommand', commandPath: ['stack', 'rounds'], helpOwner: 'router' },
   { detector: 'detectStackOwnersCommand', commandPath: ['stack', 'owners'], helpOwner: 'router' },
+  { detector: 'detectStackRestackResolveCommand', commandPath: ['stack', 'restack-resolve'], helpOwner: 'router' },
   { detector: 'detectEvidenceCommand', commandPath: ['evidence'], helpOwner: 'router' },
   { detector: 'detectKpiCommand', commandPath: ['kpi'], helpOwner: 'router' },
   { detector: 'detectBuildAuthStatusCommand', commandPath: ['build-auth-status'], helpOwner: 'router' },

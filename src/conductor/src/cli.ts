@@ -468,6 +468,20 @@ export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDi
   return { kind: 'stack-owners', slug, paths, ...(diff === undefined ? {} : { diff }) };
 }
 
+export interface StackRestackResolveDispatch { kind: 'stack-restack-resolve'; slug: string; child: string; tip: string }
+export function detectStackRestackResolveCommand(argv: readonly string[]): StackRestackResolveDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'restack-resolve') return null;
+  const values = new Map<string, string>();
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index]; const value = argv[index + 1];
+    if (!flag || value === undefined || !['--slug', '--child', '--tip'].includes(flag) || values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug'); const child = values.get('--child'); const tip = values.get('--tip');
+  if (!slug || !child || !tip || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
+  return { kind: 'stack-restack-resolve', slug, child, tip };
+}
+
 /** Parse the open, declaration, and abandon grammars. */
 export function detectStackLandCommand(argv: readonly string[]): StackLandDispatch | null {
   if (argv[2] !== 'stack' || argv[3] !== 'land') return null;

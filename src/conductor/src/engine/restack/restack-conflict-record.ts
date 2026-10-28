@@ -204,6 +204,16 @@ export function conflictDeleteLines(slug: string, refs: ConsumedConflictRefs): r
   ];
 }
 
+/** Subjects are an operator-resolution contract, not a patch-equivalence hint. */
+export async function missingCandidateSubjects(
+  git: GitRunner, parent: CommitSha, tip: CommitSha, candidates: readonly string[],
+): Promise<readonly string[]> {
+  const logged = await runGit(git, ['log', '--format=%s', `${parent}..${tip}`]);
+  if (logged?.exitCode !== 0) throw new Error('cannot inspect recorded resolution subjects');
+  const available = new Set(logged.stdout.split('\n').filter(Boolean));
+  return [...new Set(candidates.filter((subject) => !available.has(subject)))];
+}
+
 async function subjectsByCommit(
   git: GitRunner,
   range: string,
