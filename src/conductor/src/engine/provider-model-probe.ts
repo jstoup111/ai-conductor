@@ -6,6 +6,10 @@ import {
 import type { HarnessConfig } from '../types/config.js';
 import { collectProviderModelSelections } from './provider-model-config.js';
 import type { InstalledProviderDiscovery } from './provider-discovery.js';
+import {
+  installResolvedModelTiers,
+  resolveModelTierFloors,
+} from './model-tier-resolution.js';
 import { assertRealExecAllowed } from './tracker-client.js';
 
 export const PROVIDER_MODEL_PROBE_TIMEOUT_MS = 5_000;
@@ -50,6 +54,8 @@ const productionRunner: ProviderModelProbeRunner = async (executable, argv) => {
   return { exitCode: result.exitCode ?? 1, stdout: result.stdout };
 };
 
+let tierCatalogProbed = false;
+
 async function runWithTimeout(
   runner: ProviderModelProbeRunner,
   executable: string,
@@ -67,6 +73,86 @@ async function runWithTimeout(
   } finally {
     cancelTimeout?.();
   }
+}
+
+function policyModelIds(descriptor: BuiltInProviderDescriptor): string[] {
+  const policy = descriptor.modelPolicy;
+  return [
+    ...Object.values(policy.stepModels),
+    ...Object.values(policy.stepTierOverrides).flatMap((tiers) =>
+      Object.values(tiers ?? {}).flatMap((override) =>
+        override?.model === undefined ? [] : [override.model])),
+    ...policy.modelEscalationOrder,
+    ...policy.modelFallbackLadder,
+  ];
+}
+
+export interface ResolveProviderModelTiersOptions {
+  readonly discovery: InstalledProviderDiscovery;
+  readonly runner?: ProviderModelProbeRunner;
+  readonly timeoutMs?: number;
+  readonly warn?: (message: string) => void;
+  /** Reserved for the rate-card warning emitted after tier materialization. */
+  readonly projectRoot?: string;
+}
+
+/**
+ * Materializes Codex's policy floors from its visible API model catalog once
+ * per dispatching process. A catalog failure is deliberately non-fatal: the
+ * static policy floors remain the safe compatibility fallback.
+ */
+export async function resolveProviderModelTiers(
+  options: ResolveProviderModelTiersOptions,
+): Promise<void> {
+  const descriptor = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'codex');
+  if (
+    tierCatalogProbed
+    || descriptor === undefined
+    || descriptor.modelTierCatalog === undefined
+    || !options.discovery.installed.includes(descriptor.id)
+  ) return;
+
+  // Set before awaiting the subprocess so concurrent boot consumers in this
+  // process cannot issue a second catalog request.
+  tierCatalogProbed = true;
+  const warn = options.warn ?? console.warn;
+  const executable = executableFor(descriptor);
+
+  try {
+    const result = await runWithTimeout(
+      options.runner ?? productionRunner,
+      executable,
+      descriptor.modelTierCatalog.argv,
+      options.timeoutMs ?? PROVIDER_MODEL_PROBE_TIMEOUT_MS,
+      descriptor.displayName,
+    );
+    if (result.exitCode !== 0) {
+      warn(`${descriptor.displayName} tier catalog unavailable (exit code ${result.exitCode}); using floor model ids.`);
+      return;
+    }
+
+    const parsed = descriptor.modelTierCatalog.parse(result.stdout);
+    if (parsed.kind === 'unparseable') {
+      warn(`${descriptor.displayName} tier catalog unavailable (unparseable: "${parsed.firstLine}"); using floor model ids.`);
+      return;
+    }
+
+    installResolvedModelTiers(
+      descriptor.id,
+      resolveModelTierFloors(policyModelIds(descriptor), parsed.modelIds),
+    );
+  } catch (error) {
+    const timeout = error instanceof Error && error.message === `${descriptor.displayName} model listing timed out.`;
+    const reason = timeout
+      ? 'timeout'
+      : `unparseable: "${error instanceof Error ? error.message.split(/\r?\n/, 1)[0] : ''}"`;
+    warn(`${descriptor.displayName} tier catalog unavailable (${reason}); using floor model ids.`);
+  }
+}
+
+/** Test-only reset for the process-local tier-catalog probe guard. */
+export function resetProviderModelTierProbeForTest(): void {
+  tierCatalogProbed = false;
 }
 
 /**
