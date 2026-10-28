@@ -1,5 +1,8 @@
-// Covers: pi-per-step-model-selection-via-wrapped-providers:task:14,task:15, codex-steps-resolve-the-newest-catalog-model-per-t:task:5
+// Covers: pi-per-step-model-selection-via-wrapped-providers:task:14,task:15, codex-steps-resolve-the-newest-catalog-model-per-t:task:5,task:6,task:7
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execa } from 'execa';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
@@ -16,6 +19,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import { resetResolvedModelTiersForTest } from '../../src/engine/model-tier-resolution.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { resolveStepConfig } from '../../src/engine/resolved-config.js';
+import { clearRateCardCache } from '../../src/execution/rate-card.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
@@ -80,6 +84,8 @@ function codexStepModels(): Record<string, string> {
 afterEach(() => {
   resetProviderModelTierProbeForTest();
   resetResolvedModelTiersForTest();
+  clearRateCardCache();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -295,6 +301,58 @@ describe('validateConfiguredProviderModels', () => {
 });
 
 describe('resolveProviderModelTiers', () => {
+  it('warns once per unpriced upgraded id, and never warns for priced upgrades', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-tier-rate-card-'));
+    const warn = vi.fn();
+    vi.stubEnv('HOME', home);
+    await mkdir(join(home, '.ai-conductor'), { recursive: true });
+    await writeFile(join(home, '.ai-conductor', 'rate-card.json'), JSON.stringify({
+      as_of: '2026-10-25T00:00:00.000Z',
+      source: 'https://example.invalid/rates',
+      models: {
+        'gpt-5.6-luna': { input_cost_per_token: 1 },
+        'gpt-5.6-terra': { input_cost_per_token: 1 },
+        'gpt-5.6-sol': { input_cost_per_token: 1 },
+        'gpt-6-astra': { input_cost_per_token: 1 },
+      },
+    }));
+
+    try {
+      await resolveProviderModelTiers({
+        discovery: installedCodex(), runner: runner({ exitCode: 0, stdout: CODEX_LISTING }), warn,
+      });
+
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6.1-sol has no rate-card price'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6-luna has no rate-card price'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-5.6-terra has no rate-card price'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-6-astra has no rate-card price'));
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves tiers during dispatching CLI boot before runtimes are created', async () => {
+    const probe = runner({ exitCode: 0, stdout: CODEX_LISTING });
+    await bootDispatchingCliProviders({
+      command: 'inline',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: { llm_provider: 'codex' },
+      rendererOpts: {
+        stateFilePath: '/tmp/codex-tier-boot-state.json', steps: [],
+        readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp',
+      },
+      discover: async () => installedCodex(),
+      providerModelProbeRunner: probe,
+    });
+
+    expect(probe).toHaveBeenCalledExactlyOnceWith('codex', ['debug', 'models']);
+    expect(codexStepModels()).toEqual({
+      buildReview: 'gpt-6.1-sol', memory: 'gpt-6-luna', build: 'gpt-5.6-terra',
+    });
+  });
+
   it('probes Codex once per process and installs the newest same-tier models', async () => {
     const fake = runner({ exitCode: 0, stdout: CODEX_LISTING });
 

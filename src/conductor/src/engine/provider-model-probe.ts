@@ -10,6 +10,7 @@ import {
   installResolvedModelTiers,
   resolveModelTierFloors,
 } from './model-tier-resolution.js';
+import { loadRateCard } from '../execution/rate-card.js';
 import { assertRealExecAllowed } from './tracker-client.js';
 
 export const PROVIDER_MODEL_PROBE_TIMEOUT_MS = 5_000;
@@ -92,7 +93,7 @@ export interface ResolveProviderModelTiersOptions {
   readonly runner?: ProviderModelProbeRunner;
   readonly timeoutMs?: number;
   readonly warn?: (message: string) => void;
-  /** Reserved for the rate-card warning emitted after tier materialization. */
+  /** Root used to read the optional local rate card after tier materialization. */
   readonly projectRoot?: string;
 }
 
@@ -137,10 +138,19 @@ export async function resolveProviderModelTiers(
       return;
     }
 
-    installResolvedModelTiers(
-      descriptor.id,
-      resolveModelTierFloors(policyModelIds(descriptor), parsed.modelIds),
-    );
+    const resolvedIds = resolveModelTierFloors(policyModelIds(descriptor), parsed.modelIds);
+    installResolvedModelTiers(descriptor.id, resolvedIds);
+
+    // Resolution is deliberately ephemeral, but an upgraded id cannot be
+    // silently estimated as free.  Keep this warning at the one-shot probe
+    // boundary so repeated steps (and duplicate floor references) warn once.
+    const pricedModels = loadRateCard(options.projectRoot)?.models;
+    for (const model of new Set(
+      [...resolvedIds].flatMap(([floor, resolved]) => floor === resolved ? [] : [resolved]),
+    )) {
+      if (pricedModels?.[model] !== undefined) continue;
+      warn(`${descriptor.displayName} model ${model} has no rate-card price; run ai-conductor rate-card refresh --model ${model}`);
+    }
   } catch (error) {
     const timeout = error instanceof Error && error.message === `${descriptor.displayName} model listing timed out.`;
     const reason = timeout
