@@ -140,6 +140,7 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/never report text/i);
   });
 
+  // Covers: S1.2, task:8
   it('states the binding disposition rule and its one-round correction path', async () => {
     const skill = await readFile(remediateSkillPath, 'utf8');
     const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
