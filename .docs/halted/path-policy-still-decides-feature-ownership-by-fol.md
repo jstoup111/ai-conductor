@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-28T22:37:52.018Z
 Slug: path-policy-still-decides-feature-ownership-by-fol
 Class: needs-human
 Halting step: unknown
