@@ -25,6 +25,7 @@ import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provide
 import type { GitRunner } from '../../src/engine/rebase.js';
 import { phaseForStep, resolveStepConfig } from '../../src/engine/resolved-config.js';
 import { escalateAttempt } from '../../src/engine/escalation.js';
+import { CODEX_MODEL_POLICY } from '../../src/execution/provider-model-policy-defaults.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { dispatchAttributionVerifier } from '../../src/engine/attribution-lane.js';
 import { MODEL_FREE_ENGINE_STEPS } from '../../src/engine/model-table-metadata.js';
@@ -179,7 +180,7 @@ const CODEX_POLICY: AcceptancePolicy = {
     conflict_check: { L: { model: 'gpt-5.6-sol' } },
   },
   effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
-  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-astra'],
   modelFallbackLadder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
 };
 
@@ -300,6 +301,16 @@ describe('#902 built-in provider policy matrix', () => {
 });
 
 describe('#902 provider-native retry escalation', () => {
+  it('caps Codex sol escalation at Astra using the production policy', () => {
+    expect(CODEX_MODEL_POLICY.modelEscalationOrder.at(-1)).toBe('gpt-6-astra');
+
+    for (const attempt of [3, 4]) {
+      expect(
+        escalateAttempt('gpt-5.6-sol', 'high', attempt, true, CODEX_MODEL_POLICY),
+      ).toMatchObject({ model: 'gpt-6-astra' });
+    }
+  });
+
   it('bumps effort on attempt 2 and model on attempt 3 within each provider order', () => {
     expect(escalateAttempt('gpt-5.6-luna', 'low', 1, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-luna',
@@ -318,7 +329,7 @@ describe('#902 provider-native retry escalation', () => {
       effort: 'medium',
     });
     expect(escalateAttempt('gpt-5.6-sol', 'max', 8, true, CODEX_POLICY)).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-astra',
       effort: 'max',
     });
     expect(escalateAttempt('custom-model', 'high', 8, true, CODEX_POLICY)).toEqual({

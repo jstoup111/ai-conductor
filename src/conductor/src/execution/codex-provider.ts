@@ -41,9 +41,44 @@ import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schem
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
 import { CODEX_DISPLAY_NAME } from './provider-catalog-identities.js';
+import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 
 function codexDisplayName(): string {
   return CODEX_DISPLAY_NAME;
+}
+
+/** Parse Codex's debug model catalog into API-dispatchable visible model ids. */
+export function parseCodexModelListing(stdout: string): ProviderModelCatalogParseResult {
+  const firstLine = stdout.split(/\r?\n/, 1)[0] ?? '';
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { kind: 'unparseable', firstLine };
+  }
+
+  if (
+    typeof parsed !== 'object'
+    || parsed === null
+    || !Array.isArray((parsed as { models?: unknown }).models)
+  ) {
+    return { kind: 'unparseable', firstLine };
+  }
+
+  const modelIds = (parsed as { models: unknown[] }).models.flatMap((model) => {
+    if (typeof model !== 'object' || model === null) return [];
+    const { slug, visibility, supported_in_api: supportedInApi } = model as {
+      slug?: unknown;
+      visibility?: unknown;
+      supported_in_api?: unknown;
+    };
+    return typeof slug === 'string' && visibility === 'list' && supportedInApi === true
+      ? [slug]
+      : [];
+  });
+
+  return { kind: 'parsed', modelIds };
 }
 
 function abortedInvocationResult(): InvokeResult {

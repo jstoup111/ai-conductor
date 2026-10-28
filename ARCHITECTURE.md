@@ -35,6 +35,8 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 Use the least expensive provider-native capability tier that can do the job.
 The Claude autonomous family is `fable`, `opus`, `sonnet`, and `haiku`.
 The Codex autonomous family is `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Codex ids are tier floors: at dispatch boot each resolves to the newest same-tier catalog id
+(see [model resolution](docs/reference/models.md#codex-catalog-tier-resolution)).
 Each provider policy assigns those native models independently; no cross-provider alias
 translation occurs.
 
@@ -176,7 +178,7 @@ history.
 > (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model
 > **(attempt − 2) tiers** up the selected provider's native capability ladder. Claude
 > ascends `haiku→sonnet→opus→fable`; Codex ascends
-> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol`. Attempt 3 is one tier and attempt 4 two
+> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol→gpt-6-astra`. Attempt 3 is one tier and attempt 4 two
 > tiers. Bumps are capped at the selected policy's top — an effort already at `max` or
 > a model already at its provider's deepest rung is a no-op, never an error. Thus the
 > normal M/L/no-tier `explore` and every `prd` move `high→xhigh` on attempt 2

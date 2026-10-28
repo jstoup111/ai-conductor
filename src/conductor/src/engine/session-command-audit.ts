@@ -110,7 +110,8 @@ export function auditShippedManagedSessionInstructionSource(input: SessionComman
   // ordinary engine CLI construction out of prose validation without hiding a
   // blocked command that a marked prompt can actually render.
   return auditManagedSessionInstructionSource(input).filter((instruction) =>
-    /session-command context/i.test(instruction.reason ?? '')
+    instruction.reason === 'unclassified session-command context in engine instruction'
+    || /(?:ambiguous|malformed|stale) session-command context/i.test(instruction.reason ?? '')
     || instruction.reason === 'unresolved command construction'
     || (
       instruction.reason === 'managed dispatch cannot execute an operator-only instruction'

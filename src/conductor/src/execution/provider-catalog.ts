@@ -1,5 +1,5 @@
 import { ClaudeProvider } from './claude-provider.js';
-import { CodexProvider } from './codex-provider.js';
+import { CodexProvider, parseCodexModelListing } from './codex-provider.js';
 import {
   parsePiModelId,
   parsePiModelListing,
@@ -121,6 +121,8 @@ interface BuiltInProviderDescriptorBase {
   readonly parseModelId?: (modelId: string) => PiModelIdParseResult;
   /** Lists provider-native models when the provider supports an authoritative catalog. */
   readonly modelCatalog?: ProviderModelCatalog;
+  /** Lists provider-native models eligible for same-tier policy resolution. */
+  readonly modelTierCatalog?: ProviderModelCatalog;
   /** Additional provider-owned model ids to include in rate-card refreshes. */
   readonly optInModelIds: readonly string[];
   /** Whether unattended provider commands run in an OS sandbox. */
@@ -186,6 +188,7 @@ export const BUILT_IN_PROVIDERS = [
     modelPolicy: CLAUDE_MODEL_POLICY,
     parseModelId: undefined,
     modelCatalog: undefined,
+    modelTierCatalog: undefined,
     optInModelIds: [],
     osSandbox: false,
     capabilities: {
@@ -247,6 +250,7 @@ export const BUILT_IN_PROVIDERS = [
     modelPolicy: CODEX_MODEL_POLICY,
     parseModelId: undefined,
     modelCatalog: undefined,
+    modelTierCatalog: { argv: ['debug', 'models'], parse: parseCodexModelListing },
     optInModelIds: ['gpt-6-astra'],
     osSandbox: true,
     capabilities: {
@@ -297,6 +301,7 @@ export const BUILT_IN_PROVIDERS = [
     modelPolicy: PI_MODEL_POLICY,
     parseModelId: parsePiModelId,
     modelCatalog: { argv: ['--list-models'], parse: parsePiModelListing },
+    modelTierCatalog: undefined,
     optInModelIds: [],
     osSandbox: false,
     projectFileTrust: true,

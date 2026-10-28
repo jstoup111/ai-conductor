@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect } from 'vitest';
 import {
   EFFORT_ORDER,
@@ -26,7 +27,7 @@ const PROVIDER_CASES = [
   {
     provider: 'Codex',
     policy: CODEX_MODEL_POLICY,
-    models: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'] as const,
+    models: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-astra'] as const,
   },
 ] as const;
 
@@ -198,6 +199,19 @@ describe('engine/escalation — policy-aware helpers', () => {
 });
 
 describe('engine/escalation — provider-aware escalateAttempt', () => {
+  it('keeps Claude escalation provider-native and caps Codex sol escalation at Astra', () => {
+    const claudeModels = [1, 2, 3, 4, 5].map(
+      (attempt) => escalateAttempt('haiku', 'medium', attempt, true, CLAUDE_MODEL_POLICY).model,
+    );
+    const codexModels = [3, 4].map(
+      (attempt) => escalateAttempt('gpt-5.6-sol', 'medium', attempt, true, CODEX_MODEL_POLICY).model,
+    );
+
+    expect(claudeModels).toEqual(['haiku', 'haiku', 'sonnet', 'opus', 'fable']);
+    expect(claudeModels).not.toContain('gpt-6-astra');
+    expect(codexModels).toEqual(['gpt-6-astra', 'gpt-6-astra']);
+  });
+
   it('walks the configured Pi escalation order', () => {
     const small = 'openai/gpt-5.6-luna';
     const mid = 'openai/gpt-5.6-terra';

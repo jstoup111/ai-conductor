@@ -80,6 +80,7 @@ import {
   type ProviderVersionProbeRunner,
 } from './engine/provider-discovery.js';
 import {
+  resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './engine/provider-model-probe.js';
@@ -1724,6 +1725,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   await validateConfiguredProviderModels({
     config: config ?? {},
     discovery: providerDiscovery,
+    ...(opts.providerModelProbeRunner ? { runner: opts.providerModelProbeRunner } : {}),
+  });
+  await resolveProviderModelTiers({
+    discovery: providerDiscovery,
+    projectRoot,
     ...(opts.providerModelProbeRunner ? { runner: opts.providerModelProbeRunner } : {}),
   });
   validateRegisteredProviderSelections({

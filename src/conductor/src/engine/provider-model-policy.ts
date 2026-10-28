@@ -4,6 +4,7 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy-defaults.js';
+import { resolvedModelTierPolicy } from './model-tier-resolution.js';
 import type { HarnessConfig } from '../types/config.js';
 
 export {
@@ -38,7 +39,8 @@ export function resolveProviderModelPolicy(
     ? { config: undefined, warn: options }
     : options ?? {};
   if (hasBuiltInProviderModelPolicy(providerKey)) {
-    const catalogPolicy = BUILT_IN_PROVIDER_MODEL_POLICIES[providerKey];
+    const catalogPolicy = resolvedModelTierPolicy(providerKey)
+      ?? BUILT_IN_PROVIDER_MODEL_POLICIES[providerKey];
     const configuredPolicy = config?.llm_providers?.[providerKey];
     if (configuredPolicy === undefined) return catalogPolicy;
 

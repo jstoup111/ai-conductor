@@ -129,7 +129,7 @@ concern — see [steps](steps.md).
 | Property | `claude` | `codex` |
 | --- | --- | --- |
 | `effortOrder` | `low`, `medium`, `high`, `xhigh`, `max` | identical |
-| `modelEscalationOrder` | `haiku`, `sonnet`, `opus`, `fable` | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` |
+| `modelEscalationOrder` | `haiku`, `sonnet`, `opus`, `fable` | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-astra` |
 | `modelFallbackLadder` | `fable`, `opus`, `sonnet` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` |
 
 Both policies are deep-frozen (`provider-model-policy.ts:22-30`) and registered in
@@ -138,6 +138,26 @@ Claude policy for any other key and emits
 `Unknown provider "<key>": Claude-compatible model defaults are being used; add a provider model policy
 for "<key>".` (`:182-194`). No cross-provider alias translation happens: a model name is only ever
 interpreted inside its own provider's family.
+
+### Codex catalog tier resolution
+
+The Codex model ids above are tier **floors**. Once per dispatching process, the daemon, executor-child,
+and dispatching CLI boot paths run `codex debug models` (5-second timeout) and upgrade each policy-owned id
+to the newest catalog id in the same tier (`src/conductor/src/engine/provider-model-probe.ts`,
+`src/conductor/src/engine/model-tier-resolution.ts`).
+
+- Tiered ids match `gpt-<version>-<luna|terra|sol|astra>`. Only catalog entries with
+  `visibility: "list"` and `supported_in_api: true` qualify.
+- A floor is replaced only by a strictly newer version in its own tier; tiers never cross.
+- Resolution covers `stepModels`, `stepTierOverrides`, `modelEscalationOrder`, and
+  `modelFallbackLadder`. Config values (`steps.<name>.model`, `llm_providers.codex.*`) are not
+  rewritten and keep their precedence.
+- Resolution is process-local and never persisted; a later process re-reads the catalog.
+- Codex is skipped when it is not installed.
+- A failed, timed-out, or unparseable catalog is non-fatal: the run keeps the floor ids and warns
+  `Codex tier catalog unavailable (<reason>); using floor model ids.`
+- An upgraded id missing from `.ai-conductor/rate-card.json` warns once:
+  `Codex model <id> has no rate-card price; run ai-conductor rate-card refresh --model <id>`.
 
 Selecting a provider is covered in [multiprovider](../guides/multiprovider.md); the `llm_provider` key
 itself is in [configuration](configuration.md).
@@ -296,8 +316,8 @@ Take `plan` on an L-tier feature, with `llm_provider: codex` and no other config
 5. **Retries and escalate.** `max_retries` falls through to `DEFAULT_STEP_RETRIES.plan` = 3; `escalate`
    falls through to `true`.
 6. **Attempt 2** raises effort one rung — `xhigh` → `max`. **Attempt 3** bumps the model
-   `attempt - 2 = 1` tier up `['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol']`; `gpt-5.6-sol` is already
-   the top, so it clamps and stays.
+   `attempt - 2 = 1` tier up `['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol','gpt-6-astra']`, from
+   `gpt-5.6-sol` to `gpt-6-astra`. A further attempt clamps at `gpt-6-astra`.
 7. **Dispatch.** The effort is exported as `CLAUDE_CODE_EFFORT_LEVEL=max` for the Claude path, or passed
    to the Codex CLI on the Codex path.
 

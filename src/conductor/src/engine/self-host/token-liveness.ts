@@ -33,7 +33,7 @@ import { CLAUDE_PROVIDER, resolveProviderExecutable } from '../../execution/prov
 const LIVENESS_PROMPT = 'reply with ok';
 
 /** Cheapest available model tier — a liveness probe never needs more. */
-const LIVENESS_MODEL = 'claude-haiku-4-5-20251001';
+const LIVENESS_MODEL = 'haiku';
 
 /** Tight timeout — a live/dead verdict should resolve in a few seconds. */
 const DEFAULT_TIMEOUT_MS = 15_000;
