@@ -23,6 +23,7 @@ const none = (reason: string): ConsumerDeclaration => ({ consumer: 'none', reaso
 const RESOLVED_CONFIG = 'src/conductor/src/engine/resolved-config.ts';
 const CONDUCTOR = 'src/conductor/src/engine/conductor.ts';
 const REMEDIATION_CAPS = 'src/conductor/src/engine/remediation-caps.ts';
+const CASCADE_ALLOWANCE = 'src/conductor/src/engine/restack/cascade-allowance.ts';
 const PRD_AUDIT_ROUTING = 'src/conductor/src/engine/prd-audit-routing.ts';
 const STEPS = 'src/conductor/src/engine/steps.ts';
 const DAEMON_CLI = 'src/conductor/src/daemon-cli.ts';
@@ -235,6 +236,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
   ]),
   'stacked_prs.route_whole_feature_fixes': consumer(ROUTE_TYPES),
+  'stacked_prs.max_restack_cascades': consumer(CASCADE_ALLOWANCE),
 
   // ── build_review ──────────────────────────────────────────────────────────
   // `resolveBuildReviewConfig` is the only reader of the raw block and of every
