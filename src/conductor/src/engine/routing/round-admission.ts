@@ -180,7 +180,13 @@ export async function recordRoundStall(
       if (!event || typeof event !== 'object') continue;
       const typed = event as { type?: string; rounds?: unknown };
       if (typed.type === 'routed_repair_phase' || typed.type === 'remediation_routed') break;
-      if (typed.type === 'routing_rounds_stalled' && JSON.stringify(typed.rounds) === key) prior += 1;
+      if (typed.type === 'routing_rounds_stalled') {
+        // Attempts are for one consecutive identical stall, not every
+        // occurrence of that shape in the feature's history. A different
+        // round set is progress in the diagnostic state and starts over.
+        if (JSON.stringify(typed.rounds) !== key) break;
+        prior += 1;
+      }
     }
   } catch { /* no earlier feature log is the first attempt */ }
   const attempt = prior + 1;

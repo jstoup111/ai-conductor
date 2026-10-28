@@ -283,6 +283,29 @@ describe('stack preflight stop reasons', () => {
     expect(firstLine).toContain('round advance cas-failed');
   });
 
+  it('leaves a live HALT byte-identical when an escalating stall did not cross it', async () => {
+    const subject = await fixture();
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    const seeded = Buffer.from('operator decision\nneeds-human\n');
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), seeded);
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      // The caller has already established the live-HALT check. This isolates
+      // the wrapper's non-replacement branch while the stall escalates.
+      hasLiveHalt: async () => false,
+      reconcileRounds: async () => ({
+        kind: 'stalled',
+        detail: 'test reconciliation stall',
+        rounds: [{ roundId: 'round-1' as never, readable: false }],
+      }),
+    })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+
+    expect((await readFile(join(subject.repo, '.pipeline', 'HALT'))).equals(seeded)).toBe(true);
+  });
+
   it.each([
     ['clear', async () => {
       const subject = await fixture();
@@ -419,6 +442,33 @@ describe('stack preflight stop reasons', () => {
       worktree: queue.repo, slug: 'demo', events, git: makeGitRunner(queue.repo),
       reconcileRounds: async () => ({ kind: 'none' }),
     }));
+  });
+
+  it('turns an unreadable outbox round set into one mechanical, named stall', async () => {
+    const subject = await fixture();
+    vi.mocked(drainRoutingOutboxes).mockResolvedValueOnce({ kind: 'unavailable' });
+
+    const { result } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({
+        kind: 'stalled',
+        detail: 'routing round r1 stalled: routing record is unreadable',
+        rounds: [
+          { roundId: 'r1' as never, readable: false },
+          { roundId: 'r2' as never, readable: false },
+        ],
+      }),
+    }));
+
+    expect(result).toMatchObject({
+      kind: 'halted',
+      haltClass: 'mechanical',
+      detail: expect.stringContaining('r1 (unreadable); r2 (unreadable)'),
+    });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
   });
 
   it('names a lost base-refresh follow-on', async () => {

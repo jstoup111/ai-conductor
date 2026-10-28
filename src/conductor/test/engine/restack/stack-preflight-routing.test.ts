@@ -4,10 +4,11 @@ import { mkdtemp, mkdir, rename, rm, writeFile, readFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
@@ -15,6 +16,11 @@ import { createRouteRecord, readRepairMarker } from '../../../src/engine/routing
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+
+vi.mock('../../../src/engine/restack/restack-executor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-executor.js')>();
+  return { ...actual, runRestack: vi.fn(actual.runRestack) };
+});
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
@@ -25,7 +31,10 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   rename,
 };
 
-afterEach(async () => { await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.clearAllMocks();
+  await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 async function fixture() {
   const repo = await mkdtemp(join(tmpdir(), 'stack-preflight-routing-'));
@@ -140,6 +149,73 @@ describe('stack preflight routing', () => {
     } finally {
       persister.stop();
     }
+  });
+
+  it('counts only consecutive identical routing stalls', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundA = parseRoundId('r1')!;
+    const roundB = parseRoundId('r2')!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    let roundId = roundA;
+    const options = {
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({
+        kind: 'stalled' as const,
+        detail: 'test reconciliation stall',
+        rounds: [{ roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } }],
+      }),
+      hasMatchingResumeAuthorization: async () => true,
+    };
+
+    persister.start();
+    try {
+      await runStackPreflight(options);
+      roundId = roundB;
+      await runStackPreflight(options);
+      roundId = roundA;
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+
+      const attempts = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number })
+        .filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt);
+      expect(attempts).toEqual([1, 1, 1]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('uses the resume-exit continuation result and never restacks its pre-exit cursor', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const continuation = vi.fn(async () => ({ kind: 'continued' as const, next: { kind: 'leaf-returned' as const, roundId } }));
+    let reconciliations = 0;
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => {
+        reconciliations += 1;
+        return reconciliations === 1
+          ? { kind: 'resume-exit' as const, roundId, host: child }
+          : { kind: 'leaf-returned' as const, roundId };
+      },
+      exitRoutedHostAndReconcile: continuation,
+    })).resolves.toEqual({ kind: 'clear' });
+
+    expect(continuation).toHaveBeenCalledWith(expect.objectContaining({
+      roundId,
+      host: child,
+      skipBuiltCompareAndSwap: true,
+      persist: expect.any(Function),
+    }));
+    expect(runRestack).not.toHaveBeenCalled();
   });
 
   it('distinguishes unreadable stalls from readable rounds with no unsettled hosts', async () => {
