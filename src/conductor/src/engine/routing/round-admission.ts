@@ -13,16 +13,68 @@ import {
 import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { advanceRound } from './routed-exit.js';
+import { advanceRound, selectNextHost } from './routed-exit.js';
 import { readRevalidationQueue } from './route-record-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
 
-export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
+export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string; readonly fence?: true };
 
 /** Admission may deliver its durable route occurrences only after its marker transaction commits. */
 export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
   readonly persist?: PersistOutboxEvent;
 };
+
+export type RoundAdmissionFenceResult = Extract<AdmitRoundResult, { readonly kind: 'refused' }> & { readonly fence: true };
+
+/**
+ * Reject a new admission while another active round could still make progress.
+ * Revalidation is the sole exception: it may proceed only after every active
+ * round has reached its queue handoff under the current durable queue.
+ */
+export async function checkRoundAdmissionFence(
+  worktree: string,
+  slug: string,
+  record: Pick<RouteRecord, 'roundId' | 'kind'>,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<RoundAdmissionFenceResult | undefined> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const marker = await readRepairMarker(worktree, slug, { git });
+  if (marker.kind === 'unreadable') {
+    return { kind: 'refused', detail: 'routing marker is unreadable', fence: true };
+  }
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) {
+    return { kind: 'refused', detail: 'cannot enumerate routing rounds for admission', fence: true };
+  }
+  const queue = record.kind === 'revalidate' ? await readRevalidationQueue(worktree, slug, { git }) : undefined;
+  if (queue?.kind === 'unreadable') return { kind: 'refused', detail: 'revalidation queue is unreadable', fence: true };
+  const entries = queue?.kind === 'queue' ? queue.queue.entries : [];
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const id = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!id) return { kind: 'refused', detail: `routing ref ${ref} has an invalid round id`, fence: true };
+    if (id === record.roundId) continue;
+    const other = await readRouteRecord(worktree, slug, id, { git });
+    if (other.kind !== 'record') {
+      return { kind: 'refused', detail: `routing round ${id} is unreadable`, fence: true };
+    }
+    const active = other.record.phase === 'open' ||
+      (other.record.phase === 'prepared' && marker.kind === 'marker' && marker.marker.roundId === id);
+    if (!active) continue;
+    if (record.kind === 'audit') {
+      return { kind: 'refused', detail: `routing round ${id} is already open; cannot admit ${record.roundId}`, fence: true };
+    }
+    if (record.kind === 'revalidate') {
+      if (Object.values(other.record.hosts).some((state) => state === 'admitted' || state === 'repairing' || state === 'built')) {
+        return { kind: 'refused', detail: `routing round ${id} has an active host; cannot admit ${record.roundId}`, fence: true };
+      }
+      const next = await selectNextHost(worktree, other.record, { entries });
+      if (next.kind !== 'queue') {
+        return { kind: 'refused', detail: `routing round ${id} is not waiting for revalidation; cannot admit ${record.roundId}`, fence: true };
+      }
+    }
+  }
+  return undefined;
+}
 
 /** Atomically records the first host marker and the corresponding event outbox. */
 export async function admitRound(
@@ -32,6 +84,8 @@ export async function admitRound(
   firstHost: ChildId,
   dependencies: AdmitRoundDependencies = {},
 ): Promise<AdmitRoundResult> {
+  const fence = await checkRoundAdmissionFence(worktree, slug, record, dependencies);
+  if (fence !== undefined) return fence;
   // The conductor performs this check before allocating a route record. Keep
   // the same fence at the durable admission boundary so a publication that
   // lands between route planning and this transaction cannot open the round.
