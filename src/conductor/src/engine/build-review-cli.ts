@@ -722,7 +722,15 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   // to the operator reading the refusal (#1769).
   const aggregateRead = await readAggregate();
   if (!aggregateRead.ok) {
-    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; the current build-review aggregate is missing or malformed.`);
+    const stackedHint = aggregateRead.cause === 'missing' && child === undefined
+      ? await (deps.listChildAggregates ?? defaultListChildAggregates)(worktree)
+      : [];
+    const message = aggregateRead.cause === 'missing'
+      ? `${aggregateRead.path} is missing.${stackedHint.length === 0 ? '' : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${stackedHint.join(', ')}).`}`
+      : aggregateRead.cause === 'malformed'
+        ? `${aggregateRead.path} is malformed (${aggregateRead.detail}).`
+        : `${aggregateRead.path} could not be read (${aggregateRead.detail}).`;
+    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; ${message}`);
   }
   const aggregate = aggregateRead.aggregate;
   if (aggregate.lapId !== requestedLap) {
