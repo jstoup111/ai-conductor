@@ -1,4 +1,4 @@
-// Covers: task:4, task:20
+// Covers: task:3, task:4, task:20
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -148,6 +148,99 @@ describe('intersectIntervalUnions', () => {
 });
 
 describe('computeTimingRollup', () => {
+  it('measures a closed correlated retired coverage_binding execution and its context-free legacy equivalent', async () => {
+    const coverageBindingContext = {
+      executionId: 'coverage-binding-1',
+      subject: { kind: 'lifecycle-step', step: 'coverage_binding' },
+    };
+    const currentStepEvents = [
+      { type: 'step_started', step: 'plan' },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ];
+    const correlated = await writeFeatureEvents([
+      ...currentStepEvents,
+      { type: 'step_started', step: 'coverage_binding', executionContext: coverageBindingContext },
+      {
+        type: 'step_completed',
+        step: 'coverage_binding',
+        executionContext: coverageBindingContext,
+        activeInterval: { startedAtMs: 200, durationMs: 50 },
+      },
+    ]);
+    const contextFree = await writeFeatureEvents([
+      ...currentStepEvents,
+      { type: 'step_started', step: 'coverage_binding' },
+      {
+        type: 'step_completed',
+        step: 'coverage_binding',
+        activeInterval: { startedAtMs: 200, durationMs: 50 },
+      },
+    ]);
+
+    const expected = {
+      state: 'measured',
+      activeMs: 150,
+      providerActiveMs: 0,
+      noProviderActiveMs: 150,
+    };
+    await expect(computeTimingRollup(correlated)).resolves.toEqual(expected);
+    await expect(computeTimingRollup(contextFree)).resolves.toEqual(expected);
+  });
+
+  it('reports an unclosed correlated retired coverage_binding execution as open', async () => {
+    const directory = await writeFeatureEvents([
+      {
+        type: 'step_started',
+        step: 'coverage_binding',
+        executionContext: {
+          executionId: 'coverage-binding-open',
+          subject: { kind: 'lifecycle-step', step: 'coverage_binding' },
+        },
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+
+    await expect(computeTimingRollup(directory)).resolves.toMatchObject({
+      state: 'partial',
+      reason: expect.stringMatching(/^open-executions:/),
+    });
+  });
+
+  it('keeps never-built-in correlated lifecycle steps as incomplete evidence', async () => {
+    const unknownContext = {
+      executionId: 'not-a-real-step-1',
+      subject: { kind: 'lifecycle-step', step: 'not_a_real_step' },
+    };
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'not_a_real_step', executionContext: unknownContext },
+      {
+        type: 'step_completed',
+        step: 'not_a_real_step',
+        executionContext: unknownContext,
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+      { type: 'step_started', step: 'plan' },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 200, durationMs: 100 },
+      },
+    ]);
+
+    await expect(computeTimingRollup(directory)).resolves.toEqual({
+      state: 'partial',
+      reason: 'active-evidence-incomplete',
+    });
+  });
+
   it('names the empty active union route when active evidence is incomplete', async () => {
     const directory = await writeFeatureEvents([
       { type: 'step_completed', step: 'plan' },

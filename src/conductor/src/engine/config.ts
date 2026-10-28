@@ -199,6 +199,11 @@ const RETIRED_BUILT_IN_STEPS: ReadonlyMap<string, string> = new Map([
   ['coverage_binding', RETIRED_COVERAGE_BINDING_ADR],
 ]);
 
+/** Whether a former built-in lifecycle step remains recognizable in historical data. */
+export function isRetiredBuiltInStep(name: string): boolean {
+  return RETIRED_BUILT_IN_STEPS.has(name);
+}
+
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
 
