@@ -793,8 +793,21 @@ judgement again. Any other fault halts as `invalid remediation judgement <reason
 admission after the expansion round, or one naming an id absent from the plan, halts as
 `invalid remediation judgement unknown-admission-task`, listing the `index-only task ids` and
 `absent from plan` ids. A failed dispatch halts with `remediate judgement failed:` followed by the
-provider name and its bounded exit facts, suffixed `(expansion round)` on the second round. The plan
-index is capped at 1,024 entries; a larger plan halts as an adjudication context `field-overflow`.
+provider name and its bounded exit facts, suffixed `(expansion round)` or `(correction round)` for
+those rounds. The plan index is capped at 1,024 entries; a larger plan halts as an adjudication
+context `field-overflow`.
+
+Each prior case carries engine-computed `bindableDispositions`: the dispositions a row binding it
+through `existingCaseId` may use. A carry-eligible case accepts every non-escalation disposition. An
+`act` case accepts `act`; with an applied action it also accepts `defer`, and while still open and
+attempted, `refute`. Any other case accepts only its own disposition; an `escalate` case accepts
+none. `escalate` rows are never checked against this set. A binding outside it fails the judgement as
+`inadmissible-case-binding`, and the engine runs one correction round: it re-dispatches the same
+context, after any expansion, plus `bindingCorrections` naming each refused binding's `caseRef`,
+`existingCaseId`, disposition, and bindable set. That round's `remediation_adjudication_started`
+carries `bindingCorrectionCaseIds`. A second refusal halts as `invalid remediation judgement
+inadmissible-case-binding (case <id> bound as <disposition>; bindable: <list>)`. An index-only
+admission in the correction round halts as `unknown-admission-task`; no expansion follows it.
 
 Prior case sources may carry a `finding` digest read from the lap artifact that raised them: `rubric`,
 `concernKind`, a `summary` of at most 1,000 bytes, up to 8 `evidenceLocations`, and `lapId`. Only the
