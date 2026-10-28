@@ -4,33 +4,26 @@ spec_hash: 6d7779aae323a92272ff9bf28706a119e4ffb3ff467f1002632a28a21c224d88
 pr: https://github.com/jstoup111/ai-conductor/pull/3453
 shipped: 2026-10-28
 engine_version: 20261027T031452Z-97f09b9bd067
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "These are incidental robustness fixes to tests and an exit path, made alongside the lease and interactive-run refactor. They change no user-visible behavior beyond an equivalent exit code. The Scope trailer on stack-preflight.ts (abandon recovery past the undeclared-round guard) is within intent: it is Story 9's recovery."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
-input: 7871605
-output: 891204
-cache_read: 206728461
+input: 7908033
+output: 892039
+cache_read: 206846733
 cache_creation: 5873028
-cost_usd: 140.2712
-dispatches: 131
+cost_usd: 140.3778
+dispatches: 133
 retries: 4
 halts: 14
 unmetered: count: 12, duration_ms: 0
 cost_unmetered: count: 0
 providers:
-  codex: input: 7870995, output: 550331, cache_read: 169662208, cache_creation: 0, cost_usd: 79.0539, dispatches: 83, cost_unmetered: 0
+  codex: input: 7907423, output: 551166, cache_read: 169780480, cache_creation: 0, cost_usd: 79.1604, dispatches: 85, cost_unmetered: 0
   claude: input: 610, output: 340873, cache_read: 37066253, cache_creation: 5873028, cost_usd: 61.2174, dispatches: 48, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","718c5b7b-9a7c-447f-b782-0ff77a8f4341","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 1
