@@ -148,7 +148,7 @@ try {
     .map((line) => line.slice("allow: ".length));
   const permits = (candidate) => {
     if (candidate === undefined || (candidate !== ".docs" && !candidate.startsWith(".docs/"))) return true;
-    return allowPrefixes.some((prefix) => candidate.startsWith(prefix));
+    return allowPrefixes.some((prefix) => prefix.endsWith("/") ? candidate.startsWith(prefix) : candidate === prefix);
   };
   process.stdout.write(permits(requested) && permits(resolvedRelative) ? "allow" : "deny");
 } catch {

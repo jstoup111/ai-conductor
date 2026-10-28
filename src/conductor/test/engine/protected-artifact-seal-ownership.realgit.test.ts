@@ -13,6 +13,8 @@ import {
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
   createProtectedArtifactSeal,
+  prepareProtectedArtifactReseal,
+  rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
 
@@ -160,5 +162,87 @@ describe('manifest-backed protected artifact seals (real local Git)', () => {
       ok: true,
       selfAmendments: [expect.objectContaining({ path: '.docs/plans/f.md' })],
     });
+  });
+
+  it('seals the manifest itself and never treats a manifest edit as a self-amendment', async () => {
+    const root = await fixture({
+      '.docs/f/manifest.json': manifest([{ kind: 'plan', path: '.docs/plans/f.md' }]),
+      '.docs/plans/f.md': 'plan\n',
+    });
+    const manifestOwnership = await ownership(root);
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: root,
+      baselineCommit: await git(root, ['rev-parse', 'HEAD']),
+      ownership: manifestOwnership,
+    });
+    expect(seal.protectedArtifacts.map(({ path }) => path)).toContain('.docs/f/manifest.json');
+
+    await write(root, '.docs/f/manifest.json', ` ${manifest([{ kind: 'plan', path: '.docs/plans/f.md' }])}`);
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot: root,
+      featureDesc: 'f',
+      baseBranch: 'main',
+      ownership: manifestOwnership,
+    });
+    expect(verdict).toMatchObject({ ok: false, reason: expect.stringContaining('Protected artifact changed: .docs/f/manifest.json') });
+    expect(verdict.ok && verdict.selfAmendments).not.toContainEqual(expect.objectContaining({ path: '.docs/f/manifest.json' }));
+  });
+
+  it('keeps listed protected paths and the manifest in a rotated seal audit', async () => {
+    const root = await fixture({
+      '.docs/f/manifest.json': manifest([
+        { kind: 'plan', path: '.docs/plans/f.md' },
+        { kind: 'stories', path: '.docs/f/review/stories.md' },
+      ]),
+      '.docs/plans/f.md': 'plan\n',
+      '.docs/f/review/stories.md': 'stories\n',
+    });
+    const manifestOwnership = await ownership(root);
+    const baselineCommit = await git(root, ['rev-parse', 'HEAD']);
+    const seal = await createProtectedArtifactSeal({ projectRoot: root, baselineCommit, ownership: manifestOwnership });
+    const rotated = await rotateProtectedArtifactSeal({
+      projectRoot: root,
+      seal,
+      toCommit: baselineCommit,
+      trigger: 'test-rotation',
+      paths: ['.docs/f/review/stories.md', '.docs/f/manifest.json'],
+      ownership: manifestOwnership,
+    });
+    expect(rotated.protectedArtifacts.map(({ path }) => path)).toEqual(expect.arrayContaining([
+      '.docs/f/review/stories.md',
+      '.docs/f/manifest.json',
+    ]));
+    expect(rotated.rebaselines.at(-1)?.paths).toEqual(expect.arrayContaining([
+      '.docs/f/review/stories.md',
+      '.docs/f/manifest.json',
+    ]));
+  });
+
+  it('permits resealing a listed protected-kind path but refuses the manifest', async () => {
+    const root = await fixture({
+      '.docs/f/manifest.json': manifest([
+        { kind: 'plan', path: '.docs/plans/f.md' },
+        { kind: 'stories', path: '.docs/f/review/stories.md' },
+      ]),
+      '.docs/plans/f.md': 'plan\n',
+      '.docs/f/review/stories.md': 'stories\n',
+    });
+    const manifestOwnership = await ownership(root);
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: root,
+      baselineCommit: await git(root, ['rev-parse', 'HEAD']),
+      ownership: manifestOwnership,
+    });
+    await write(root, '.docs/f/review/stories.md', 'approved stories\n');
+    await commit(root, 'approved story correction');
+    const head = await git(root, ['rev-parse', 'HEAD']);
+    await expect(prepareProtectedArtifactReseal({
+      projectRoot: root, seal, toCommit: head, trigger: 'operator-reseal',
+      paths: ['.docs/f/review/stories.md'], featureDesc: 'f', baseBranch: 'main', ownership: manifestOwnership,
+    })).resolves.toMatchObject({ survivingPaths: ['.docs/f/review/stories.md'] });
+    await expect(prepareProtectedArtifactReseal({
+      projectRoot: root, seal, toCommit: head, trigger: 'operator-reseal',
+      paths: ['.docs/f/manifest.json'], featureDesc: 'f', baseBranch: 'main', ownership: manifestOwnership,
+    })).rejects.toThrow('ai-conductor register-artifact');
   });
 });

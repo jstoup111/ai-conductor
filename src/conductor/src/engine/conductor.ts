@@ -11151,6 +11151,7 @@ export class Conductor {
                   // already-merged PR, picked up by this feature's rebase — while
                   // still halting on any in-worktree mutation.
                   baseBranch: this.baseBranch,
+                  ownership,
                   onRebaseline: (event) => this.surfaceProtectedArtifactRebaseline(event),
                 });
                 if (!sealVerdict.ok) {
@@ -11168,7 +11169,7 @@ export class Conductor {
                   if (step.phase === 'BUILD' && baselineCommit) {
                     // Persist only after the workspace matches committed DECIDE
                     // content. createProtectedArtifactSeal is immutable once present.
-                    await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+                    await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit, ownership });
                   }
                 }
               }

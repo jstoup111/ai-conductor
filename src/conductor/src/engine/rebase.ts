@@ -38,6 +38,7 @@ import {
   computeFeatureOwnership,
   renderOwnershipRefusal,
   worktreeFeatureOwnershipSource,
+  type FeatureOwnership,
 } from './feature-ownership.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
@@ -1515,8 +1516,9 @@ export async function performRebase(
   // authority first so a stale or tampered seal fails before history changes.
   // Repositories predating seals retain the legacy rebase behavior.
   const ownershipSlug = await resolveFeatureOwnershipSlug(projectRoot);
+  let ownership: FeatureOwnership | undefined;
   if (ownershipSlug) {
-    const ownership = await computeFeatureOwnership(
+    ownership = await computeFeatureOwnership(
       worktreeFeatureOwnershipSource(projectRoot, git),
       ownershipSlug,
       base.ref,
@@ -1535,6 +1537,7 @@ export async function performRebase(
       // so no call site can disable the tolerance by forgetting to pass it.
       featureDesc: await resolveFeatureDesc(projectRoot),
       baseBranch: base.branch,
+      ownership,
     });
     if (!verdict.ok) throw new ProtectedArtifactSealRejection(verdict.reason);
   } catch (error) {

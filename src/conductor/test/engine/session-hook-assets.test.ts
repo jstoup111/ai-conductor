@@ -113,6 +113,18 @@ describe('session-hook-assets', () => {
 });
 
 describe('DOCS_GUARD_HOOK', () => {
+  it('treats a file allow entry as exact while retaining directory allow prefixes', () => {
+    const markerContent = 'step: remediate\nphase: SHIP\nallow: .docs/plans/f.md\nallow: .docs/release-waivers/\n';
+    const result = (file_path: string) => runDocsGuardHook({
+      markerContent,
+      payload: { tool_name: 'Write', tool_input: { file_path } },
+    });
+    expect(result('.docs/plans/f.md').status).toBe(0);
+    expect(result('.docs/plans/f.md.orig').status).toBe(2);
+    expect(result('.docs/plans/other.md').status).toBe(2);
+    expect(result('.docs/release-waivers/f.md').status).toBe(0);
+  });
+
   it('exits 0 with no stdin read when the phase-active marker is absent', () => {
     // No `input` provided at all — if the script attempted to read stdin
     // before checking the marker, execFileSync would block until the
