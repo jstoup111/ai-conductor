@@ -304,6 +304,17 @@ describe('CodexProvider', () => {
     });
     expect(mockExeca).not.toHaveBeenCalled();
     expect(process.env.PATH).toBe(priorPath);
+
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = await provider.invoke({ ...baseOptions, abortSignal: controller.signal });
+
+    expect(aborted).toMatchObject({
+      success: false,
+      output: 'Codex invocation aborted.',
+      executionDisposition: 'not-started',
+    });
+    expect(mockExeca).not.toHaveBeenCalled();
   });
 
   // Covers: task:6

@@ -99,6 +99,15 @@ describe('CodexProvider abort handling', () => {
       invoked: true,
       tokenUsage: { input: 40, output: 5, cacheRead: 10, numTurns: 1 },
     });
+
+    const nonZeroFactory = vi.fn((_file: string, _args: readonly string[], _options: ExecaOptions) =>
+      Promise.resolve({ stdout: 'Codex exited unsuccessfully', stderr: '', exitCode: 1 }) as ResultPromise,
+    );
+    const nonZero = await provider(nonZeroFactory).invoke(invokeOptions);
+
+    expect(nonZeroFactory).toHaveBeenCalledOnce();
+    expect(nonZero).toMatchObject({ success: false, exitCode: 1 });
+    expect(nonZero).not.toHaveProperty('executionDisposition');
   });
 
   // Covers: task:6
