@@ -89,11 +89,11 @@ same refuted claim is neither re-judged nor halted as a regression.
 
 #### Negative Paths
 - Given a case resolved by refutation whose residual deferral effect is reserved or failed, when a later lap re-raises the same source id, then the source is not settled, the lap does not route PASS, and the unfinished effect is reported as the blocker
-- Given a case resolved by refutation, when a later lap raises a finding whose id has drifted from the refuted source id, then the drifted finding is a live source and is adjudicated normally
+- Given a case resolved by refutation, when a later lap raises a finding whose id has drifted from the refuted source id, then, in a full lap or when the drifted finding maps to a delta hunk or names a delta cause hunk, the drifted finding is a live source and is adjudicated normally
 - Given a case resolved by refutation, when a later lap re-raises the same source id, then no regression halt is written for that case
 
 ### Done When
-- [ ] A two-lap coordinator test proves the refuted source is excluded by exact id and that a drifted id is not
+- [ ] A two-lap coordinator test proves the refuted source is excluded by exact id and that a drifted id, in a full lap or on a delta hunk, is not
 - [ ] A test proves an unfinished residual effect blocks settlement exactly as any other reserved or failed effect
 
 ## Story 5: The narrow true remainder files an intake issue

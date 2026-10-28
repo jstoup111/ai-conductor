@@ -8,7 +8,8 @@ import type { ComplexityTier } from '../types/index.js';
 import { splitRow, isSeparatorRow } from './coherence-parse.js';
 import { readPendingAsBuiltRemediationFindings } from './kickback-ledger.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen } from './plan-task-parse.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
 
 /** Incremented only when the deterministic projection contract changes. */
@@ -278,7 +279,7 @@ export async function buildAsBuiltProjection(
     return { ok: false, fault: { dimension: 'diff', detail: 'could not read projection diff' } };
   }
 
-  const storiesRepoPath = resolvePlanStoriesPath(repoPath(worktree, planPath), plan);
+  const storiesRepoPath = await resolveFeatureStoriesRef(worktreeManifestSource(worktree), repoPath(worktree, planPath), plan);
   if (!storiesRepoPath) {
     return { ok: false, fault: { dimension: 'story-criteria', detail: 'active plan does not resolve a sealed stories artifact' } };
   }

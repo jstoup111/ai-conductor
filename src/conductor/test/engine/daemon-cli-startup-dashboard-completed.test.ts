@@ -93,7 +93,7 @@ describe('Task 3: startup dashboard PROCESSED gating (console vs persisted log)'
     expect(logContent).not.toContain('PROCESSED');
   });
 
-  it('showCompleted unset — neither console nor persisted log shows PROCESSED', async () => {
+  it('showCompleted unset — compact console shows only the PROCESSED count while persisted log omits it', async () => {
     const repo = await freshDir();
     await seedProcessed(repo, 'done-feature');
 
@@ -106,7 +106,9 @@ describe('Task 3: startup dashboard PROCESSED gating (console vs persisted log)'
       console.log = origLog;
     }
 
-    expect(lines.some((l) => l.includes('PROCESSED'))).toBe(false);
+    const consoleOutput = lines.join('\n');
+    expect(consoleOutput).toContain('PROCESSED (1)');
+    expect(consoleOutput).not.toContain('done-feature');
 
     const logContent = await readFile(daemonLogPath(repo), 'utf-8').catch(() => '');
     expect(logContent.includes('PROCESSED')).toBe(false);

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:5, task:6, task:7, task:10
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:10, task:12
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,6 +88,15 @@ function durableAction(overrides: Partial<RemediationCaseRecord> = {}): Remediat
     effect: { id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' },
     ...overrides,
   };
+}
+
+function resolvedActionOwner(id: string, sourceId: string): RemediationCaseRecord {
+  return durableAction({
+    id,
+    resolution: 'resolved',
+    sources: [{ sourceId, outcome: 'acted', recordedAt: RECORDED_AT }],
+    effect: { id: `effect-${id}`, kind: 'action', status: 'applied', workOrderId: `order-${id}` },
+  });
 }
 
 afterEach(async () => {
@@ -246,6 +255,277 @@ describe('remediation case reconciler', () => {
         }],
       },
     });
+  });
+
+  // Covers: task:4
+  it('stamps a resolved action owner as the recurrence of an unbound action case', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({
+      value: null,
+      nextState: {
+        ...state,
+        cases: [resolvedActionOwner('case-R', 'source-S')],
+      },
+    }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'case-N' }, [
+        { sourceId: 'source-S', outcome: 'acted', caseRef: 'case-N' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('case-N', 'effect-N'),
+    });
+    const after = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: {
+        cases: [
+          { id: 'case-R' },
+          {
+            id: 'case-N',
+            resolution: 'open',
+            recurrenceOf: ['case-R'],
+            effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(JSON.parse(after).cases[0])).toBe(JSON.stringify(JSON.parse(before).cases[0]));
+
+    const replay = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'case-N' }, [
+        { sourceId: 'source-S', outcome: 'acted', caseRef: 'case-N' },
+      ]),
+      recordedAt: '2026-08-30T14:00:00.000Z',
+      generateId: () => { throw new Error('a converged recurrence must not mint ids'); },
+    });
+
+    expect(replay).toMatchObject({
+      ok: true,
+      caseIdsByRef: new Map([['case-N', 'case-N']]),
+      state: { cases: [{ id: 'case-R' }, { id: 'case-N', recurrenceOf: ['case-R'] }] },
+    });
+    expect(replay.ok && replay.state.cases).toHaveLength(2);
+  });
+
+  it('stamps every resolved action owner as a recurrence for an unbound multi-source action case', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({
+      value: null,
+      nextState: { ...state, cases: [
+        resolvedActionOwner('case-R1', 'source-S1'),
+        resolvedActionOwner('case-R2', 'source-S2'),
+      ] },
+    }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'case-N' }, [
+        { sourceId: 'source-S1', outcome: 'acted', caseRef: 'case-N' },
+        { sourceId: 'source-S2', outcome: 'acted', caseRef: 'case-N' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('case-N', 'effect-N'),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: { cases: [{ id: 'case-R1' }, { id: 'case-R2' }, { id: 'case-N', recurrenceOf: ['case-R1', 'case-R2'] }] },
+    });
+  });
+
+  it('retains a declared distinction instead of stamping its resolved action owner as a recurrence', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({
+      value: null,
+      nextState: { ...state, cases: [resolvedActionOwner('case-R', 'source-S')] },
+    }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+    const reason = 'asserts daemon-liveness staleness, not in-flight age';
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({
+        ...ACTION_CASE,
+        caseRef: 'case-N',
+        distinctFrom: [{ caseId: 'case-R', reason }],
+      }, [{ sourceId: 'source-S', outcome: 'acted', caseRef: 'case-N' }]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('case-N', 'effect-N'),
+    });
+    const after = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: {
+        cases: [
+          { id: 'case-R' },
+          { id: 'case-N', distinctFrom: [{ caseId: 'case-R', reason }] },
+        ],
+      },
+    });
+    expect(result.ok && result.state.cases[1]).not.toHaveProperty('recurrenceOf');
+    expect(JSON.stringify(JSON.parse(after).cases[0])).toBe(JSON.stringify(JSON.parse(before).cases[0]));
+  });
+
+  it('retains a declared distinction while classifying the remaining resolved action owners as recurrences', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({
+      value: null,
+      nextState: { ...state, cases: [
+        resolvedActionOwner('case-R1', 'source-S1'),
+        resolvedActionOwner('case-R2', 'source-S2'),
+      ] },
+    }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+    const reason = 'asserts daemon-liveness staleness, not in-flight age';
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({
+        ...ACTION_CASE,
+        caseRef: 'case-N',
+        distinctFrom: [{ caseId: 'case-R1', reason }],
+      }, [
+        { sourceId: 'source-S1', outcome: 'acted', caseRef: 'case-N' },
+        { sourceId: 'source-S2', outcome: 'acted', caseRef: 'case-N' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('case-N', 'effect-N'),
+    });
+    const after = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: {
+        cases: [
+          { id: 'case-R1' },
+          { id: 'case-R2' },
+          {
+            id: 'case-N',
+            distinctFrom: [{ caseId: 'case-R1', reason }],
+            recurrenceOf: ['case-R2'],
+          },
+        ],
+      },
+    });
+    expect(JSON.parse(after).cases.slice(0, 2)).toEqual(JSON.parse(before).cases);
+  });
+
+  it.each([
+    ['unbound defer', {
+      caseRef: 'new-defer', disposition: 'defer', priority: 'medium',
+      rationale: 'The remaining work belongs outside the current feature.', confidence: 'medium',
+      effect: { kind: 'deferral', title: 'Follow up', body: 'This is not owned here.', exclusionRationale: 'Outside the approved scope.' },
+    }, [{ sourceId: 'source-S', outcome: 'deferred', caseRef: 'new-defer' }], ['case-N', 'effect-N']],
+    ['unbound reject', {
+      caseRef: 'new-reject', disposition: 'reject', priority: 'low',
+      rationale: 'The concern does not require a change.', confidence: 'high', effect: { kind: 'none' },
+    }, [{ sourceId: 'source-S', outcome: 'rejected', caseRef: 'new-reject' }], ['case-N']],
+    ['existingCaseId-bound action', {
+      caseRef: 'bound-action', existingCaseId: 'case-B', disposition: 'act', priority: 'high',
+      rationale: ACTION_CASE.rationale, confidence: 'high', effect: ACTION_CASE.effect,
+    }, [{ sourceId: 'source-T', outcome: 'acted', caseRef: 'bound-action' }], []],
+  ] as const)('ignores a distinctFrom declaration on an %s row', async (_label, row, sources, ids) => {
+    const declaredRoot = await createProjectRoot();
+    const undeclaredRoot = await createProjectRoot();
+    const declaredStore = new RemediationCaseStore(declaredRoot, FEATURE);
+    const undeclaredStore = new RemediationCaseStore(undeclaredRoot, FEATURE);
+    const existingCaseId = 'existingCaseId' in row ? row.existingCaseId : undefined;
+    const priorCases = existingCaseId
+      ? [durableAction({ id: 'case-B', sources: [{ sourceId: 'source-S', outcome: 'acted', recordedAt: RECORDED_AT }] })]
+      : [resolvedActionOwner('case-R', 'source-S')];
+    for (const store of [declaredStore, undeclaredStore]) {
+      await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: priorCases } }));
+    }
+    const declaration = [{ caseId: existingCaseId ?? 'case-R', reason: 'The declaration must not govern this row.' }];
+
+    const [declared, undeclared] = await Promise.all([
+      reconcileRemediationCases(declaredStore, {
+        graph: graph({ ...row, distinctFrom: declaration }, sources),
+        recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds(...ids),
+      }),
+      reconcileRemediationCases(undeclaredStore, {
+        graph: graph(row, sources),
+        recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds(...ids),
+      }),
+    ]);
+
+    expect(declared).toMatchObject({ ok: true });
+    expect(declared).toEqual(undeclared);
+    if (!declared.ok) throw new Error(`expected reconciliation to succeed, got ${declared.reason}`);
+    expect(declared.state.cases.at(-1)).not.toHaveProperty('recurrenceOf');
+    expect(declared.state.cases.at(-1)).not.toHaveProperty('distinctFrom');
+  });
+
+  it.each([
+    ['an open action case', [durableAction({ id: 'case-O' })], 'case-O'],
+    ['no case', [], 'case-N'],
+  ] as const)('leaves an unbound act row unstamped when its source has %s as its owner', async (_label, cases, expectedCaseId) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(ACTION_CASE), recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: expectedCaseId === 'case-O' ? () => { throw new Error('an open case must converge'); } : generatedIds('case-N', 'effect-N'),
+    });
+
+    expect(result).toMatchObject({ ok: true, caseIdsByRef: new Map([['new-action', expectedCaseId]]) });
+    if (!result.ok) throw new Error(`expected reconciliation to succeed, got ${result.reason}`);
+    const record = result.state.cases.find((caseRecord) => caseRecord.id === expectedCaseId);
+    expect(record).not.toHaveProperty('recurrenceOf');
+    expect(record).not.toHaveProperty('distinctFrom');
+  });
+
+  it('drops an unknown distinctFrom declaration while retaining the resolved owner as a recurrence', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolvedActionOwner('case-R', 'source-S')] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'case-N', distinctFrom: [{ caseId: 'case-unknown', reason: 'This declaration names no owner.' }] }, [
+        { sourceId: 'source-S', outcome: 'acted', caseRef: 'case-N' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds('case-N', 'effect-N'),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [
+      { id: 'case-R' }, { id: 'case-N', recurrenceOf: ['case-R'] },
+    ] } });
+    if (!result.ok) throw new Error(`expected reconciliation to succeed, got ${result.reason}`);
+    const record = result.state.cases.find((caseRecord) => caseRecord.id === 'case-N');
+    expect(record).not.toHaveProperty('distinctFrom');
+    expect(JSON.stringify(record)).not.toContain('case-unknown');
+  });
+
+  it('does not infer distinction from two unbound act rows whose rationale only says they are distinct', async () => {
+    const roots = await Promise.all([createProjectRoot(), createProjectRoot()]);
+    const stores = roots.map((root) => new RemediationCaseStore(root, FEATURE));
+    await Promise.all(stores.map((store) => store.mutate(async (state) => ({
+      value: null, nextState: { ...state, cases: [resolvedActionOwner('case-R', 'source-S')] },
+    }))));
+    const rationales = [
+      'This concern is distinct from case-R despite sharing its source.',
+      'This separately raised concern is distinct from case-R despite sharing its source.',
+    ];
+
+    const results = await Promise.all(stores.map((store, index) => reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: `case-N${index + 1}`, rationale: rationales[index]! }, [
+        { sourceId: 'source-S', outcome: 'acted', caseRef: `case-N${index + 1}` },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds(`case-N${index + 1}`, `effect-N${index + 1}`),
+    })));
+
+    for (const [index, result] of results.entries()) {
+      const caseId = `case-N${index + 1}`;
+      expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-R' }, { id: caseId, recurrenceOf: ['case-R'] }] } });
+      if (!result.ok) throw new Error(`expected reconciliation to succeed, got ${result.reason}`);
+      expect(result.state.cases.find((record) => record.id === caseId)).not.toHaveProperty('distinctFrom');
+    }
   });
 
   it('reuses an exact settled custom non-action case without a new identity, but retains history after its policy identity changes', async () => {

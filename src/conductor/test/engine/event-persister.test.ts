@@ -1,4 +1,4 @@
-// Covers: task:4, task:3, task:1, task:2
+// Covers: task:4, task:3, task:1, task:2, task:5, task:rem-operator-5-r2
 // Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
@@ -8,8 +8,11 @@ import {
   EventPersister,
   EventPersistError,
   isForwardedFromFeature,
+  persistOnActiveEventSpine,
+  startSessionEventTail,
   startFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
+import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
@@ -24,6 +27,7 @@ import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDispo
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
+import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 
 const CURRENT_TEST_SUITE_PROOF = {
   status: 'CURRENT',
@@ -96,6 +100,35 @@ describe('EventPersister', () => {
     },
   });
 
+  it('flushes a fresh ledger read after joining an in-flight poll', async () => {
+    const received: ConductorEvent[] = [];
+    emitter.on('github_operation_failed', (event) => { received.push(event); });
+    let releaseFirstRead: ((content: Buffer) => void) | undefined;
+    let reads = 0;
+    const tail = new CloseoutEventTail({
+      projectRoot: tempDir,
+      events: emitter,
+      readLedger: vi.fn(() => {
+        reads += 1;
+        if (reads === 1) return new Promise<Buffer>((resolve) => { releaseFirstRead = resolve; });
+        return Promise.resolve(Buffer.from(`${JSON.stringify({
+          type: 'github_operation_failed', operation: 'pull-request.edit',
+          target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+          error: 'appended after first read', ts: '2026-10-25T00:00:00.000Z',
+        })}\n`));
+      }),
+    });
+    const scope = startSessionEventTail(tempDir, emitter, undefined, tail);
+
+    const poll = tail.poll();
+    const flushed = scope.flush();
+    releaseFirstRead!(Buffer.from(''));
+    await Promise.all([poll, flushed]);
+
+    expect(received).toEqual([expect.objectContaining({ error: 'appended after first read' })]);
+    expect(reads).toBe(2);
+  });
+
   const configuredMember = (executionId: string, member = 'reviewer'): ExecutionContext => ({
     executionId,
     subject: { kind: 'configured-member', parentGroup: 'validation', member },
@@ -120,6 +153,19 @@ describe('EventPersister', () => {
     persister.stop();
 
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it('acknowledges routing outbox events through the active spine owner', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await expect(persistOnActiveEventSpine(emitter, routingEvent('routed_repair_phase', 'routing-outbox-1')))
+      .resolves.toBe('persisted');
+    persister.stop();
+
+    expect(await readFile(eventsPath, 'utf8')).toContain('"eventId":"routing-outbox-1"');
+    await expect(persistOnActiveEventSpine(emitter, routingEvent('routed_repair_phase', 'routing-outbox-2')))
+      .rejects.toBeInstanceOf(EventPersistError);
   });
 
   it('persists coordinator-derived excluded marker files on a build-review scope summary', async () => {
@@ -161,6 +207,39 @@ describe('EventPersister', () => {
     expect(scopeSummary).toMatchObject({
       type: 'build_review_scope_summary',
       excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    });
+  });
+
+  // Covers: task:5
+  it('persists a build-review review-scope occurrence with its complete scope summary', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'build_review_review_scope',
+      rubric: 'security',
+      lapId: 'lap-2',
+      mode: 'delta',
+      reason: 'delta',
+      deltaHunkCount: 3,
+      settledHunkCount: 5,
+    } satisfies ConductorEvent;
+    persister.start();
+
+    await emitter.emit(event);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    const { ts: _ts, ...record } = records[0];
+    expect(record).toEqual(event);
+  });
+
+  // Covers: task:5
+  it('registers build-review review-scope occurrences as persistent but non-rendered', () => {
+    expect(EVENT_SINKS).toHaveProperty('build_review_review_scope', {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
     });
   });
 
@@ -406,24 +485,6 @@ describe('EventPersister', () => {
       .map((line) => JSON.parse(line));
     expect(Object.hasOwn(records[3], 'child')).toBe(false);
     expect(records[4].child).toBe(2);
-  });
-
-  it('persists a coverage-binding judgement to the shared pipeline ledger', async () => {
-    const persister = new EventPersister(eventsPath, emitter);
-    const event = {
-      type: 'coverage_binding_judged',
-      step: 'coverage_binding',
-      verdict: 'asserts',
-      digest: 'sha256:claim',
-      taskIds: ['17'],
-    } satisfies ConductorEvent;
-    persister.start();
-
-    await emitter.emit(event);
-    persister.stop();
-
-    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
-    expect(record).toEqual(event);
   });
 
   it('persists a step-scoped loop halt without closing the active step interval', async () => {
@@ -770,6 +831,32 @@ describe('EventPersister', () => {
       nextDisposition: 'trial-required',
       forwarded: true,
     });
+  });
+
+  it('flushes a newly appended external event without stopping the feature tail', async () => {
+    const globalEvents = new ConductorEventEmitter();
+    const observed: ConductorEvent[] = [];
+    globalEvents.on('github_operation_failed', (event) => { observed.push(event); });
+    const scope = startFeatureEventPersistence(tempDir, globalEvents, 'feature');
+    const ledger = join(tempDir, '.pipeline', 'pipeline-events.jsonl');
+    await mkdir(join(tempDir, '.pipeline'), { recursive: true });
+
+    await writeFile(ledger, `${JSON.stringify({
+      type: 'github_operation_failed', operation: 'pull-request.edit',
+      target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+      error: 'first failure', ts: '2026-10-25T00:00:00.000Z',
+    })}\n`);
+    await scope.flush();
+    await writeFile(ledger, `${JSON.stringify({
+      type: 'github_operation_failed', operation: 'pull-request.edit',
+      target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+      error: 'second failure', ts: '2026-10-25T00:00:01.000Z',
+    })}\n`, { flag: 'a' });
+    await scope.flush();
+    scope.stop();
+
+    expect(observed.map((event) => event.type === 'github_operation_failed' ? event.error : undefined))
+      .toEqual(['first failure', 'second failure']);
   });
 
   it('persists only the closed progress contract, not doctor diagnostics', async () => {

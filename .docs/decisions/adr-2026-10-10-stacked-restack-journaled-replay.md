@@ -443,6 +443,14 @@ Operator decisions (2026-10-10):
    - **The re-kick sentinel.** The one-shot `REKICK` sentinel is consumed before a restack runs, so
      crash recovery depends only on the journal.
 
+> **Amended 2026-10-23 by #3212:** With routing on, a follow-on base refresh is deferred while the
+> re-validation queue holds an entry or any route record is not `closed`. This applies both in the
+> preflight and in the `applied` with a follow-on recovery row: the follow-on is suppressed,
+> `restack_refused` with reason `deferred-base-refresh` is emitted, and the repair journal becomes
+> terminal. The request survives in `REKICK` until the queue drains: the preflight defers before
+> consuming it, and recovery, which runs after it was consumed, re-arms it before deleting the
+> journal (`adr-2026-10-12-routed-whole-feature-repair` decisions 7 and 14).
+
 > **Amended 2026-10-12 by #2944:** After both journal recoveries and before the cursor, the
 > preflight reconciles any open routing round. It skips the automatic repair while a host is
 > `admitted` or `repairing`. It runs the routed exit restack when a host is `built`
@@ -549,6 +557,8 @@ Operator decisions (2026-10-10):
 > no closed child. While any route record is not `closed` or the re-validation queue is non-empty, a
 > due base refresh is deferred with `restack_refused` reason `deferred-base-refresh`
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+
+> **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that carries the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
@@ -672,6 +682,14 @@ Operator decisions (2026-10-10):
         `verification-failed`, `replay-mismatch`, `range-not-ancestor`,
         `closed-child-rewritten`, `flatten_refused`, `restack-outstanding`,
         `published-stack` or `deferred-base-refresh`.
+
+        > **Amended 2026-10-27 by #3446:** The reason set also includes `journal-live-owner`. It
+        > is emitted when the stack preflight stops because journal recovery returns `live-owner`
+        > on either recovery pass, with `detail` naming the owner as
+        > `restack journal owned by live process <pid> on <host>`, or `journal owner unreadable`
+        > when no owner was read. The preflight then writes a `mechanical` HALT. It stays distinct
+        > from `restack-outstanding`, which a competing planner receives, because only this reason
+        > ends the run on a live owner (operator decision 2026-10-26).
       - `restack_recovered` {opId, fromState}, emitted only when recovery drives a journal out of
         `planned`, `ready`, `moved`, `rolling-back` or `synced`. Deleting a leftover `applied` or
         `aborted` journal emits nothing;

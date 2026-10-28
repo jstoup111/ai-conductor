@@ -384,7 +384,8 @@ export async function dispatchRewindCommand(
 ): Promise<number> {
   const cursor = await resolveActiveChildForCurrentFeature(cwd);
   if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
-    console.error(`rewind: active child resolution refused (${cursor.kind})`);
+    const detail = cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+    console.error(`rewind: active child resolution refused (${detail})`);
     return 1;
   }
   const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);

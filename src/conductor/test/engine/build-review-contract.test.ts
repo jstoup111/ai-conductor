@@ -11,8 +11,8 @@ import {
 import {
   BUILD_REVIEW_CUSTOM_V1_SCHEMA,
   BUILD_REVIEW_FINDING_VOCABULARIES,
-  BUILD_REVIEW_JUDGED_V3_SCHEMA,
-  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
+  BUILD_REVIEW_JUDGED_V4_SCHEMA,
+  BUILD_REVIEW_JUDGED_V4_SCHEMAS,
   parseBuildReviewCustomReviewerPayload,
   parseBuildReviewJudgedResult,
 } from '../../src/engine/build-review-domain.js';
@@ -75,7 +75,7 @@ function renderedShapeTokens(shape: string): string[] {
   return [...new Set([...shape.matchAll(/`([^`]+)`/g)].map((match) => match[1]!))].sort();
 }
 
-function expectClosedJudgedV3TopLevel(schema: unknown): void {
+function expectClosedJudgedV4TopLevel(schema: unknown): void {
   expect(Object.keys(properties(schema))).toEqual([
     'findings',
     'relocationAudit',
@@ -107,14 +107,14 @@ function schemaAccepts(schema: unknown, value: unknown): boolean {
 
 describe('engine/build-review-contract', () => {
   it.each(['testQuality', 'security'] as const)(
-    'gives %s an engine-owned v3 descriptor with canonical identity',
+    'gives %s an engine-owned v4 descriptor with canonical identity',
     (id) => {
       const { contract } = BUILD_REVIEW_RUBRIC_REGISTRY[id];
       const finding = fixedFinding(id);
       const expected = canonicalizeBuildReviewFindingIdentity(finding);
 
-      expect(contract.projection.version).toBe('v3');
-      expect(contract.output.version).toBe('v3');
+      expect(contract.projection.version).toBe('v4');
+      expect(contract.output.version).toBe('v4');
       expect(Object.isFrozen(contract.output.jsonSchema)).toBe(true);
       expect(contract.identity.canonicalize(finding)?.id).toBe(expected?.id);
     },
@@ -148,7 +148,7 @@ describe('engine/build-review-contract', () => {
     expect(renderRubricContractShape(descriptor)).toContain('`nested-schema-kind`');
   });
 
-  it('gives a resolved custom member the shared v1 descriptor with schema and identity semantics', () => {
+  it('gives a resolved custom member the shared v2 descriptor with schema and identity semantics', () => {
     const resolved = resolveBuildReviewConfig({
       build_review: {
         custom_rubrics: {
@@ -165,6 +165,7 @@ describe('engine/build-review-contract', () => {
     const customFinding = {
       concernId: 'public-boundary-gap',
       summary: 'The changed public boundary lacks compatibility evidence.',
+      severity: 'minor',
       evidenceLocations: ['src/public-api.ts:8'],
       sourceRegions: [{
         path: 'src/public-api.ts', startLine: 8, endLine: 12,
@@ -172,7 +173,7 @@ describe('engine/build-review-contract', () => {
       }],
     };
     const stamped = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [customFinding],
+      kind: 'custom-findings', version: 'v2', findings: [customFinding],
     }, {
       rubric: custom.id,
       lapId: 'lap-1',
@@ -183,8 +184,8 @@ describe('engine/build-review-contract', () => {
     }, { sourceRegions: customFinding.sourceRegions });
 
     expect(custom.contract).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT);
-    expect(custom.contract.output.version).toBe('v1');
-    expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'custom-findings', version: 'v1', findings: [] })).toBe(true);
+    expect(custom.contract.output.version).toBe('v2');
+    expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'custom-findings', version: 'v2', findings: [] })).toBe(true);
     expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'unsupported-policy', requirement: 'x' })).toBe(true);
     expect(custom.contract.identity.canonicalize(stamped?.findings[0])?.id).toBe(stamped?.findings[0]?.identity.id);
   });
@@ -270,19 +271,32 @@ describe('engine/build-review-contract', () => {
     ])).toThrow(/boundaryPolicy.*output\.jsonSchema/i);
   });
 
-  it('closes judged-v3 output to the four provider-owned fields', () => {
-    expectClosedJudgedV3TopLevel(BUILD_REVIEW_JUDGED_V3_SCHEMA);
+  it('closes judged-v4 output to the four provider-owned fields', () => {
+    expectClosedJudgedV4TopLevel(BUILD_REVIEW_JUDGED_V4_SCHEMA);
 
-    expect(() => expectClosedJudgedV3TopLevel({
-      ...BUILD_REVIEW_JUDGED_V3_SCHEMA,
-      properties: { ...properties(BUILD_REVIEW_JUDGED_V3_SCHEMA), extra: { type: 'string' } },
+    expect(() => expectClosedJudgedV4TopLevel({
+      ...BUILD_REVIEW_JUDGED_V4_SCHEMA,
+      properties: { ...properties(BUILD_REVIEW_JUDGED_V4_SCHEMA), extra: { type: 'string' } },
     })).toThrow();
   });
+
+  it.each(['testQuality', 'security'] as const)(
+    'requires the closed severity enum in the %s native schema',
+    (rubric) => {
+      const finding = record(properties(BUILD_REVIEW_JUDGED_V4_SCHEMAS[rubric]).findings);
+      const item = record(finding.items);
+
+      expect(record(item).required).toContain('severity');
+      expect(properties(item).severity).toEqual({
+        type: 'string', enum: ['critical', 'major', 'minor', 'nit'],
+      });
+    },
+  );
 
   describe('scopeResolutions per-status required fields', () => {
     const region = { path: 'test/a.test.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'a'.repeat(64)}`, display: 'test/a.test.ts:1-2' };
     const validate = new Ajv().compile({
-      ...BUILD_REVIEW_JUDGED_V3_SCHEMA,
+      ...BUILD_REVIEW_JUDGED_V4_SCHEMA,
       required: [],
     });
     const accepts = (entry: Record<string, unknown>) => validate({ findings: [], scopeResolutions: [entry] });
@@ -365,7 +379,7 @@ describe('engine/build-review-contract', () => {
     }
 
     it('keeps every descriptor schema inside the native provider keyword subset', () => {
-      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V3_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
+      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V4_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
         for (const { path, keyword, value } of schemaKeywords(schema)) {
           expect(NATIVE_SCHEMA_KEYWORDS.has(keyword), `${path} uses unsupported keyword ${keyword}`).toBe(true);
           if (keyword === 'minItems') expect([0, 1], `${path} minItems`).toContain(value);
@@ -374,7 +388,7 @@ describe('engine/build-review-contract', () => {
     });
 
     it('declares a plain object root on every descriptor schema, as the Claude tool input_schema requires', () => {
-      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V3_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
+      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V4_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
         expect(record(schema).type).toBe('object');
         for (const combinator of ['oneOf', 'anyOf', 'allOf']) {
           expect(record(schema)[combinator], `root ${combinator}`).toBeUndefined();
@@ -383,15 +397,16 @@ describe('engine/build-review-contract', () => {
     });
 
     it.each(['testQuality', 'security'] as const)('states the %s built-in grammar the parser enforces', (rubric) => {
-      const schema = BUILD_REVIEW_JUDGED_V3_SCHEMAS[rubric];
+      const schema = BUILD_REVIEW_JUDGED_V4_SCHEMAS[rubric];
       const valid = {
         concernKind: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds[0]!,
         summary: 'A concern.',
         evidenceLocations: ['src/a.ts:1'],
+        severity: 'minor',
         anchor: { rubric, locus: { path: 'src/a.ts', contentHash: sha, display: 'a' } },
       };
       const parses = (finding: unknown) => parseBuildReviewJudgedResult({
-        kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [finding],
+        kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:snapshot', contractVersion: 'v4', findings: [finding],
       }) !== undefined;
       const admits = (finding: unknown) => schemaAccepts(schema, { findings: [finding] });
 
@@ -414,10 +429,10 @@ describe('engine/build-review-contract', () => {
       }
     });
 
-    it('states the custom-v1 grammar the parser enforces', () => {
+    it('states the custom-v2 grammar the parser enforces', () => {
       const region = { path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: sha, display: 'a' };
-      const valid = { concernId: 'public-boundary-gap', summary: 'A concern.', evidenceLocations: ['src/a.ts:1'], sourceRegions: [region] };
-      const payload = (finding: unknown) => ({ kind: 'custom-findings', version: 'v1', findings: [finding] });
+      const valid = { concernId: 'public-boundary-gap', summary: 'A concern.', severity: 'minor', evidenceLocations: ['src/a.ts:1'], sourceRegions: [region] };
+      const payload = (finding: unknown) => ({ kind: 'custom-findings', version: 'v2', findings: [finding] });
 
       expect(parseBuildReviewCustomReviewerPayload(payload(valid))).toBeDefined();
       expect(schemaAccepts(BUILD_REVIEW_CUSTOM_V1_SCHEMA, payload(valid))).toBe(true);

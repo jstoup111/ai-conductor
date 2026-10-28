@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import {
   createRestackJournal,
   isJournalOwnerAlive,
@@ -15,6 +16,7 @@ import {
   journalStateUpdateLines,
   pinStagingRef,
   readRestackJournal,
+  recordRoutedApplyPlan,
   replaceAppliedJournalWithFollowOn,
   stagingRefFor,
   updateRestackChildStatus,
@@ -81,6 +83,106 @@ async function readCreated(repo: string, slug = 'demo') {
 }
 
 describe('ref-backed restack journal (real local Git)', () => {
+  it('round-trips a routed apply plan and its invalidation set', async () => {
+    const fixture = await createRepo();
+    try {
+      const oldSha = sha((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim());
+      const routed = {
+        roundId: parseRoundId('r1')!,
+        host: child(1),
+        routeOld: sha('1111111111111111111111111111111111111111'),
+        markerOld: sha('2222222222222222222222222222222222222222'),
+        queueOld: sha('3333333333333333333333333333333333333333'),
+        routeNew: sha('4444444444444444444444444444444444444444'),
+        queueNew: sha('5555555555555555555555555555555555555555'),
+      };
+      const invalidation = [{ child: child(2), gates: ['test_suite', 'build_review'] as const }];
+
+      expect((await createRestackJournal(fixture.repo, 'demo', { ...draft(oldSha), routed, invalidation })).kind).toBe('created');
+
+      const stored = await readCreated(fixture.repo);
+      expect(stored.journal).toMatchObject({ routed, invalidation });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on malformed routed values', async () => {
+    const fixture = await createRepo();
+    try {
+      const oldSha = sha((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim());
+      const routed = {
+        roundId: parseRoundId('r1')!,
+        host: child(1),
+        routeOld: sha('1111111111111111111111111111111111111111'),
+        markerOld: sha('2222222222222222222222222222222222222222'),
+      };
+      expect((await createRestackJournal(fixture.repo, 'demo', { ...draft(oldSha), routed })).kind).toBe('created');
+      const stored = await readCreated(fixture.repo);
+
+      for (const malformed of [
+        { ...routed, host: 0 },
+        { ...routed, routeOld: '1111111' },
+        { ...routed, roundId: 'x1' },
+      ]) {
+        const blob = sha((await makeGitRunner(fixture.repo)(['hash-object', '-w', '--stdin'], {
+          input: JSON.stringify({ ...stored.journal, routed: malformed }),
+        })).stdout.trim());
+        await fixture.git(['update-ref', journalRefFor('demo'), blob]);
+        await expect(readRestackJournal(fixture.repo, 'demo')).resolves.toEqual({ kind: 'unreadable', blob });
+      }
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('records a routed apply plan from synced by CAS and refuses a stale journal', async () => {
+    const fixture = await createRepo();
+    try {
+      const oldSha = sha((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim());
+      const routed = {
+        roundId: parseRoundId('r1')!,
+        host: child(1),
+        routeOld: sha('1111111111111111111111111111111111111111'),
+        markerOld: sha('2222222222222222222222222222222222222222'),
+        queueOld: sha('3333333333333333333333333333333333333333'),
+      };
+      const applyPlan = {
+        routeNew: sha('4444444444444444444444444444444444444444'),
+        queueNew: sha('5555555555555555555555555555555555555555'),
+        invalidation: [{ child: child(2), gates: ['test_suite', 'build_review'] as const }],
+      };
+      expect((await createRestackJournal(fixture.repo, 'demo', { ...draft(oldSha), routed })).kind).toBe('created');
+      const planned = await readCreated(fixture.repo);
+
+      await expect(recordRoutedApplyPlan(fixture.repo, planned, applyPlan)).resolves.toEqual({ kind: 'stale' });
+      expect((await fixture.git(['rev-parse', journalRefFor('demo')])).stdout.trim()).toBe(planned.blob);
+
+      const syncedBlob = await writeRestackJournalBlob(fixture.repo, { ...planned.journal, state: 'synced' });
+      await fixture.git(['update-ref', journalRefFor('demo'), syncedBlob, planned.blob]);
+      const synced = await readCreated(fixture.repo);
+
+      await recordRoutedApplyPlan(fixture.repo, synced, applyPlan);
+
+      const recorded = await readCreated(fixture.repo);
+      expect(recorded.journal).toMatchObject({
+        routed: { ...routed, routeNew: applyPlan.routeNew, queueNew: applyPlan.queueNew },
+        invalidation: applyPlan.invalidation,
+      });
+
+      const concurrentBlob = await writeRestackJournalBlob(fixture.repo, {
+        ...recorded.journal,
+        dirtyPaths: ['changed-by-another-planner'],
+      });
+      await fixture.git(['update-ref', journalRefFor('demo'), concurrentBlob, recorded.blob]);
+
+      await expect(recordRoutedApplyPlan(fixture.repo, recorded, applyPlan)).resolves.toEqual({ kind: 'stale' });
+      expect((await fixture.git(['rev-parse', journalRefFor('demo')])).stdout.trim()).toBe(concurrentBlob);
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
   it('creates once with a create-only CAS, records a live owner, and refuses competing planners on the event spine', async () => {
     const fixture = await createRepo();
     try {

@@ -17,11 +17,11 @@ import type { StateMutation } from '../conduct-state-store.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { resolveGitRef } from './git-ref-resolver.js';
-import { readRouteRecord, transitionHost, writeRoutingTransaction } from './route-record-store.js';
+import { readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
-import { assertNever, type RouteKind, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
+import { assertNever, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
 export type EnterHostRegionResult =
@@ -115,6 +115,11 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
     }
   }
   if (contract === undefined) {
+    // A disposition-only child closed with no acceptance run: every criterion
+    // is proven below this layer, so there is nothing to re-run.  Only the
+    // close-time digest can vouch for the marker, so it must match exactly.
+    const verified = await dispositionOnlyVerified(childDir, git, input.slug, input.host);
+    if (verified) return recordVerifiedGreen(git, childDir, recordPath, input);
     return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing command or cwd` };
   }
   let observed: Record<string, unknown>;
@@ -146,6 +151,29 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   } catch {
     return { kind: 'refused', reason: `child ${input.host} RED marker or ref is invalid` };
   }
+  return recordVerifiedGreen(git, childDir, recordPath, input);
+}
+
+async function dispositionOnlyVerified(childDir: string, git: GitRunner, slug: string, host: ChildId): Promise<boolean> {
+  try {
+    const marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8');
+    if ((JSON.parse(marker) as Record<string, unknown>).outcome !== 'disposition-only') return false;
+    const ref = await git(['rev-parse', '-q', '--verify', redRefFor(slug, host)]);
+    if (ref.exitCode !== 0) return false;
+    const blob = await git(['cat-file', '-p', ref.stdout.trim()]);
+    const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
+    return blob.exitCode === 0 && parseRoutedRedRecord(blob.stdout)?.digest === digest;
+  } catch {
+    return false;
+  }
+}
+
+async function recordVerifiedGreen(
+  git: GitRunner,
+  childDir: string,
+  recordPath: string,
+  input: VerifyGreenAcceptanceInput,
+): Promise<VerifyGreenAcceptanceResult> {
   const resolvedHead = await resolveGitRef(git, 'HEAD');
   if (typeof resolvedHead !== 'string') return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
   const head = resolvedHead;
@@ -155,9 +183,7 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
 }
 
 function terminalJournal(journal: Awaited<ReturnType<typeof readRestackJournal>>): boolean {
-  return journal.kind === 'missing' || (journal.kind === 'journal' &&
-    (journal.journal.state === 'aborted' ||
-      (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)));
+  return routingFenceOpen(journal);
 }
 
 async function hostTarget(
@@ -208,8 +234,14 @@ async function verifyOrSwitch(
     : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to host branch ${target.branch}` };
 }
 
-async function restageHostRegion(worktree: string, host: ChildId, kind: RouteKind): Promise<{ readonly kind: 'restaged' } | { readonly kind: 'refused'; readonly detail: string }> {
-  switch (kind) {
+async function restageHostRegion(
+  worktree: string,
+  slug: string,
+  host: ChildId,
+  record: RouteRecord,
+  git: GitRunner,
+): Promise<{ readonly kind: 'restaged' } | { readonly kind: 'refused'; readonly detail: string }> {
+  switch (record.kind) {
     case 'audit': {
       const state = createRoutedConductStateStore(worktree, host);
       const current = await state.read();
@@ -227,10 +259,22 @@ async function restageHostRegion(worktree: string, host: ChildId, kind: RouteKin
         ? { kind: 'refused', detail: `cannot restage host ${host} region: ${result.message}` }
         : { kind: 'restaged' };
     }
-    case 'revalidate':
-      return { kind: 'refused', detail: `revalidate host region entry is delivered by #3212` };
+    case 'revalidate': {
+      const queue = await readRevalidationQueue(worktree, slug, { git });
+      const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
+      if (!entry) return { kind: 'refused', detail: `revalidate host ${host} has no queued entry` };
+      const state = createRoutedConductStateStore(worktree, host);
+      const current = await state.read();
+      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      const mutations = entry.gates
+        .filter((step) => current.value[step] !== 'pending')
+        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage revalidate host ${host} ${step}` } as StateMutation<ConductState>));
+      if (mutations.length === 0) return { kind: 'restaged' };
+      const result = await state.applyBatch({ name: `restage revalidate host ${host} region`, mutations });
+      return 'message' in result ? { kind: 'refused', detail: `cannot restage revalidate host ${host}: ${result.message}` } : { kind: 'restaged' };
+    }
   }
-  return assertNever(kind);
+  return assertNever(record.kind);
 }
 
 async function bindHostObligations(
@@ -330,7 +374,19 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
   let pinnedBase = stored.record.entry?.host === input.host ? stored.record.entry.pinnedBase : undefined;
   if (stored.record.entry?.host !== input.host) {
-    const next = { ...stored.record, entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree } };
+    let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
+    const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
+    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === input.host) : undefined;
+    if (stored.record.kind === 'revalidate' && (!queued || queue.kind !== 'queue')) {
+      return { kind: 'refused', detail: `revalidate host ${input.host} has no queued entry to pin` };
+    }
+    if (queued && queue.kind === 'queue') {
+      revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+    }
+    const next = {
+      ...stored.record,
+      entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
+    };
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
       { kind: 'update-record', previous: stored, record: next },
     ], { git });
@@ -364,7 +420,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
       : { kind: 'resume', pinnedBase: pinnedBase! };
   }
 
-  const restaged = await restageHostRegion(input.worktree, input.host, stored.record.kind);
+  const restaged = await restageHostRegion(input.worktree, input.slug, input.host, stored.record, git);
   if (restaged.kind === 'refused') return restaged;
 
   const resolvedEntryHead = await resolveGitRef(git, 'HEAD');

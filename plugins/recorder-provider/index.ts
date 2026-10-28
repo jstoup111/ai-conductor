@@ -24,6 +24,7 @@ export interface RecorderProviderOptions {
  * src/conductor/src/index.ts.
  */
 export class RecorderProvider implements LLMProvider {
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
   private readonly recordingPath: string;
   private dirEnsured = false;
 

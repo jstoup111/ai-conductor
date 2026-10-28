@@ -264,14 +264,21 @@ export function createRepairObligationStore(
         // the same task.  Review/gate obligations deliberately remain open:
         // the resolver folds every open record, rather than treating this
         // index as the sole source of authority.
-        if (admission.source.authority === 'plan_amendment' || admission.source.authority === 'done-when-citation') {
+        if (admission.source.authority === 'plan_amendment' || admission.source.authority === 'done-when-citation' || admission.source.authority === 'remediation-closure') {
           for (const prior of Object.values(section.records)) {
             if (prior.planIdentity !== planIdentity || prior.source.authority !== admission.source.authority) continue;
             for (const taskId of taskIds) {
               if (prior.tasks[taskId]?.status === 'open') {
                 prior.tasks[taskId] = {
                   status: 'resolved',
-                  evidence: { kind: admission.source.authority === 'plan_amendment' ? 'superseded-by-plan-amendment' : 'superseded-by-citation-refusal', value: admission.id },
+                  evidence: {
+                    kind: admission.source.authority === 'plan_amendment'
+                      ? 'superseded-by-plan-amendment'
+                      : admission.source.authority === 'done-when-citation'
+                        ? 'superseded-by-citation-refusal'
+                        : 'superseded-by-remediation-closure',
+                    value: admission.id,
+                  },
                 };
               }
             }

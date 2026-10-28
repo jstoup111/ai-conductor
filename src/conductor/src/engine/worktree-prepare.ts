@@ -251,7 +251,7 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
-  await refreshWorktreeCoAuthor(worktreePath, opts?.events);
+  await refreshWorktreeCoAuthor(worktreePath, opts?.events, { dispatch: opts?.dispatchStart === true });
   await ensureSessionHooks(worktreePath, log, opts?.skillNameRoot);
   await excludeEngineArtifacts(worktreePath, log);
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);

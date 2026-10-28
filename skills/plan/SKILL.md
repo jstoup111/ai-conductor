@@ -76,6 +76,9 @@ refusal is not a git conflict: do not invoke the rebase resolver or run `git reb
       whose plans lack a dependency tree
 - [ ] Every story has both happy and negative paths
 - [ ] Conflict-check has passed (check `.docs/conflicts/` for recent clean pass, or no blocking conflicts)
+- [ ] Before the plan declares a `## Slices` section, the operator has explicitly accepted stacked
+      delivery and `.docs/complexity/<stem>.md` carries `Stacked-Delivery: approved` (see Slice
+      manifest). Land refuses a sliced plan without that line, after plan review has already run
 
 If preconditions are not met, state which are missing and suggest the appropriate skill.
 
@@ -339,7 +342,8 @@ without making the task undeliverable or its evidence stale.
 ## Slice manifest
 
 For a Large feature, propose delivery slices only when the resolved project configuration enables
-`stacked_prs.enabled`. Slice a Medium feature only when the operator asks for it. On operator
+`stacked_prs.enabled`. Slice a Medium feature only when the operator asks for it. Ask the operator
+to choose stacked or single-PR delivery before writing the section; never add it unasked. On operator
 acceptance, declare one optional `## Slices` section before the first task heading and write
 `Stacked-Delivery: approved` into `.docs/complexity/<stem>.md`. If the operator declines, author
 no manifest and no sign-off line.
@@ -552,8 +556,8 @@ must be taken from one cited task's `Done when` block, and the disposition is
 #### 7a. Independent Coverage Judgement
 
 **GATE: before the plan lands, a fresh subagent judges every criterion row. The plan's author never
-judges its own checks.** This is the only coverage judgement: the engine's `coverage_binding` step
-is a no-op and does not re-judge before BUILD.
+judges its own checks.** This is the only coverage judgement: no engine step re-judges coverage
+before BUILD.
 
 1. Build one claim per criterion row: the exact criterion text and every `Done when` bullet of each
    cited task, verbatim. Include nothing else — no plan prose, stories, files, or rationale — so the
@@ -673,6 +677,8 @@ any code is written. The full flow from here is:
 ## Verification
 
 - [ ] Preconditions validated (stories exist, both paths, conflict-check clean)
+- [ ] A `## Slices` section exists only with the operator's stacked-delivery acceptance recorded as
+      `Stacked-Delivery: approved` in `.docs/complexity/<stem>.md`
 - [ ] Every acceptance criterion maps to at least one task
 - [ ] Every citable decision in each non-deleted land-accepted ADR in the current change set has one
       mechanically valid Architecture Obligation Coverage row

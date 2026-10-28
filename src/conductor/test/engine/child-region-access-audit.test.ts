@@ -23,12 +23,9 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/conductor.ts:ConductStateStore.applyBatch': 2,
   'engine/conductor.ts:readAllVerdicts': 3,
   'engine/conductor.ts:readKickbackLedger': 11,
-  'engine/conductor.ts:readVerdict': 4,
+  'engine/conductor.ts:readVerdict': 3,
   'engine/conductor.ts:updateKickbackLedger': 5,
   'engine/conductor.ts:writeVerdict': 2,
-  'engine/coverage-binding-void.ts:ConductStateStore.apply': 1,
-  'engine/coverage-binding-void.ts:readVerdict': 1,
-  'engine/coverage-binding-void.ts:writeVerdict': 1,
   'engine/daemon-observe-cli.ts:readKickbackLedger': 1,
   'engine/daemon-rekick.ts:readKickbackLedger': 3,
   'engine/finish-publication-production.ts:readAllVerdicts': 1,
@@ -36,20 +33,21 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/finish-record-cli.ts:ConductStateStore.apply': 1,
   'engine/gate-verdicts.ts:readVerdict': 3,
   'engine/gate-verdicts.ts:writeVerdict': 2,
-  'engine/kickback-budget-cli.ts:readKickbackLedger': 6,
+  'engine/kickback-budget-cli.ts:readKickbackLedger': 7,
   'engine/kickback-ledger.ts:bumpKickbackGate': 2,
   'engine/kickback-ledger.ts:readKickbackLedger': 20,
   'engine/rebase-transition.ts:ConductStateStore.applyBatch': 1,
-  'engine/rebase-transition.ts:readVerdict': 9,
+  'engine/rebase-transition.ts:readVerdict': 7,
   'engine/rebase-transition.ts:updateKickbackLedger': 1,
   'engine/rebase-transition.ts:writeVerdict': 3,
   'engine/rebase.ts:readVerdict': 4,
   'engine/rebase.ts:writeVerdict': 4,
   'engine/remediation-caps.ts:readKickbackLedger': 3,
-  'engine/restack/restack-transition.ts:readVerdict': 1,
+  'engine/restack/restack-transition.ts:readVerdict': 2,
   'engine/rewind.ts:ConductStateStore.applyBatch': 3,
   'engine/rewind.ts:ConductStateStore.applyCorrection': 1,
-  'engine/routing/host-region-entry.ts:ConductStateStore.applyBatch': 1,
+  'engine/routing/host-region-entry.ts:ConductStateStore.applyBatch': 2,
+  'engine/routing/routed-exit.ts:writeVerdict': 1,
   'engine/routing/round-receipt.ts:readKickbackLedger': 2,
   'engine/routing/round-receipt.ts:updateKickbackLedger': 2,
   'engine/state.ts:ConductStateStore.apply': 3,
@@ -79,6 +77,7 @@ const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classificat
   'engine/daemon-rekick.ts:readKickbackLedger(path)': 'whole-feature-only',
   'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)': 'child-aware',
   'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)': 'child-aware',
+  'engine/restack/restack-transition.ts:readVerdict(worktree,gate,range.child)': 'child-aware',
   'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)': 'child-aware',
 };
 
@@ -181,6 +180,7 @@ function isWholeFeatureOnly(call: CallSite): boolean {
     ((path === 'engine/rebase-transition.ts' || path === 'engine/rebase.ts') &&
       (accessor === 'readVerdict' || accessor === 'writeVerdict') &&
       (gate === "'rebase'" || gate === "'coverage_binding'")) ||
+    (path === 'engine/routing/routed-exit.ts' && accessor === 'writeVerdict') ||
     (path === 'engine/kickback-ledger.ts' && accessor === 'bumpKickbackGate');
 }
 
@@ -248,7 +248,7 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
     throw new Error(`unclassified restack region access sites: ${unclassifiedRestackAccesses.join(', ')}`);
   }
   return calls.map((call) => isWholeFeatureOnly(call)
-    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
+    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'This access is deliberately whole-feature scoped.' }
     : {
       site: call.site,
       classification: RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] ?? 'child-aware' as const,
@@ -282,6 +282,7 @@ describe('child-region flat-access audit', () => {
       'engine/daemon-rekick.ts:readKickbackLedger(path)',
       'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)',
       'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)',
+      'engine/restack/restack-transition.ts:readVerdict(worktree,gate,range.child)',
       'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)',
     ]);
   });

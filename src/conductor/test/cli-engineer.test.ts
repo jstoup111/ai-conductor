@@ -140,6 +140,7 @@ describe('detectEngineerCommand — argv detection', () => {
     'dep-audit': ['--project', 'project'],
     'plan-review': ['--project', 'project', '--worktree', '/tmp/worktree'],
     worktree: ['--project', 'project', '--idea', 'idea'],
+    phase: ['--worktree', '/tmp/worktree', '--phase', 'stories'],
     land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
     handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],
     poll: [],

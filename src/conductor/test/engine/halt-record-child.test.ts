@@ -15,15 +15,15 @@ import {
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { escalateBuildFailure } from '../../src/engine/build-failure-escalation.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '../../src/engine/remote-git-operations.js';
 
 const scratchRoots: string[] = [];
 const leaseTip = 'a'.repeat(40);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -162,7 +162,7 @@ async function currentBranch(worktree: string): Promise<string> {
 }
 
 async function sealChildren(worktree: string, positions: readonly number[]): Promise<void> {
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeSliceTopologyFixture(worktree, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

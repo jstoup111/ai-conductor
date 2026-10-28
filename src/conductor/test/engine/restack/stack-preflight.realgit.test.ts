@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
@@ -17,7 +17,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -53,8 +53,8 @@ async function fixture() {
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -99,7 +99,7 @@ describe('runStackPreflight (real local Git)', () => {
     events.on('restack_refused', (event) => { refusals.push(event); });
 
     await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('closed-child-rewritten') });
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(subject.closedOne);
     expect(refusals).toEqual([expect.objectContaining({ reason: 'closed-child-rewritten', child: 1 })]);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -124,6 +124,35 @@ describe('runStackPreflight (real local Git)', () => {
     expect(phases).toEqual(['consume']);
     expect(planned.map(({ cause }) => cause)).toEqual(['feature-repair', 'base-refresh']);
     expect(planned[0]!.opId).not.toBe(planned[1]!.opId);
+  });
+
+  // Covers: task:rem-prd-audit-rem-vg5-s10-2
+  it('emits deferred-base-refresh once when a routed round opens after the repair applies', async () => {
+    const subject = await fixture();
+    await subject.git(['checkout', '-q', 'main']);
+    await subject.commit('base advance', 'base.txt', 'advanced\n');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('operator change', 'operator.txt', 'X\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const rearmed: string[] = [];
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      baseRefreshDue: true,
+      rearmRekick: async () => { rearmed.push('rearm'); },
+      // The routing record can be admitted after the early preflight probe
+      // but before the repair hands off its base-refresh journal.
+      routedRoundOpen: async () => true,
+      events,
+      git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toEqual({ kind: 'repaired' });
+    expect(rearmed).toEqual(['rearm']);
+    expect(records.filter((record) => record.type === 'restack_refused' && record.reason === 'deferred-base-refresh'))
+      .toHaveLength(1);
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
   async function withPersistedEvents<T>(repo: string, run: (events: ConductorEventEmitter) => Promise<T>) {
@@ -164,7 +193,7 @@ describe('runStackPreflight (real local Git)', () => {
       consumeRekick: async () => { consumed.push('consume'); }, events, git: makeGitRunner(subject.repo),
     }));
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
     expect(records.filter((record) => record.type === 'restack_refused').map((record) => record.reason))
       .toEqual(['dirty-overlap', 'deferred-base-refresh']);
     expect(records.filter((record) => record.type === 'restack_planned').map((record) => record.cause))
@@ -187,7 +216,7 @@ describe('runStackPreflight (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', baseRefreshDue: true, events, git: makeGitRunner(subject.repo),
     }));
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
     // The repair applied: child 1's closure moved to the operator commit and the leaf carries it.
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(operatorTip);
     expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
@@ -295,7 +324,7 @@ describe('runStackPreflight (real local Git)', () => {
     await commit('leaf', 'leaf.txt', 'leaf\n');
     await mkdir(join(repo, '.ai-conductor'), { recursive: true });
     await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
       sliceMembership: { taskSlices: { a: 2, b: 4, c: 7 }, titles: ['two', 'four', 'leaf'] },
       storyOwnership: { S1: 2, S2: 4, S3: 7 },

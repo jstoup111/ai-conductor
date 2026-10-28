@@ -244,7 +244,7 @@
 # Controls: stacked_prs — stacked delivery of a plan's ## Slices manifest.
 # Allowed: an object with enabled (true or false) and max_slices (integer 1-9; above 5 warns).
 # Default: unset; when present, enabled false and max_slices 1.
-# Changing it: enabling adds stacked-delivery checks at engineer/land; coverage_binding then records story ownership.
+# Changing it: enabling adds stacked-delivery checks at engineer/land.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
 # Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.
@@ -272,6 +272,15 @@
 # Allowed: a positive integer.
 # Default: 1.
 # Changing it: a higher cap lets the harness retry fixes unattended for longer, spending more before it asks for a human.
+# Controls: plan_review — policy for the DECIDE-phase plan review prompt.
+# Allowed: an object with only max_prompt_chars, a positive integer.
+# Default: unset; the runner allows prompts up to 400000 characters.
+# Changing it: raises the refusal threshold for unusually large plans when the operator accepts the additional review context.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: plan_review.max_prompt_chars — maximum characters the plan-review prompt may contain before review refuses to dispatch.
+# Allowed: a positive integer.
+# Default: 400000 in the runner.
+# Changing it: a higher value permits a larger review prompt and can increase provider context use.
 # Controls: architecture_review_as_built — policy for the as-built architecture review that runs on every feature.
 # Allowed: an object with checks (reachability, planGap, adrCompliance, diagramDrift, each with tiers: an array of S, M, L), remediation (enabled true or false), and max_remediation_laps (a positive integer).
 # Default: remediation.enabled true, max_remediation_laps 1; reachability and planGap run on every tier, adrCompliance and diagramDrift when approved ADRs or diagrams exist.
@@ -303,11 +312,6 @@
 # Allowed: an object with the single key enabled (true or false); any other key fails the load.
 # Default: enabled true.
 # Changing it: false makes every retry a plain rerun of the same step.
-# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
-# Controls: coverage_binding — retired; the coverage_binding step is a no-op that only records plan slice topology.
-# Allowed: an object with judge, itself an object with enabled (true or false) and batch_size (a positive integer).
-# Default: judge.enabled false.
-# Changing it: has no effect; the keys are still validated so existing configurations load.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: feature_applicability — whether merged DECIDE artifacts may declare selected feature steps inapplicable.
 # Allowed: an object with the single key enabled (true or false); any other key fails the load.
@@ -394,7 +398,7 @@ build_review:
     testQuality:
       enabled: false
 
-# enabled adds stacked-delivery checks at engineer/land; coverage_binding records ownership; build-loop slice
+# enabled adds stacked-delivery checks at engineer/land; build-loop slice
 # checkpoints remain reserved for the stacked child-plans chain (#2940–#2949).
 # stacked_prs:
 #   enabled: false

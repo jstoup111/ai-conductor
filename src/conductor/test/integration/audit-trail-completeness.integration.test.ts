@@ -79,17 +79,11 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Command rejection telemetry is persisted but has no audit-trail projection.
   land_gate_rejected: 'not-audited-by-design',
   land_dependency_decided: 'not-audited-by-design',
+  feature_artifacts_registered: 'not-audited-by-design',
   dependency_drift_swept: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
-  coverage_binding_judged: 'not-audited-by-design',
-  coverage_binding_amendment_judged: 'not-audited-by-design',
-  coverage_binding_conflict_judged: 'not-audited-by-design',
-  coverage_binding_disabled: 'not-audited-by-design',
-  coverage_binding_invalidated: 'not-audited-by-design',
-  coverage_binding_task_reopened: 'not-audited-by-design',
-  plan_slices_changed: 'not-audited-by-design',
   plan_review_dispatched: 'not-audited-by-design',
   plan_review_completed: 'not-audited-by-design',
   plan_review_finding_accepted: 'not-audited-by-design',
@@ -105,7 +99,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   restack_refused: 'not-audited-by-design',
   restack_recovered: 'not-audited-by-design',
   push_lease_refused: 'not-audited-by-design',
-  story_reowned: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   build_review_read_only_capability: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
@@ -118,6 +111,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_rubric_prompt: 'not-audited-by-design',
   build_review_rubric_result: 'not-audited-by-design',
   build_review_rubric_skipped: 'not-audited-by-design',
+  build_review_review_scope: 'not-audited-by-design',
   build_review_cache_hit: 'friction-mapped',
   build_review_scope_summary: 'not-audited-by-design',
   build_review_cache_discarded: 'friction-mapped',
@@ -154,6 +148,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Ownership refusals remain durable in the event ledger and terminal, but
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
+  github_operation_failed: 'not-audited-by-design',
   session_command_refused: 'not-audited-by-design',
   github_bypass_attempt: 'not-audited-by-design',
   github_bypass_result: 'not-audited-by-design',
@@ -278,6 +273,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_done_when_unverified: 'not-audited-by-design',
   decide_artifacts_pruned: 'not-audited-by-design',
   done_when_citation_judged: 'not-audited-by-design',
+  remediation_closure_judged: 'not-audited-by-design',
   done_when_citation_accepted: 'not-audited-by-design',
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
@@ -297,6 +293,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   provider_transcripts_evicted: 'not-audited-by-design',
   provider_transcripts_retention_failed: 'not-audited-by-design',
 };
+
+it('classifies remediation-closure judgements as intentionally outside the audit trail', () => {
+  expect(EVENT_TYPE_CLASSIFICATION.remediation_closure_judged).toBe('not-audited-by-design');
+});
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
@@ -375,6 +375,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'land_dependency_decided', repository: 'owner/repo', sourceRef: 'owner/repo#1',
     proposals: [], accepted: [], declined: [], skipped: null, writes: [],
   },
+  feature_artifacts_registered: {
+    type: 'feature_artifacts_registered', slug: 'feature', added: [],
+  },
   dependency_drift_swept: {
     type: 'dependency_drift_swept', repository: 'owner/repo', status: 'swept',
     unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
@@ -385,44 +388,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'setup_repair',
     disposition: 'engine-committed',
     preservedPaths: [],
-  },
-  coverage_binding_judged: {
-    type: 'coverage_binding_judged',
-    step: 'coverage_binding',
-    verdict: 'asserts',
-    digest: 'sha256:claim',
-    taskIds: ['1'],
-  },
-  coverage_binding_amendment_judged: {
-    type: 'coverage_binding_amendment_judged',
-    step: 'coverage_binding',
-    verdict: 'carried',
-    digest: 'sha256:amendment',
-    artifactPath: '.docs/decisions/architecture-review-example.md',
-    taskIds: ['1'],
-  },
-  coverage_binding_conflict_judged: {
-    type: 'coverage_binding_conflict_judged',
-    step: 'coverage_binding',
-    claimKind: 'criterion',
-    claimId: 'stories#criterion-1',
-    verdict: 'conflicts',
-    taskIds: ['1'],
-  },
-  coverage_binding_disabled: { type: 'coverage_binding_disabled', step: 'coverage_binding' },
-  coverage_binding_invalidated: {
-    type: 'coverage_binding_invalidated', paths: ['.docs/decisions/adr-governing.md'], origin: 'decide-change',
-  },
-  coverage_binding_task_reopened: {
-    type: 'coverage_binding_task_reopened', step: 'coverage_binding', taskId: '1', digest: 'sha256:claim',
-  },
-  plan_slices_changed: {
-    type: 'plan_slices_changed',
-    step: 'coverage_binding',
-    moved: [{ taskId: '4', from: 1, to: 2 }],
-    added: ['9'],
-    removed: ['3'],
-    manifest: 'unchanged',
   },
   plan_review_dispatched: {
     type: 'plan_review_dispatched',
@@ -468,7 +433,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'push_lease_refused', ref: parseRefName('refs/heads/feat/daemon-feature')!,
     expected: parseCommitSha('d'.repeat(40))!, actual: parseCommitSha('e'.repeat(40))!,
   },
-  story_reowned: { type: 'story_reowned', story: '1', from: 1, to: 2 },
   config_deprecated_key: {
     type: 'config_deprecated_key',
     key: 'build_review.rubrics.scope',
@@ -516,6 +480,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
   build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
   build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
+  build_review_review_scope: { type: 'build_review_review_scope', rubric: 'scope', lapId: 'lap-1', mode: 'full', reason: 'first-lap', deltaHunkCount: 0, settledHunkCount: 0 },
   build_review_cache_hit: { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-1' },
   build_review_scope_summary: { type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-1', establishedTargetCount: 2, candidateCount: 1, unresolvedReasons: ['uncertain-association'] },
   build_review_cache_discarded: { type: 'build_review_cache_discarded', rubric: 'testQuality', lapId: 'lap-1', reason: 'engine-version-mismatch', cachedEngineStamp: 'aaaaaaaaaaaa', currentEngineStamp: 'bbbbbbbbbbbb' },
@@ -564,6 +529,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     reason: 'other-owner',
     remedy: 'ask-resource-owner',
+  },
+  github_operation_failed: {
+    type: 'github_operation_failed',
+    target: { repository: 'acme/repo', kind: 'pull-request', number: 1 },
+    operation: 'pull-request.edit',
+    error: 'GitHub rejected the update',
   },
   session_command_refused: {
     type: 'session_command_refused', eventId: 'refusal-1',
@@ -1025,6 +996,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   done_when_citation_judged: {
     type: 'done_when_citation_judged',
     citations: [],
+  },
+  remediation_closure_judged: {
+    type: 'remediation_closure_judged', outcome: 'judged', attempts: 1,
+    candidates: [{ taskId: 'rem-as-built-R1', verdict: 'resolved', rationale: 'present', disposition: 'left-closed' }],
   },
   done_when_citation_accepted: {
     type: 'done_when_citation_accepted',

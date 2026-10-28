@@ -204,6 +204,7 @@ async function runFlow(input: {
       concernId: 'stale-policy-cache',
       summary: 'The cache key does not bind the effective installed policy.',
       confidence: 95,
+      severity: 'major',
       evidenceLocations: ['src/feature.ts:1'],
       sourceRegions: [{
         path: 'src/feature.ts', startLine: 1, endLine: 1, contentHash: HASH, display: 'cache key',
@@ -211,7 +212,7 @@ async function runFlow(input: {
     }] : [];
     expect(options.prompt).toContain('Portable policy');
     const payload = {
-      kind: 'custom-findings', version: 'v1', findings,
+      kind: 'custom-findings', version: 'v2', findings,
     };
     return { success: true, output: JSON.stringify(payload), finalStructuredResult: payload, exitCode: 0 };
   });

@@ -11,6 +11,7 @@ const piEnvironment: PiEnvironment = {
     isFile: () => path === '/test-home/.agents/skills/HARNESS.md',
     isDirectory: () => false,
   }),
+  access: async () => {},
   env: {},
   homeDir: () => '/test-home',
   cwd: () => '/test-project',

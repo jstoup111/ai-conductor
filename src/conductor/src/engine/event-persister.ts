@@ -85,6 +85,11 @@ export interface EventPersisterDependencies {
   readonly appendFile?: (filePath: string, contents: string, encoding: BufferEncoding) => void;
 }
 
+// Persistence is composed at the application boundary.  Engine code that must
+// durably acknowledge an outbox entry borrows that already-active owner rather
+// than constructing a second writer for the same feature ledger.
+const activePersisters = new WeakMap<ConductorEventEmitter, EventPersister>();
+
 /**
  * EventPersister subscribes to every ConductorEvent and appends each event
  * as a newline-delimited JSON line (with timestamp) to the specified file.
@@ -130,6 +135,7 @@ export class EventPersister {
    */
   start(): void {
     this.buildObservationIndex();
+    activePersisters.set(this.emitter, this);
     for (const type of persistedEventTypes()) {
       this.emitter.on(type, this.handler);
     }
@@ -142,6 +148,7 @@ export class EventPersister {
     for (const type of persistedEventTypes()) {
       this.emitter.off(type, this.handler);
     }
+    if (activePersisters.get(this.emitter) === this) activePersisters.delete(this.emitter);
   }
 
   /** Append once to the canonical event spine, preserving a producer occurrence timestamp. */
@@ -278,6 +285,20 @@ export class EventPersister {
   }
 }
 
+/**
+ * Persist an outbox occurrence through the emitter's composition-owned ledger.
+ * The acknowledgement is intentionally direct: normal event delivery swallows
+ * subscriber errors, while an outbox must retain its entry on a write failure.
+ */
+export async function persistOnActiveEventSpine(
+  events: ConductorEventEmitter,
+  event: ConductorEvent,
+): Promise<'persisted' | 'duplicate'> {
+  const persister = activePersisters.get(events);
+  if (persister === undefined) throw new EventPersistError('<active event spine>', new Error('no active event persister'));
+  return persister.persistDurably(event);
+}
+
 function readCanonicalEvents(filePath: string): string | undefined {
   if (!existsSync(filePath) || !statSync(filePath).isFile()) return undefined;
   return readFileSync(filePath, 'utf8');
@@ -402,6 +423,8 @@ export interface SessionEventTailOwner {
   stop(): void;
   /** Stop polling, join an in-flight read, then make one settled final pass. */
   drain(): Promise<void>;
+  /** Poll once without stopping the tail, joining any in-flight poll. */
+  flush(): Promise<void>;
 }
 
 /**
@@ -413,8 +436,10 @@ export function startSessionEventTail(
   projectRoot: string,
   events: ConductorEventEmitter,
   featureSlug?: string,
+  /** Test seam for a controlled in-flight ledger read. */
+  tailOverride?: CloseoutEventTail,
 ): SessionEventTailOwner {
-  const tail = new CloseoutEventTail({ projectRoot, featureSlug, events });
+  const tail = tailOverride ?? new CloseoutEventTail({ projectRoot, featureSlug, events });
   tail.start();
   let drainPromise: Promise<void> | undefined;
   return {
@@ -428,6 +453,7 @@ export function startSessionEventTail(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 
@@ -454,7 +480,7 @@ export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
   slug?: string,
-): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
+): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void>; flush: () => Promise<void> } {
   const featureEvents = createForwardingFeatureEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
@@ -502,6 +528,7 @@ export function startFeatureEventPersistence(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 

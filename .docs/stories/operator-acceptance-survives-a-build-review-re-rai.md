@@ -126,7 +126,7 @@ As an operator, I want an acceptance to reach only findings the adjudicator bind
 
 #### Negative Paths
 - Given a case holding no acceptance origin and no operator resolution, when a later lap binds a finding to it with any disposition, then the finding is not carried and today's repeat, regression, deferral and decision-stop rules apply.
-- Given a current finding whose exact id matches no disposition and which the judgement does not bind, when it resembles an accepted finding by rubric, path or summary, then it is not suppressed.
+- Given a current finding whose exact id matches no disposition and which the judgement does not bind, when it resembles an accepted finding by rubric, path or summary, then it is not suppressed by that resemblance and is not accepted risk.
 - Given the disposition store is unreadable or malformed, when a later lap binds F2 to C, then F2 is not carried and the gate takes exactly the path it takes today for an unreadable disposition store.
 - Given the case store is unreadable or malformed, when the lap runs, then nothing is carried and the gate fails closed exactly as today.
 

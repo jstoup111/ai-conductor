@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -45,14 +45,14 @@ beforeEach(async () => {
   await git(['add', '.ai-conductor/config.yml']);
   await git(['commit', '-qm', 'configure stack']);
   await writeFile(join(root, '.git', 'info', 'exclude'), '.pipeline/\n');
-  await writeCoverageBindingEnvelope(root, {
-    version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [],
+  await writeSliceTopologyFixture(root, {
+    version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [], materializeTopologyCommit: true,
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
-    feature_desc: 'demo', coverage_binding: 'done', acceptance_specs: 'pending',
+    feature_desc: 'demo', acceptance_specs: 'pending',
   }));
 });
 
@@ -161,6 +161,9 @@ describe('stacked BUILD region loop', () => {
     await git(['switch', '-q', 'feat/c1/demo']);
     const childTip = await commit('child 1 complete');
     await git(['update-ref', 'refs/conductor/demo/closed/c1', childTip, '']);
+    await sealSliceTopologyPositions(root, {
+      slug: 'demo', sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
+    });
     await git(['switch', '-q', 'feat/daemon-demo']);
     await git(['update-ref', 'refs/remotes/origin/main', leafBefore]);
     await git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);

@@ -128,15 +128,40 @@ describe('ref-backed restack journal (sweep G1, real local Git)', () => {
     await expect(isJournalOwnerAlive({ ...owner, processStartTime: String(Number(owner.processStartTime) + 1) })).resolves.toBe(false);
 
     // A real process that has exited: same host, its own recorded start time, but no longer running.
-    const exited = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    // Wait for the child to prove its event loop is live before taking its /proc identity: `spawn()`
+    // gives us a PID before the child has necessarily reached its timer.
+    const exited = spawn(process.execPath, ['-e', 'process.stdout.write("ready\\n"); setInterval(() => {}, 30000)'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
     const exitedPid = exited.pid!;
-    const exitedStart = (await readFile(`/proc/${exitedPid}/stat`, 'utf8')).slice((await readFile(`/proc/${exitedPid}/stat`, 'utf8')).lastIndexOf(') ') + 2).trim().split(/\s+/)[19]!;
-    const exitedOwner = { host: owner.host, pid: exitedPid, processStartTime: exitedStart };
-    await expect(isJournalOwnerAlive(exitedOwner)).resolves.toBe(true);
-    const closed = new Promise((resolve) => { exited.once('exit', resolve); });
-    exited.kill('SIGKILL');
-    await closed;
-    await expect(isJournalOwnerAlive(exitedOwner)).resolves.toBe(false);
+    const closed = new Promise<void>((resolve, reject) => {
+      exited.once('exit', () => resolve());
+      exited.once('error', reject);
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      let output = '';
+      exited.stdout!.on('data', (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes('ready\n')) resolve();
+      });
+      exited.once('error', reject);
+      exited.once('exit', (code, signal) => reject(new Error(`owner probe exited before ready (code=${code}, signal=${signal})`)));
+    });
+    try {
+      await ready;
+      const stat = await readFile(`/proc/${exitedPid}/stat`, 'utf8');
+      const exitedStart = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19]!;
+      const exitedOwner = { host: owner.host, pid: exitedPid, processStartTime: exitedStart };
+      await expect(isJournalOwnerAlive(exitedOwner)).resolves.toBe(true);
+      exited.kill('SIGKILL');
+      await closed;
+      await expect(isJournalOwnerAlive(exitedOwner)).resolves.toBe(false);
+    } finally {
+      if (!exited.killed) {
+        exited.kill('SIGKILL');
+        await closed;
+      }
+    }
   });
 
   // Covers: S4.8, task:4

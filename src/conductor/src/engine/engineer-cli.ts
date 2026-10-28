@@ -106,6 +106,12 @@ import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
 import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
+import { labelComposerPane, type PaneLabelRunner } from './engineer/pane-label.js';
+import {
+  gitRefManifestSource,
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+} from './feature-manifest-source.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -116,12 +122,13 @@ type EngineerDispatchDescriptor =
   | { kind: 'projects' }
   | { kind: 'dep-audit'; project: string }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
+  | { kind: 'phase'; worktree: string; phase: string }
   | {
     kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
   }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
-  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string }
+  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
@@ -142,7 +149,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -157,6 +164,24 @@ async function resolvePlanReviewFeatureSlug(worktree: string): Promise<string | 
   if (!branch.startsWith('spec/')) return undefined;
   const slug = branch.slice('spec/'.length);
   return isSpecSlug(slug) ? slug : undefined;
+}
+
+async function labelPrimitivePane(
+  worktree: string,
+  phase: string,
+  opts: DispatchEngineerOpts,
+  warn: (line: string) => void,
+): Promise<void> {
+  if (!opts.paneLabelRunner) return;
+  const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(worktree);
+  if (!slug) return;
+  await labelComposerPane({
+    slug,
+    phase,
+    env: opts.env ?? process.env,
+    run: opts.paneLabelRunner,
+    warn,
+  });
 }
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -238,6 +263,15 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     return { kind: 'worktree', project, idea, sourceRef, body };
   }
 
+  if (subCmd === 'phase') {
+    const worktree = parseFlag(argv, '--worktree');
+    const phase = parseOptionalFlagPreservingEmpty(argv, '--phase');
+    if (!worktree || phase === undefined) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--worktree', '--phase']);
+    if (unk) return { kind: 'reject', sub: 'phase', flag: unk };
+    return { kind: 'phase', worktree, phase };
+  }
+
   if (subCmd === 'land') {
     const project = parseFlag(argv, '--project');
     const idea = parseFlag(argv, '--idea');
@@ -289,10 +323,14 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const accept = parseFlag(argv, '--accept') ?? undefined;
     const acknowledge = argv.includes('--acknowledge') || undefined;
     const reason = parseFlag(argv, '--reason') ?? undefined;
+    const maxPromptCharsRaw = parseFlag(argv, '--max-prompt-chars');
+    const maxPromptChars = maxPromptCharsRaw === null ? undefined : Number(maxPromptCharsRaw);
+    const invalidMaxPromptChars = maxPromptCharsRaw !== null &&
+      (maxPromptChars === undefined || !Number.isInteger(maxPromptChars) || maxPromptChars <= 0);
     if (accept && acknowledge) return { kind: 'guide' };
-    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason']);
+    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason', '--max-prompt-chars']);
     if (unk) return { kind: 'reject', sub: 'plan-review', flag: unk };
-    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}) };
+    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}), ...(invalidMaxPromptChars ? { invalidMaxPromptChars: true } : maxPromptChars === undefined ? {} : { maxPromptChars }) };
   }
 
   if (subCmd === 'poll') {
@@ -583,6 +621,10 @@ export interface DispatchEngineerOpts {
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
   printErr?: (s: string) => void;
+  /** Optional pane-label process seam; only production injects the real runner. */
+  paneLabelRunner?: PaneLabelRunner;
+  /** Test seam for the checked-out spec branch lookup used by `compose phase`. */
+  resolvePlanReviewFeatureSlug?: (worktree: string) => Promise<string | undefined>;
   /** Injected gh runner (for tests). */
   gh?: GhRunner;
   /** Injectable canonical tracker seam for `compose dep-audit`. */
@@ -619,6 +661,8 @@ export interface DispatchEngineerOpts {
   env?: NodeJS.ProcessEnv;
   /** Injectable reviewer executor for the deterministic plan-review boundary. */
   providerExecutor?: RunPlanReviewInput['providerExecutor'];
+  /** Injectable plan-review runner so command wiring can be asserted without a provider call. */
+  runPlanReview?: typeof runPlanReview;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -772,10 +816,14 @@ function parseGhRepo(remote: string): string | null {
 }
 
 function featureMarkerForSpecBranch(branch: string): string {
+  return `.docs/intake/${featureSlugForSpecBranch(branch)}.md`;
+}
+
+function featureSlugForSpecBranch(branch: string): string {
   const prefix = 'spec/';
   const slug = branch.startsWith(prefix) ? branch.slice(prefix.length) : '';
   if (!isSpecSlug(slug)) throw new Error(`engineer handoff: branch "${branch}" is not a canonical spec/<slug> branch.`);
-  return `.docs/intake/${slug}.md`;
+  return slug;
 }
 
 /**
@@ -796,6 +844,7 @@ export function initialSpecPublication(
     throw new Error('engineer handoff: remote GitHub repository could not be resolved for guarded publication.');
   }
   const featureMarker = featureMarkerForSpecBranch(branch);
+  const slug = featureSlugForSpecBranch(branch);
   const mutation = {
     provenance: {
       repository,
@@ -811,8 +860,26 @@ export function initialSpecPublication(
       resolveMachineOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd),
       provenanceDiscovery: {
         readCommittedRecords: async ({ ref }: { readonly ref: string }) => {
-          const { stdout } = await git(['show', `${ref}:${featureMarker}`], { cwd });
-          return [{ path: featureMarker, content: stdout }];
+          let paths: readonly string[];
+          try {
+            paths = (await resolveFeatureArtifact(
+              gitRefManifestSource(cwd, ref),
+              slug,
+              'intake',
+              async () => [featureMarker],
+            )).paths;
+          } catch (error) {
+            // A vanished or unavailable ref remains unreadable at the existing
+            // injected Git seam. Preserve malformed manifests as fail-closed.
+            if (error instanceof MalformedFeatureManifestError) throw error;
+            paths = [featureMarker];
+          }
+          return Promise.all(paths.map(async (path) => {
+            const { stdout } = await git(['show', `${ref}:${path}`], { cwd });
+            // The mutation-provenance request keeps the stable legacy identity,
+            // while this reader obtains its committed bytes from the manifest path.
+            return { path: featureMarker, content: stdout };
+          }));
         },
       },
     },
@@ -869,6 +936,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas), --body <text> (optional — stages the intake body).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
+  phase:
+    'compose phase --worktree <path> --phase <phase> — label the current composer pane for an active DECIDE phase.\n' +
+    'Flags: --worktree <path> (required), --phase <phase> (required).\n' +
+    'Mutates: updates only the current herdr or tmux pane label when one is identified by the environment.\n' +
+    'Loop fit: informational phase marker during DECIDE; it does not change authored artifacts or workflow state.',
   land:
     'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — commit the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
@@ -880,7 +952,7 @@ export const SUBCOMMAND_HELP = {
     'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
   'plan-review':
-    'compose plan-review --project <name> --worktree <path> [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
+    'compose plan-review --project <name> --worktree <path> [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
     'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
     'Mutates: writes only .docs/plan-review/<plan-stem>.md and composer events.\n' +
     'Loop fit: DECIDE gate after coherence-check and before land.',
@@ -939,7 +1011,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose dep-audit --project <name>         — read-only dependency drift report\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
-      '  ai-conductor compose plan-review --project <n> --worktree <p> [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
+      '  ai-conductor compose plan-review --project <n> --worktree <p> [--max-prompt-chars <positive-integer>] [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
@@ -1277,6 +1349,28 @@ export async function dispatchEngineer(
       return 0;
     }
 
+    // ── phase ─────────────────────────────────────────────────────────────────
+    case 'phase': {
+      if (!/^[a-z0-9-]+$/.test(dispatch.phase)) {
+        printErr(`compose phase: invalid phase '${dispatch.phase}'.`);
+        return 1;
+      }
+      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
+      if (!slug) {
+        printErr(`compose phase: worktree '${dispatch.worktree}' must be on a canonical spec/<slug> branch.`);
+        return 1;
+      }
+      if (!opts.paneLabelRunner) return 0;
+      await labelComposerPane({
+        slug,
+        phase: dispatch.phase,
+        env: opts.env ?? process.env,
+        run: opts.paneLabelRunner,
+        warn: printErr,
+      });
+      return 0;
+    }
+
     // ── projects ──────────────────────────────────────────────────────────────
     case 'projects': {
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
@@ -1367,6 +1461,15 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
+        if (opts.paneLabelRunner) {
+          await labelComposerPane({
+            slug: wt.slug,
+            phase: 'worktree',
+            env: opts.env ?? process.env,
+            run: opts.paneLabelRunner,
+            warn: printErr,
+          });
+        }
         // The occurrence rides the one telemetry spine. This CLI process owns no
         // long-lived bus, so it builds the spine for the duration of the emit —
         // a ConductorEventEmitter with EventPersister attached to the canonical
@@ -1403,7 +1506,10 @@ export async function dispatchEngineer(
     }
 
     case 'plan-review': {
-      const { project: projectName, worktree, accept, acknowledge, reason } = dispatch;
+      const { project: projectName, worktree, accept, acknowledge, reason, maxPromptChars, invalidMaxPromptChars } = dispatch;
+      if (invalidMaxPromptChars) { printErr('engineer plan-review: --max-prompt-chars must be a positive integer'); return 1; }
+      if (maxPromptChars !== undefined && (accept || acknowledge)) { printErr('engineer plan-review: --max-prompt-chars applies only to a review run'); return 1; }
+      await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const record = (await reader.listProjects()).find((project) => project.name === projectName);
       if (!record) { printErr(`engineer plan-review: project "${projectName}" not found in registry.`); return 1; }
@@ -1432,7 +1538,7 @@ export async function dispatchEngineer(
           const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
           let ledgerError: string | undefined;
           const safeEmit = async (event: any) => { try { await events.emitOrThrow(event); } catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error); } };
-          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr });
+          const artifact = await (opts.runPlanReview ?? runPlanReview)({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr, maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars });
           if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
           if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
         }
@@ -1449,6 +1555,7 @@ export async function dispatchEngineer(
         project: projectName, idea, worktree, sourceRef,
         dependsOn = [], declinedDependencies = [], skipDependencyCheck,
       } = dispatch;
+      await labelPrimitivePane(worktree, 'land', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -1554,6 +1661,25 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      if (result.manifestChanged) {
+        try {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+          persister.start();
+          try {
+            await events.emitOrThrow({
+              type: 'feature_artifacts_registered',
+              slug: result.slug,
+              added: result.added.map(({ kind, path }) => ({ kind, path })),
+            });
+          } finally {
+            persister.stop();
+          }
+        } catch (error) {
+          printErr(`engineer land: could not record artifact registration event: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
       // Intake write-back (FR-36): when this idea originated from a github issue,
       // comment "Routed to <repo>" and advance the ledger to `routed`. Advisory —
       // a gh failure never fails a successful land.
@@ -1650,6 +1776,7 @@ export async function dispatchEngineer(
     // ── handoff ───────────────────────────────────────────────────────────────
     case 'handoff': {
       const { project: projectName, branch, worktree, sourceRef } = dispatch;
+      await labelPrimitivePane(worktree, 'handoff', opts, printErr);
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);

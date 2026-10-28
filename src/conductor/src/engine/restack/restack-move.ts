@@ -183,7 +183,11 @@ export async function checkRestackPreMove(
   }
 
   try {
-    const seal = await verifyProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: checkedOutMove.oldSha });
+    const seal = await verifyProtectedArtifactSeal({
+      projectRoot: worktree,
+      baselineCommit: checkedOutMove.oldSha,
+      toleratesEngineAppendedRemediation: true,
+    });
     return seal.ok ? { kind: 'clear' } : { kind: 'seal-refused', detail: seal.reason };
   } catch (error) {
     return { kind: 'seal-refused', detail: error instanceof Error ? error.message : String(error) };

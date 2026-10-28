@@ -33,6 +33,11 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
   roots.push(repo);
   const git = makeGitRunner(repo);
   await git(['init', '-q', '-b', 'main']);
+  // This fixture is removed immediately after each case. Keep Git from
+  // detaching maintenance that can still create paths under .git during
+  // teardown, racing the recursive remove in afterEach.
+  await git(['config', 'maintenance.auto', 'false']);
+  await git(['config', 'gc.auto', '0']);
   await git(['config', 'user.email', 'host-region@example.invalid']);
   await git(['config', 'user.name', 'Host region']);
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
@@ -56,7 +61,7 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
     acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
   }));
   const created = await createRouteRecord(repo, 'demo', {
-    roundId, sealedAuthored: 1, kind,
+    roundId, ...(kind === 'audit' ? { kind, sealedAuthored: 1 } : { kind }),
     items: [{ findingId: 'finding', kind, owner: child, host: child, reason: 'task-slice', fallback: [] }],
     allocation: { [child]: {
       remTaskIds: ['rem-prd-audit-T1'],
@@ -180,9 +185,9 @@ describe('routed host region entry (real local Git)', () => {
   });
 
   // Covers: task:48
-  it('refuses the deferred revalidate restage and any non-terminal restack journal', async () => {
+  it('refuses a revalidate host without a queue entry and any non-terminal restack journal', async () => {
     const revalidate = await fixture('revalidate');
-    await expect(entered(revalidate)).resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('#3212') });
+    await expect(entered(revalidate)).resolves.toMatchObject({ kind: 'refused', detail: 'revalidate host 1 has no queued entry to pin' });
 
     const subject = await fixture();
     const journal: RestackJournal = {

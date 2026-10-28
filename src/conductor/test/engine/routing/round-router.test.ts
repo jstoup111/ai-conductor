@@ -23,7 +23,7 @@ const git: GitRunner = async (args) => {
 
 const input = (admitted: Parameters<typeof routeAdmittedRound>[0]['admitted']) => ({
   admitted,
-  envelope: { sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] } },
+  sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] },
   planText: '', appendedChildren: {}, declaredPositions: [c1, c2, c3] as const,
   leafTip: 'feat/daemon-demo', roundId: 'r1' as RoundId, git,
 });

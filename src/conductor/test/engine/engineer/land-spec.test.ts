@@ -394,7 +394,20 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     const gh: GhRunner = async () => ({ stdout: 'operator\n' });
     const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
 
-    expect(result).toEqual({ slug: 'dep-bump', branch: 'spec/dep-bump', repoPath: dir });
+    expect(result).toEqual({
+      slug: 'dep-bump',
+      branch: 'spec/dep-bump',
+      repoPath: dir,
+      manifestChanged: true,
+      added: [
+        { kind: 'complexity', path: '.docs/complexity/dep-bump.md' },
+        { kind: 'plan', path: '.docs/plans/dep-bump.md' },
+        { kind: 'prd', path: '.docs/specs/dep-bump.md' },
+        { kind: 'stories', path: '.docs/stories/dep-bump.md' },
+        { kind: 'track', path: '.docs/track/dep-bump.md' },
+        { kind: 'intake', path: '.docs/intake/dep-bump.md' },
+      ],
+    });
 
     const message = await git(['log', '-1', '--format=%B'], dir);
     expect(message.split('\n')[0]).toBe('spec: land authored artifacts for "dep bump" [engineer/land]');
@@ -470,7 +483,7 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     const countBeforeSecondLand = await git(['rev-list', '--count', 'HEAD'], dir);
     const second = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
 
-    expect(second).toEqual(first);
+    expect(second).toEqual({ ...first, manifestChanged: false, added: [] });
     expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBeforeSecondLand);
     expect(await git(['rev-list', '--count', 'HEAD'], dir)).toBe(countBeforeSecondLand);
   });

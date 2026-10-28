@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import type { StepName } from '../../types/index.js';
 import { CHILD_REGION_STEPS, isRegionStep, pipelinePathFor, type ChildId } from '../child-context.js';
 import { createFilesystemConductStateStore } from '../filesystem-conduct-state-store.js';
-import { readVerdict, type RebasePreservedCandidate, type ReplayEvidence } from '../gate-verdicts.js';
+import { checkGateCompletion, readVerdict, type RebasePreservedCandidate, type ReplayEvidence } from '../gate-verdicts.js';
 import { classifyReplayGateInvalidation } from '../gate-invalidation.js';
+import type { RegionGate, RevalidationQueueEntry } from '../routing/route-types.js';
 import {
   applyRebaseVerdicts,
   emitGateInvalidationEvents,
@@ -15,10 +16,12 @@ import {
   type GitRunner,
   type RebaseOutcome,
 } from '../rebase.js';
-import { compareReplayTree } from '../rebase-replay.js';
+import { compareReplayTree, type ReplayComparison, type ReplayIdentity } from '../rebase-replay.js';
 import { applyRebaseTransition } from '../rebase-transition.js';
 import { translateAfterRebase } from '../rebase-translate.js';
 import { readState } from '../state.js';
+import { parsePlanTaskBlocks } from '../plan-task-parse.js';
+import { stripInheritedRemBlocks } from '../routing/rem-block-merge.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { RestackMoveRef } from './restack-move.js';
 import type { ChildRange, CommitSha, RestackCause } from './restack-types.js';
@@ -37,12 +40,16 @@ export interface ApplyRestackTransitionOptions {
   readonly moves: readonly RestackMoveRef[];
   /** Exact replay identities retained by the executor or recovered journal. */
   readonly rewritesByChild?: ReadonlyMap<ChildId, ReadonlyMap<CommitSha, CommitSha>>;
+  /** Gate-owned freshness check for preserved closed-child verdicts. */
+  readonly isRegionGateFresh?: (gate: RegionGate, child: ChildId) => Promise<boolean>;
   readonly git: GitRunner;
   readonly events?: ConductorEventEmitter;
 }
 
 export interface RestackTransitionResult {
   readonly wouldInvalidate: ReadonlyMap<ChildId, readonly StepName[]>;
+  /** Closed children whose region gates cannot be safely retained. */
+  readonly queueInvalidation: readonly RevalidationQueueEntry[];
 }
 
 interface RestackTuple {
@@ -67,6 +74,151 @@ async function changedPaths(git: GitRunner, from: CommitSha, to: CommitSha): Pro
   return result.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
 }
 
+async function showPath(git: GitRunner, ref: CommitSha, path: string): Promise<string | undefined> {
+  const result = await git(['show', `${ref}:${path}`]);
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+interface NormalizedRemPlanSurface {
+  readonly authored: string;
+  readonly remBlocks: readonly [string, string][];
+}
+
+/**
+ * The conflict resolver preserves task blocks but may attach a separator to
+ * the preceding block body. Compare the inherited-rem-free surfaces rather
+ * than treating that formatting detail as a child replay change.
+ */
+function normalizedRemPlanSurface(plan: string, parent: string): NormalizedRemPlanSurface | undefined {
+  const entries = [...parsePlanTaskBlocks(plan)];
+  const parentBlocks = parsePlanTaskBlocks(parent);
+  const firstRem = entries.findIndex(([id]) => id.startsWith('rem-'));
+  if (firstRem === -1 || entries.slice(firstRem).some(([id]) => !id.startsWith('rem-'))) return undefined;
+  const firstHeading = entries[firstRem]![1].heading;
+  const firstStart = plan.startsWith(firstHeading) ? 0 : plan.indexOf(`\n${firstHeading}`);
+  if (firstStart === -1) return undefined;
+  const remBlocks = entries.slice(firstRem)
+    .filter(([id, block]) => {
+      const inherited = parentBlocks.get(id);
+      return inherited === undefined || `${inherited.heading}\n${inherited.body}`.trimEnd() !== `${block.heading}\n${block.body}`.trimEnd();
+    })
+    .map(([id, block]) => [id, `${block.heading}\n${block.body}`.trimEnd()] as [string, string])
+    .sort(([left], [right]) => left.localeCompare(right));
+  return { authored: plan.slice(0, firstStart === 0 ? 0 : firstStart + 1).trimEnd(), remBlocks };
+}
+
+function sameInheritedRemSurface(before: string, oldParent: string, after: string, newParent: string): boolean {
+  const left = normalizedRemPlanSurface(before, oldParent);
+  const right = normalizedRemPlanSurface(after, newParent);
+  return left !== undefined && right !== undefined &&
+    left.authored === right.authored && JSON.stringify(left.remBlocks) === JSON.stringify(right.remBlocks);
+}
+
+/** Remove only plan deltas that are byte-for-byte inherited rem blocks from their respective parents. */
+async function normalizeInheritedRemPaths(git: GitRunner, tuple: RestackTuple, paths: readonly string[]): Promise<string[]> {
+  const normalized: string[] = [];
+  for (const path of paths) {
+    if (!path.startsWith('.docs/plans/') || !path.endsWith('.md')) { normalized.push(path); continue; }
+    const [before, after, oldParent, newParent] = await Promise.all([
+      showPath(git, tuple.previous, path),
+      showPath(git, tuple.head, path),
+      showPath(git, tuple.base, path),
+      showPath(git, tuple.onto, path),
+    ]);
+    if (
+      before === undefined || after === undefined || oldParent === undefined || newParent === undefined ||
+      (
+        stripInheritedRemBlocks(before, oldParent) !== stripInheritedRemBlocks(after, newParent) &&
+        !sameInheritedRemSurface(before, oldParent, after, newParent)
+      )
+    ) normalized.push(path);
+  }
+  return normalized;
+}
+
+/**
+ * Prove that the replay retained the child's own surface when merge-tree
+ * cannot construct a whole tree solely because the two sides appended rem
+ * blocks to the same plan.  Non-plan paths remain eligible only when the new
+ * parent did not touch them; a genuine overlapping code edit stays unproved.
+ */
+async function unchangedChildOwnedSurface(
+  git: GitRunner,
+  tuple: RestackTuple,
+  childOwned: readonly string[],
+): Promise<boolean> {
+  for (const path of childOwned) {
+    const [before, after, oldParent, newParent] = await Promise.all([
+      showPath(git, tuple.previous, path),
+      showPath(git, tuple.head, path),
+      showPath(git, tuple.base, path),
+      showPath(git, tuple.onto, path),
+    ]);
+    if (path.startsWith('.docs/plans/') && path.endsWith('.md')) {
+      if (before === undefined || after === undefined || oldParent === undefined || newParent === undefined ||
+          (stripInheritedRemBlocks(before, oldParent) !== stripInheritedRemBlocks(after, newParent) &&
+           !sameInheritedRemSurface(before, oldParent, after, newParent))) return false;
+      continue;
+    }
+    // A parent edit to a child-owned code/test path requires merge-tree's
+    // exact reconstruction; do not infer that its conflict resolution held.
+    if (oldParent !== newParent || before !== after) return false;
+  }
+  return true;
+}
+
+interface NormalizedReplayComparison {
+  readonly comparison: ReplayComparison;
+  /** Present only when child-owned replay normalization replaces a failed exact reconstruction. */
+  readonly fallbackPaths?: readonly string[];
+}
+
+async function normalizedReplayComparison(
+  git: GitRunner,
+  tuple: RestackTuple,
+  replay: ReplayIdentity,
+): Promise<NormalizedReplayComparison> {
+  // A restacked child owns only its old range. The new parent's changes are
+  // inherited inputs, not evidence that this child changed its replay.
+  // Normalize rem blocks on both sides before using this fallback so a union
+  // resolution does not turn the parent's appended block into child work.
+  const childOwned = await changedPaths(git, tuple.base, tuple.previous);
+  const relevant = await normalizeInheritedRemPaths(git, tuple, childOwned);
+  // Replay proof answers whether the child's contribution is unchanged. Gate
+  // invalidation must still see independent runtime changes inherited from
+  // the new parent, except for rem blocks normalized out of the plan surface.
+  const invalidationPaths = await normalizeInheritedRemPaths(
+    git,
+    tuple,
+    await changedPaths(git, tuple.previous, tuple.head),
+  );
+  const comparison = await compareReplayTree(git, replay);
+  if (comparison.kind === 'unchanged') return { comparison };
+  if (comparison.kind === 'changed') {
+    if (relevant.length > 0 && !await unchangedChildOwnedSurface(git, tuple, childOwned)) return { comparison };
+    return {
+      comparison: { ...comparison, kind: 'unchanged' as const, expectedTree: comparison.completedTree },
+      fallbackPaths: invalidationPaths,
+    };
+  }
+
+  // A plan-only conflict makes merge-tree conservatively unproved even when
+  // the resolved child-owned surface is identical. Bind the normalized result
+  // to the actual completed tree rather than returning early on `unproved`.
+  if (relevant.length > 0 && !await unchangedChildOwnedSurface(git, tuple, childOwned)) return { comparison };
+  const completed = await git(['rev-parse', `${replay.completedHead}^{tree}`]);
+  const completedTree = completed.exitCode === 0 ? completed.stdout.trim() : '';
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(completedTree)
+    ? {
+        comparison: { kind: 'unchanged', identity: replay, expectedTree: completedTree, completedTree },
+        // The child-owned surface above is byte-for-byte retained after
+        // inherited rem blocks are removed. Its replay is unchanged, while
+        // independent parent runtime paths remain invalidation inputs.
+        fallbackPaths: invalidationPaths,
+      }
+    : { comparison };
+}
+
 async function mergeBase(git: GitRunner, left: CommitSha, right: CommitSha): Promise<CommitSha> {
   const result = await git(['merge-base', left, right]);
   const value = result.stdout.trim();
@@ -77,7 +229,7 @@ async function mergeBase(git: GitRunner, left: CommitSha, right: CommitSha): Pro
 }
 
 async function outcomeFor(worktree: string, git: GitRunner, tuple: RestackTuple): Promise<RebaseOutcome> {
-  const delta = await changedPaths(git, tuple.previous, tuple.head);
+  const delta = await normalizeInheritedRemPaths(git, tuple, await changedPaths(git, tuple.previous, tuple.head));
   if (delta.length === 0) {
     return { kind: 'noop', baseSha: tuple.onto, allChangedPaths: [] };
   }
@@ -95,6 +247,58 @@ async function outcomeFor(worktree: string, git: GitRunner, tuple: RestackTuple)
       target: tuple.onto,
       completedHead: tuple.head,
     },
+  };
+}
+
+/**
+ * Produces one revalidation obligation for a moved closed child when replay
+ * proof cannot retain every one of its region gates. A gate verdict is the
+ * existing gate-owned freshness decision: an absent, unreadable, or
+ * unsatisfied record is therefore conservative evidence to re-run that gate.
+ */
+export async function queueInvalidation(
+  worktree: string,
+  git: GitRunner,
+  range: ChildRange,
+  move: RestackMoveRef,
+  newParent: CommitSha,
+  isRegionGateFresh: (gate: RegionGate, child: ChildId) => Promise<boolean> = async (gate, child) =>
+    (await checkGateCompletion(worktree, gate, { activeChild: child })).done,
+): Promise<RevalidationQueueEntry | undefined> {
+  const outcome = await outcomeFor(worktree, git, {
+    previous: range.oldTip,
+    base: range.oldParent,
+    onto: newParent,
+    head: move.newSha,
+  });
+  if (outcome.kind !== 'changed' || outcome.replay === undefined) return undefined;
+
+  const normalized = await normalizedReplayComparison(git, {
+    previous: range.oldTip, base: range.oldParent, onto: newParent, head: move.newSha,
+  }, outcome.replay);
+  const projection = classifyReplayGateInvalidation(
+    normalized.fallbackPaths ?? outcome.allChangedPaths ?? outcome.changedCodePaths,
+    outcome.featureSurface ?? [],
+    false,
+    normalized.comparison,
+    outcome.documentInputs,
+  );
+  const invalidated = new Set(projection.invalidated);
+  const gates = (await Promise.all(CHILD_REGION_STEPS.map(async (gate) => {
+    if (invalidated.has(gate)) return gate;
+    const verdict = await readVerdict(worktree, gate, range.child);
+    if (verdict?.satisfied !== true || !(await isRegionGateFresh(gate, range.child))) return gate;
+    return undefined;
+  }))).filter((gate): gate is RegionGate => gate !== undefined);
+  if (gates.length === 0) return undefined;
+
+  return {
+    child: range.child,
+    position: range.child,
+    closureSha: move.newSha,
+    gates,
+    replay: { oldParent: range.oldParent, newParent },
+    state: 'queued',
   };
 }
 
@@ -214,6 +418,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     .filter((move): move is RestackMoveRef & { child: ChildId } => move.child !== undefined && move.ref.startsWith('refs/heads/') && move.oldSha !== move.newSha)
     .map((move) => move.child));
   const wouldInvalidate = new Map<ChildId, readonly StepName[]>();
+  const queuedInvalidations: RevalidationQueueEntry[] = [];
   const newParentFor = (range: ChildRange): CommitSha => {
     const index = options.ranges.indexOf(range);
     const previous = index > 0 ? moveByChild.get(options.ranges[index - 1]!.child) : undefined;
@@ -327,11 +532,14 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
       wouldInvalidate.set(range.child, []);
       continue;
     }
+    const normalized = await normalizedReplayComparison(options.git, {
+      previous: range.oldTip, base: range.oldParent, onto: newParentFor(range), head: move.newSha,
+    }, outcome.replay!);
     const projection = classifyReplayGateInvalidation(
-      outcome.allChangedPaths ?? outcome.changedCodePaths,
+      normalized.fallbackPaths ?? outcome.allChangedPaths ?? outcome.changedCodePaths,
       outcome.featureSurface ?? [],
       false,
-      await compareReplayTree(options.git, outcome.replay!),
+      normalized.comparison,
       outcome.documentInputs,
     );
     const invalidated = new Set(projection.invalidated);
@@ -341,6 +549,15 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
         : undefined,
     ))).filter((gate) => gate !== undefined);
     wouldInvalidate.set(range.child, gates);
+    const queued = await queueInvalidation(
+      options.worktree,
+      options.git,
+      range,
+      move,
+      newParentFor(range),
+      options.isRegionGateFresh,
+    );
+    if (queued) queuedInvalidations.push(queued);
   }
-  return { wouldInvalidate };
+  return { wouldInvalidate, queueInvalidation: queuedInvalidations };
 }

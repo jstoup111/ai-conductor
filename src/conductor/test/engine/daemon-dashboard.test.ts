@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:1, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,12 +9,14 @@ import {
   inFlightSteps,
   scanInheritedState,
   renderDashboard,
+  resolveRowBudget,
   type InheritedState,
 } from '../../src/engine/daemon-dashboard.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
 import type { GatedItem } from '../../src/engine/daemon-backlog.js';
+import type { BlockedSpecItem } from '../../src/engine/daemon-backlog.js';
 import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
 import { writeFullSuiteEvidence, type FullSuiteEvidence } from '../../src/engine/full-suite-evidence.js';
 
@@ -73,6 +75,149 @@ describe('engine/daemon-dashboard — inFlightSteps (Task 5)', () => {
       event('step_started', 'test_suite', 10),
       event('step_completed', 'test_suite', 20),
     ])).toEqual([]);
+  });
+});
+
+describe('startup dashboard readability (Tasks 2–8, 12–13)', () => {
+  const base = (): InheritedState => ({ halted: [], inProgress: [], eligible: [], processed: [], processedCount: 0, gated: [] });
+
+  it('marks failed discovery unavailable and renders unknown partition lines', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dashboard-discovery-'));
+    try {
+      const state = await scanInheritedState({ worktreeBase: join(root, 'worktrees'), processedDir: join(root, 'processed'), discover: async () => { throw new Error('no discovery'); } });
+      expect(state.discovery).toBe('unavailable');
+      const output = renderDashboard(state);
+      expect(output).toContain('NEEDS YOU: no known items · discovery state unknown');
+      for (const group of ['BLOCKED', 'GATED', 'WAITING', 'ELIGIBLE']) expect(output).toContain(`${group}: unknown — discovery did not complete`);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('uses actionable display order, attention first, and compact budget rules', () => {
+    const state = base();
+    state.halted = [{ slug: 'halted', reason: 'x' }];
+    state.blocked = [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'approve stories' }];
+    state.gated = [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'other', remedy: 'wait' }];
+    state.inProgress = [{ slug: 'running', step: 'build', tier: 'M' }];
+    state.waiting = [{ slug: 'waiting', verdict: { kind: 'blocked', blockers: [{ repo: 'r', number: '1' }] } }];
+    state.eligible = [{ slug: 'eligible', tier: 'S' }];
+    state.parked = Array.from({ length: 3 }, (_, i) => ({ slug: `parked-${i}`, annotation: i === 0 ? 'orphan' as const : undefined }));
+    state.retainedWorktrees = [{ slug: 'retained', reason: 'pr-closed-unmerged' }];
+    state.neverStarted = ['never']; state.processed = [{ slug: 'processed' }]; state.processedCount = 1;
+    const output = renderDashboard(state, { mode: 'compact', rowBudget: 120 });
+    expect(output.split('\n')[1]).toBe('NEEDS YOU: 1 halted · 1 blocked · 1 gated · 1 parked need review · 1 retained need action');
+    const headers = ['HALTED', 'BLOCKED', 'GATED', 'IN-PROGRESS', 'WAITING', 'ELIGIBLE', 'PARKED', 'RETAINED WORKTREES', 'NEVER-STARTED', 'PROCESSED'];
+    expect(headers.map((header) => output.indexOf(header))).toEqual([...headers.map((header) => output.indexOf(header))].sort((a, b) => a - b));
+    expect(output).toContain('PARKED (3) — 1 need review');
+    expect(output).toContain('PROCESSED (1)');
+  });
+
+  // Covers: task:rem-prd-audit-8
+  it('clips compact details to the budget but never a slug, and resolves a safe row budget', () => {
+    const longSlug = 's'.repeat(50); const reason = 'x'.repeat(280);
+    const output = renderDashboard({ ...base(), halted: [{ slug: longSlug, reason, tier: 'M', step: 'build' }] }, { mode: 'compact', rowBudget: 80 });
+    expect(output).toContain(`  • ${longSlug} [M] @build`);
+    const detail = output.split('\n').find((line) => line.startsWith('      '));
+    expect(detail).toHaveLength(80);
+    expect(detail).toMatch(/^      reason: x+/);
+    expect(detail?.endsWith('…')).toBe(true);
+    expect(resolveRowBudget({ isTTY: false, columns: 200 })).toBe(80);
+    expect(resolveRowBudget({ isTTY: true, columns: 20 })).toBe(40);
+    expect(resolveRowBudget({ isTTY: true, columns: 120 })).toBe(120);
+  });
+
+  it.each([40, 80, 120])('keeps every compact detail row within a %i-character budget', (rowBudget) => {
+    const output = renderDashboard({
+      ...base(),
+      halted: [{ slug: 'halted', reason: 'halted reason '.repeat(20) }],
+      blocked: [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'blocked remedy '.repeat(20) }],
+      gated: [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'owner', remedy: 'gated remedy '.repeat(20) }],
+      parked: [{ slug: 'parked-action', annotation: 'orphan', reason: 'parked reason '.repeat(20) }],
+      retainedWorktrees: [{ slug: 'retained-action', reason: 'pr-closed-unmerged' }],
+    }, { mode: 'compact', rowBudget });
+    const lines = output.split('\n');
+    const memberLines = lines.filter((line) => line.startsWith('      '));
+    expect(memberLines).toHaveLength(5);
+    for (const line of memberLines) expect(line.length).toBeLessThanOrEqual(rowBudget);
+    if (rowBudget === 120) for (const line of lines) expect(line.length).toBeLessThanOrEqual(120);
+  });
+
+  it('puts the reason before the remedy on each compact inert action row', () => {
+    const output = renderDashboard({
+      ...base(),
+      blocked: [{ slug: 'blocked', reason: 'stories-not-approved', remedy: 'blocked remedy' }],
+      gated: [{ kind: 'spec', slug: 'gated', reason: 'other-owner', otherOwner: 'owner', remedy: 'gated remedy' }],
+      parked: [{ slug: 'parked-action', annotation: 'orphan', reason: 'parked reason' }],
+      retainedWorktrees: [{ slug: 'retained-action', reason: 'pr-closed-unmerged' }],
+    }, { mode: 'compact', rowBudget: 80 });
+    const lines = output.split('\n');
+    for (const [slug, reason] of [['blocked', 'stories-not-approved'], ['gated', 'other-owner'], ['parked-action', 'parked reason'], ['retained-action', 'retained after ship']] as const) {
+      const index = lines.findIndex((line) => line === `  • ${slug}`);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(lines[index + 1]).toMatch(/^      /);
+      expect(lines[index + 1].length).toBeLessThanOrEqual(80);
+      expect(lines[index + 1].indexOf('remedy')).toBeGreaterThan(lines[index + 1].indexOf(reason));
+    }
+  });
+
+  // Covers: task:rem-prd-audit-12
+  it('assigns each overlapping slug to its highest-ranked group in full and compact renders', () => {
+    const slugs = Array.from({ length: 50 }, (_, index) => `generated-${index}`);
+    const names = ['parked', 'halted', 'inProgress', 'retained', 'processed', 'blocked', 'gated', 'waiting', 'eligible'] as const;
+    type Partition = typeof names[number];
+    let seed = 0x5eed1234;
+    const next = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed; };
+    const assigned = new Map<string, Set<Partition>>();
+    for (const [index, slug] of slugs.entries()) {
+      if (index === 0) assigned.set(slug, new Set(['blocked', 'eligible']));
+      else if (index === 1) assigned.set(slug, new Set(['blocked', 'gated']));
+      else if (index === 2) assigned.set(slug, new Set(['blocked', 'halted']));
+      else if (index === 3) assigned.set(slug, new Set(['halted', 'processed']));
+      else if (index === 4) assigned.set(slug, new Set(['inProgress', 'retained']));
+      else {
+        const pool = [...names];
+        for (let position = pool.length - 1; position > 0; position--) {
+          const swap = next() % (position + 1);
+          [pool[position], pool[swap]] = [pool[swap], pool[position]];
+        }
+        assigned.set(slug, new Set(pool.slice(0, 2 + (next() % 3))));
+      }
+    }
+    const has = (slug: string, partition: Partition) => assigned.get(slug)?.has(partition) ?? false;
+    const state: InheritedState = {
+      ...base(),
+      parked: slugs.filter((slug) => has(slug, 'parked')).map((slug) => ({ slug })),
+      halted: slugs.filter((slug) => has(slug, 'halted')).map((slug) => ({ slug, reason: 'halted' })),
+      inProgress: slugs.filter((slug) => has(slug, 'inProgress')).map((slug) => ({ slug, step: 'build' })),
+      retainedWorktrees: slugs.filter((slug) => has(slug, 'retained')).map((slug) => ({ slug, reason: 'pr-open-awaiting-main' })),
+      processed: slugs.filter((slug) => has(slug, 'processed')).map((slug) => ({ slug })),
+      processedCount: slugs.filter((slug) => has(slug, 'processed')).length,
+      blocked: slugs.filter((slug) => has(slug, 'blocked')).map((slug) => ({ slug, reason: 'stories-not-approved' as const, remedy: 'blocked remedy' })),
+      gated: slugs.filter((slug) => has(slug, 'gated')).map((slug) => ({ kind: 'spec' as const, slug, reason: 'other-owner' as const, otherOwner: 'owner', remedy: 'gated remedy' })),
+      waiting: slugs.filter((slug) => has(slug, 'waiting')).map((slug) => ({ slug, verdict: { kind: 'blocked' as const, blockers: [{ repo: 'owner/repo', number: '1' }] } })),
+      eligible: slugs.filter((slug) => has(slug, 'eligible')).map((slug) => ({ slug })),
+    };
+    const expected = (slug: string) => state.parked?.some((entry) => (typeof entry === 'string' ? entry : entry.slug) === slug) ? 'PARKED'
+      : state.halted.some((entry) => entry.slug === slug) ? 'HALTED'
+        : state.inProgress.some((entry) => entry.slug === slug) ? 'IN-PROGRESS'
+          : state.retainedWorktrees?.some((entry) => entry.slug === slug) ? 'RETAINED WORKTREES'
+            : state.processed.some((entry) => entry.slug === slug) ? 'PROCESSED'
+              : state.blocked?.some((entry) => entry.slug === slug) ? 'BLOCKED'
+                : state.gated?.some((entry) => entry.kind === 'spec' && entry.slug === slug) ? 'GATED'
+                  : state.waiting?.some((entry) => entry.slug === slug) ? 'WAITING' : 'ELIGIBLE';
+    const full = renderDashboard(state, { mode: 'full', includeCompleted: true });
+    const compact = renderDashboard(state, { mode: 'compact', rowBudget: 120 });
+    for (const slug of slugs) {
+      expect(full.match(new RegExp(`\\b${slug}\\b`, 'g'))).toHaveLength(1);
+      const winner = expected(slug);
+      const groupStart = full.indexOf(`${winner} (`);
+      const nextGroup = full.slice(groupStart + 1).search(/\n(?:HALTED|BLOCKED|GATED|IN-PROGRESS|WAITING|ELIGIBLE|PARKED|RETAINED WORKTREES|NEVER-STARTED|PROCESSED) \(/);
+      expect(full.slice(groupStart, nextGroup < 0 ? undefined : groupStart + 1 + nextGroup)).toContain(slug);
+      expect(compact.match(new RegExp(`\\b${slug}\\b`, 'g'))?.length ?? 0).toBeLessThanOrEqual(1);
+      if (!['PARKED', 'RETAINED WORKTREES', 'PROCESSED'].includes(winner)) expect(compact).toContain(slug);
+    }
+    for (const group of ['PARKED', 'RETAINED WORKTREES', 'PROCESSED']) {
+      expect(compact).toContain(`${group} (${slugs.filter((slug) => expected(slug) === group).length})`);
+    }
   });
 });
 
@@ -654,6 +799,67 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     );
   });
 
+  it('copies blocked discovery entries into the inherited state', async () => {
+    const blocked: BlockedSpecItem = {
+      slug: 'stories-pending',
+      reason: 'stories-not-approved',
+      remedy: 'approve the stories',
+    };
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => ({ items: [], waiting: [], blocked: [blocked], gated: [] }),
+    });
+
+    expect(state.blocked).toEqual([blocked]);
+  });
+
+  it('renders blocked slugs ahead of eligible and gated slugs', () => {
+    const blocked: BlockedSpecItem[] = [
+      { slug: 'blocked-eligible', reason: 'stories-not-approved', remedy: 'approve stories' },
+      { slug: 'blocked-gated', reason: 'stories-not-approved', remedy: 'approve stories' },
+    ];
+    const state = {
+      halted: [],
+      inProgress: [],
+      eligible: [{ slug: 'blocked-eligible' }],
+      processed: [],
+      processedCount: 0,
+      blocked,
+      gated: [{
+        kind: 'spec' as const,
+        slug: 'blocked-gated',
+        reason: 'other-owner' as const,
+        remedy: 'ask the owner',
+      }],
+    } as InheritedState & { blocked: BlockedSpecItem[] };
+
+    const output = renderDashboard(state);
+
+    for (const line of ['BLOCKED (2)', '  • blocked-eligible — stories-not-approved — approve stories', '  • blocked-gated — stories-not-approved — approve stories', 'GATED (0)', 'ELIGIBLE (0)']) expect(output).toContain(line);
+  });
+
+  it('keeps blocked slugs in higher-precedence halted and parked sections', () => {
+    const blocked: BlockedSpecItem[] = [
+      { slug: 'blocked-halted', reason: 'stories-not-approved', remedy: 'approve stories' },
+      { slug: 'blocked-parked', reason: 'stories-not-approved', remedy: 'approve stories' },
+    ];
+    const state = {
+      halted: [{ slug: 'blocked-halted', reason: 'needs operator' }],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      blocked,
+      parked: ['blocked-parked'],
+    } as InheritedState & { blocked: BlockedSpecItem[] };
+
+    const output = renderDashboard(state);
+
+    for (const line of ['PARKED (1)', '  • blocked-parked — operator-parked; remedy: run conduct daemon unpark for this row', 'HALTED (1)', "  • blocked-halted — reason: needs operator; remedy: clear this row's .pipeline/HALT to resume"]) expect(output).toContain(line);
+  });
+
   it('eligible carries the backlog tier; processed carries the persisted PR url', async () => {
     await makeProcessedJson('shipped-pr', 'https://github.com/o/r/pull/3');
     await makeProcessed('shipped-legacy'); // legacy plain-text ledger → no PR
@@ -865,7 +1071,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       ...state,
       parked: (await isOperatorParked(root, slug)) ? [slug] : [],
     });
-    const lowerPrecedenceSections = out.slice(out.indexOf('HALTED'));
+    const lowerPrecedenceSections = out.slice(out.indexOf('HALTED'), out.indexOf('PARKED'));
 
     expect(state.neverStarted).toEqual([slug]);
     expect(state.retainedWorktrees).toEqual([]);
@@ -884,7 +1090,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       discover: async () => [item(slug)],
     });
     const out = renderDashboard(state);
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PARKED'));
 
     expect(out).toContain('HALTED (1)\n  • never-started-halted — reason: needs operator');
     expect(eligibleSection).not.toContain(slug);
@@ -1005,7 +1211,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       prStateProbe: async (queriedPrUrl) => ({ prUrl: queriedPrUrl, state: 'open' }),
     });
     const out = renderDashboard(state);
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PARKED'));
 
     expect(state.retainedWorktrees).toEqual([
       { slug, reason: 'pr-open-awaiting-main', prUrl },
@@ -1031,7 +1237,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       },
     });
     const out = renderDashboard(state);
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PARKED'));
 
     expect(state.retainedWorktrees).toEqual([
       { slug, reason: 'pr-state-unknown', prUrl },
@@ -1090,6 +1296,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
+  // Covers: task:rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451
   it('renders an unparked halted slug with its reason and clear-to-resume remedy', () => {
     const out = renderDashboard({
       halted: [{ slug: 'held-by-halt', reason: 'needs human DECIDE' }],
@@ -1102,13 +1309,15 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
 
     expect(out).toBe([
       '── inherited state ──────────────────────────────────────────',
-      'PARKED (0)',
+      'NEEDS YOU: 1 halted',
       'HALTED (1)',
       "  • held-by-halt — reason: needs human DECIDE; remedy: clear this row's .pipeline/HALT to resume",
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
-      '─────────────────────────────────────────────────────────────',
+      'PARKED (0)',
+      '─'.repeat(61),
     ].join('\n'));
+    expect(out.split('\n').at(-1)).toBe('─'.repeat(61));
   });
 
   it('renders a parked halted slug only in PARKED without increasing HALTED', () => {
@@ -1123,12 +1332,13 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
 
     expect(out).toBe([
       '── inherited state ──────────────────────────────────────────',
-      'PARKED (1)',
-      '  • held-by-halt — operator-parked; remedy: run conduct daemon unpark for this row',
+      'NEEDS YOU: nothing',
       'HALTED (0)',
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
-      '─────────────────────────────────────────────────────────────',
+      'PARKED (1)',
+      '  • held-by-halt — operator-parked; remedy: run conduct daemon unpark for this row',
+      '─'.repeat(61),
     ].join('\n'));
   });
 
@@ -1189,11 +1399,12 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
 
     expect(out).toBe([
       '── inherited state ──────────────────────────────────────────',
-      'PARKED (0)',
+      'NEEDS YOU: nothing',
       'HALTED (0)',
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
-      '─────────────────────────────────────────────────────────────',
+      'PARKED (0)',
+      '─'.repeat(61),
     ].join('\n'));
   });
 

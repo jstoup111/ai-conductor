@@ -20,13 +20,20 @@ async function sourceFiles(directory: string): Promise<string[]> {
 function protectedRoutingRefWrites(source: string, fileName = 'fixture.ts'): string[] {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const writes: string[] = [];
-  const updatesRef = source.includes('routeRecordRefFor(') || source.includes('repairMarkerRefFor(');
   const isUpdateRefCall = (node: ts.CallExpression): boolean => node.arguments.some((argument) => ts.isArrayLiteralExpression(argument)
     && argument.elements.some((element) => ts.isStringLiteral(element) && (element.text === 'update-ref' || element.text === 'symbolic-ref')));
+  const enclosingFunctionText = (node: ts.Node): string => {
+    let current: ts.Node | undefined = node;
+    while (current !== undefined && !ts.isFunctionLike(current)) current = current.parent;
+    return (current ?? node).getText(file);
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && isUpdateRefCall(node)) {
       const text = node.getText(file);
-      if (updatesRef || /refs\/conductor\/[^'"`]+\/(?:routes\/|repairing\b)/.exec(text)) writes.push(text);
+      const functionText = enclosingFunctionText(node);
+      if (functionText.includes('routeRecordRefFor(')
+        || functionText.includes('repairMarkerRefFor(')
+        || /refs\/conductor\/[^'"`]+\/(?:routes\/|repairing\b)/.exec(text)) writes.push(text);
     }
     ts.forEachChild(node, visit);
   };
@@ -38,6 +45,15 @@ describe('routing ref writer fence', () => {
   it('rejects a fixture source file that writes a route record or repairing marker directly', () => {
     const source = "await git(['update-ref', 'refs/conductor/demo/routes/r1', next]);\nawait git(['update-ref', 'refs/conductor/demo/repairing', next]);";
     expect(protectedRoutingRefWrites(source, 'fixture-direct-routing-write.ts')).toHaveLength(2);
+  });
+
+  it('rejects a helper-derived routing write but allows an unrelated transaction', () => {
+    const source = [
+      "async function direct() { await git(['update-ref', routeRecordRefFor('demo', 'r1'), next]); }",
+      'const applied = await restackTransactionBuilder.appliedTransactionLines(worktree, journal, git);',
+      "await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));",
+    ].join('\n');
+    expect(protectedRoutingRefWrites(source, 'fixture-helper-derived-routing-write.ts')).toHaveLength(1);
   });
 
   it('allows the bounded teardown deletion through routingTeardownRefNames', async () => {

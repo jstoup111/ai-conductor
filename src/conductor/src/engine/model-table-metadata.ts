@@ -49,7 +49,6 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   architecture_review:
     'Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy.',
   worktree: 'Git operations — mechanical branch/worktree management.',
-  coverage_binding: 'Engine-native no-op gate; records plan slice topology for stacked delivery and dispatches no model.',
   acceptance_specs: 'Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work.',
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
@@ -99,6 +98,7 @@ export const SKILL_STEP_MAP: Record<string, StepName> = {
 // numbered engine step), so there is no autonomous Claude policy entry to
 // compare the pin against.
 export const PIN_EXEMPT_SKILLS: readonly string[] = [
+  'coverage-binding', // plan §7a coverage-judge policy has no engine step
   'code-review', // dispatches an evaluator agent directly; not an engine step
   'composer', // interactive idea→spec authoring loop; orchestrates DECIDE skills, not an engine step
   'debugging', // standalone investigation skill; not an engine step

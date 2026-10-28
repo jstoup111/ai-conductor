@@ -7,14 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { repairMarkerRefFor } from '../../src/engine/routing/routing-refs.js';
 import { withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 const sourceIndex = fileURLToPath(new URL('../../src/index.ts', import.meta.url));
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -81,14 +81,7 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
   await git(root, ['add', '.gitignore', '.ai-conductor/config.yml']);
   await git(root, ['commit', '-qm', 'base']);
-  await git(root, ['checkout', '-qb', 'feat/c1/demo']);
-  await writeFile(join(root, 'child.txt'), 'child\n');
-  await git(root, ['add', 'child.txt']);
-  await git(root, ['commit', '-qm', 'child']);
-  await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
-  await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
-  await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1,
     slug: 'demo',
     runId: 'round-stamp',
@@ -97,6 +90,13 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
+  await git(root, ['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'child.txt'), 'child\n');
+  await git(root, ['add', 'child.txt']);
+  await git(root, ['commit', '-qm', 'child']);
+  await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
+  await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
+  await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
   await git(root, ['checkout', '-q', 'feat/c1/demo']);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'current-task'), 'T1\n');

@@ -70,7 +70,6 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // those documents changes (plan/coherence/stories/specs/cited ADRs).  An
   // upstream runtime edit overlapping a feature file is build_review's and
   // test_suite's concern; reopening these on it fired on nearly every rebase.
-  coverage_binding: 'feature-coverage-inputs',
   // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
   // completeness), so only the feature's own code or tests can change the
   // grade — a foreign main-side delta leaves that diff, and therefore the
@@ -89,7 +88,7 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // intent context; only those declared documents reopen it.
   prd_audit: 'feature-prd-inputs',
   // The as-built review is bound to the same document inputs as
-  // coverage_binding (plans, coherence, stories, specs, cited ADRs).
+  // architecture_review_as_built (plans, coherence, stories, specs, cited ADRs).
   architecture_review_as_built: 'feature-coverage-inputs',
 };
 
@@ -109,7 +108,7 @@ export interface DeltaPartition {
   foreignSrc: string[];
 }
 
-export function partitionDelta(D: string[], F: string[]): DeltaPartition {
+export function partitionDelta(D: readonly string[], F: readonly string[]): DeltaPartition {
   const featureSet = new Set(F);
   const result: DeltaPartition = { test: [], featureSrc: [], foreignSrc: [] };
 
@@ -140,7 +139,7 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
  * distinction, so it is computed alongside rather than by widening — and
  * kept out of `DeltaPartition` so that invariant is untouched.
  */
-export function featureTestPaths(D: string[], F: string[]): string[] {
+export function featureTestPaths(D: readonly string[], F: readonly string[]): string[] {
   const featureSet = new Set(F);
   return D.filter((path) => isTestPath(path) && featureSet.has(path));
 }
@@ -182,8 +181,8 @@ export interface ReplayGateInvalidation {
  * dependency surface, making a new kind a type error until it is explicit.
  */
 export function projectGateSurfaces(
-  D: string[],
-  F: string[],
+  D: readonly string[],
+  F: readonly string[],
   documentInputs?: readonly string[],
 ): Record<GateSurfaceKind, GateSurfaceProjection> {
   const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
@@ -245,8 +244,7 @@ export function projectGateSurfaces(
  * Per gate surface kind (see `GATE_SURFACE`):
  * - 'feature-prd-inputs' (prd_audit): preserved iff no declared
  *   stories/spec/PRD input changed.
- * - 'feature-coverage-inputs' (coverage_binding,
- *   architecture_review_as_built): preserved iff no declared plan,
+ * - 'feature-coverage-inputs' (architecture_review_as_built): preserved iff no declared plan,
  *   coherence, stories, spec or cited-ADR input changed.
  * - 'feature-codetest' (build_review): preserved iff `featureSrc` AND the
  *   feature's own test paths are both empty — a foreign-only delta (runtime
@@ -260,8 +258,8 @@ export function projectGateSurfaces(
  *   re-running is cheap.
  */
 export function classifyGateInvalidation(
-  D: string[],
-  F: string[],
+  D: readonly string[],
+  F: readonly string[],
   ranManualTest: boolean,
   documentInputs?: readonly string[],
 ): { preserved: string[]; invalidated: string[] } {
@@ -300,8 +298,8 @@ function isFeatureScopedReview(surface: GateSurfaceKind): boolean {
  * path-based conservative result.
  */
 export function classifyReplayGateInvalidation(
-  D: string[],
-  F: string[],
+  D: readonly string[],
+  F: readonly string[],
   ranManualTest: boolean,
   replay: ReplayComparison,
   documentInputs?: readonly string[],

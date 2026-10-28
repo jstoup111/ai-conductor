@@ -91,7 +91,7 @@ changed code it is about, so that malformed or unanchored judgements never fail 
 
 ### Done When
 
-- [ ] `BUILD_REVIEW_FINDING_VOCABULARIES` has an `implementationQuality` entry equal to the seven-kind set, and its judged-v3 schema admits only those kinds.
+- [ ] `BUILD_REVIEW_FINDING_VOCABULARIES` has an `implementationQuality` entry equal to the seven-kind set, and its current judged schema admits only those kinds.
 - [ ] Validation fixtures cover the accepted FAIL, accepted PASS, out-of-vocabulary kind, unmatched anchor, line-number anchor, forbidden evidence field, and exhausted repair turn cases, each with the stated outcome.
 - [ ] Two fixtures that differ only in summary wording produce equal finding identities.
 

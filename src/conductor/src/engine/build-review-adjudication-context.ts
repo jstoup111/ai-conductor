@@ -15,6 +15,7 @@ export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxCurrentSources: 512,
   maxPolicyCriteria: 64,
   maxAdmittedTaskContracts: 128,
+  maxPlanIndexEntries: 1_024,
   maxPriorCases: 128,
   maxSourcesPerCase: 512,
   maxEvidenceLocations: 64,
@@ -22,6 +23,25 @@ export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxTextBytes: 8_000,
   maxSerializedBytes: 256 * 1024,
 });
+
+const MAX_PRIOR_SOURCE_DIGESTS_PER_CASE = 4;
+const MAX_PRIOR_SOURCE_DIGEST_BYTES = 64 * 1024;
+const MAX_PRIOR_SOURCE_DIGEST_SUMMARY_BYTES = 1_000;
+const MAX_PRIOR_SOURCE_DIGEST_EVIDENCE_LOCATIONS = 8;
+
+/** Bounded finding detail recovered from the branch artifact that raised a source. */
+export interface BuildReviewAdjudicationPriorFindingDigest {
+  readonly rubric: string;
+  readonly concernKind: string;
+  readonly summary: string;
+  readonly evidenceLocations: readonly string[];
+  readonly lapId: string;
+}
+
+export interface BuildReviewAdjudicationPriorSource extends RemediationCaseSourceLink {
+  /** Optional because a historical branch artifact may have been lost or be unreadable. */
+  readonly finding?: BuildReviewAdjudicationPriorFindingDigest;
+}
 
 export interface BuildReviewAdjudicationCurrentSource extends BuildReviewRawSourceProjection {
   readonly sourceId: string;
@@ -34,7 +54,7 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly rationale: string;
   readonly confidence: RemediationCaseRecord['confidence'];
   readonly resolution: RemediationCaseRecord['resolution'];
-  readonly sources: readonly RemediationCaseSourceLink[];
+  readonly sources: readonly BuildReviewAdjudicationPriorSource[];
   readonly effect: RemediationCaseEffect;
   /** Engine-projected evidence that this prior case may carry a later binding. */
   readonly operatorAccepted?: {
@@ -46,6 +66,12 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly escalation?: RemediationCaseRecord['escalation'];
   /** The blocked consistency verdict a persisted `escalate` stop retains. */
   readonly consistencyStop?: RemediationCaseRecord['consistencyStop'];
+  /** The lower severity recorded by a persisted non-blocking advisory case. */
+  readonly adjudicatedSeverity?: RemediationCaseRecord['adjudicatedSeverity'];
+  /** Prior cases that establish this case as a recurrence. */
+  readonly recurrenceOf?: readonly string[];
+  /** Prior cases retained as distinct from this case. */
+  readonly distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -55,11 +81,19 @@ export interface BuildReviewAdjudicationPlanContract {
   readonly pointers: readonly string[];
   /** Every active plan task's complete body, available for repair admission. */
   readonly admittedTaskContracts?: readonly BuildReviewAdjudicationTaskContract[];
+  /** Every active plan task without its full body. */
+  readonly index?: readonly BuildReviewAdjudicationPlanIndexEntry[];
 }
 
 export interface BuildReviewAdjudicationTaskContract {
   readonly id: string;
   readonly contract: string;
+}
+
+export interface BuildReviewAdjudicationPlanIndexEntry {
+  readonly id: string;
+  readonly title: string;
+  readonly dependencies: readonly string[];
 }
 
 /** Engine-supplied task-status evidence for the active plan. */
@@ -68,7 +102,7 @@ export interface BuildReviewAdjudicationTaskStatus {
   readonly tasks: readonly { readonly id: string; readonly status: string }[];
 }
 
-const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]), admittedTaskContracts: Object.freeze([]) });
+const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]), admittedTaskContracts: Object.freeze([]), index: Object.freeze([]) });
 const ABSENT_TASK_STATUS: BuildReviewAdjudicationTaskStatus = Object.freeze({ path: null, tasks: Object.freeze([]) });
 
 /** The approved lifecycle boundaries that a policy finding cannot reclaim. */
@@ -111,12 +145,17 @@ export interface BuildReviewAdjudicationContext {
   /** Engine-stamped owners that policy findings may not supersede. */
   readonly lifecycleOwners: typeof RESERVED_LIFECYCLE_OWNERS;
   readonly priorCases: readonly BuildReviewAdjudicationPriorCase[];
+  /** Digests omitted solely to preserve the serialized-context ceiling. */
+  readonly priorDigestsOmitted: number;
   readonly planContract: BuildReviewAdjudicationPlanContract;
   readonly taskStatus: BuildReviewAdjudicationTaskStatus;
   /** Prior effect state plus durable BUILD-attempt evidence, one line per case. */
   readonly effectPointers: readonly string[];
   /** Non-blocking suppression history; it is intentionally not a source set. */
   readonly suppressionHistory: readonly RemediationCaseSuppressionEntry[];
+  /** Per-rubric thresholds are engine facts that bound an advisory downgrade. */
+  readonly declaredSeverityThresholds: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  readonly admittedDispositions: readonly RemediationCaseDisposition[];
 }
 
 export interface AssembleBuildReviewAdjudicationContextInput {
@@ -133,12 +172,19 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   /** Durable work-order attempt evidence; renders into `effectPointers`. */
   readonly attemptedCaseIds?: readonly string[];
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
+  readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  /**
+   * Branch-artifact findings keyed by the persisted `<rubric>:<findingId>`
+   * source identity. The async artifact reader belongs to the coordinator;
+   * this pure context boundary owns projection and byte accounting.
+   */
+  readonly priorFindingDigests?: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest>;
 }
 
 export type BuildReviewAdjudicationContextStop =
   | { readonly code: 'invalid-aggregate' }
   | { readonly code: 'missing-scope-evidence'; readonly subject: 'policy-context' | 'admitted-task-contracts' | 'task-status' }
-  | { readonly code: 'field-overflow'; readonly subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract'; readonly field: string; readonly limit: number; readonly actual: number; readonly caseId?: string }
+  | { readonly code: 'field-overflow'; readonly subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract' | 'plan-index'; readonly field: string; readonly limit: number; readonly actual: number; readonly caseId?: string }
   | { readonly code: 'unrepresentable-prior-case'; readonly caseId: string; readonly field: string }
   | { readonly code: 'serialized-byte-overflow'; readonly limit: number; readonly actual: number };
 
@@ -150,10 +196,10 @@ const LIMITS = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
 // Keyed by the store's own vocabularies: a value the store learns to persist
 // fails to compile here until this boundary represents it too.
 const OUTCOMES: Readonly<Record<RemediationCaseSourceOutcome, true>> = Object.freeze({
-  acted: true, deferred: true, rejected: true, refuted: true, merged: true, escalate: true, carried: true,
+  acted: true, deferred: true, rejected: true, refuted: true, advisory: true, merged: true, escalate: true, carried: true,
 });
 const DISPOSITIONS: Readonly<Record<RemediationCaseDisposition, true>> = Object.freeze({
-  act: true, defer: true, reject: true, refute: true, escalate: true,
+  act: true, defer: true, reject: true, refute: true, advisory: true, escalate: true,
 });
 const ESCALATION_OWNERS: Readonly<Record<RemediationCaseEscalationOwner, true>> = Object.freeze({
   product: true, plan: true, architecture: true,
@@ -166,7 +212,7 @@ function bytes(value: string): number {
 function boundedString(
   value: unknown,
   max: number,
-  subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract',
+  subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract' | 'plan-index',
   field: string,
   caseId?: string,
 ): BuildReviewAdjudicationContextStop | undefined {
@@ -284,6 +330,25 @@ function validateAdmissionScope(
   return undefined;
 }
 
+function validatePlanIndex(planContract: BuildReviewAdjudicationPlanContract): BuildReviewAdjudicationContextStop | undefined {
+  const index = planContract.path === null ? [] : planContract.index ?? [];
+  if (index.length > LIMITS.maxPlanIndexEntries) {
+    return { code: 'field-overflow', subject: 'plan-index', field: 'index', limit: LIMITS.maxPlanIndexEntries, actual: index.length };
+  }
+  for (const entry of index) {
+    const id = boundedString(entry?.id, LIMITS.maxReferenceBytes, 'plan-index', 'id');
+    if (id) return id;
+    const title = boundedString(entry?.title, LIMITS.maxTextBytes, 'plan-index', 'title');
+    if (title) return title;
+    if (!Array.isArray(entry?.dependencies)) return { code: 'invalid-aggregate' };
+    for (const dependency of entry.dependencies) {
+      const dependencyStop = boundedString(dependency, LIMITS.maxReferenceBytes, 'plan-index', 'dependencies[]');
+      if (dependencyStop) return dependencyStop;
+    }
+  }
+  return undefined;
+}
+
 function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdjudicationContextStop | undefined {
   const fields: readonly [string, unknown, number][] = [
     ['rubric', source.rubric, LIMITS.maxReferenceBytes],
@@ -308,7 +373,7 @@ function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdj
 
 function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
   const effect = caseRecord.effect;
-  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
+  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'advisory' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
     return effect.kind === 'none' ? undefined : { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'effect' };
   }
   const expectedKind = caseRecord.disposition === 'act' ? 'action' : 'deferral';
@@ -358,6 +423,10 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
     !['high', 'medium', 'low'].includes(caseRecord.confidence) || !['open', 'resolved'].includes(caseRecord.resolution)) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'case' };
   }
+  if (caseRecord.disposition === 'advisory' &&
+    !['critical', 'major', 'minor', 'nit'].includes(caseRecord.adjudicatedSeverity ?? '')) {
+    return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'adjudicatedSeverity' };
+  }
   if (!Array.isArray(caseRecord.sources) || caseRecord.sources.length === 0 || caseRecord.sources.length > LIMITS.maxSourcesPerCase) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'sources' };
   }
@@ -395,13 +464,60 @@ function effectPointerFor(caseRecord: RemediationCaseRecord, attempted: Readonly
   return `case ${caseRecord.id}: ${effect.kind} effect ${effect.id} ${effect.status}${reference}${attempt}`;
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  let length = 0;
+  let result = '';
+  for (const character of value) {
+    const characterBytes = bytes(character);
+    if (length + characterBytes > maxBytes) break;
+    result += character;
+    length += characterBytes;
+  }
+  return result;
+}
+
+function freezePriorFindingDigest(
+  digest: BuildReviewAdjudicationPriorFindingDigest | undefined,
+): BuildReviewAdjudicationPriorFindingDigest | undefined {
+  if (digest === undefined ||
+    typeof digest.rubric !== 'string' || digest.rubric.length === 0 || bytes(digest.rubric) > LIMITS.maxReferenceBytes ||
+    typeof digest.concernKind !== 'string' || digest.concernKind.length === 0 || bytes(digest.concernKind) > LIMITS.maxReferenceBytes ||
+    typeof digest.summary !== 'string' || digest.summary.length === 0 ||
+    typeof digest.lapId !== 'string' || digest.lapId.length === 0 || bytes(digest.lapId) > LIMITS.maxReferenceBytes ||
+    !Array.isArray(digest.evidenceLocations)) return undefined;
+  const evidenceLocations = digest.evidenceLocations
+    .filter((location): location is string => typeof location === 'string' && location.length > 0 && bytes(location) <= LIMITS.maxReferenceBytes)
+    .slice(0, MAX_PRIOR_SOURCE_DIGEST_EVIDENCE_LOCATIONS);
+  return Object.freeze({
+    rubric: digest.rubric,
+    concernKind: digest.concernKind,
+    summary: truncateUtf8(digest.summary, MAX_PRIOR_SOURCE_DIGEST_SUMMARY_BYTES),
+    evidenceLocations: Object.freeze(evidenceLocations),
+    lapId: digest.lapId,
+  });
+}
+
+function priorDigestKey(caseId: string, sourceId: string): string {
+  return `${caseId}\u0000${sourceId}`;
+}
+
+function comparePriorSources(left: RemediationCaseSourceLink, right: RemediationCaseSourceLink): number {
+  return Date.parse(left.recordedAt) - Date.parse(right.recordedAt) ||
+    left.sourceId.localeCompare(right.sourceId);
+}
+
 function freezePriorCase(
   caseRecord: RemediationCaseRecord,
   carryInput: RemediationCaseCarryInput | undefined,
+  includedDigestKeys: ReadonlySet<string>,
+  priorFindingDigests: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest> | undefined,
 ): BuildReviewAdjudicationPriorCase {
-  const sources = [...caseRecord.sources].sort((left, right) =>
-    `${left.recordedAt}\u0000${left.sourceId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}`),
-  ).map((source) => Object.freeze({ ...source }));
+  const sources = [...caseRecord.sources].sort(comparePriorSources).map((source) => {
+    const digest = includedDigestKeys.has(priorDigestKey(caseRecord.id, source.sourceId))
+      ? freezePriorFindingDigest(priorFindingDigests?.get(source.sourceId))
+      : undefined;
+    return Object.freeze({ ...source, ...(digest === undefined ? {} : { finding: digest }) });
+  });
   const origins = caseRecord.operatorAcceptance?.origins ?? [];
   const operatorAccepted = carryInput !== undefined && isCarryEligibleRemediationCase(caseRecord, carryInput)
     ? Object.freeze({
@@ -426,6 +542,11 @@ function freezePriorCase(
         sourceIds: Object.freeze([...caseRecord.consistencyStop.sourceIds]),
         rationale: caseRecord.consistencyStop.rationale,
       }),
+    }),
+    ...(caseRecord.disposition === 'advisory' ? { adjudicatedSeverity: caseRecord.adjudicatedSeverity! } : {}),
+    ...(caseRecord.recurrenceOf === undefined ? {} : { recurrenceOf: Object.freeze([...caseRecord.recurrenceOf]) }),
+    ...(caseRecord.distinctFrom === undefined ? {} : {
+      distinctFrom: Object.freeze(caseRecord.distinctFrom.map((relationship) => Object.freeze({ ...relationship }))),
     }),
   });
 }
@@ -500,35 +621,46 @@ export function assembleBuildReviewAdjudicationContext(
     return { ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'priorCases', limit: LIMITS.maxPriorCases, actual: input.priorCases.length } };
   }
   const caseIds = new Set<string>();
-  const priorCases: BuildReviewAdjudicationPriorCase[] = [];
   for (const caseRecord of input.priorCases) {
     const stop = validatePriorCase(caseRecord);
     if (stop) return { ok: false, stop };
     if (caseIds.has(caseRecord.id)) return { ok: false, stop: { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'duplicate-id' } };
     caseIds.add(caseRecord.id);
-    priorCases.push(freezePriorCase(caseRecord, input.carryInput));
   }
-  priorCases.sort((left, right) => left.id.localeCompare(right.id));
 
   const attempted = new Set(input.attemptedCaseIds ?? []);
   const planContract = input.planContract ?? ABSENT_PLAN_CONTRACT;
   const taskStatus = input.taskStatus ?? ABSENT_TASK_STATUS;
   const scopeStop = validateAdmissionScope(policyContext, planContract, taskStatus);
   if (scopeStop) return { ok: false, stop: scopeStop };
+  const indexStop = validatePlanIndex(planContract);
+  if (indexStop) return { ok: false, stop: indexStop };
   const mode = policyContext.some((policy) =>
     isCustomPolicyContext(policy) || policy.rubric === 'implementationQuality',
   ) ? 'case-v2' as const : 'case-v1' as const;
-  const context: BuildReviewAdjudicationContext = Object.freeze({
+  const freezePriorCases = (includedDigestKeys: ReadonlySet<string>): readonly BuildReviewAdjudicationPriorCase[] =>
+    Object.freeze(input.priorCases
+      .map((caseRecord) => freezePriorCase(caseRecord, input.carryInput, includedDigestKeys, input.priorFindingDigests))
+      .sort((left, right) => left.id.localeCompare(right.id)));
+  const contextFor = (
+    priorCases: readonly BuildReviewAdjudicationPriorCase[],
+    priorDigestsOmitted: number,
+  ): BuildReviewAdjudicationContext => Object.freeze({
     version: 'v1', mode, domain: 'build_review',
     lapId: input.aggregate.lapId, snapshotDigest: input.aggregate.snapshotDigest,
     currentFindings: Object.freeze(currentFindings),
     policyContext: Object.freeze(policyContext),
     lifecycleOwners: RESERVED_LIFECYCLE_OWNERS,
-    priorCases: Object.freeze(priorCases),
+    priorCases,
+    priorDigestsOmitted,
     planContract: Object.freeze({
       path: planContract.path,
       pointers: Object.freeze([...planContract.pointers]),
-      admittedTaskContracts: Object.freeze([...(planContract.admittedTaskContracts ?? [])].map((task) => Object.freeze({ ...task }))),
+      admittedTaskContracts: Object.freeze(planContract.path === null ? [] : [...(planContract.admittedTaskContracts ?? [])].map((task) => Object.freeze({ ...task }))),
+      index: Object.freeze(planContract.path === null ? [] : [...(planContract.index ?? [])].map((entry) => Object.freeze({
+        ...entry,
+        dependencies: Object.freeze([...entry.dependencies]),
+      }))),
     }),
     taskStatus: Object.freeze({
       path: taskStatus.path,
@@ -542,7 +674,37 @@ export function assembleBuildReviewAdjudicationContext(
     suppressionHistory: Object.freeze([...(input.suppressions ?? [])]
       .sort((left, right) => left.findingId.localeCompare(right.findingId))
       .map((entry) => Object.freeze({ ...entry }))),
+    declaredSeverityThresholds: Object.freeze({ ...(input.declaredSeverityThresholds ?? {}) }),
+    admittedDispositions: Object.freeze<RemediationCaseDisposition[]>([
+      'act', 'defer', 'reject', 'refute', ...(Object.values(input.declaredSeverityThresholds ?? {}).some((threshold) => threshold !== 'nit') ? ['advisory' as const] : []),
+      ...(mode === 'case-v2' ? ['escalate' as const] : []),
+    ]),
   });
+  const digestCandidates = input.priorCases.flatMap((caseRecord) => [...caseRecord.sources]
+    .sort(comparePriorSources)
+    .slice(-MAX_PRIOR_SOURCE_DIGESTS_PER_CASE)
+    .flatMap((source) => freezePriorFindingDigest(input.priorFindingDigests?.get(source.sourceId)) === undefined
+      ? []
+      : [{ key: priorDigestKey(caseRecord.id, source.sourceId), recordedAt: source.recordedAt, sourceId: source.sourceId, caseId: caseRecord.id }]))
+    .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) ||
+      left.sourceId.localeCompare(right.sourceId) || left.caseId.localeCompare(right.caseId));
+  // Account for the widest omission counter before admitting a byte of a
+  // digest. Otherwise removing the final digest can itself add digits to the
+  // counter and overflow a context that looked as though it had headroom.
+  const base = contextFor(freezePriorCases(new Set()), digestCandidates.length);
+  const baseBytes = bytes(JSON.stringify(base));
+  if (baseBytes > LIMITS.maxSerializedBytes) {
+    return { ok: false, stop: { code: 'serialized-byte-overflow', limit: LIMITS.maxSerializedBytes, actual: baseBytes } };
+  }
+  const digestBudget = Math.min(MAX_PRIOR_SOURCE_DIGEST_BYTES, LIMITS.maxSerializedBytes - baseBytes);
+  const includedDigestKeys = new Set(digestCandidates.map((candidate) => candidate.key));
+  let priorDigestsOmitted = 0;
+  let context = contextFor(freezePriorCases(includedDigestKeys), priorDigestsOmitted);
+  while (bytes(JSON.stringify(context)) - baseBytes > digestBudget && digestCandidates.length > priorDigestsOmitted) {
+    includedDigestKeys.delete(digestCandidates[priorDigestsOmitted]!.key);
+    priorDigestsOmitted += 1;
+    context = contextFor(freezePriorCases(includedDigestKeys), priorDigestsOmitted);
+  }
   const actual = bytes(JSON.stringify(context));
   if (actual > LIMITS.maxSerializedBytes) {
     return { ok: false, stop: { code: 'serialized-byte-overflow', limit: LIMITS.maxSerializedBytes, actual } };

@@ -55,6 +55,7 @@ function fakeEnvironment(): PiEnvironment {
       error.code = 'ENOENT';
       throw error;
     },
+    access: async () => {},
     env: { PATH: inheritedPath },
     homeDir: () => '/home/agent',
     cwd: () => '/prepared',

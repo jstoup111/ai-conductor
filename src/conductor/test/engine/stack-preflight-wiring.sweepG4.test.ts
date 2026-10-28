@@ -10,7 +10,7 @@
 // the restack phases are pass-through spies that record their order.
 import { execFile as execFileCallback } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -122,7 +122,7 @@ vi.mock('../../src/engine/halt-record.js', async (importOriginal) => {
 });
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { clearMarker, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { __resetResolveCacheForTests, writeOperatorPark } from '../../src/engine/park-marker.js';
@@ -133,7 +133,7 @@ import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -192,8 +192,8 @@ async function daemonStack() {
   await git('worktree', 'add', '-q', worktree, 'feat/daemon-demo');
   cwd = worktree;
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
-  await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
+  await writeSliceTopologyFixture(worktree, {
     version: 1, slug: 'demo', runId: 'dispatch', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -244,13 +244,13 @@ async function bootDaemon(project: string) {
     log: (message: string) => void,
   ) => Promise<unknown>;
   return {
-    dispatch: (subject: Stack, events: ConductorEventEmitter) =>
+    dispatch: (subject: Stack, events: ConductorEventEmitter, log: (message: string) => void = () => {}) =>
       (runnerDeps.runConductor as RunConductor)(
         { path: subject.worktree, branch: 'feat/daemon-demo' },
         { slug: 'demo' },
         undefined,
         events,
-        () => {},
+        log,
       ),
     consumeResumeAuthorizations: daemonDeps.consumeResumeAuthorizations as () => Promise<void>,
   };
@@ -265,6 +265,58 @@ function recordEvents(events: ConductorEventEmitter, types: readonly ConductorEv
 const RESTACK_EVENTS: readonly ConductorEvent['type'][] = ['restack_planned', 'restack_applied', 'restack_refused', 'restack_recovered'];
 
 describe('stack preflight through the real daemon dispatch', () => {
+  // Covers: task:9
+  type CursorCause = 'positions-changed' | 'positions-ref-unreadable' | 'plan-missing' | 'plan-invalid' | 'detached-head' | 'git-error';
+  const unresolvableCursorCases: readonly [CursorCause, (subject: Stack) => Promise<void>][] = [
+    ['positions-changed', async (subject) => {
+      const path = join(subject.worktree, '.docs', 'plans', 'demo.md');
+      await writeFile(path, (await readFile(path, 'utf8')).replace('| 3 | leaf | c |', '| 4 | leaf | c |'));
+    }],
+    ['positions-ref-unreadable', async (subject) => {
+      await subject.git('update-ref', '-d', 'refs/conductor/demo/positions');
+    }],
+    ['plan-missing', async (subject) => {
+      await unlink(join(subject.worktree, '.docs', 'plans', 'demo.md'));
+    }],
+    ['plan-invalid', async (subject) => {
+      await writeFile(join(subject.worktree, '.docs', 'plans', 'demo.md'), '# broken\n\n## Slices\n\nnot a table\n');
+    }],
+    ['detached-head', async (subject) => {
+      await subject.git('checkout', '-q', '--detach');
+    }],
+    ['git-error', async (subject) => {
+      // The durable-state probe treats an unreadable child-state boundary as
+      // `git-error`; this real filesystem fault exercises the daemon's same
+      // halt path while the focused preflight unit test injects Git failures.
+      await writeFile(join(subject.worktree, '.pipeline', 'children'), 'not a directory\n');
+    }],
+  ];
+
+  it.each(unresolvableCursorCases)(
+    'writes its own %s HALT and avoids generic preflight logs on fresh daemon dispatch and daemon re-kick',
+    async (cause, arrange) => {
+      const subject = await daemonStack();
+      await arrange(subject);
+      const daemon = await bootDaemon(subject.project);
+
+      const freshLog: string[] = [];
+      await daemon.dispatch(subject, new ConductorEventEmitter(), (line) => freshLog.push(line));
+      await expect(readFile(join(subject.worktree, HALT_MARKER), 'utf8')).resolves.toContain(cause);
+      expect(freshLog.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      expect(freshLog.join('\n')).not.toContain('stack preflight: unavailable');
+
+      // The production clear operation is what leaves REKICK for the daemon's
+      // next pass.  Re-run the same dispatch closure to prove this is not a
+      // one-shot fresh-dispatch property.
+      await clearMarker(subject.worktree);
+      const rekickLog: string[] = [];
+      await daemon.dispatch(subject, new ConductorEventEmitter(), (line) => rekickLog.push(line));
+      await expect(readFile(join(subject.worktree, HALT_MARKER), 'utf8')).resolves.toContain(cause);
+      expect(rekickLog.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      expect(rekickLog.join('\n')).not.toContain('stack preflight: unavailable');
+    },
+  );
+
   // Covers: S9.1, task:31
   it('daemon dispatch repairs an appended closed child inside the preflight, in phase order, before resumeRebaseFirst and conductor.run, with no halt', async () => {
     const subject = await daemonStack();

@@ -7,13 +7,13 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../../src/engine/protected-artifact-seal.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -42,7 +42,7 @@ async function fixture() {
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await git(['add', '.gitignore']);
   await commit('base', 'notes.txt', 'base notes\n');
-  await commit('approved plan', '.docs/plans/demo.md', 'approved\n');
+  await commit('approved decision', '.docs/decisions/demo.md', 'approved\n');
 
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const c1 = await commit('C1', 'c1.txt', 'c1\n');
@@ -57,7 +57,7 @@ async function fixture() {
   await git(['checkout', '-q', 'main']);
   const advancedDefault = await commit('base advance', 'base.txt', 'advanced\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

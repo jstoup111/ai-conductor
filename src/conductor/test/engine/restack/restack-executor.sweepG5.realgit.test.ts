@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { advanceChildRegion } from '../../../src/engine/child-lifecycle.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { readVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
@@ -48,7 +48,7 @@ async function repository(prefix: string) {
   await git(['config', 'user.name', 'Restack Sweep']);
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await git(['add', '.gitignore']);
-  const sealStack = async (positions: readonly number[]) => writeCoverageBindingEnvelope(repo, {
+  const sealStack = async (positions: readonly number[]) => writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

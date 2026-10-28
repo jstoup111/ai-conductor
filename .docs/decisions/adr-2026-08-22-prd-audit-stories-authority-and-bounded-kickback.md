@@ -120,6 +120,13 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
 > dispatch, by the route record's settlement compare-and-swap after the cap check
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 2, 9 and 10). N=1 is unchanged.
 
+> **Amended 2026-10-25 by #2413:** The lap allowance is no longer one lap per feature. It is
+> derived from the feature's complexity tier: Small 2, Medium 3, Large 4, with a feature that has
+> no recorded tier treated as Medium. `prd_audit.max_remediation_laps` may set a positive integer
+> (every tier) or a map of `S`/`M`/`L` to positive integers (unset tiers keep their default). An
+> operator `kickback-budget raise` still takes precedence. The 5-task and 25% growth caps, the
+> halt class, and the enforcement point are unchanged.
+
 6. **Growth ledger.** The kickback ledger gains a per-feature `growth` record:
    `{authored, added, byGate, remaining}`; pre-existing `rem-*` tasks found in a plan at first read
    count toward `authored`. Surfaced by `conduct-ts` status output and emitted on the spine.

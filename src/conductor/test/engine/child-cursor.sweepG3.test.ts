@@ -8,14 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveActiveChild } from '../../src/engine/child-cursor.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -32,7 +32,7 @@ async function git(args: string[], cwd = repository): Promise<string> {
 async function sealStack(positions: readonly number[]): Promise<void> {
   await mkdir(join(repository, '.ai-conductor'), { recursive: true });
   await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-  await writeCoverageBindingEnvelope(repository, {
+  await writeSliceTopologyFixture(repository, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
@@ -73,6 +73,7 @@ describe('repair-pending and divergent cursor kinds (sweep)', () => {
   // Covers: task:29
   it('distinguishes an operator commit past closed/c1 (repair-pending) from an amended A2 or a reset behind the closure (closed-child-rewritten)', async () => {
     await sealStack([1, 2]);
+    await git(['branch', '-f', 'feat/daemon-demo', 'HEAD']);
     await git(['checkout', '-q', '-b', 'feat/c1/demo', 'feat/daemon-demo']);
     const a1 = await commitFile('a1.txt', 'A1\n', 'A1');
     const a2 = await commitFile('a2.txt', 'A2\n', 'A2');

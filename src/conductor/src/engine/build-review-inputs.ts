@@ -20,7 +20,8 @@ import {
 } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { gitRefManifestSource } from './feature-manifest-source.js';
 import { parseCoversMarkers } from './covers-marker.js';
 import { isTestPath } from './test-path.js';
 import {
@@ -78,7 +79,7 @@ export interface BuildReviewInputs {
   baseRef: string;
   /** Where the base came from — a closed parent child, origin's discovered
    * default, or the local fallback (no remote / probe failure). */
-  baseKind: 'child-parent' | 'routed-repair' | 'remote' | 'local';
+  baseKind: 'child-parent' | 'routed-repair' | 'revalidation' | 'revalidation-fix' | 'remote' | 'local';
   /** The local tracking ref's sha at resolution time, or `null` on fallback. */
   trackingRefSha: string | null;
   /** The true remote head sha reported by the freshness probe, or `null` on
@@ -475,8 +476,17 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
 }
 
-function activeStoriesPath(planRepoPath: string, planBody: string): string | undefined {
-  const storiesRepoPath = resolvePlanStoriesPath(planRepoPath, planBody);
+async function activeStoriesPath(
+  sourceRoot: string,
+  sourceRef: string,
+  planRepoPath: string,
+  planBody: string,
+): Promise<string | undefined> {
+  const storiesRepoPath = await resolveFeatureStoriesRef(
+    gitRefManifestSource(sourceRoot, sourceRef),
+    planRepoPath,
+    planBody,
+  );
   return storiesRepoPath === null ? undefined : storiesRepoPath;
 }
 
@@ -858,6 +868,14 @@ export async function assembleBuildReviewInputs(
       remoteHeadSha = null;
       fresh = true;
       break;
+    case 'revalidation':
+    case 'revalidation-fix':
+      baseRef = childBase.sha;
+      baseKind = childBase.kind;
+      trackingRefSha = null;
+      remoteHeadSha = null;
+      fresh = true;
+      break;
     case 'parent-missing':
       throw new MergeBaseError(
         `build_review cannot resolve parent child ${childBase.parent}: branch ${childBase.branch} is missing`,
@@ -977,7 +995,7 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
-  const storiesPath = activeStoriesPath(planRepoPath, planBody);
+  const storiesPath = await activeStoriesPath(projectRoot, liveHeadSha, planRepoPath, planBody);
   const storiesRead = storiesPath === undefined ? undefined : await source.readOptional(storiesPath);
   const storiesBody = storiesRead?.kind === 'present' ? storiesRead.value : '';
   const typedTestScope = await snapshotTypedTestScope(

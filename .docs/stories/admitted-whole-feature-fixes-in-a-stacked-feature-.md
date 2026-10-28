@@ -19,8 +19,8 @@ Scope outcomes (from jstoup111/ai-conductor#3210):
 5. N=1 features route and remediate exactly as today.
 
 Terms used below:
-- **Routing on:** the project sets `stacked_prs.route_whole_feature_fixes: true`. The default is
-  `false`, and with it off every story below behaves exactly as before this spec.
+- **Routing on:** `stacked_prs.route_whole_feature_fixes` resolves to `true`, which is the default.
+  A project that sets it `false` gets exactly the behavior from before this spec in every story below.
 - **Stacked feature:** a feature whose cursor reports durable child state.
 - **Three-child stack:** a stacked feature with slug `demo`, routing on, and positions `1`, `2`
   and `3`.
@@ -207,7 +207,7 @@ automatic restack or base refresh moves a closure over a half-built fix.
 #### Negative Paths
 - Given host `1` `admitted` and an unstamped operator commit on `feat/c2/demo` past `closed/c2`, when the stack preflight runs, then no automatic restack runs for child 2 and no restack journal is created.
 - Given a round open and a daemon re-kick requesting a base refresh, when the stack preflight runs, then no ref moves, one `restack_refused` with reason `deferred-base-refresh` is emitted, and the re-kick request is kept.
-- Given a round open, when the daemon re-kick resume reaches its base refresh, then it emits `restack_refused` with reason `deferred-base-refresh`, runs no base-refresh restack, leaves every branch and `refs/conductor/demo/` ref unchanged, keeps the re-kick request, and continues the resume instead of halting.
+- Given an `audit` or `revalidate` round open, when the daemon re-kick resume reaches its base refresh, then it emits `restack_refused` with reason `deferred-base-refresh`, runs no base-refresh restack, leaves every branch and `refs/conductor/demo/` ref unchanged, keeps the re-kick request, and continues the resume instead of halting.
 - Given a round open, when the FINISH rebase reaches its base refresh, then it emits `restack_refused` with reason `deferred-base-refresh`, runs no base-refresh restack, leaves every branch and `refs/conductor/demo/` ref unchanged, and the feature is not published.
 - Given a route record that is not `closed` and no marker, when a base refresh is due, then it is still deferred, because the marker alone does not decide whether a round is open.
 

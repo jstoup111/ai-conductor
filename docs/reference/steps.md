@@ -24,7 +24,7 @@ whether the step can be skipped and whether it can be disabled by config.
 | Level | Can be skipped | Can be config-disabled | Used by |
 | --- | --- | --- | --- |
 | `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, and all four out-of-band steps |
-| `gating` | No | Only with `configDisableAllowed` | `prd`, `architecture_review`, `stories`, `conflict_check`, `plan`, `coherence_check`, `plan_review`, `coverage_binding`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
+| `gating` | No | Only with `configDisableAllowed` | `prd`, `architecture_review`, `stories`, `conflict_check`, `plan`, `coherence_check`, `plan_review`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
 | `structural` | No | Never — the flag is ignored entirely | `worktree`, `build`, `rebase` |
 | `mechanical` | — | — | Nothing. The level is declared in the type union but no step definition uses it. |
 
@@ -34,7 +34,7 @@ mechanism and apply to gating steps too. For what a gate *is* and why it fails c
 
 ## Sequential steps
 
-The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
+The 21 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
 [Tier skips](#tier-skips) and [Track skips](#track-skips).
 
 | # | Step | Phase | Enforcement | Prerequisites | Skips | Dispatches |
@@ -51,18 +51,17 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 9 | `plan` | DECIDE | gating | `conflict_check` | — | `/plan` |
 | 10 | `coherence_check` | DECIDE | gating | `plan` | tier S | `/coherence-check` |
 | 11 | `plan_review` | DECIDE | gating | `coherence_check` | tier S | `/plan-review`, through an engine-owned read-only reviewer session |
-| 12 | `coverage_binding` | BUILD | gating | `plan` | — | engine-native |
-| 13 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
-| 14 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
-| 15 | `test_suite` | BUILD | gating | `build` | — | engine-native |
-| 16 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
-| 17 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
-| 18 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
-| 19 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
-| 20 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
-| 21 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
+| 12 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
+| 13 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
+| 14 | `test_suite` | BUILD | gating | `build` | — | engine-native |
+| 15 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
+| 16 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
+| 17 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
+| 18 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
+| 19 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
+| 20 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
 
-Per phase: SETUP 1, UNDERSTAND 1, DECIDE 10, BUILD 5, SHIP 5.
+Per phase: SETUP 1, UNDERSTAND 1, DECIDE 10, BUILD 4, SHIP 5.
 
 `plan_review` is skipped for landed specs. When a daemon run reaches it without an operator grant and
 this feature's `.docs/plan-review/<plan-stem>.md` is absent, the engine records the step `skipped` and

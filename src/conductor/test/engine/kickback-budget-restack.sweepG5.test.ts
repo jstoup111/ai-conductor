@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import {
   clearHaltForResume,
   clearMarker,
@@ -62,7 +62,7 @@ async function cascadeCapHalt() {
   await git(['branch', 'feat/daemon-demo', closed]);
   await git(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2 },

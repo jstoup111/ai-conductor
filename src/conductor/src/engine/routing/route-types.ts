@@ -1,4 +1,4 @@
-import { parseChildId, type ChildId } from '../child-context.js';
+import { CHILD_REGION_STEPS, parseChildId, type ChildId } from '../child-context.js';
 import { isValidGitBranchName } from '../git-branch-name.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import type { StackedPrsConfig } from '../../types/config.js';
@@ -137,9 +137,9 @@ export function isLegalRoundPhaseTransition(from: RoundPhase, to: RoundPhase): b
   return assertNever(from);
 }
 
-/** The dark-launch setting is deliberately false unless explicitly enabled. */
+/** Routing is enabled for stacks unless an operator explicitly opts out. */
 export function routingSettingOn(config: { readonly stacked_prs?: StackedPrsConfig } | undefined): boolean {
-  return config?.stacked_prs?.route_whole_feature_fixes === true;
+  return config?.stacked_prs?.route_whole_feature_fixes !== false;
 }
 
 /** A caller supplies its cursor; flat and unsliced features are never eligible. */
@@ -192,6 +192,12 @@ export interface HostEntry {
   readonly host: ChildId;
   readonly pinnedBase: CommitSha;
   readonly tree: CommitSha;
+  /** Revalidation admission pins the exact queue generation and closure it may acknowledge. */
+  readonly revalidation?: {
+    readonly queueBlob: CommitSha;
+    readonly generation: number;
+    readonly closureSha: CommitSha;
+  };
 }
 
 /** The immutable rem-* blocks to append when a host enters its region. */
@@ -297,6 +303,8 @@ export interface RouteRecord {
   readonly fallback?: readonly RouteFallback[];
   /** Present only while a rerouted worktree still needs tree synchronization. */
   readonly reroute?: ReroutePhase;
+  /** The leaf branch and tip durably recorded before the round is closed. */
+  readonly leafReturn?: { readonly branch: string; readonly head: CommitSha };
   readonly outbox: readonly OutboxEntry[];
 }
 
@@ -330,9 +338,14 @@ export interface RepairMarker {
 
 export interface RevalidationQueueEntry {
   readonly child: ChildId;
+  readonly position: ChildId;
   readonly closureSha: CommitSha;
-  readonly state: string;
+  readonly gates: readonly RegionGate[];
+  readonly replay: { readonly oldParent: CommitSha; readonly newParent: CommitSha };
+  readonly state: 'queued';
 }
+
+export type RegionGate = typeof CHILD_REGION_STEPS[number];
 
 export interface RevalidationQueueRecord {
   readonly generation: number;
@@ -345,6 +358,7 @@ const hostStates = new Set<HostState>([
 ]);
 const roundPhases = new Set<RoundPhase>(['prepared', 'open', 'closed']);
 const routeKinds = new Set<RouteKind>(['audit', 'revalidate']);
+const regionGates = new Set<RegionGate>(CHILD_REGION_STEPS);
 const ROUND_ID = /^r([1-9]\d*)$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -452,6 +466,16 @@ function parseHostEntry(value: unknown): HostEntry | undefined {
   const host = parseChild(value.host);
   const pinnedBase = typeof value.pinnedBase === 'string' ? parseCommitSha(value.pinnedBase) : undefined;
   const tree = typeof value.tree === 'string' ? parseCommitSha(value.tree) : undefined;
+  const revalidation = value.revalidation;
+  if (revalidation !== undefined) {
+    const generation = isRecord(revalidation) ? revalidation.generation : undefined;
+    if (!isRecord(revalidation) || typeof revalidation.queueBlob !== 'string' || typeof revalidation.closureSha !== 'string'
+      || typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 0) return undefined;
+    const queueBlob = parseCommitSha(revalidation.queueBlob);
+    const closureSha = parseCommitSha(revalidation.closureSha);
+    if (!host || !pinnedBase || !tree || !queueBlob || !closureSha) return undefined;
+    return { host, pinnedBase, tree, revalidation: { queueBlob, generation, closureSha } };
+  }
   return host && pinnedBase && tree ? { host, pinnedBase, tree } : undefined;
 }
 
@@ -479,6 +503,13 @@ function parseReroutePhase(value: unknown): ReroutePhase | undefined {
   return rejectedTip && resetTip && destination
     ? { sourceBranch: value.sourceBranch, rejectedTip, resetTip, destination }
     : undefined;
+}
+
+function parseLeafReturn(value: unknown): { readonly branch: string; readonly head: CommitSha } | undefined {
+  if (!isRecord(value) || typeof value.branch !== 'string' || !isValidGitBranchName(value.branch)
+    || typeof value.head !== 'string') return undefined;
+  const head = parseCommitSha(value.head);
+  return head === undefined ? undefined : { branch: value.branch, head };
 }
 
 function parseOutboxEntry(value: unknown): OutboxEntry | undefined {
@@ -699,6 +730,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const entry = value.entry === undefined ? undefined : parseHostEntry(value.entry);
   const fallback = value.fallback === undefined ? undefined : Array.isArray(value.fallback) ? value.fallback.map(parseRouteFallback) : undefined;
   const reroute = value.reroute === undefined ? undefined : parseReroutePhase(value.reroute);
+  const leafReturn = value.leafReturn === undefined ? undefined : parseLeafReturn(value.leafReturn);
   const currentHostIndex = value.currentHostIndex;
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
@@ -706,7 +738,8 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     || (value.entry !== undefined && !entry) || (fallback?.some((item) => item === undefined) ?? false)
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
     || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
-    || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)) return undefined;
+    || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)
+    || (value.leafReturn !== undefined && leafReturn === undefined)) return undefined;
   if (!hasConsistentRouteLifecycle({
     phase, hosts, currentHostIndex, entry, fallback: fallback as RouteFallback[] | undefined, reroute,
   })) return undefined;
@@ -726,6 +759,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     ...(entry === undefined ? {} : { entry }),
     ...(fallback === undefined ? {} : { fallback: fallback as RouteFallback[] }),
     ...(reroute === undefined ? {} : { reroute }),
+    ...(leafReturn === undefined ? {} : { leafReturn }),
     outbox,
   };
   if (reroute && !validatedReroute(record)) return undefined;
@@ -748,11 +782,25 @@ export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRec
   const entries = value.entries.map((entry): RevalidationQueueEntry | undefined => {
     if (!isRecord(entry)) return undefined;
     const child = parseChild(entry.child);
+    const position = parseChild(entry.position);
     const closureSha = typeof entry.closureSha === 'string' ? parseCommitSha(entry.closureSha) : undefined;
-    const state = nonEmptyString(entry.state);
-    return child && closureSha && state ? { child, closureSha, state } : undefined;
+    if (!isRecord(entry.replay) || !Array.isArray(entry.gates)) return undefined;
+    const oldParent = typeof entry.replay.oldParent === 'string' ? parseCommitSha(entry.replay.oldParent) : undefined;
+    const newParent = typeof entry.replay.newParent === 'string' ? parseCommitSha(entry.replay.newParent) : undefined;
+    const gates = entry.gates.map((gate): RegionGate | undefined =>
+      typeof gate === 'string' && regionGates.has(gate as RegionGate) ? gate as RegionGate : undefined);
+    if (!child || !position || !closureSha || !oldParent || !newParent || entry.state !== 'queued' || gates.some((gate) => gate === undefined)) return undefined;
+    return { child, position, closureSha, gates: gates as RegionGate[], replay: { oldParent, newParent }, state: 'queued' };
   });
   const outbox = parseOutbox(value.outbox);
   if (entries.some((entry) => entry === undefined) || !outbox) return undefined;
-  return { generation: value.generation, entries: entries as RevalidationQueueEntry[], outbox };
+  const parsedEntries = entries as RevalidationQueueEntry[];
+  const children = new Set<ChildId>();
+  let previousPosition: ChildId | undefined;
+  for (const entry of parsedEntries) {
+    if (children.has(entry.child) || (previousPosition !== undefined && entry.position <= previousPosition)) return undefined;
+    children.add(entry.child);
+    previousPosition = entry.position;
+  }
+  return { generation: value.generation, entries: parsedEntries, outbox };
 }

@@ -1,4 +1,4 @@
-// Covers: S3.2, task:3, task:15, task:26
+// Covers: S3.2, task:3, task:11, task:15, task:26
 import { describe, expect, it } from 'vitest';
 
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -7,6 +7,7 @@ import {
   deriveEffectiveBuildReviewVerdict,
   deriveEffectiveBuildReviewVerdictWithDispositions,
   joinBuildReviewRubricOutcomes,
+  type BuildReviewEffectiveScope,
   parseBuildReviewAggregate,
   projectBuildReviewAggregateSources,
 } from '../../src/engine/build-review-aggregate.js';
@@ -93,6 +94,28 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
+  // Covers: task:15
+  it('classifies a non-critical settled-hunk finding as out of delta without accepting risk', () => {
+    const securityFinding: BuildReviewFinding = {
+      concernKind: 'injection', summary: 'A stale sink remains.', evidenceLocations: ['src/a.ts:8'],
+      anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: HASH, display: 'sink' } }, severity: 'major',
+    };
+    const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), securityJudged([securityFinding])) });
+    const scope: BuildReviewEffectiveScope = {
+      reviewScope: { mode: 'delta', deltaHunks: [{ path: 'src/other.ts', contentHash: 'sha256:other' }] },
+      changedFiles: [
+        { path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: HASH }] },
+        { path: 'src/other.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: 'sha256:other' }] },
+      ],
+    };
+    const id = canonicalizeBuildReviewFindingIdentity({ rubric: 'security', contractVersion: 'v3', concernKind: securityFinding.concernKind, anchor: securityFinding.anchor })!.id;
+    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: scope })).toMatchObject({
+      verdict: 'PASS', outOfDeltaFindingIds: [id], unresolvedFindingIds: [], acceptedFindingIds: [],
+    });
+    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: { ...scope, reviewScope: { ...scope.reviewScope, deltaHunks: [{ path: 'src/a.ts', contentHash: HASH }] } } })).toMatchObject({
+      verdict: 'FAIL', unresolvedFindingIds: [id],
+    });
+  });
   it('preserves passing peers beside an implementation-quality failure and suppresses a declared replication identity', () => {
     const finding = implementationQualityFinding();
     const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
@@ -204,6 +227,28 @@ describe('build-review raw aggregate', () => {
     expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
   });
 
+  // Covers: task:11
+  it('treats an all-scope-empty custom lap as a passing non-judged result', () => {
+    const scopeEmpty = {
+      declaration: {
+        version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+        question: 'Does this preserve the portable policy contract?', source: 'project', resources: [],
+      },
+      result: { kind: 'scope-empty', rubric: 'portablePolicy' },
+    } as const;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+      customResults: { portablePolicy: scopeEmpty }, currentCustomRubrics: ['portablePolicy'],
+    } as never);
+
+    expect(aggregate).toMatchObject({
+      verdict: 'PASS',
+      customResults: { portablePolicy: { result: { kind: 'scope-empty', rubric: 'portablePolicy' } } },
+    });
+    expect(parseBuildReviewAggregate(aggregate)?.customResults?.portablePolicy.result).toEqual(scopeEmpty.result);
+  });
+
   it('keeps a disabled rubric\'s cached findings inspectable while supplying no current blocker or repair source', () => {
     const declaration = { version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy', question: 'Does this preserve the portable policy contract?', source: 'project', resources: [] } as const;
     const stamp = {
@@ -211,9 +256,9 @@ describe('build-review raw aggregate', () => {
       policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
       reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
     } as const;
-    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v1', findings: [{
+    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', evidenceLocations: ['src/widget.ts:8'],
-      sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
+      severity: 'minor', sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
     }] }, stamp, { sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }] })!;
     const member = {
       descriptor: { version: 'v1', semanticSkill: 'portable-policy', declaration, installation: { source: 'project' }, effectivePolicy: stamp.policy, reviewedInput: stamp.reviewedInput, producer: stamp.candidate },
@@ -412,6 +457,26 @@ describe('build-review raw aggregate', () => {
       rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
       skippedRubrics: ['testQuality', 'security', 'implementationQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
       uncoveredScopeIncompleteRubrics: [],
+    });
+  });
+
+  // Covers: task:11
+  it('treats scope-empty coverage as a passing non-judged result', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: results(
+        { kind: 'scope-empty', rubric: 'testQuality' },
+        { kind: 'scope-empty', rubric: 'security' },
+      ),
+    });
+
+    expect(aggregate).toMatchObject({
+      verdict: 'PASS',
+      coverage: { testQuality: 'scope-empty', security: 'scope-empty' },
+      rubric: { testQuality: false, security: false },
+    });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
+      rawVerdict: 'PASS', verdict: 'PASS', skippedRubrics: ['implementationQuality'],
     });
   });
 

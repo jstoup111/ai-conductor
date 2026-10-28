@@ -1,0 +1,7 @@
+# Track: FINISH reports the real PR-publish failure instead of "pr.prose unchanged"
+
+Track: technical
+
+Scope boundary: operator-confirmed 2026-10-24. In scope: (1) a failed guarded GitHub operation run by the `github-operation` CLI is recorded on the event spine with its operation, target, and failure text; (2) when the FINISH `author_pr_prose` pass ran a failed PR publish against the feature's PR, the halt reason and spine carry that failure instead of "left pr.prose unchanged at placeholder"; (3) such a pass is not treated as a successful authoring pass that the fixed-point guard reads as unchanged; (4) a pass that genuinely leaves placeholder prose with no publish failure still halts with the existing "unchanged" reason. Excluded: documenting the `github_bot` credential's required scopes (operator dropped it 2026-10-24), changing the `pull-request.edit`/`retarget` transport from `gh pr edit` to REST, and reclassifying a missing-scope error as a credential-fallback refusal — the operator fixes the bot token's scopes directly.
+
+Internal harness diagnostics (halt reason, spine event) — no user-facing product requirements; acceptance criteria live in stories. Chosen approach: the CLI emits a `github_operation_failed` spine event and the FINISH coordinator correlates it with the authoring pass for this PR (engine-performed publish was rejected to avoid amending adr-2026-08-01 D4 for a narrowed scope; credential fallback rejected as out of scope). Source: jstoup111/ai-conductor#3376.

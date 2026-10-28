@@ -104,6 +104,9 @@ build_review:
       # Raised from the 1 MiB default 2026-10-11: a large changed-test scope
       # (130+ new test files) measured 1,091,894 bytes and halted needs-human.
       max_projection_bytes: 1572864
+      # Operator, 2026-10-24: nit-severity findings are advisory (recorded and
+      # published, never a kickback); minor and above still block (#3298).
+      min_severity: minor
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
     # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
     # same Claude opus routing. Enabled 2026-09-18.
@@ -116,16 +119,19 @@ build_review:
       # low-confidence security findings (35-55) cost a 30-minute lap and a
       # kickback charge each while rarely surviving a second look.
       min_confidence: 60
+      # Operator, 2026-10-24: nit-severity findings are advisory (#3298).
+      min_severity: minor
   # Repository-local guard against bypassing this repository's event spine.
   # Routed to Codex terra 2026-10-07 (operator order) to split rubrics across
   # providers without paying for astra.
   # Disabled 2026-10-17 (operator order): operator acceptances are keyed by exact
   # finding identity, so this rubric re-raises an accepted finding under a new id
   # every lap and halts features on substance the operator already decided.
-  # Re-enable once acceptance survives a re-raise (#3271).
+  # Re-enabled 2026-10-23 (operator order): acceptance now survives a re-raise
+  # (#3271 via #3358/#3367) and resolved-case re-raises are admitted (#3292).
   custom_rubrics:
     eventSpine:
-      enabled: false
+      enabled: true
       skill: event-spine
       source: project
       llm_provider: codex
@@ -140,7 +146,8 @@ test_suite:
     # Vitest strips types without checking them, so a repair that does not
     # compile would otherwise pass this gate and cost a build_review lap
     # (bb94f63b0f, 2026-10-18: TS2322 passed test_suite, caught by review).
-    - command: npm run typecheck --silent
+    # typecheck:test covers test/ too, matching CI (#3411).
+    - command: npm run typecheck --silent && npm run typecheck:test --silent
       working_directory: src/conductor
     - command: npm test
       working_directory: src/conductor
@@ -158,8 +165,8 @@ test_suite:
   # Repo-wide structural guards scan the tree by path rather than importing
   # what they police, so `--changed` never selects them; a second run always
   # includes them (~35s) so a guard violation fails here, not first in CI (#3192).
-  # The typecheck (~10s) leads each lap for the same reason as in `commands`.
-  changed_command: 'npm run typecheck --silent && node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
+  # Both typechecks (~10s + ~35s) lead each lap for the same reason as in `commands`.
+  changed_command: 'npm run typecheck --silent && npm run typecheck:test --silent && node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
   # Ordered aggregate entries each choose their own directory; scoped runs use
   # this shared fallback to reach the conductor package's Vitest binary.
   working_directory: src/conductor
@@ -235,11 +242,14 @@ coverage_binding:
     enabled: false
 
 # Operator, 2026-10-21: stacked delivery on for testing native stack
-# publication (#2945/#3311). Routed whole-feature fixes stay off until the
-# exit restack and child revalidation land (#3212).
+# publication (#2945/#3311). Routed whole-feature fixes are on by default
+# (route_whole_feature_fixes); the exit restack and child revalidation they
+# depend on landed with #3212.
+# Operator, 2026-10-24: max_slices raised 3 -> 5 (the highest value that loads
+# without a review-size warning).
 stacked_prs:
   enabled: true
-  max_slices: 3
+  max_slices: 5
 
 # Remediation append allowance. The effective cap is
 # min(max_appended_tasks, floor(authored_count * max_appended_ratio)), so BOTH
@@ -253,26 +263,12 @@ stacked_prs:
 # appended tasks against a 19-task plan (the case that prompted this review)
 # remains far outside it and still halts for an operator.
 prd_audit:
-  # TEMPORARY (operator, 2026-09-04): 8 / 0.5 raised to 10 / 0.6 with the
-  # lap grant below — a-coverage's second as-built lap needs 5 tasks with
-  # 4 of 8 spent. Revert with the lap grant.
-  max_appended_tasks: 10
+  max_appended_tasks: 8
   # Operator, 2026-09-06: 0.6 raised to 0.8. On a 4-task plan the ratio term
   # resolved to 3 while an ordinary as-built round asked for 4, so small plans
   # halted kickback-cap on a one-task overrun (sweep-stale-vitest). Note the
   # authored count also includes the "Task Dependency Graph" heading.
   max_appended_ratio: 0.8
-  # TEMPORARY (operator, 2026-09-04): second lap granted to clear the
-  # bin-setup S4.2 and a-coverage AB-1/AB-2 halts; revert to the default 1
-  # once both features pass (see #2147 for the per-feature grant design).
-  max_remediation_laps: 2
-
-# TEMPORARY (operator, 2026-09-04, laps raised 2026-09-05): third lap granted —
-# AB-1 converged to the conductor-consumption half only. Worktree-local
-# recovery, not feature scope; revert with the grant above.
-architecture_review_as_built:
-  max_remediation_laps: 3
-
 steps:
   explore:
     llm_provider: claude

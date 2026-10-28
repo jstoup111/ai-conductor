@@ -87,10 +87,10 @@ under repair, so that my commands and the engine's writes never land on the leaf
 - Given host 1 `repairing`, when the operator runs `daemon status`, then it shows child 1 as the child being worked, as `1/3`.
 - Given host 1 `repairing`, when region state is read or written, then child 1's per-child region state is used.
 - Given host 1 `repairing`, when the operator runs `kickback-budget raise --gate prd_audit`, then the raise lands in the flat feature ledger, ignoring the execution-child default.
-- Given a closed child 2 and no open round, when the operator runs `rewind --child 2`, then it is refused with a message naming #3203.
+- Given a closed child 2, no open round and no live HALT, when the operator runs `rewind --child 2 --reason "x"`, then it is refused naming the missing HALT.
 
 #### Negative Paths
-- Given host 1 `repairing` and an operator commit with no `Round:` stamp past `closed/c2`, when the cursor runs, then it accepts `repair-pending` with child 2 as a co-origin, and does not halt.
+- Given host 1 `repairing` in an operator round that carries child 2, and an operator commit with no `Round:` stamp past `closed/c2`, when the cursor runs, then it accepts `repair-pending` with child 2 as a co-origin, and does not halt.
 - Given host 1 `repairing`, when the cursor reports `repair-pending` for children 1 and 2 and child 2's commits carry another round's `Round:` stamp, then the feature halts needs-human naming child 2.
 - Given host 1 `repairing`, when the restack executor reads the cursor, then it does not throw, because the cursor kind is unchanged.
 
@@ -125,22 +125,23 @@ reader.
 - [ ] Persister dedup covers them by `eventId`, asserted by a test.
 - [ ] Tests assert at-least-once delivery from the route record outbox across crashes.
 
-## Story 16: Routing stays off until the project turns it on
+## Story 16: Routing is on by default, and a project can turn it off
 
 **Requirement:** ADR decision 18
 
-As an operator, I want the routing machinery to ship dark until every part of it has landed, so that
-no stacked feature runs on a half-built router.
+As an operator, I want routing on for every stacked feature once all four specs have landed, with
+an explicit opt-out, so that no project has to edit its config to get routed repairs.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a three-child stack whose project sets `stacked_prs.route_whole_feature_fixes: true`, when `routingEligible` is evaluated, then it returns true.
+- Given a three-child stack whose project leaves `stacked_prs.route_whole_feature_fixes` unset, when `routingEligible` is evaluated, then it returns true.
 
 #### Negative Paths
-- Given a three-child stack whose project leaves `stacked_prs.route_whole_feature_fixes` unset, when `routingEligible` is evaluated, then it returns false, and the `PATH`-shimmed `git` records no command naming `refs/conductor/demo/routes`, `repairing` or `revalidate`.
+- Given a three-child stack whose project sets `stacked_prs.route_whole_feature_fixes: false`, when `routingEligible` is evaluated, then it returns false, and the `PATH`-shimmed `git` records no command naming `refs/conductor/demo/routes`, `repairing` or `revalidate`.
 - Given an N=1 feature whose project sets `stacked_prs.route_whole_feature_fixes: true`, when `routingEligible` is evaluated, then it returns false, because the cursor reports `no-child`.
 
 ### Done When
 - [ ] `routingEligible` requires both durable child state and the setting, asserted by a test for each combination.
-- [ ] The setting defaults to `false` when the project config omits it.
+- [ ] The setting defaults to `true` when the project config omits it, and an explicit `false` turns routing off.

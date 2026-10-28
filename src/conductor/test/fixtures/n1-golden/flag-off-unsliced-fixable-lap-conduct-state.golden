@@ -12,7 +12,6 @@
   "plan": "done",
   "coherence_check": "done",
   "plan_review": "done",
-  "coverage_binding": "done",
   "acceptance_specs": "done",
   "build": "pending",
   "test_suite": "stale",

@@ -48,9 +48,10 @@ ai-conductor daemon logs --lines 60
 means a live daemon owns `.daemon/daemon.pid` and can dispatch; anything else means it cannot.
 The full state vocabulary is in [daemon recovery](daemon-recovery.md).
 
-The startup dashboard in `.daemon/daemon.log` groups every known slug into exactly one of
-PARKED, HALTED, PROCESSED, IN-PROGRESS, GATED, WAITING, ELIGIBLE. PARKED has absolute
-precedence — a parked slug never appears anywhere else.
+The startup dashboard in `.daemon/daemon.log` groups every known slug into exactly one group, by
+precedence: PARKED, HALTED, IN-PROGRESS, RETAINED WORKTREES, PROCESSED, BLOCKED, GATED, WAITING,
+ELIGIBLE. PARKED has absolute precedence — a parked slug never appears anywhere else. See
+[read the startup dashboard](../guides/running-the-daemon.md#read-the-startup-dashboard).
 
 ### Decide the scope
 

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readVerdict, validRebaseOperationRecord, writeVerdict, type RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
-import { applyRebaseTransition, clampRebaseContinuation, completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
+import { applyRebaseTransition, completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { classifyRebaseOperation, rebaseOperationPublicationBlocker } from '../../src/engine/gate-code-validity.js';
 import { earliestUnsatisfiedGateIndex } from '../../src/engine/selector.js';
@@ -653,20 +653,5 @@ describe('completeInterruptedRebaseOperation', () => {
       verdicts,
       regionStart: 'build_review',
     })).toBe(0);
-  });
-});
-
-describe('clampRebaseContinuation', () => {
-  const steps = [{ name: 'coverage_binding' }, { name: 'acceptance_specs' }, { name: 'build' }, { name: 'test_suite' }, { name: 'manual_test' }] as const;
-
-  it('moves a completed pre-suite selection to test_suite after a post-rebase coverage refresh', () => {
-    expect(clampRebaseContinuation(steps, { acceptance_specs: 'skipped', build: 'done' }, 2, true)).toBe(3);
-    expect(clampRebaseContinuation(steps, { acceptance_specs: 'skipped', build: 'done' }, 1, true)).toBe(3);
-  });
-
-  it('leaves a genuinely open BUILD, a later gate, and ordinary lifecycle selection alone', () => {
-    expect(clampRebaseContinuation(steps, { build: 'pending' }, 2, true)).toBe(2);
-    expect(clampRebaseContinuation(steps, { build: 'done' }, 4, true)).toBe(4);
-    expect(clampRebaseContinuation(steps, { build: 'done' }, 2, false)).toBe(2);
   });
 });

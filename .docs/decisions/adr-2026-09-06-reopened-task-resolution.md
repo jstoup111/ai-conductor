@@ -103,6 +103,28 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > open, whether each was re-closed and accepted, demoted under D14, dropped because its plan text
 > changed, or accepted by the operator under D16.
 
+> **Amended 2026-10-23 by #3190:** a completed remediation task whose named change the BUILD-boundary
+> remediation-closure judgement finds absent becomes an admitted repair source, narrowly, for the
+> reopen that `adr-2026-10-21-remediation-closure-judgement` decision 8 defines. Decisions 1-13 are
+> unchanged.
+>
+> 14. When the BUILD-boundary remediation-closure judgement returns `persists` or `partial` for an
+> engine-appended `rem-*` task under its reopen bound, the engine admits one obligation for that task
+> with source authority `remediation-closure`. Its finding id is the task's close identity
+> (`adr-2026-10-21-remediation-closure-judgement` decision 2), its instruction is the judge's
+> rationale, and its boundary is the HEAD at admission; in a stacked feature it is `{branch, head}`
+> on the execution child's branch, taken at admission rather than at host region entry, and keyed by
+> close identity rather than by a round. Admission uses the same idempotent admission, replay, and
+> restage path as the other existing-task sources, and is marked settled at admission. It charges no
+> lap and no gate allowance. The per-task reopen count bounding it belongs to decision 9 of that ADR
+> and lives in its verdict state; it is not a repair retry counter, so decision 8's "no new retry
+> counter" stands. Under decision 4, pre-reopen trailers and the old close record do not resolve the
+> task. For decision 8 it has no governing review of its own, as for `plan_amendment`: it ends when
+> its task resolves, and the next BUILD-boundary judgement judges the new close. A newer
+> `remediation-closure` obligation for the same task supersedes an older open one, as decision 11 does
+> for its own source. A plan-text change of its task admits a `plan_amendment` obligation beside it
+> without superseding it, and one fresh close resolves both.
+
 ## Architectural Alignment
 
 This is a durable state-transition decision, so an ADR is warranted even at Medium tier. No existing ADR covers a current repair obligation spanning resolver, reconstruction, task close, and restart. The July 23 trailer-union ADR continues to own the shared resolution/authority split; its bounded freshness exception and the July 13 no-op guard qualification are amended beside their original clauses in this same DECIDE change.

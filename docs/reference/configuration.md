@@ -245,11 +245,11 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `stacked_prs` | object | disabled | [stacked_prs](#stacked_prs) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
 | `prd_audit` | object | see section | [prd_audit](#prd_audit) |
+| `plan_review` | object | unset | [plan_review](#plan_review) |
 | `architecture_review_as_built` | object | see section | [architecture_review_as_built](#architecture_review_as_built) |
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
-| `coverage_binding` | object (retired, ignored) | `{ judge: { enabled: false, batch_size: 8 } }` | [coverage_binding](#coverage_binding) |
 | `feature_applicability` | object | `{ enabled: false }` | [feature_applicability](#feature_applicability) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
@@ -1289,19 +1289,10 @@ Consumed at `src/conductor/src/engine/conductor.ts:10364-10365, 10886-10887`.
 
 ## coverage_binding
 
-Retired. The `coverage_binding` step is a no-op: it never dispatches a judge, never checks criterion,
-amendment, conflict, or ADR-obligation claims, never reopens tasks, and never halts on plan content.
-It still runs at its pipeline position, records the plan's slice topology for
-[stacked delivery](#stacked_prs), and completes as passed. These keys remain accepted and validated so
-existing configurations load, but the engine ignores them.
-
-| Key | Type | Validation | Default |
-| --- | --- | --- | --- |
-| `coverage_binding.judge.enabled` | boolean | Boolean, else hard error; ignored | `false` |
-| `coverage_binding.judge.batch_size` | integer | Positive integer, else hard error; ignored | `8` |
-
-Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. The plan skill's
-pre-land coverage judgement is unaffected.
+Retired with the `coverage_binding` step. A top-level `coverage_binding` block and a
+`steps.coverage_binding` entry each load with a warning that the key is retired and ignored; neither
+is validated. The plan skill's pre-land coverage judgement is unaffected. Stacked delivery reads slice
+topology from the sealed plan; see [child-by-child build](#child-by-child-build).
 
 ## feature_applicability
 
@@ -1488,19 +1479,18 @@ Opts a project into stacked delivery of a sliced plan. Plan-slice grammar valida
 `plan-slices` land gate) runs regardless of this block; the checks below run only when `enabled` is
 `true`. An admitted plan builds
 [child by child](#child-by-child-build), and FINISH publishes it as a
-[GitHub native stack](#stacked-publication). Routing whole-feature fixes to the owning child is dark-launched behind
-`route_whole_feature_fixes`. Round admission and the routed repair pass on the host are implemented;
-child revalidation and the exit restack land with #3212.
+[GitHub native stack](#stacked-publication). `route_whole_feature_fixes` routes whole-feature fixes
+to the owning child, carries them up the stack, and re-validates the closed children above it.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
 | `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
 | `stacked_prs.max_slices` | integer | Integer from 1 through 9, else hard error; a value above 5 loads with a review-size warning | `1` |
-| `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `false` |
+| `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `true` |
 
 `stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
 block is present, an omitted `enabled` resolves to `false` and an omitted `max_slices` resolves to
-`1`. An omitted `route_whole_feature_fixes` resolves to `false`, with or without the block.
+`1`. An omitted `route_whole_feature_fixes` resolves to `true`, with or without the block.
 
 `route_whole_feature_fixes: true` takes effect only for a feature with durable child state. The
 engine then reads the feature's [routing refs](artifacts.md#worktree-and-branch-names), and the stack
@@ -1509,7 +1499,7 @@ While a repair host is recorded, a closed child other than the host whose post-c
 a `Round: r<n>` line halts `needs-human` with `routing foreign-round commit`. With the setting
 `false`, or for a feature without children, the engine never reads or writes a routing ref.
 
-With the setting on and two or more slice positions in the sealed `coverage_binding` envelope, an
+With the setting on and two or more slice positions in the sealed plan, an
 admitted remediation lap that the ordinary path would send to `build` is admitted as
 a routed round instead of appended to the leaf plan:
 
@@ -1528,8 +1518,7 @@ a routed round instead of appended to the leaf plan:
   a `Round: r<n>` trailer, binds each item's repair obligation to the host branch, and seeds task
   status. Resume verifies that state and never re-appends. An entry with nothing left to build halts
   `needs-human` with `routed host <k> entry derived already complete`; other failures halt with
-  `routed host <k> entry halted:` or `entry refused:` plus the detail. A `revalidate` round refuses
-  until #3212.
+  `routed host <k> entry halted:` or `entry refused:` plus the detail.
 - **Membership.** `prepare-commit-msg` stamps `Round: r<n>` on commits made on the current host
   (hidden `ai-conductor round-stamp`). `ai-conductor task` and `task-membership-check` accept the
   round's routed task ids on its host; task status stays feature-wide.
@@ -1550,6 +1539,23 @@ a routed round instead of appended to the leaf plan:
   closure, moves the round to that child in one fenced transaction, and emits
   `remediation_rerouted`. A malformed or unverified claim counts as an ordinary failed build
   attempt; a failed move or worktree sync halts `needs-human`.
+- **Exit.** When a host child's `build_review` passes, the host leaves the round. A host tip equal
+  to its closure exits with one compare-and-swap that marks the host `done` and deletes the marker.
+  Otherwise the engine marks the host `built` and runs a journaled `feature-repair`
+  [restack](#restack), whose transaction marks the host `restacked` and deletes the marker. A failed
+  exit halts `needs-human` with `routed exit host <k>:` plus the detail.
+- **Progression.** The round then admits its next pending child host in recorded order. After the
+  child hosts come queued revalidations, then the leaf host. With nothing pending, the engine
+  switches to the leaf, records the return in the route record, closes the round, and re-pends
+  `prd_audit`, `architecture_review_as_built`, `manual_test`, and the custom gates between
+  `build_review` and `finish`. Those gates re-run under their existing caps; the return records no
+  kickback.
+- **Revalidation.** Every restack of a feature with the setting on queues the closed children whose
+  gate verdicts it invalidated, at `refs/conductor/<slug>/revalidate`. Children are re-validated
+  bottom-up, one `revalidate` round per child, re-running only the child's queued gates. A pass with
+  no new commits acknowledges the entry by compare-and-swap (`child_revalidated`, `outcome:
+  passed`). A child that commits a fix exits through the restack (`outcome: fixed`), which can queue
+  the children above it. Leaf gates and FINISH wait until the queue is empty.
 - **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
   `build` takes the ordinary remediation path unchanged.
 - **Halts.** A routing refusal halts `needs-human` with its detail, for example
@@ -1575,17 +1581,18 @@ gate at `engineer/land` refuses the plan unless all of these hold:
 - No custom step sits between `acceptance_specs` and `build_review`, and no custom BUILD step
   before `build_review` is a loop gate or kickback target.
 
-The land-gate refusal lists every failed condition. At BUILD entry, `coverage_binding` re-evaluates
-the same conditions without refusing: an invalid slice manifest or an ineligible plan builds flat. On
-success, `coverage_binding` records the story-to-slice mapping as `storyOwnership` in
-[`coverage-binding.json`](artifacts.md).
+The land-gate refusal lists every failed condition. Before the first child exists, the engine
+re-evaluates the same conditions from the sealed plan, its stories, its complexity record, and the
+main repository's config, without refusing: an ineligible plan builds flat.
 
 ### Child-by-child build
 
-A feature has children when `enabled` is `true` and the sealed `coverage_binding` envelope records
-`storyOwnership` and two or more slice positions. Each position is a child; the last is the leaf. A
-single-slice or ineligible plan builds flat, unchanged. Once a child branch, closure ref, or
-`.pipeline/children/` directory exists, the engine uses them whatever the flag says.
+A feature has children when its sealed plan declares two or more slice positions, every story maps
+to one slice, and the plan is eligible. Each position is a child; the last is the leaf. A
+single-slice or ineligible plan builds flat, unchanged. The engine derives positions, task
+membership, and story ownership from the sealed plan on every read; no separate binding artifact
+exists. Once a child branch, a stack-owned `refs/conductor/<slug>/` ref, or a non-empty
+`.pipeline/children/` directory exists, the engine uses the stack whatever the flag says.
 
 The **active child** is the lowest non-leaf position without a closure ref, otherwise the leaf. The
 engine runs the BUILD region (`acceptance_specs`, `build`, `test_suite`, `build_review`) once per
@@ -1614,9 +1621,12 @@ child, in declared order:
 - **Rebase.** The re-kick rebase and the finish-time `rebase` step refresh the whole stack from the
   default branch with a `base-refresh` [restack](#restack), whichever child is active. Open-PR
   autoresolve never rewrites a stacked feature; it escalates with `published-stack` (#2945).
-- **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions`. Once child state
-  exists, a `coverage_binding` run that moves, adds, or removes a position refuses `needs-human`.
-  This is the step's only remaining refusal.
+- **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions` when the first
+  child starts. Once child state exists, [`reseal`](cli.md#ai-conductor-reseal) refuses a plan change
+  that moves, adds, or removes a position; task membership may change within the recorded positions.
+- **Unresolvable cursor.** If the stack preflight cannot resolve the active child, it halts
+  `needs-human` with `cannot resolve stack cursor: <cause>`, the topology details, and one recovery
+  command. See [stack cursor cannot be resolved](../runbooks/stalled-or-stuck-feature.md#stack-cursor-cannot-be-resolved).
 - **Execution child.** While a routed repair or a child revalidation is recorded, its host child runs
   the BUILD region and is the default for [`--child`](cli.md#per-child-selection---child) and
   `daemon status`. The active child keeps the restack range and restack cap evidence.
@@ -1681,6 +1691,16 @@ the finish-time `rebase` step. It recovers an interrupted restack from its journ
 pending feature repair, then any chained base refresh. A live HALT stops it after journal recovery.
 Features without child state keep the ordinary rebase.
 
+Every preflight stop is durable. A `halted` or `unavailable` result writes `.pipeline/HALT` with
+its reason and emits `loop_halt`; a HALT already written by an inner step is kept, and the
+`loop_halt` reason appends its first line. When a resume authorization crossed the entry HALT and
+preflight still stops, the new reason replaces that unchanged entry HALT. Stops are `needs-human`
+except a journal owned by a live process, which halts `mechanical` and emits `restack_refused`
+with reason `journal-live-owner`. The `rebase` step fails with
+`stack preflight <halted|unavailable>: <reason>`; the daemon re-kick logs
+`stack preflight <slug>: <halted|unavailable> — <reason>`. A HALT that cannot be written fails the
+run with both reasons.
+
 The replay runs off the worktree. The engine then moves every child branch and closure ref in one
 compare-and-swap transaction and syncs the checked-out worktree without stashing; colliding
 untracked files move to the rebase untracked quarantine. A replay conflict goes to the configured
@@ -1742,14 +1762,19 @@ on expiry; an already-running provider may finish, but its late judgment is reje
 and its invocation usage is retained. This is an acceptance deadline, not a process kill timeout.
 
 `testQuality`, `security`, and `implementationQuality` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
-`model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`. `max_projection_bytes` is a
+`model_fallback_ladder`, `max_retries`, `escalate`, `min_confidence`, and `min_severity`. `max_projection_bytes` is a
 positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the
 limit itself is admitted. An oversized projection is not dispatched: the gate records
 `projection-oversized` with the measured and allowed byte counts, then halts for an operator without
 consuming the shared mechanical-fault allowance. `min_confidence` is an integer from 0 through 100 and
 defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
 remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
-never suppressed. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
+never suppressed. `min_severity` is one of `critical`, `major`, `minor`, or `nit` (order
+`critical > major > minor > nit`) and has no default. Each finding carries a reviewer-assigned severity;
+a finding ranked strictly below the rubric's `min_severity` is advisory: it is recorded, listed by
+`build-review findings`, and published in the PR's `## Advisory build-review findings` region, but never
+fails the gate, reaches `remediate`, or charges a kickback. Without `min_severity`, every finding stays
+blocking; `nit` admits nothing as advisory. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
 on by default with `effort: medium` — opt out with `build_review.rubrics.implementationQuality.enabled: false`. When enabled, `testQuality` derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
@@ -1775,8 +1800,8 @@ Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
 lowercase), followed by letters, digits, `_`, or `-`. A built-in rubric id (`testQuality`, `security`,
 `implementationQuality`) is reserved and rejected as a custom id. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
-it may set `source` (`project`, `global`, or `plugin`), `resources`, and the normal provider/model/retry
-fields. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
+it may set `source` (`project`, `global`, or `plugin`), `resources`, the normal provider/model/retry
+fields, and the same `min_confidence` and `min_severity` thresholds as a built-in rubric. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.
 
 The selected skill must be installed for the actual provider candidate. Omitting `source` is accepted
@@ -1837,7 +1862,7 @@ trivially passes.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `prd_audit.max_remediation_laps` | positive integer | `1` | Caps the number of remediation laps a `prd_audit` FAIL can trigger for a feature |
+| `prd_audit.max_remediation_laps` | positive integer, or map of `S`\|`M`\|`L` to positive integers | `S` 2, `M` 3, `L` 4 | Caps the number of remediation laps a `prd_audit` FAIL can trigger for a feature; see [tier-aware lap caps](#tier-aware-remediation-lap-caps) |
 | `prd_audit.max_appended_tasks` | positive integer | `5` | Fixed cap on tasks appended by a `prd_audit` remediation lap |
 | `prd_audit.max_appended_ratio` | finite number in `(0, 1]` | `0.25` | Cap on appended tasks as a fraction of the authored task count |
 | `prd_audit.halt_on_any_plan_gap` | boolean | `false` | When `true`, every `PLAN_GAP` finding halts for the operator, not only happy-path ones |
@@ -1849,6 +1874,36 @@ tasks. A merged spec whose plan predates `prd_audit`'s remediation caps (pre-exi
 remediation tasks) counts those tasks toward the authored baseline rather than the cap, so an old feature
 does not retroactively exceed a cap it was never measured against.
 
+### Tier-aware remediation lap caps
+
+`prd_audit.max_remediation_laps` and `architecture_review_as_built.max_remediation_laps` each resolve
+independently from the feature's recorded complexity tier:
+
+| Setting | Resolved allowance |
+| --- | --- |
+| Unset | Tier default: `S` 2, `M` 3, `L` 4 |
+| Positive integer, for example `5` | That integer for every tier |
+| Tier map, for example `{ L: 6 }` | The listed tier's value; unlisted tiers keep their default (`{}` keeps every default) |
+
+A feature with no recorded tier resolves as `M`. User and project tier maps merge per tier (user
+`{ S: 1 }` plus project `{ L: 5 }` resolves `S` 1, `M` 3, `L` 5); a project integer replaces a user map.
+A value of `0`, a non-integer, a string, or a tier other than `S`, `M`, `L` is a configuration error
+naming the offending path. A [`kickback-budget raise`](cli.md#ai-conductor-kickback-budget) overrides
+the resolved allowance for that feature.
+
+## plan_review
+
+Prompt budget for the DECIDE-phase plan review (`compose plan-review` and the daemon `plan_review` step).
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `plan_review.max_prompt_chars` | positive integer | unset (runner limit `400000`) | Maximum characters the review prompt may contain before review refuses to dispatch |
+
+Any other key under `plan_review`, or a non-positive or non-integer value, fails config validation. The
+`--max-prompt-chars` flag on [`compose plan-review`](cli.md#compose-subcommands) overrides this value
+for one run. A refusal names each prompt section's size, the largest section, and the exact value that
+would admit the prompt.
+
 ## architecture_review_as_built
 
 Per-check, per-tier policy for the as-built architecture review, which runs on every feature and issues
@@ -1858,7 +1913,7 @@ one of `APPROVED`, `PLAN_GAP`, or `BLOCKED`.
 | --- | --- | --- | --- |
 | `architecture_review_as_built.checks.<name>.tiers` | array of `S`\|`M`\|`L` | see below | Restricts the named check to the listed complexity tiers; an explicit list always overrides the artifact-presence default |
 | `architecture_review_as_built.remediation.enabled` | boolean | `true` | Enables daemon-mode bounded remediation for an all-`REMEDIABLE` `BLOCKED` report; `false` keeps that report on the needs-human halt path |
-| `architecture_review_as_built.max_remediation_laps` | positive integer | `1` | Caps as-built remediation laps for the feature; exhaustion halts before another plan append |
+| `architecture_review_as_built.max_remediation_laps` | positive integer, or map of `S`\|`M`\|`L` to positive integers | `S` 2, `M` 3, `L` 4 | Caps as-built remediation laps for the feature; exhaustion halts before another plan append; see [tier-aware lap caps](#tier-aware-remediation-lap-caps) |
 
 `<name>` is one of `reachability`, `planGap`, `adrCompliance`, `diagramDrift`. Without an explicit
 `tiers` override:
@@ -1875,8 +1930,9 @@ The outcome is judged against the sealed story criteria under `.docs/stories/`, 
 `.docs/intake/` capture: the gap is recorded in the verdict and the shipped record and ships when those
 criteria are satisfied, and halts only when a sealed story criterion is unmet.
 
-`remediation` accepts only the `enabled` boolean. `max_remediation_laps` must be an integer greater
-than zero; unknown keys and invalid values are configuration errors.
+`remediation` accepts only the `enabled` boolean. `max_remediation_laps` follows the
+[tier-aware lap cap](#tier-aware-remediation-lap-caps) rules; unknown keys and invalid values are
+configuration errors.
 
 ## ci_watch
 
@@ -2113,9 +2169,12 @@ it never includes the token, token-file path, or command output.
 
 The daemon also reads this token once while preparing a worktree to resolve the bot's GitHub
 identity. When that succeeds, daemon-created commits carry a `Co-authored-by:` trailer for that
-identity; the operator remains the commit author. An unavailable token or identity read simply
-omits the trailer and emits a secret-safe `bot_co_author_skipped` event. Operator-run commits are
-never stamped.
+identity; the operator remains the commit author. The daemon process and each executor child
+install the identity resolver before feature dispatch. An unavailable token or identity read simply
+omits the trailer and emits a secret-safe `bot_co_author_skipped` event. A daemon dispatch that
+reaches worktree preparation without an installed resolver also omits the trailer and emits the
+same event with reason `resolver-absent`, rendered in the daemon log as `bot co-author skipped:
+resolver not installed for daemon dispatch`. Operator-run commits are never stamped.
 
 ## spec_owner
 

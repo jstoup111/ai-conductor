@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:8
+// Covers: task:1, task:2, task:8, task:11
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { StepName, ComplexityTier } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -23,7 +23,6 @@ import {
 } from '../../src/engine/steps.js';
 import { phaseForStep } from '../../src/engine/resolved-config.js';
 import { isGatingStep } from '../../src/engine/gates.js';
-import { PRESEEDED_DONE } from '../../src/engine/daemon-state.js';
 
 describe('engine/steps', () => {
   // --- ALL_STEPS exact order ---
@@ -34,14 +33,14 @@ describe('engine/steps', () => {
       'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
       'coherence_check',
       'plan_review',
-      'coverage_binding', 'acceptance_specs', 'build', 'test_suite', 'build_review', 'manual_test', 'prd_audit',
+      'acceptance_specs', 'build', 'test_suite', 'build_review', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'rebase', 'finish',
     ];
 
-    it('has exactly the 22 surviving steps including plan_review at the DECIDE boundary', () => {
-      expect(ALL_STEPS).toHaveLength(22);
+    it('has exactly the 21 surviving steps including plan_review at the DECIDE boundary', () => {
+      expect(ALL_STEPS).toHaveLength(21);
       expect(ALL_STEPS.slice(10, 13).map((step) => step.name)).toEqual([
-        'coherence_check', 'plan_review', 'coverage_binding',
+        'coherence_check', 'plan_review', 'acceptance_specs',
       ]);
     });
 
@@ -154,7 +153,7 @@ describe('engine/steps', () => {
     });
 
     it('registers plan_review immediately after coherence_check with its legacy-artifact disposition', () => {
-      expect(ALL_STEPS).toHaveLength(22);
+      expect(ALL_STEPS).toHaveLength(21);
       expect(ALL_STEPS[11]).toEqual({
         name: 'plan_review',
         label: 'Plan Review',
@@ -171,25 +170,8 @@ describe('engine/steps', () => {
       expect(getSkippableSteps('S')).toHaveLength(7);
     });
 
-    it('coverage_binding is engine-native BUILD/gating after coherence_check and never skipped', () => {
-      const s = ALL_STEPS[12];
-      expect(s).toEqual({
-        name: 'coverage_binding',
-        label: 'Coverage Binding',
-        phase: 'BUILD',
-        enforcement: 'gating',
-        prerequisites: ['plan'],
-        skippableForTiers: [],
-        isCheckpoint: false,
-        kickbackTarget: true,
-      });
-      expect(s.skippableForTracks).toBeUndefined();
-      expect(s.skillName).toBeUndefined();
-      expect(PRESEEDED_DONE).not.toContain('coverage_binding');
-    });
-
     it('acceptance_specs is BUILD/gating, skippable for S', () => {
-      const s = ALL_STEPS[13];
+      const s = ALL_STEPS[12];
       expect(s.name).toBe('acceptance_specs');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['plan']);
@@ -197,7 +179,7 @@ describe('engine/steps', () => {
     });
 
     it('build is BUILD/structural, checkpoint, prereq plan', () => {
-      const s = ALL_STEPS[14];
+      const s = ALL_STEPS[13];
       expect(s.name).toBe('build');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('structural');
@@ -206,7 +188,7 @@ describe('engine/steps', () => {
     });
 
     it('test_suite is a native non-disableable BUILD/gating loop gate in the deterministic group after build', () => {
-      const s = ALL_STEPS[15];
+      const s = ALL_STEPS[14];
       expect(s).toEqual({
         name: 'test_suite',
         label: 'Test Suite',
@@ -221,7 +203,7 @@ describe('engine/steps', () => {
     });
 
     it('build_review is a BUILD/gating loop gate after the deterministic group join', () => {
-      const s = ALL_STEPS[16];
+      const s = ALL_STEPS[15];
       expect(s.name).toBe('build_review');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('gating');
@@ -231,7 +213,7 @@ describe('engine/steps', () => {
     });
 
     it('manual_test is SHIP/gating, checkpoint, prereq test_suite (#367 — a failing manual test must be able to block)', () => {
-      const s = ALL_STEPS[17];
+      const s = ALL_STEPS[16];
       expect(s.name).toBe('manual_test');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -243,7 +225,7 @@ describe('engine/steps', () => {
     });
 
     it('prd_audit is SHIP/gating loopGate, after manual_test, and runs on every track', () => {
-      const s = ALL_STEPS[18];
+      const s = ALL_STEPS[17];
       expect(s.name).toBe('prd_audit');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -256,7 +238,7 @@ describe('engine/steps', () => {
     });
 
     it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit, and runs on every tier and track', () => {
-      const s = ALL_STEPS[19];
+      const s = ALL_STEPS[18];
       expect(s.name).toBe('architecture_review_as_built');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -271,7 +253,7 @@ describe('engine/steps', () => {
     });
 
     it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
-      const s = ALL_STEPS[20];
+      const s = ALL_STEPS[19];
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
@@ -284,7 +266,7 @@ describe('engine/steps', () => {
     });
 
     it('finish is SHIP/gating with prereq rebase', () => {
-      const s = ALL_STEPS[21];
+      const s = ALL_STEPS[20];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['rebase']);
@@ -337,8 +319,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 19 for finish', () => {
-      expect(getStepIndex('finish')).toBe(21);
+    it('returns 20 for finish', () => {
+      expect(getStepIndex('finish')).toBe(20);
     });
   });
 
@@ -347,12 +329,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 19', () => {
-      expect(getStepByIndex(21).name).toBe('finish');
+    it('returns finish for index 20', () => {
+      expect(getStepByIndex(20).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-    expect(() => getStepByIndex(23)).toThrow();
+      expect(() => getStepByIndex(21)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });
@@ -374,7 +356,7 @@ describe('engine/steps', () => {
     it('Small tier does not skip non-skippable steps', () => {
       const nonSkippable: StepName[] = [
         'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
-        'plan', 'coverage_binding', 'build', 'test_suite',
+        'plan', 'build', 'test_suite',
         'architecture_review_as_built', 'finish',
       ];
       for (const step of nonSkippable) {
@@ -394,7 +376,7 @@ describe('engine/steps', () => {
       }
     });
 
-    it.each(['test_suite', 'coverage_binding'] as const)('%s is present for S/M/L tiers', (step) => {
+    it.each(['test_suite'] as const)('%s is present for S/M/L tiers', (step) => {
       for (const tier of ['S', 'M', 'L'] as ComplexityTier[]) {
         expect(shouldSkipForTier(step, tier)).toBe(false);
       }
@@ -407,7 +389,7 @@ describe('engine/steps', () => {
     // legitimately skip manual testing.
     it('locks the S-tier evidence-gate core as never-skippable (Task: T6)', () => {
       const evidenceGateCore: StepName[] = [
-        'coverage_binding', 'build', 'build_review', 'test_suite',
+        'build', 'build_review', 'test_suite',
         'architecture_review_as_built', 'rebase', 'finish',
       ];
       for (const step of evidenceGateCore) {
@@ -513,7 +495,6 @@ describe('engine/steps', () => {
       'finish',
       'prd_audit',
       'architecture_review_as_built',
-      'coverage_binding',
       'build',
       'rebase',
       'plan',
@@ -631,6 +612,15 @@ describe('engine/steps', () => {
   // --- buildStepRegistry ---
 
   describe('buildStepRegistry', () => {
+    // Covers: task:11
+    it('places acceptance_specs immediately after plan_review in the default registry', () => {
+      const names = buildStepRegistry({}).map((step) => step.name);
+      const planReview = names.indexOf('plan_review');
+
+      expect(names[planReview + 1]).toBe('acceptance_specs');
+      expect(names).not.toContain('coverage_binding');
+    });
+
     it('declares exactly build and test_suite as tree-attesting gates', () => {
       const defaultConfig: HarnessConfig = {};
 

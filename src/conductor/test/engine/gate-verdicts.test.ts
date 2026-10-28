@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  checkGateCompletion,
   computeAndWriteVerdict,
   readAllVerdicts,
   readVerdict,
@@ -75,16 +74,6 @@ describe('engine/gate-verdicts', () => {
     const v = await readVerdict(dir, 'plan');
     expect(v?.kickback?.from).toBe('build');
     expect(v?.kickback?.evidence).toMatch(/AC-7/);
-  });
-
-  it('preserves decide-change kickback provenance for an unsatisfied coverage binding', async () => {
-    await writeVerdict(dir, 'coverage_binding', {
-      satisfied: false,
-      checkedAt: 6,
-      kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },
-    });
-
-    expect((await readVerdict(dir, 'coverage_binding'))?.kickback?.from).toBe('decide-change');
   });
 
   it('round trips replay-bound preservation without replacing the original judge identity', async () => {
@@ -239,19 +228,6 @@ describe('engine/gate-verdicts', () => {
     const verdict = await readVerdict(dir, 'build_review');
     expect(verdict?.preservation).toBeUndefined();
     expect(verdict?.rebaseOperation).toBeUndefined();
-  });
-
-  it.each(['failed', 'refused'] as const)('does not satisfy coverage_binding for a %s envelope', async (status) => {
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status,
-      entries: [],
-    }));
-
-    expect(await checkGateCompletion(dir, 'coverage_binding')).toMatchObject({ done: false });
   });
 
   it('resolves flat and region-child verdict paths', () => {

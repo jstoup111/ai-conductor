@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createProgram, type KickbackBudgetDispatch } from '../../src/cli.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
-import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import {
   clearHaltForResume,
   clearMarker,
@@ -45,15 +45,23 @@ function child(value: number) {
   return parsed;
 }
 
-async function sealEnvelope(repo: string, runId: string) {
-  await writeCoverageBindingEnvelope(repo, {
+async function sealEnvelope(repo: string) {
+  await sealSliceTopologyPositions(repo, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
+  });
+}
+
+async function materializeTopology(repo: string) {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
-    runId,
+    runId: 'run-1',
     status: 'done',
     entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
+    materializeTopologyCommit: true,
   }, envelopeFilesystem);
 }
 
@@ -82,6 +90,7 @@ async function stackFixture() {
   await writeFile(join(root, 'base.txt'), 'base\n');
   await git(['add', 'base.txt', '.gitignore']);
   await git(['commit', '-qm', 'base']);
+  await materializeTopology(root);
   await git(['worktree', 'add', '-qb', 'feat/c1/demo', childWorktree, 'main']);
   const closed = await commit('closed child', 'child.txt');
   await git(['update-ref', 'refs/conductor/demo/closed/c1', closed]);
@@ -89,7 +98,7 @@ async function stackFixture() {
   await git(['branch', 'feat/daemon-demo', closed]);
   await git(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
-  await sealEnvelope(repo, 'run-1');
+  await sealEnvelope(repo);
   const blob = (await makeGitRunner(repo)(
     ['hash-object', '-w', '--stdin'],
     { input: JSON.stringify({ version: 1, counts: { 1: 3, 2: 3 } }) },
@@ -214,7 +223,7 @@ describe('kickback-budget --gate restack end to end (sweep G4)', () => {
     const leaf = await unauthorized.git(['rev-parse', 'feat/daemon-demo']);
     expect(generation).toBeTruthy();
     expect(await daemonConsumeAuthorizations(unauthorized)).toEqual([]);
-    await expect(entryPreflight(unauthorized)).resolves.toEqual({ kind: 'halted' });
+    await expect(entryPreflight(unauthorized)).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
     expect(await unauthorized.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).toBe(unauthorized.closed);
     expect(await unauthorized.git(['rev-parse', 'feat/daemon-demo'])).toBe(leaf);
     expect(await readFile(join(unauthorized.repo, HALT_MARKER), 'utf8')).toBe(halt);
@@ -248,7 +257,7 @@ describe('kickback-budget --gate restack end to end (sweep G4)', () => {
     await expect(entryPreflight(subject)).resolves.toEqual({ kind: 'repaired' });
     expect(await cascades(subject)).toMatchObject({ counts: { 1: 5, 2: 3 }, limits: { 1: 5 } });
     await subject.commit('third operator change', 'third.txt');
-    await expect(entryPreflight(subject)).resolves.toEqual({ kind: 'halted' });
+    await expect(entryPreflight(subject)).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
     await expect(access(join(subject.repo, HALT_MARKER))).resolves.toBeUndefined();
 
     // reset after the raise zeroes child 1's count and keeps the raised limit.
@@ -266,7 +275,7 @@ describe('kickback-budget --gate restack end to end (sweep G4)', () => {
     const haltClass = await readFile(join(subject.repo, '.pipeline', 'HALT.class'));
     await subject.git(['worktree', 'remove', '--force', subject.repo]);
     await subject.git(['worktree', 'add', '-q', subject.repo, 'feat/daemon-demo']);
-    await sealEnvelope(subject.repo, 'run-2');
+    await sealEnvelope(subject.repo);
     await mkdir(join(subject.repo, '.pipeline', 'children', '2'), { recursive: true });
     await writeFile(ledgerPath, ledger);
     await writeFile(join(subject.repo, HALT_MARKER), halt);

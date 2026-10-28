@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -19,7 +19,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -63,7 +63,7 @@ async function fixture() {
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
   await git(['add', '.ai-conductor/config.yml']);
   await git(['commit', '-qm', 'configure stack routing']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'routing-resume', status: 'done', entries: [],
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },

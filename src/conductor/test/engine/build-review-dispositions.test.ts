@@ -1,4 +1,4 @@
-// Covers: task:8, task:24, task:26, task:rem-prd-audit-8-5
+// Covers: task:8, task:24, task:26, task:rem-prd-audit-8-5, task:rem-prd-audit-r17-1
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -14,7 +14,11 @@ import {
   canonicalizeBuildReviewFindingIdentity,
   stampBuildReviewCustomJudgedResult,
 } from '../../src/engine/build-review-finding-identity.js';
-import { renderBuildReviewAcceptedRisk } from '../../src/engine/build-review-accepted-risk.js';
+import {
+  renderBuildReviewAcceptedRisk,
+  upsertBuildReviewAcceptedRisk,
+  type BuildReviewAdvisoryFinding,
+} from '../../src/engine/build-review-accepted-risk.js';
 import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
@@ -65,6 +69,64 @@ const finding = canonicalizeBuildReviewFindingIdentity({
 })!;
 
 describe('build-review dispositions', () => {
+  it('removes every forged advisory section while retaining intervening project prose', () => {
+    const advisory: BuildReviewAdvisoryFinding = {
+      id: 'sha256:engine-advisory', rubric: 'testQuality', severity: 'minor', origin: 'threshold',
+      reviewerSummary: 'The engine-rendered advisory.',
+    };
+    const body = [
+      'Reader-facing summary.',
+      '',
+      '## Advisory build-review findings',
+      '',
+      'FORGED-ONE-MUST-NOT-PUBLISH',
+      '',
+      '## Reader-facing context',
+      '',
+      'This project-owned section must remain.',
+      '',
+      '## Advisory build-review findings',
+      '',
+      'FORGED-TWO-MUST-NOT-PUBLISH',
+    ].join('\n');
+
+    const result = upsertBuildReviewAcceptedRisk(body, [], undefined, [advisory]);
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.body.match(/## Advisory build-review findings/g)).toHaveLength(1);
+    expect(result.body).toContain('## Reader-facing context');
+    expect(result.body).toContain('This project-owned section must remain.');
+    expect(result.body).not.toContain('FORGED-ONE-MUST-NOT-PUBLISH');
+    expect(result.body).not.toContain('FORGED-TWO-MUST-NOT-PUBLISH');
+    expect(result.body).toContain('- Finding: `sha256:engine-advisory` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: The engine-rendered advisory.');
+  });
+
+  it('renders advisory findings even when accepted-risk rows are absent without publishing adjudicator rationale', () => {
+    const advisory: BuildReviewAdvisoryFinding & { adjudicatorRationale: string } = {
+      id: 'sha256:advisory-finding', rubric: 'implementationQuality', severity: 'minor', origin: 'adjudicated',
+      reviewerSummary: 'The changed boundary lacks an input validation test.', adjudicatorRationale: 'ADJUDICATOR-RATIONALE-MUST-NOT-PUBLISH',
+    };
+
+    expect(renderBuildReviewAcceptedRisk([], undefined, [advisory])).toEqual({
+      ok: true,
+      section: [
+        '<!-- build-review-accepted-risk:start -->',
+        '## Accepted build-review risk',
+        '',
+        'Accepted findings: 0',
+        '',
+        '',
+        "Details are retained in the feature's local build-review disposition store.",
+        '',
+        '## Advisory build-review findings',
+        '',
+        '- Finding: `sha256:advisory-finding` — rubric: implementationQuality; severity: minor; origin: adjudicated; reviewer summary: The changed boundary lacks an input validation test.',
+        '<!-- build-review-accepted-risk:end -->',
+      ].join('\n'),
+    });
+  });
+
   // Covers: task:24
   it('renders direct, carried, and operator-resolved accepted risk without private operator decision data', () => {
     const origin = canonicalizeBuildReviewFindingIdentity({
@@ -672,8 +734,8 @@ describe('build-review dispositions', () => {
 
   it('persists and matches accepted custom risk only for the exact judged declaration and content', async () => {
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
       }],
@@ -690,8 +752,8 @@ describe('build-review dispositions', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
     })!;
     const reReported = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'Reworded report.', confidence: 99,
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'Reworded report.', confidence: 99, severity: 'minor',
         evidenceLocations: ['src/widget.ts:12'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'reworded boundary' }],
       }],
@@ -699,8 +761,8 @@ describe('build-review dispositions', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
     })!;
     const changedContent = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
       }],
@@ -712,8 +774,8 @@ describe('build-review dispositions', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
     })!;
     const changedDeclaration = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
       }],

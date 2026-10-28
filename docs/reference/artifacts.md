@@ -37,10 +37,11 @@ engine reads (resume probe) and excludes (self-host fingerprint) but never write
 
 ## `.docs/` — committed artifacts
 
-Twenty-one entries. Alphabetized; the four with no code reference are marked.
+Twenty-two entries. Alphabetized; the four with no code reference are marked.
 
 | Entry | Naming | Written by | Read by / gate role |
 | --- | --- | --- | --- |
+| `<slug>/manifest.json` | one folder per feature slug | `compose land`, its only writer | feature-scoped artifact readers in the daemon, conduct, and SHIP — see [feature manifest](#feature-manifest) |
 | `applicability/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | DECIDE author (`explore` for an operator-confirmed technical maintenance change, declaring only `acceptance_specs`), only when [`feature_applicability`](configuration.md#feature_applicability) is enabled | `land-spec` validates its `Inapplicable: <step> — <reason>` lines; daemon discovery reads the base-branch copy and seeds the feature's declarations — see [per-feature applicability](steps.md#per-feature-applicability) |
 | `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; non-Small artifacts require at least one fenced Mermaid block; protected-artifact seal |
 | `audit/` | free-form | manual | **no code reference** |
@@ -73,6 +74,43 @@ its absence is not a defect. The mechanism behind it is live: the land-time cohe
 `evaluateCoherenceWaiver` (`src/conductor/src/engine/engineer/coherence-waiver.ts`, invoked from
 `coherence-validator.ts`) on every run that reports gaps, and blocks unless a fresh, well-formed waiver
 covers every gap id. Write the first one as a plain file at `.docs/coherence-waivers/<plan-stem>.md`.
+
+### Feature manifest
+
+`compose land` writes `.docs/<slug>/manifest.json` on every land and commits it with the spec. It
+rebuilds the file from the current change set; a prior manifest is never an input, so a stale,
+malformed, or mismatched one is overwritten and a deleted artifact drops out. Schema:
+`src/conductor/src/engine/feature-manifest.ts`.
+
+```json
+{
+  "schemaVersion": 1,
+  "slug": "2026-10-01-alpha",
+  "artifacts": [
+    { "kind": "plan", "path": ".docs/plans/2026-10-01-alpha.md" }
+  ]
+}
+```
+
+| Field | Constraint |
+| --- | --- |
+| `schemaVersion` | `1`; any other value is malformed |
+| `slug` | equals the `<slug>` folder name |
+| `artifacts[].kind` | `plan`, `stories`, `prd`, `track`, `complexity`, `conflicts`, `coherence`, `coherence-waiver`, `architecture`, `intake`, `applicability`, or `decision` |
+| `artifacts[].path` | a `.docs/` path inside that kind's directory |
+
+Exactly one `plan` entry is required. Unknown top-level or entry fields are malformed. Entries are sorted by kind, then path. `plan-review/`,
+`shipped/`, `halted/`, and `release-waivers/` files are never registered; ADRs are registered only when
+changed by this land and still present.
+
+Readers resolve a feature-scoped artifact manifest-first. When the manifest exists, its entries for that
+kind are authoritative, and a listed path absent from the tree is reported missing. Without a manifest,
+the reader uses its legacy stem lookup. A malformed manifest fails closed instead of falling back; daemon
+discovery reports it as the `malformed-manifest`
+[blocked merged spec](../runbooks/stalled-or-stuck-feature.md#blocked-merged-spec). Daemon discovery
+also treats every committed manifest as a backlog candidate, alongside `.docs/plans/`.
+
+The manifest is outside `DOCS_RETENTION_POLICY`; `docs-prune` never deletes it.
 
 ### Naming
 
@@ -277,10 +315,9 @@ baseline stale by design. Review the amendment, then reseal the reviewed paths w
 [`ai-conductor reseal`](cli.md#ai-conductor-reseal) before the feature is re-queued — it runs only from an
 interactive operator terminal, refuses the whole reseal if any unlisted protected path has also
 drifted, and records the old and new fingerprints, trigger, and rationale in both the seal's
-`rebaselines` entry and the audit trail. If a resealed, changed path belongs to the current
-coverage-binding DECIDE set and its completed coverage evidence is still current, the engine marks
-that evidence `invalidated`, makes the gate unsatisfied with a `decide-change` origin, and re-runs
-the no-op coverage-binding step before BUILD resumes. Editing the JSON directly is never a valid reseal.
+`rebaselines` entry and the audit trail. Once a stacked feature has child state, a plan reseal that
+changes its `## Slices` positions is refused with the recorded and proposed positions; task
+membership may change within the recorded positions. Editing the JSON directly is never a valid reseal.
 
 Verification also tolerates these cases without halting:
 
@@ -367,7 +404,6 @@ Every pattern declares one lifecycle scope:
 | `architecture_diagram` | `.docs/architecture/*.md` | repository |
 | `architecture_review` | `.docs/decisions/architecture-review-*.md` (feature), `.docs/decisions/adr-*.md` (repository) | mixed |
 | `worktree` | *(none)* | — |
-| `coverage_binding` | `.pipeline/coverage-binding.json` | run |
 | `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares | repository |
 | `build` | `.pipeline/task-status.json` | run |
 | `build_review` | `.pipeline/build-review.json` | run |
@@ -421,7 +457,7 @@ worktree removal.
 | `conduct-state.json` | Backward-compatible `ConductState` formatted as 2-space JSON with a trailing newline; it includes per-step status plus `feature_desc`, `complexity_tier`, `track`, `bootstrap_mode`, `run_started_at`, `session_started_at`, `last_step`, `step_reasons` (why a step was fast-forwarded or skipped, keyed by step), `pr_url`, `rebase_base_sha`, `worktree_dir`, `worktree_branch`, `feature_status`, and `artifact_approvals`. | `filesystem-conduct-state-store.ts` | Created on the first state mutation. Mutations and invariant batches run under a worktree-local lease and persist by atomic replacement; ordinary mutations preserve unowned and omitted fields. Full replacement is reserved for reset/start-over. Missing ⇒ `{}`; **empty or invalid ⇒ hard `corrupted` error**. A legacy `brainstorm` status is migrated forward onto `explore` + `prd` on every load | The feature restarts from step zero and every gate re-runs. `pr_url`, `worktree_branch`, and `session_started_at` are gone, so SHIP-tail freshness gates (which compare artifact mtimes to `session_started_at`) fail open |
 | `task-evidence.json` | `{ evidenceStamps: Record<string, EvidenceStamp>, noEvidenceAttempts, noEvidenceReasons?, migrationGrandfather, lastResolvedCount? }`; each stamp is `{ sha, form, citedShas?, verdictAnchor?, testEvidence? }` with `form` ∈ `commit`, `trailer`, `evidence:satisfied-by`, `semantic-verified` | `task-evidence.ts` | Read-modify-write per gate evaluation, written atomically via a same-directory temp file plus `rename(2)`. Missing or corrupt ⇒ empty state, logged, never throws | `lastResolvedCount` reads 0, so the progress delta degrades to "no progress" rather than crashing the tick; the no-evidence retry budget resets; completed tasks may be re-attempted |
 | `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1. A row restored from git evidence also carries `commit` and `restored_from: "task-trailer"`. A started row carries `startHead`, the commit at its first `task start`, kept across re-seed, repair restaging, and rebase translation. A closed row's `doneWhen` records each check's `source`: `verified`, `reported`, `verify-only`, `unverified`, `pending-judgement`, `judged` (with `verdict`), or `operator-accepted`; any other value fails the reader closed | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation and at the build preflight. Written atomically (same-directory temp plus `rename(2)`) and re-read afterwards — a reconstruction that does not land throws rather than reporting success | Self-heals from the plan on the next evaluation, **with completions intact**: see reconstruction below |
-| `engine-state.json` | `{ activePlanPath?: string, repairObligations?: { version: 1, records, currentByPlan, admissionsByPlan, citationRefusals?, citationRefusalAdmissions? }, taskDigests?: { version: 1, byPlan: { <plan identity>: { <task id>: "v1:sha256:…" } } }, … }`. Each repair record binds its active plan, owning task ids, finding/authority/instruction, admission commit/tree/progress baseline, settlement state, and per-task open or resolved state. `citationRefusals` counts Done-when citation refusals per task, check number, and check-text digest; `citationRefusalAdmissions` marks admissions already counted, so a replay never counts a refusal twice. | `task-seed.ts`, `conductor.ts`, `repair-obligations.ts` (serialized atomic updates) | Written when the active plan is resolved, when each re-seed records plan task digests, and when existing-task remediation is admitted, settled, or closed. A completed `Done when:` close resolves every live open obligation on that task, not only the newest. An older same-authority obligation superseded by the newer current obligation is not live: it no longer holds its task open, reopens it on re-seed, or accepts a close. An open obligation with no current entry fails closed: `repair state is unavailable: task <id> has an open repair obligation but no current obligation is recorded for it`. `activePlanPath` is recorded only by the interactive plan step, so a daemon-dispatched feature that enters at `build` has none; repair-scoped reads therefore resolve the plan through the full ladder (recorded path, then the slug-scoped convention) instead of keying on that field. An admitted open repair keeps its owner unresolved until current closure evidence or post-admission matching task evidence is accepted. | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing. A malformed or incompatible present repair section also fails closed; it is never treated as legacy absence. So does an unresolvable plan while obligations exist — present obligations are never read as legacy absence. |
+| `engine-state.json` | `{ activePlanPath?: string, repairObligations?: { version: 1, records, currentByPlan, admissionsByPlan, citationRefusals?, citationRefusalAdmissions? }, taskDigests?: { version: 1, byPlan: { <plan identity>: { <task id>: "v1:sha256:…" } } }, … }`. Each repair record binds its active plan, owning task ids, finding/authority/instruction, admission commit/tree/progress baseline, settlement state, and per-task open or resolved state. `citationRefusals` counts Done-when citation refusals per task, check number, and check-text digest; `citationRefusalAdmissions` marks admissions already counted, so a replay never counts a refusal twice. `remediationClosure` (`{ version: 1, plans: { <plan identity>: { tasks: { <task id>: { reopenCount, verdicts: { <close identity>: { verdict, rationale, disposition, applied } } } } } } }`) records each [remediation closure judgement](../explanation/gates.md#remediation-closure-judgement); `applied` marks a completed reopen, and a malformed section fails closed. | `task-seed.ts`, `conductor.ts`, `repair-obligations.ts`, `remediation-closure-state.ts` (serialized atomic updates) | Written when the active plan is resolved, when each re-seed records plan task digests, and when existing-task remediation is admitted, settled, or closed. A completed `Done when:` close resolves every live open obligation on that task, not only the newest. An older same-authority obligation superseded by the newer current obligation is not live: it no longer holds its task open, reopens it on re-seed, or accepts a close. An open obligation with no current entry fails closed: `repair state is unavailable: task <id> has an open repair obligation but no current obligation is recorded for it`. `activePlanPath` is recorded only by the interactive plan step, so a daemon-dispatched feature that enters at `build` has none; repair-scoped reads therefore resolve the plan through the full ladder (recorded path, then the slug-scoped convention) instead of keying on that field. An admitted open repair keeps its owner unresolved until current closure evidence or post-admission matching task evidence is accepted. | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing. A malformed or incompatible present repair section also fails closed; it is never treated as legacy absence. So does an unresolvable plan while obligations exist — present obligations are never read as legacy absence. |
 | `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, cumulative, laps?, treeHash, lastReason, priorVerdict, resolvedBefore, mechanicalFaults?, suiteInfrastructureRetries?, effectiveLimit?, effectiveLapCap?, adjustments?, pendingAdjustment?, capEvidence?, resumeAuthorization? }>, pendingRepair? }`. `pendingRepair` (`{ receiptId, charges: { prd_audit?, architecture_review_as_built?: { laps, growth } }, taskIds, prdAuditCriteria? }`) is an appended remediation repair whose lap and growth are charged only when `build` dispatches; a malformed record makes the `prd_audit`, as-built, and growth allowances read as exhausted. `build_review`'s `mechanicalFaults` counts its infrastructure-failure allowance (cap `MAX_MECHANICAL_FAULTS_BUILD_REVIEW`, 3); `effectiveLimit`/`effectiveLapCap`, adjustment history, cap evidence, and a one-use resume authorization record a human-approved budget recovery. | `kickback-ledger.ts` | Every read-modify-write takes the feature-local `kickback-ledger` lease, then atomically replaces the file. A gate's count survives daemon re-dispatch and advances toward its cap; an approved recovery changes only its named gate. Cleared entirely on a fresh feature session. | A missing ledger is the empty base case. An unreadable ledger, or an unreadable gate entry, fails closed: the affected recovery or enforcement path refuses rather than inventing fresh allowance; healthy sibling gates remain readable when only one entry is malformed. |
 | `build-outcome.json` | `{ version: 1, records: BuildOutcomeRecord[] }`. Each record carries `outcome` (`moved`/`no-movement`), `terminalOutcome` (`done`/`failed`/`no-verdict`), the kicking-back `gate` (or `null`), the gate `verdict` at entry, the `rung` (`model`, `effort`) dispatched at, both movement witnesses (`treeBefore`/`treeAfter`, `headBefore`/`headAfter`), and an optional bounded `note` (the same last-200-lines tail `step_completed` carries) plus an inferred or agent-declared `category` (`disputes-gate`/`belongs-to-decide`/`silent-no-movement`) | `build-outcome.ts`, appended to at every build-step terminal outcome from `conductor.ts` | Read when the conductor handles an active gate's kickback to `build`: an identical no-movement cycle can halt instead of paying for a repeat dispatch (`sameNoOpCycle`) | Missing, corrupt, or version-mismatched sidecars fail open to an empty record set (never throw, never block dispatch); a lost sidecar just means one already-observed no-op cycle may be repeated once before the guard has evidence again |
 | `build-dispute.json` | `{ category: 'disputes-gate' \| 'belongs-to-decide' \| 'silent-no-movement' }` | optional, hand- or agent-authored during a build step | `resolveBuildOutcomeCategory`, preferred over the note-text inference when present and well-formed | Absent, malformed, or shape-invalid content is ignored outright and the category is inferred from the build's note text instead — this artifact is never required for any behavior in the feature |
@@ -534,10 +570,10 @@ Agent-authored, engine-validated. Alphabetized.
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
 | `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { testQuality, security, implementationQuality }, codeStamp?, declaredReplicationSuppressions? }`. `declaredReplicationSuppressions` lists `{ findingId, sourcePath, targetPath }` for `implementationQuality` `duplication` findings the engine suppressed under a declared pattern replication. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as a retired rubric — `tautology`, `scope`, `rootCause`, `completeness`, `wiring`) is ignored, so a verdict written before the rubric consolidation still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
+| `build-review/<lap>/<rubric>.json` | One branch artifact per rubric per lap: `{ version, rubric, lapId, snapshotDigest, result, provenance, descriptor?, declaration?, reuse?, reviewScope? }`. `result.kind` is `judged`, `skipped`, `scope-empty`, or a failure kind. `reviewScope` is the durable [lap scope record](../explanation/gates.md#later-laps-judge-only-the-unsettled-delta) the next lap's scope decision reads; an unparseable one forces one `record-unreadable` full lap. | `build-review-artifacts.ts`, `step-runners.ts` |
 | `build-review-rejections/<lap>/<rubric>.<attempt>.json` | `{ version: 1, rubric, rubricKind: 'builtin'\|'custom', lapId, attempt, reason: 'invalid-structured-result', detail, rejection?, provider?, model?, structuredResult, output?, outputBytes?, outputTruncated?, promptPath?, promptSha256?, regionComparison? }`. One write-once record per reviewer response rejected by the rubric's structured-result contract; `attempt` increments per rubric within a lap. `output` keeps the first 1 MiB of raw reviewer output (`outputTruncated` marks a cut). Custom-rubric records add `promptPath`/`promptSha256` for the exact delivered prompt, retained at `build-review/<lap>/<rubric>.prompt.txt`, and `regionComparison` for each cited source region checked against the frozen commit. The `build_review_rubric_infrastructure_failure` event names the record in `retainedResponsePath`. Best-effort diagnostic evidence: a failed write never changes the review outcome, and these writes are excluded from the lap input digest. | `build-review-rejection-retention.ts`, `step-runners.ts` |
 | `build-review-work-order.json` | `{ version: 'v1', domain: 'build_review', feature, effectId, cases[], attemptedCaseIds? }`. The effect-bound, feature-local ordered BUILD work from a post-join adjudication; BUILD records `attemptedCaseIds` before dispatch so restart recovery and repeat detection remain durable. | build-review adjudication coordinator |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
-| `coverage-binding.json` | `{ version: 1, slug, runId, status, entries[], sliceMembership?, storyOwnership? }`. The no-op `coverage_binding` step writes `status: "disabled"` with an empty `entries` array; the remaining entry and status shapes below are accepted only so envelopes written before the judge was retired still parse. `status` is `disabled`, `done`, `failed`, `partial`, `refused`, or `invalidated`; entries bind engine-stamped digests to a criterion verdict and cited task checks, to a DECIDE amendment's plan-obligation verdict, or (`kind: "conflict"`) to a plan-conflict verdict `{ claimKind, claimId, verdict, taskIds?, conflict? }`, where `claimKind` is `criterion` or `adr-decision`, `verdict` is `consistent`, `conflicts`, `not-applicable`, or `unjudged`, and `taskIds` and `conflict` appear only with `conflicts`. When a plan declares a valid `## Slices` manifest, `sliceMembership` records `{ taskSlices, titles }`: each non-remediation task id maps to its positive slice position, and `titles` preserves the ordered slice titles. When [`stacked_prs`](configuration.md#stacked_prs) admits the sliced plan, `storyOwnership` maps each story id to its slice position. `partial` checkpoints accepted batches, and `invalidated` retains the prior entries as a re-judgement baseline; neither is completion evidence. | `coverage_binding` step |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
@@ -553,7 +589,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
 | `remediation.json` | Post-join `build_review` adjudication output only, in the strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Gap plans use `remediation-plan.json`. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
 | `remediation-plan.json` | Gap-plan authority: `{ version: 'v1', attemptId, source, requiredReferenceDigest, dispositions[] }`. The engine checks the planner's native structured result against its bounded input projection, then writes it. Each disposition answers one `reference` with `disposition`, `targetStep`, a halt `category` or `null`, `rationale`, new `tasks[]`, and active-plan `boundTaskIds[]`. Every projected PRD criterion, as-built finding, and refusal must be answered exactly once. `source` is `validation-group`, `prd-audit`, `as-built`, `build-stall`, or `finish-verification`. A plan from another attempt reads as absent, and a malformed envelope reads as invalid. Written atomically. | engine (`remediate` step) |
-| `remediation-cases.json` | Version 3 feature-local case state; versions 1 and 2 remain readable and upgrade to version 3 on the first write that queues an event. It retains the version-one `build_review` cases, effects, and suppressions, and the version-two `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. Version 3 adds engine-written operator state: a case's `operatorAcceptance.origins` (each `{ sourceId, lapId }` where an exact operator acceptance was first recorded on that case), a case's `operatorResolution` (`operator`, `rationale`, `resolvedAt`, written only by `build-review resolve-case`), the source outcome `carried`, and an `outbox` of `{ eventId, occurredAt, event }` entries written in the same mutation as the state change and drained onto `.pipeline/events.jsonl` once per `eventId`. A child BUILD keeps its own case store, selected with `--child`. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
+| `remediation-cases.json` | Version 3 feature-local case state; versions 1 and 2 remain readable and upgrade to version 3 on the first write that queues an event. It retains the version-one `build_review` cases, effects, and suppressions, and the version-two `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. A build-review `advisory` case carries `adjudicatedSeverity` and effect `none`. Each suppression entry has `kind` `confidence` or `severity` (a below-`min_severity` advisory finding); an entry without `kind` reads as `confidence`. Version 3 adds engine-written operator state: a case's `operatorAcceptance.origins` (each `{ sourceId, lapId }` where an exact operator acceptance was first recorded on that case), a case's `operatorResolution` (`operator`, `rationale`, `resolvedAt`, written only by `build-review resolve-case`), the source outcome `carried`, and an `outbox` of `{ eventId, occurredAt, event }` entries written in the same mutation as the state change and drained onto `.pipeline/events.jsonl` once per `eventId`. A build-review case may carry `recurrenceOf` (prior case IDs it recurs from) and `distinctFrom` (`{ caseId, reason }` entries the judgement declared distinct); `remediation_case_reconciled` repeats both for an opened case. A child BUILD keeps its own case store, selected with `--child`. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
@@ -603,7 +639,7 @@ To clear a halt safely, use the procedure in
 | `git-hooks/` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction`, `pre-push` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Externally written `build_review` disposition and kickback-budget authorization events | Separate ledger — see below |
-| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
+| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`, `feature_artifacts_registered`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/` | Sanitized, allowlisted provider session transcripts captured before a self-host provider home is removed | Self-host only. Pruned after a step completes with progress; otherwise retained, capped at 20 captures / 1 GiB per worktree. Read with [`ai-conductor transcripts`](cli.md#ai-conductor-transcripts); see [provider transcripts](../guides/self-hosting.md#provider-transcripts) |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
@@ -828,7 +864,7 @@ when a reseal changes a story's owner without moving a task; and the restack eve
 (`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). Routed repair adds
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
-`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome`). Stacked
+`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
 publication adds `stack_member_published` and `stack_member_redrafted` (`child`, `pr`),
 `stack_assembled` (`prs`), `stack_member_lifecycle` (`child`, `pr`, `state` of
 `merged`/`closed`/`reverted`, de-duplicated by `eventId`), `stack_members_unreachable` (`child`,
@@ -844,7 +880,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `operator_rewind`, `decide_artifacts_pruned`,
 `setup_repair`, `project_setup`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
-`build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
+`build_review_review_scope`, `build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `build_review_stale_aggregate`,
 `build_review_disposition_version_invalidated`, `build_review_mechanical_allowance_exhausted`,
 `remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
@@ -865,7 +901,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
 `remediation_disposition_rejected`,
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_done_when_unverified`,
-`done_when_citation_judged`, `done_when_citation_accepted`, `build_stall`, `build_progress`,
+`done_when_citation_judged`, `done_when_citation_accepted`, `remediation_closure_judged`, `build_stall`, `build_progress`,
 `step_in_flight`, `build_no_progress`, `build_active_stall`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `gate_verdict`, `test_suite_verification`, `build_member_evidence_reused`,
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
@@ -923,6 +959,12 @@ judge could not run, `unavailable` naming the cause. `done_when_citation_accepte
 [operator acceptance](cli.md#ai-conductor-done-when) with `taskId`, `check`, and `reason`. Both
 persist here only; neither renders to the terminal.
 
+`remediation_closure_judged` records one BUILD-boundary
+[remediation closure judgement](../explanation/gates.md#remediation-closure-judgement): `outcome`
+(`judged` or `unjudged`), `attempts`, and `candidates`, each with `taskId`, `verdict` (`resolved`,
+`persists`, `partial`, or `unjudged`), `rationale`, and `disposition` (`reopened`, `left-closed`, or
+`bound-exhausted`). It persists here only and does not render to the terminal.
+
 `rebase_supersession_verdict` records a successful mergeable-sweep test-only judgement: its choice,
 rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding
 preservation-guard excusals. Both persist in the affected feature worktree's event ledger; neither
@@ -964,6 +1006,10 @@ so rejection history remains available after that worktree is removed. The run r
 `land_dependency_decided` records a successful intake land's dependency outcome: repository, source
 reference, proposed, accepted, and declined targets, any `--skip-dependency-check` reason, and the
 status of each post-commit link write. It goes to the same `.pipeline/composer-events.jsonl`.
+`feature_artifacts_registered` records a successful land that changed the
+[feature manifest](#feature-manifest): the slug and the `{ kind, path }` entries newly added relative to
+the prior valid manifest. It goes to the same ledger; a write failure prints a warning and never fails
+the land.
 `dependency_drift_swept` records each hourly `intake-loop` drift sweep per repository: `status`
 (`swept` or `repository-indeterminate`) and the unlinked, stale, cycle, contradiction, and
 indeterminate findings. It persists to `.pipeline/events.jsonl` under the directory where
@@ -1095,6 +1141,11 @@ line. `CloseoutEventTail` admits only these types (`ADMITTED_EXTERNAL_PIPELINE_E
 - `build_review_reduced_coverage_accepted`
 - `build_review_disposition_refused`
 - `build_review_outer_verdict`
+- `github_operation_failed` — appended by the `github-operation` subcommand when a guarded GitHub
+  operation runs and fails. Carries `operation`, `target`, and `error`. `error` is bounded before
+  it is written: request payload strings become `«payload»`, a leading `Command failed:` line is
+  dropped, and the text is capped at 1000 characters. A ledger write failure never changes the
+  operation's own result.
 - `kickback_budget_adjustment_authorized` — appended at most once per `adjustmentId`, under a
   writer lease.
 
@@ -1107,6 +1158,13 @@ re-emitted. A malformed or unadmitted complete line is consumed once so later va
 observable; the tail emits one `pipeline_tail_diagnostic` instead of replaying or exposing the line.
 `readMergedFeatureEvents` (used by [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail))
 merges this ledger with `events.jsonl` by `ts`.
+
+FINISH PR-prose authoring also reads this ledger. It flushes the tail before dispatching an
+authoring pass to fix a boundary, then flushes again after the pass. A `github_operation_failed`
+for `pull-request.edit` on the same pull request inside that window halts FINISH with
+`publication_operation_failed`, unless re-observation shows the prose changed anyway. If the first
+flush fails, the pass attributes no failures, so an earlier pass's failure is never reported as
+this one's.
 
 ### `.pipeline/audit-trail/events.jsonl`
 

@@ -187,6 +187,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > flag-on stack-eligibility verdict at land and `coverage_binding`, and `MAX_PLAN_SLICES` is replaced
 > by the `MAX_CHILD_ID` ceiling in the flag-independent grammar rung.
 
+> **Amended 2026-10-23 by #3365:** The source of a feature's children is the sealed plan's slice manifest, read through the slice-topology loader (adr-2026-10-23-slice-topology-from-sealed-plan decision 2). The `coverage_binding` envelope is removed.
+
 6. **The leaf is a branch kind, not the absence of a child.**
    - When a feature has children, the leaf is the child with the highest declared position. Its
      region state lives under that child's directory, and its branch stays `feat/daemon-<slug>`.
@@ -199,6 +201,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
    - A reseal that would move, add or remove a position halts needs-human instead of silently
      re-attributing state. The guard belongs in `coverage_binding` and is implemented by the ticket
      that first creates children (#2942).
+
+> **Amended 2026-10-23 by #3365:** The position guard belongs to `reseal` and the slice-topology loader, not `coverage_binding`, which is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 3).
 
 8. **Per-child state lives under `.pipeline/children/<k>/`, mirroring the flat layout.**
    - One seam, `pipelinePathFor(root, relative, child?)`, forms every per-child path.
@@ -226,6 +230,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > their round receipts, the repairing marker, the re-validation queue and `red/c<k>`. The flat
 > ledger becomes a reconciled cache of the receipts (`adr-2026-10-12-routed-whole-feature-repair`
 > decisions 6, 9 and 10).
+
+> **Amended 2026-10-23 by #3365:** `coverage_binding` is removed from the whole-feature state set (adr-2026-10-23-slice-topology-from-sealed-plan decision 1).
 
 9. **Region caps apply per child.**
    - Because region gate entries, including `build_review`'s cumulative count, live in the child's
@@ -255,6 +261,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > else the cursor child) is what region consumers read (`adr-2026-10-12-routed-whole-feature-repair`
 > decision 8).
 
+> **Amended 2026-10-23 by #3365:** The active child's positions come from the sealed plan through the slice-topology loader, not the sealed envelope (adr-2026-10-23-slice-topology-from-sealed-plan decisions 2 and 4).
+
 11. **The base-override contract is implemented by #2942.**
     - One producer, `resolveChildBase(worktree, child)`, returns one of three results:
       - nothing, for no child or the first declared position, so today's per-site ladder runs;
@@ -277,6 +285,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > **Amended 2026-10-12 by #2944:** Two bases are added. `routed-repair` is the host's closure at
 > region entry, pinned in the route record. A re-validation pass grades the replayed contribution
 > against its new parent (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
+
+> **Amended 2026-10-23 by #3365:** `resolveChildBase` takes its positions from the slice-topology loader; the base-override contract is otherwise unchanged (adr-2026-10-23-slice-topology-from-sealed-plan decision 4).
 
 12. **Events carry an optional `child`.**
     - `ConductorEvent` becomes `(existing union) & { child?: ChildId }`.
@@ -310,6 +320,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > **Amended 2026-10-12 by #2944:** The recovery CLIs default `--child` to the execution child. The
 > exception is whole-feature gate budgets, which stay flat
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 8 and 10).
+
+    > **Amended 2026-10-24 by #3203:** For a closed `k`, `rewind --child k` is no longer refused. It is validated against `k`'s closure ref rather than `.pipeline/children/<k>/`, opens a declared operator round, and demotes only `k`'s region from the target; children above and the whole-feature steps are not demoted (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 11).
 
 14. **The N=1 contract is structural and proven by golden tests.**
     - With no child there is no `children/` directory, no new key, and no event field.

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConductorEvent } from '../../src/types/events.js';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
+  ProtectedArtifactResealRefusal,
   type ProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
   createProtectedArtifactSeal,
@@ -18,6 +19,7 @@ import {
   evaluateProtectedArtifactSealRotationInRepository,
   isProtectedArtifactPath,
   namesOwnFeature,
+  prepareProtectedArtifactReseal,
   readOperatorReseals,
   resealProtectedArtifactSeal,
   rotateProtectedArtifactSeal,
@@ -1009,6 +1011,65 @@ describe('resealProtectedArtifactSeal', () => {
         : `${reason}\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', baseBranch!, 'HEAD'])})`,
       persistedBytes: originalBytes,
     });
+  });
+});
+
+describe('prepareProtectedArtifactReseal', () => {
+  async function makePreparationFixture(): Promise<{
+    repo: string;
+    seal: ProtectedArtifactSeal;
+    toCommit: string;
+    p1: string;
+    p2: string;
+  }> {
+    const p1 = '.docs/plans/p1.md';
+    const p2 = '.docs/plans/p2.md';
+    const repo = await makeRepo({ [p1]: 'approved plan one\n', [p2]: 'approved plan two\n' });
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: await git(repo, ['rev-parse', 'HEAD']) });
+    await git(repo, ['checkout', '-q', '-b', 'feature']);
+    await writeProjectFile(repo, p1, 'corrected plan one\n');
+    await writeProjectFile(repo, p2, 'corrected plan two\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'correct protected plans']);
+    return { repo, seal, toCommit: await git(repo, ['rev-parse', 'HEAD']), p1, p2 };
+  }
+
+  it('refuses unlisted drift with the reseal message and its sealed path', async () => {
+    const { repo, seal, toCommit, p1, p2 } = await makePreparationFixture();
+    const options = { projectRoot: repo, seal, toCommit, trigger: 'operator-reseal', paths: [p1], baseBranch: 'main' };
+
+    const prepared = await prepareProtectedArtifactReseal(options).then(() => undefined, (error: unknown) => error);
+    const resealed = await resealProtectedArtifactSeal(options).then(() => undefined, (error: unknown) => error);
+
+    expect({
+      refusal: prepared instanceof ProtectedArtifactResealRefusal,
+      path: (prepared as { path?: string }).path,
+      message: (prepared as Error).message,
+    }).toEqual({ refusal: true, path: p2, message: (resealed as Error).message });
+  });
+
+  it('prepares every listed changed artifact without writing a seal or event', async () => {
+    const { repo, seal, toCommit, p1, p2 } = await makePreparationFixture();
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const before = await readFile(sealPath, 'utf8');
+
+    await prepareProtectedArtifactReseal({ projectRoot: repo, seal, toCommit, trigger: 'operator-reseal', paths: [p1, p2], baseBranch: 'main' });
+
+    await expect(Promise.all([
+      readFile(sealPath, 'utf8'),
+      readFile(join(repo, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false),
+    ])).resolves.toEqual([before, false]);
+  });
+
+  it('refuses an unsealed target with that target as its path', async () => {
+    const { repo, seal, toCommit } = await makePreparationFixture();
+    const path = '.docs/plans/not-sealed.md';
+
+    const refusal = await prepareProtectedArtifactReseal({ projectRoot: repo, seal, toCommit, trigger: 'operator-reseal', paths: [path] })
+      .then(() => undefined, (error: unknown) => error);
+
+    expect({ refusal: refusal instanceof ProtectedArtifactResealRefusal, path: (refusal as { path?: string }).path })
+      .toEqual({ refusal: true, path });
   });
 });
 

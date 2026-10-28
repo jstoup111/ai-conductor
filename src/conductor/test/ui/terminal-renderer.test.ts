@@ -8,7 +8,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 
 const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'github_operation_refused', 'github_operation_failed', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'rate_limit', 'session_reset',
   'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
   'provider_attempt_started',
   'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
@@ -406,9 +406,9 @@ describe('TerminalRenderer', () => {
   });
 
   it('does not summarize non-renderable branchless events', async () => {
-    await renderer.handle({ type: 'coverage_binding_judged' } as ConductorEvent);
+    await renderer.handle({ type: 'otel_spool_drop' } as ConductorEvent);
 
-    expect(stream.output()).not.toContain('coverage_binding_judged');
+    expect(stream.output()).not.toContain('otel_spool_drop');
   });
 
   it('renders active build stalls with their elapsed time and selected action', async () => {

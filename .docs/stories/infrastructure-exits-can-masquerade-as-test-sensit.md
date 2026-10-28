@@ -27,17 +27,17 @@ consumer can read sensitivity support out of an exit code alone.
 - [ ] The mechanical-fault lane (launch/timeout/signal → `infrastructure-failure`) is byte-for-byte behavior-identical under existing tests
 - [ ] Unit tests cover exit 0, nonzero exit, and each infrastructure reason against the new union
 
-## Story 2: The reviewer result carries a validated counterfactualSensitivity field under v3
+## Story 2: The reviewer result carries a validated counterfactualSensitivity field under the current contract
 
 As the build_review engine, I want the testQuality reviewer's result to include an optional
 `counterfactualSensitivity` value from the closed vocabulary `supports | indeterminate |
-not-applicable`, validated and persisted by the engine under contract v3, so that the sensitivity
+not-applicable`, validated and persisted by the engine under the current built-in contract version, so that the sensitivity
 judgement is durable schema-checked state rather than prose.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a testQuality reviewer result whose `counterfactualSensitivity` is `supports`, `indeterminate`, or `not-applicable`, when the engine validates the stamped envelope, then the result is accepted and the field is persisted with the judged envelope under `contractVersion: v3`
+- Given a testQuality reviewer result whose `counterfactualSensitivity` is `supports`, `indeterminate`, or `not-applicable`, when the engine validates the stamped envelope, then the result is accepted and the field is persisted with the judged envelope under the current built-in `contractVersion`
 - Given an accepted result with the field present, when the branch verdict is settled and cached, then the persisted artifact and cache entry carry the field unchanged
 
 #### Negative Paths
@@ -48,7 +48,7 @@ judgement is durable schema-checked state rather than prose.
 
 ### Done When
 - [ ] `build-review-domain.ts` validates the field against the closed vocabulary; out-of-vocabulary or wrong-typed values reject the envelope with a named problem
-- [ ] The contract version constant remains `v3` and no cache or disposition migration exists in the diff
+- [ ] Adding counterfactualSensitivity does not change the contract version constant and no cache or disposition migration exists in its diff
 - [ ] Unit tests cover: each vocabulary member accepted, out-of-vocabulary rejected → absent rerun, field absent accepted, finding identity unchanged with and without the field
 
 ## Story 3: An indeterminate counterfactual supplies no sensitivity evidence and no finding

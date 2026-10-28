@@ -6,12 +6,14 @@ import {
   type RemediationCaseSuppressionEntry,
 } from './remediation-case-store.js';
 import type { ChildId } from './child-context.js';
+import type { BuildReviewSeverity } from './build-review-domain.js';
 
 export interface BuildReviewCustomSuppressionSource {
   readonly rubric: string;
   readonly findingId: string;
   readonly summary: string;
   readonly confidence?: number;
+  readonly severity?: BuildReviewSeverity;
 }
 
 /**
@@ -30,6 +32,7 @@ export function projectBuildReviewCustomSuppressionSources(
     findingId: source.findingId,
     summary: source.summary,
     ...(source.confidence === undefined ? {} : { confidence: source.confidence }),
+    ...(source.severity === undefined ? {} : { severity: source.severity }),
   })));
 }
 
@@ -54,6 +57,7 @@ export function projectBuildReviewSuppressionEntries(input: {
     const floor = input.floors[source.rubric];
     if (floor === undefined) return [];
     return [{
+      kind: 'confidence' as const,
       findingId: source.findingId,
       rubric: source.rubric,
       summary: source.summary,
@@ -61,6 +65,20 @@ export function projectBuildReviewSuppressionEntries(input: {
       floor,
       lastSeenLap: input.aggregate.lapId as string,
     }];
+  });
+}
+
+/** The parallel durable history projection for below-threshold findings. */
+export function projectBuildReviewAdvisoryEntries(input: {
+  readonly aggregate: BuildReviewAggregate;
+  readonly advisoryFindingIds: readonly string[];
+  readonly thresholds: Partial<Record<string, BuildReviewSeverity>>;
+}): readonly RemediationCaseSuppressionEntry[] {
+  const advisory = new Set(input.advisoryFindingIds);
+  return (projectBuildReviewAggregateSources(input.aggregate) ?? []).flatMap((source) => {
+    const threshold = input.thresholds[source.rubric];
+    if (!advisory.has(source.findingId) || source.severity === undefined || threshold === undefined) return [];
+    return [{ kind: 'severity' as const, findingId: source.findingId, rubric: source.rubric, summary: source.summary, severity: source.severity, threshold, lastSeenLap: input.aggregate.lapId as string }];
   });
 }
 

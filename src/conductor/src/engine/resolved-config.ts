@@ -25,6 +25,7 @@ import { BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED, BUILD_REVIEW_RUBRIC_IDS } from './
 import { resolveBuildReviewCustomContract } from './build-review-policy-resolver.js';
 import { resolveBuildReviewContractCatalog, type RubricContractDescriptor } from './build-review-contract.js';
 import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js';
+import type { BuildReviewSeverity } from './build-review-domain.js';
 import type { BuildReviewCustomFindingIdentity } from './build-review-finding-identity.js';
 import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
 
@@ -52,7 +53,6 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
-  coverage_binding: 3,
   acceptance_specs: 3,
   build: 3,
   build_review: 3,
@@ -83,7 +83,6 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   architecture_diagram: 'auto',
   architecture_review: 'conditional',
   worktree: 'auto',
-  coverage_binding: 'auto', // engine-native no-op gate; records plan slice topology only
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
@@ -746,6 +745,8 @@ export interface ResolvedBuildReviewRubricPolicy {
   readonly max_retries: number;
   readonly escalate: boolean;
   readonly min_confidence: number;
+  /** Absent preserves legacy behavior; no severity threshold is defaulted. */
+  readonly min_severity?: BuildReviewSeverity;
 }
 
 /** An enabled built-in rubric published for build-review execution. */
@@ -923,6 +924,7 @@ export function resolveBuildReviewConfig(
       max_retries: resolvedNeutral.max_retries,
       escalate: resolvedNeutral.escalate,
       min_confidence: rubric?.min_confidence ?? 0,
+      ...(rubric?.min_severity === undefined ? {} : { min_severity: rubric.min_severity }),
     });
   };
   const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [

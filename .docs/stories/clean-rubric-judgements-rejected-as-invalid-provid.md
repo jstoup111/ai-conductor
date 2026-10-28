@@ -38,7 +38,7 @@ engine bookkeeping.
 #### Happy Path
 - Given a dispatched rubric whose provider returns `{"findings": []}` and nothing else, when the
   dispatch settles, then the branch resolves as a judged PASS carrying `kind: "judged"`, the
-  dispatched rubric's id, `contractVersion: "v3"`, and the projection's `lapId` and
+  dispatched rubric's id, the current built-in `contractVersion`, and the projection's `lapId` and
   `snapshotDigest`.
 - Given a provider that returns one well-formed finding and no envelope fields, when the dispatch
   settles, then the branch resolves as a judged FAIL whose single finding is preserved verbatim and
@@ -113,7 +113,7 @@ narrowing the contract cannot break a rubric mid-flight.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a provider response carrying the complete v3 envelope with correct values, when the dispatch
+- Given a provider response carrying the complete current-version envelope with correct values, when the dispatch
   settles, then it settles as judged and is indistinguishable from a `findings`-only response.
 - Given a provider response carrying extra unrecognized top-level keys alongside `findings`, when
   the dispatch settles, then the extra keys are discarded and the judgement settles.
@@ -126,7 +126,7 @@ narrowing the contract cannot break a rubric mid-flight.
   the dispatch settles, then the engine's rubric wins and no failure is raised on the mismatch
   alone.
 - Given a provider response whose `contractVersion` is `"v1"`, when the dispatch settles, then the
-  engine stamps `"v3"` and the findings are parsed under the v3 anchor rules.
+  engine stamps the current built-in contract version and the findings are parsed under its anchor rules.
 
 ### Done When
 - [ ] A test asserts each of the three recorded drifted envelopes (`status`, `type`, missing
@@ -164,7 +164,7 @@ results cannot cross.
 
 ---
 
-## Story 5: The contract version stays v3 and no judgement is invalidated
+## Story 5: Narrowing the wire contract does not itself change the contract version
 
 **Requirement:** D3 · O2
 
@@ -174,22 +174,22 @@ so that the fix does not spend provider budget across every open feature.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a rubric cache entry written before this change, when the same projection is graded after
-  it, then the entry is served as a cache hit and no fresh dispatch occurs.
+- Given a rubric cache entry written under the current contract version, when the same projection is
+  graded again under that version, then the entry is served as a cache hit and no fresh dispatch occurs.
 - Given a branch settled after this change, when its artifact is persisted, then the stored result
-  is a full envelope carrying `contractVersion: "v3"`, unchanged in shape from before.
+  is a full envelope carrying the current built-in `contractVersion`, unchanged in shape by the narrowing.
 
 #### Negative Paths
-- Given a persisted `v1` or `v2` result in the cache or an artifact, when it is parsed at rest,
+- Given a persisted result of an earlier contract version in the cache or an artifact, when it is parsed at rest,
   then it parses successfully under the version it declares, exactly as before.
 - Given a projection whose content changed, when cache identity is computed, then the entry misses
   — the provenance keys `lapId` and `snapshotDigest` remain excluded from the digest and do not
   become identity inputs as a side effect of this change.
 
 ### Done When
-- [ ] `CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION` is unchanged at `v3`.
-- [ ] A test proves a pre-change cache entry is served as a hit after the change.
-- [ ] A test proves `v1` and `v2` records still parse at rest.
+- [ ] The wire-contract narrowing does not change `CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION`; only a contract change such as the required finding severity (v4) advances it.
+- [ ] A test proves a cache entry under the current contract version is served as a hit.
+- [ ] A test proves records of earlier contract versions still parse at rest.
 
 ---
 
