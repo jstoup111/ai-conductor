@@ -2,10 +2,19 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  type FeatureManifest,
+  type ParseFeatureManifestResult,
   featureManifestPath,
   parseFeatureManifest,
   renderFeatureManifest,
 } from '../../src/engine/feature-manifest.js';
+
+const asManifest = (value: unknown): FeatureManifest => value as FeatureManifest;
+
+function reasonOf(result: ParseFeatureManifestResult): string {
+  if (result.kind !== 'malformed') throw new Error(`expected malformed, got ${result.kind}`);
+  return result.reason;
+}
 
 const allKindsManifest = {
   schemaVersion: 1,
@@ -73,9 +82,9 @@ describe('feature manifest', () => {
       artifacts: [...entries].reverse(),
     } as const;
 
-    const rendered = renderFeatureManifest(manifest);
+    const rendered = renderFeatureManifest(asManifest(manifest));
 
-    expect(renderFeatureManifest(reversedManifest)).toBe(rendered);
+    expect(renderFeatureManifest(asManifest(reversedManifest))).toBe(rendered);
     expect(rendered).toBe(
       `${JSON.stringify(
         {
@@ -102,7 +111,7 @@ describe('feature manifest', () => {
         { kind: 'plan', path: '.docs/plans/f.md' },
       ],
     } as const;
-    const rendered = renderFeatureManifest(manifest);
+    const rendered = renderFeatureManifest(asManifest(manifest));
 
     expect(Object.keys(JSON.parse(rendered))).toEqual(['schemaVersion', 'slug', 'artifacts']);
     expect(parseFeatureManifest(rendered, '.docs/f/manifest.json', 'f')).toEqual({
@@ -134,9 +143,9 @@ describe('feature manifest', () => {
     );
 
     expect(unsupportedSchema).toMatchObject({ kind: 'malformed' });
-    expect(unsupportedSchema.reason).toContain('2');
+    expect(reasonOf(unsupportedSchema)).toContain('2');
     expect(unknownKind).toMatchObject({ kind: 'malformed' });
-    expect(unknownKind.reason).toContain('notes');
+    expect(reasonOf(unknownKind)).toContain('notes');
   });
 
   it('rejects unknown top-level and entry fields by name', () => {
@@ -156,9 +165,9 @@ describe('feature manifest', () => {
     );
 
     expect(unknownTopLevelField).toMatchObject({ kind: 'malformed' });
-    expect(unknownTopLevelField.reason).toContain('updatedAt');
+    expect(reasonOf(unknownTopLevelField)).toContain('updatedAt');
     expect(unknownEntryField).toMatchObject({ kind: 'malformed' });
-    expect(unknownEntryField.reason).toContain('title');
+    expect(reasonOf(unknownEntryField)).toContain('title');
   });
 
   it('rejects paths outside .docs and decision paths outside .docs/decisions/', () => {
@@ -194,11 +203,11 @@ describe('feature manifest', () => {
     );
 
     expect(outsideDocs).toMatchObject({ kind: 'malformed' });
-    expect(outsideDocs.reason).toMatch(/outside .docs/);
+    expect(reasonOf(outsideDocs)).toMatch(/outside .docs/);
     expect(escapingDocs).toMatchObject({ kind: 'malformed' });
-    expect(escapingDocs.reason).toMatch(/outside .docs/);
+    expect(reasonOf(escapingDocs)).toMatch(/outside .docs/);
     expect(decisionOutsideAdrFolder).toMatchObject({ kind: 'malformed' });
-    expect(decisionOutsideAdrFolder.reason).toMatch(/outside .docs\/decisions/);
+    expect(reasonOf(decisionOutsideAdrFolder)).toMatch(/outside .docs\/decisions/);
   });
 
   it('rejects folder-slug mismatch and plan entry counts other than one', () => {
@@ -230,18 +239,18 @@ describe('feature manifest', () => {
     );
 
     expect(mismatchedSlug).toMatchObject({ kind: 'malformed' });
-    expect(mismatchedSlug.reason).toContain('f');
-    expect(mismatchedSlug.reason).toContain('g');
+    expect(reasonOf(mismatchedSlug)).toContain('f');
+    expect(reasonOf(mismatchedSlug)).toContain('g');
     expect(noPlanEntry).toMatchObject({ kind: 'malformed' });
-    expect(noPlanEntry.reason).toContain('0');
+    expect(reasonOf(noPlanEntry)).toContain('0');
     expect(twoPlanEntries).toMatchObject({ kind: 'malformed' });
-    expect(twoPlanEntries.reason).toContain('2');
+    expect(reasonOf(twoPlanEntries)).toContain('2');
   });
 
   it('names the manifest path when JSON is invalid', () => {
     const result = parseFeatureManifest('{ not valid JSON', '.docs/f/manifest.json', 'f');
 
     expect(result).toMatchObject({ kind: 'malformed' });
-    expect(result.reason).toContain('.docs/f/manifest.json');
+    expect(reasonOf(result)).toContain('.docs/f/manifest.json');
   });
 });
