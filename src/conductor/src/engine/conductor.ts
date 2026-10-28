@@ -16937,6 +16937,12 @@ export class Conductor {
    * the verdict and so a HALT routes the loop to stop.
    */
   private async runRebaseStep(state: ConductState): Promise<StepRunResult> {
+    const result = await this.runRebaseStepBody(state);
+    await this.adoptDurableState(state);
+    return result;
+  }
+
+  private async runRebaseStepBody(state: ConductState): Promise<StepRunResult> {
     // Phase 9.0: the native rebase-on-latest is a DAEMON finish-time mechanism.
     // In non-daemon runs (interactive `/conduct` and the entire test suite) we
     // must NOT invoke git here: a real `git rebase origin/<default>` against the
