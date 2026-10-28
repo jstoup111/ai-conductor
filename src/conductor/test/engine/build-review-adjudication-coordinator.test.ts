@@ -496,6 +496,117 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).toHaveBeenCalledTimes(1);
   });
 
+  // Covers: task:6
+  it('keeps an admitted attempted-action refutation to one dispatch', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-A', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The earlier repair was attempted.', resolution: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+      effect: { id: 'effect-A', kind: 'action', status: 'applied', workOrderId: 'order-A' },
+    }] });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-A',
+      cases: [{ caseId: 'case-A', priority: 'high', tasks: [{ title: 'Attempted repair' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'case-a-refutation.test.ts'), 'the attempted repair is absent\n');
+    const contexts: unknown[] = [];
+    const judge = vi.fn(async (context: unknown): Promise<RemediationCaseJudgement> => {
+      contexts.push(context);
+      return {
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'refute-A' }],
+        cases: [{
+          caseRef: 'refute-A', existingCaseId: 'case-A', disposition: 'refute', priority: 'high', confidence: 'high',
+          rationale: 'The current test disproves the attempted finding.', effect: { kind: 'none' },
+          refutation: { claim: 'The repair remains missing.', assertions: [{
+            assertion: 'The focused test demonstrates the missing repair.', verdict: 'refuted',
+            evidence: [{ path: 'test/case-a-refutation.test.ts', excerpt: 'attempted repair is absent' }],
+          }] },
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(contexts[0]).toMatchObject({ priorCases: [expect.objectContaining({ id: 'case-A', bindableDispositions: ['act', 'defer', 'refute'] })] });
+    expect(contexts[0]).not.toHaveProperty('bindingCorrections');
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ id: 'case-A', disposition: 'refute', resolution: 'resolved' })],
+    } });
+  });
+
+  // Covers: task:6
+  it('keeps a repeated attempted action to one dispatch and its semantic-repeat halt', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-A', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The earlier repair was attempted.', resolution: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+      effect: { id: 'effect-A', kind: 'action', status: 'applied', workOrderId: 'order-A' },
+    }] });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-A',
+      cases: [{ caseId: 'case-A', priority: 'high', tasks: [{ title: 'Attempted repair' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'repeat-A' }],
+      cases: [{
+        caseRef: 'repeat-A', existingCaseId: 'case-A', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The judge repeats the earlier repair.', effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repeat repair' }] },
+      }],
+    }));
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case repeat case-A/) });
+  });
+
+  // Covers: task:6
+  it('keeps a repeated refutation to one dispatch and its refutation-repeat halt', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'case-f-refutation.test.ts'), 'the earlier evidence remains current\n');
+    const refutation = {
+      claim: 'The original claim is false.',
+      assertions: [{ assertion: 'The focused test covers the behavior.', verdict: 'refuted' as const, evidence: [{ path: 'test/case-f-refutation.test.ts', excerpt: 'evidence remains current' }] }],
+    };
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-F', domain: 'build_review', disposition: 'refute', priority: 'high', confidence: 'high',
+      rationale: 'The earlier claim was refuted.', resolution: 'resolved',
+      sources: [{ sourceId: 'testQuality:prior-F', outcome: 'refuted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+      effect: { kind: 'none' }, refutation,
+    }] });
+    const contexts: unknown[] = [];
+    const judge = vi.fn(async (context: unknown): Promise<RemediationCaseJudgement> => {
+      contexts.push(context);
+      return {
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'repeat-F' }],
+        cases: [{
+          caseRef: 'repeat-F', existingCaseId: 'case-F', disposition: 'refute', priority: 'high', confidence: 'high',
+          rationale: 'The refuted claim remains false.', effect: { kind: 'none' }, refutation,
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(contexts[0]).toMatchObject({ priorCases: [expect.objectContaining({ id: 'case-F', bindableDispositions: ['refute'] })] });
+    expect(result).toEqual({ ok: false, detail: 'refutation repeat case-F' });
+  });
+
   it('rejects an advisory judgement when its live source rubric lacks a declared threshold', async () => {
     const advisoryJudgement = (): RemediationCaseJudgement => ({
       mode: 'case-v1', domain: 'build_review',
