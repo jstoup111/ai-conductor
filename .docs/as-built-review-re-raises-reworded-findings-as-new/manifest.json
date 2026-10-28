@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "as-built-review-re-raises-reworded-findings-as-new",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-28-as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-as-built-finding-reconciliation.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/as-built-review-re-raises-reworded-findings-as-new.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/as-built-review-re-raises-reworded-findings-as-new.md"
+    }
+  ]
+}
