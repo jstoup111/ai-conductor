@@ -67,7 +67,7 @@ describe('CodexProvider abort handling', () => {
   });
 
   // Covers: task:6
-  it('records the tokens of turns completed before an abort, unpriced', async () => {
+  it('records post-spawn abort evidence and leaves a non-zero exit unstamped', async () => {
     const controller = new AbortController();
     const stdout = new PassThrough();
     const subprocessFactory = vi.fn((_file: string, _args: readonly string[], options: ExecaOptions) =>

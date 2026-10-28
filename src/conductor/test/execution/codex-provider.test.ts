@@ -284,7 +284,7 @@ describe('CodexProvider', () => {
   });
 
   // Covers: task:6
-  it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
+  it('fails before launch for a read-only git guard and an entry abort', async () => {
     const guardPath = '/prepared/.pipeline/bin/git';
     const priorPath = process.env.PATH;
     mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('spawn boundary reached'), stderr: '', exitCode: 0, failed: false } as any);
