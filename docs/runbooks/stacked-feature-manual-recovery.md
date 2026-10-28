@@ -400,14 +400,10 @@ In a stacked feature, a child's review state lives under `.pipeline/children/<k>
 `current feature state is invalid or unavailable`, even when given `--child`. `accept` has no
 `--child` at all. This is [#3448](https://github.com/jstoup111/ai-conductor/issues/3448).
 
-**Symptom (semantic case repeat).** No runbook section existed for this before
-[#3449](https://github.com/jstoup111/ai-conductor/issues/3449):
-
-```text
-build_review adjudication halted: semantic remediation case repeat <case-id>
-```
-
-**Diagnosis.** Read the case and its finding directly. Both reads are safe:
+For a `semantic remediation case repeat` or `regression` halt on a child, the halt names the
+recovery command. Follow
+[semantic case repeat or regression](stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
+To read the case and its finding until #3448 lands, use these read-only commands:
 
 ```bash
 cd .worktrees/<slug>
@@ -420,27 +416,9 @@ import json; d=json.load(open('.pipeline/children/<k>/build-review.json'))
 print(d['lapId']); [print(json.dumps(f,indent=1)) for r in d['results'].values() for f in r.get('findings',[])]"
 ```
 
-A repeat means the case was `act`, its action was applied (`effect.status: applied`), and the next
-review raised the same concern. Decide whether the finding can actually be satisfied. One example
-that cannot: a test-insensitivity finding on behavior the feature did not change, where the code
-under test is a behavior-preserving refactor, so no test can fail against the base.
-
-**Recovery.** If the finding is accepted risk or already fixed, resolve the case on the child,
-then do an audited clear:
-
-```bash
-ai-conductor build-review resolve-case --feature <slug> --child <k> --case <case-id> \
-  --rationale "<why this is accepted risk or fixed>"
-ai-conductor halt clear --feature <slug> --rationale "<case-id> resolved: <why>"
-```
-
-If the finding is real, fix it on the child's branch and leave the case open. For flat features and
-the other build_review halts, see
+For the other build_review halts, see
 [open action case](stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case) and
 [recurrence limit](stalled-or-stuck-feature.md#build_review-halted-on-a-recurrence-limit).
-
-**Verification.** `resolve-case` prints `resolved <case-id>`. The next `build_review` lap settles
-or routes without repeating the halt.
 
 ## 8. Shipped-record hash mismatch on a stacked PR
 

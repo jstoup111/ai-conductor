@@ -1828,6 +1828,75 @@ route is not progress. The engine bound the current source to `<case>` and emitt
 `.pipeline/events.jsonl` holds no new `remediation_semantic_repeat_halt` with reason
 `recurrence-limit` for the lineage.
 
+### build_review halted on a semantic case repeat or regression
+
+**Symptom:** `.pipeline/HALT` (class `needs-human`) reads one of:
+
+```text
+build_review adjudication halted: semantic remediation case repeat <case>; resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+build_review adjudication halted: semantic remediation case regression <case>; accept with ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>", or fix the finding in the feature worktree
+build_review adjudication halted: semantic remediation case regression <case>; fix the finding on child <child> (build-review accept has no --child yet)
+```
+
+The matching `remediation_semantic_repeat_halt` event carries reason `already-attempted` for a repeat
+or `regressed` for a regression.
+
+**Diagnosis:** the judgement bound a current finding to an `act` case whose BUILD action already ran.
+Another BUILD route would repeat that action, so the engine halts instead.
+
+- **Repeat:** the case is still open. Its action was applied (`effect.status: applied`), and the next
+  lap raised the same concern again.
+- **Regression:** the case was resolved, and the finding came back.
+
+Decide whether the finding can be satisfied. A repair that did not satisfy it once will not satisfy
+it on a second attempt. Example: a test-insensitivity finding on a behavior-preserving refactor. No
+test can fail against the base, so the finding is accepted risk.
+
+**Recovery:**
+
+1. Inspect the case and the re-raised finding:
+
+   ```bash
+   ai-conductor build-review findings --feature <slug>
+   ```
+
+   On a stacked child, `findings` does not yet read child state. Read
+   `.pipeline/children/<child>/remediation-cases.json` and `.pipeline/children/<child>/build-review.json`
+   instead. See
+   [Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
+2. Leave `.pipeline/remediation-cases.json` unchanged. Do not hand-edit case history.
+3. If the finding is accepted risk or already fixed, run the command from the halt in an interactive
+   terminal:
+   - **Repeat:** use `resolve-case`, passing `--child <child>` on a stacked child. The engine carries
+     an operator-resolved case forward, so the next lap does not halt on it again.
+
+     ```bash
+     ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+     ```
+
+   - **Regression:** `resolve-case` refuses because the case is already resolved. Accept each
+     re-raised finding instead:
+
+     ```bash
+     ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"
+     ```
+
+     On a stacked child, `accept` has no `--child` yet
+     ([#3448](https://github.com/jstoup111/ai-conductor/issues/3448)). Fix the finding on the child's
+     branch instead.
+
+   If the finding is real, fix it in the feature worktree. For a repeat, also leave the case open.
+4. Clear the halt with an [audited clear](#audited-clear):
+
+   ```bash
+   ai-conductor halt clear --feature <slug> --rationale "<case> resolved: <why>"
+   ```
+
+**Verification:** `resolve-case` prints `resolved <case>`, or `accept` prints
+`accepted <id> for lap <lap>`. The next
+`build_review` lap settles or routes. `.pipeline/events.jsonl` holds no new
+`remediation_semantic_repeat_halt` for the case.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
