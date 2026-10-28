@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:16, task:37
+// Covers: task:1, task:2, task:3, task:9, task:16, task:37
 /**
  * Tests for ci-fix.ts (Task 15–16: RETRY hint builder).
  *
@@ -1401,6 +1401,50 @@ describe('ci-fix: productionCiFixRunner delegates to injected StepRunner dispatc
     expect(outcome).toEqual({ kind: 'changed' });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({ worktreePath, hint, entry });
+  });
+});
+
+describe('ci-fix: pre-spawn provider failures (Task 9)', () => {
+  // Covers: task:9
+  it('classifies a Claude git-guard failure as not-started and records an uninvoked attempt', async () => {
+    const ensureGitGuardForDispatch = vi.fn().mockRejectedValue(new Error('git guard setup failed'));
+    vi.doMock('../../src/engine/git-guard.js', () => ({ ensureGitGuardForDispatch }));
+    const { ClaudeProvider } = await import('../../src/execution/claude-provider.js');
+    const { DefaultStepRunner } = await import('../../src/engine/step-runners.js');
+    const { ProviderRuntimeSet } = await import('../../src/engine/provider-runtime.js');
+    const { ModelAvailability } = await import('../../src/engine/model-availability.js');
+    const { CLAUDE_MODEL_POLICY } = await import('../../src/engine/provider-model-policy.js');
+    const { ProviderSessionStore } = await import('../../src/engine/provider-session.js');
+    const spawn = vi.fn();
+    const provider = new ClaudeProvider(ensureGitGuardForDispatch, { nowMs: () => 0 }, spawn as never);
+    const attempts: Array<{ provider: string; invoked: boolean; outcome: string }> = [];
+
+    const runner = new DefaultStepRunner(provider, 'ci-fix-pre-spawn', '/fixture/ci-fix', {
+      providerKey: 'claude',
+      configuredProviders: ['claude'],
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude',
+        provider,
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore({ createSessionId: () => 'ci-fix-attempt' }),
+      providerAttempt: async (_step, attempt) => { attempts.push(attempt); },
+    });
+
+    const outcome = await runner.resolveCiFailure({
+      worktreePath: '/fixture/ci-fix',
+      prUrl: 'https://example.test/pull/9',
+      slug: 'ci-fix-pre-spawn',
+      hint: 'typecheck failed',
+    });
+
+    expect(outcome).toMatchObject({ kind: 'not-started', reason: 'readiness-degraded' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(attempts.filter((attempt) => attempt.provider === 'claude')).toEqual([
+      expect.objectContaining({ invoked: false, outcome: 'failure' }),
+    ]);
   });
 });
 
