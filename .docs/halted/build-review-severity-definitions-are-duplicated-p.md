@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-28T22:09:07.575Z
 Slug: build-review-severity-definitions-are-duplicated-p
 Class: needs-human
 Halting step: unknown
