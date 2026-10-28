@@ -59,7 +59,7 @@ already failed, so that its history follows it instead of starting over.
 #### Negative Paths
 - Given an unbound act row whose sources' authoritative owners are all open cases or have no owner, when it is reconciled, then the new case carries no `recurrenceOf` and no `distinctFrom`, unless the row has a provenance candidate, in which case `recurrenceOf` names that candidate.
 - Given R owns S, when the judgement proposes an unbound `defer`, `reject`, `advisory` or `escalate` row on S, then the case it produces carries no `recurrenceOf` and behaves exactly as before this change.
-- Given R holds no operator acceptance, when the judgement binds S to R by `existingCaseId` with disposition `act`, then the lap still halts `semantic remediation case regression R` and no new case is persisted.
+- Given R holds no operator acceptance, when the judgement binds S to R by `existingCaseId` with disposition `act` and a `reRaise` of kind `repeat`, then the lap still halts `semantic remediation case regression R` and no new case is persisted, while the same binding with kind `residual-gap` or no `reRaise` is a residual rebind that mints a new case stamped `recurrenceOf` [R] under the same lineage limit (mixed-laps D5.13).
 - Given an open case O owns S, when an undeclared unbound act row on S with a different source set is proposed, then the lap still halts with a rejected transition naming `source-linked-by-multiple-cases`, and no `recurrenceOf` is written.
 - Given a store that an engine without this change wrote, holding no `recurrenceOf` or `distinctFrom` keys, when it is read, reconciled and written, then it parses and every pre-existing row is byte-identical.
 - Given a persisted case whose `recurrenceOf` is an empty list or names its own id, when the store is read, then the read fails with the existing `malformed-state` reason.
@@ -68,7 +68,7 @@ already failed, so that its history follows it instead of starting over.
 - [ ] A coordinator test replays the #2423 shape and asserts N's `recurrenceOf`, R's unchanged bytes, one kickback charge and no failure event.
 - [ ] Reconciler tests cover the multi-owner, replay-convergence and no-owner shapes.
 - [ ] Store tests assert that a pre-change store round-trips byte-identically and that malformed lineage fields fail `malformed-state`.
-- [ ] Existing tests for the explicit-rebind regression halt and the open-owner refusal pass unchanged.
+- [ ] Tests for the explicit-rebind regression halt of a declared `repeat` and for the open-owner refusal pass.
 
 ## Story 3: A recurrence lineage stops after three applied attempts
 

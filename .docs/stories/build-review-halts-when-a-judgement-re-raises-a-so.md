@@ -81,13 +81,13 @@ remains the bound.
 
 #### Negative Paths
 - Given N's new action effect and an exhausted cumulative kickback cap, when the effect stage runs, then the lap halts with the existing kickback-cap halt naming N's effect and no case-store invariant appears in the halt or the event.
-- Given R is an action case, failed or applied, that holds no operator acceptance and no operator resolution, and the judgement binds the current finding to R by `existingCaseId` with disposition `act`, when the lap runs, then it halts `semantic remediation case regression R` and persists no new case.
+- Given R is an action case, failed or applied, that holds no operator acceptance and no operator resolution, and the judgement binds the current finding to R by `existingCaseId` with disposition `act`, when the lap runs, then it halts `semantic remediation case regression R` and persists no new case if R's effect is `failed` or the row declares a `reRaise` of kind `repeat`, while an applied R bound with kind `residual-gap` or no `reRaise` instead gets a new case stamped `recurrenceOf` [R] under the lineage limit of three applied attempts.
 - Given O is an open action case on S and the judgement proposes an unbound action case on S with a different source set, when the lap reconciles, then it halts with a rejected transition naming `source-linked-by-multiple-cases`, O, the proposed case id and S, and the store is byte-identical.
 
 ### Done When
 - [ ] A coordinator test replays the 2026-10-18 `daemon-reconciliation-delays-first-feature-dispatc` shape through the real store and reconciler and asserts N persisted, R unchanged and no failure event.
 - [ ] Tests assert one kickback charge for N's effect id, and the kickback-cap halt when the cap is exhausted.
-- [ ] Tests assert that the explicit-rebind regression halt and the open-owner refusal are unchanged.
+- [ ] Tests assert that the explicit-rebind regression halt of a failed effect or a declared `repeat`, and the open-owner refusal, are unchanged.
 
 ## Story 4: Decision stops over resolved history persist, and a replayed stop converges
 
