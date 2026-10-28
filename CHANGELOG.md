@@ -209,6 +209,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - As-built remediation halts now name findings the planner escalated against a sealed artifact such as an approved ADR, with the target step and the planner's rationale, instead of reporting them as missing. ([implementation PR #3503](https://github.com/jstoup111/ai-conductor/pull/3503)).
 - Raising the restack cascade cap for one originating child no longer blocks raising it later for a different originating child, and the cascade-cap halt now reports the budget that actually refused. ([implementation PR #3504](https://github.com/jstoup111/ai-conductor/pull/3504)).
 - Build reviews now halt for human action when a judge rejects a case binding. ([implementation PR #3520](https://github.com/jstoup111/ai-conductor/pull/3520)).
+- Stacked feature runs continue after successful restacks instead of halting on stale state. ([implementation PR #3515](https://github.com/jstoup111/ai-conductor/pull/3515)).
 
 ## Migration
 
