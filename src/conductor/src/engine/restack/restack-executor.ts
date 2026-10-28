@@ -27,7 +27,6 @@ import {
   applyRestackMove,
   checkRestackPreMove,
   haltRestack,
-  haltRestackConflict,
   rollbackRestackMove,
   verifyRestackMove,
   type RestackMoveRef,
@@ -36,7 +35,8 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { consumeRecordedResolution, writeConflictRecord } from './restack-conflict-record.js';
+import { consumeRecordedResolution } from './restack-conflict-record.js';
+import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { emitRestackRefused } from './restack-events.js';
@@ -503,22 +503,19 @@ async function haltUnresolvedConflict(
   const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`;
   if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
   else {
-    let recordFailure = '';
+    let replayParentTree: CommitSha | undefined;
     if (journal.journal.cause === 'feature-repair') {
       try {
-        const parentTree = await requiredSha(git, `${newParent}^{tree}`, 'conflict replay parent tree');
-        const written = await writeConflictRecord(worktree, slug, {
-          opId: journal.journal.opId, child: range.child, oldParent: range.oldParent, oldTip: range.oldTip,
-          newParent, newParentTree: parentTree,
-          candidateSubjects: await replayCandidateSubjects(git, candidates), commit: conflict.commit, paths: conflict.paths,
-        }, { git });
-        if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
-      } catch (error) { recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`; }
+        replayParentTree = await requiredSha(git, `${newParent}^{tree}`, 'conflict replay parent tree');
+      } catch {
+        // The shared halt helper turns an unavailable tree into durable hand-off detail.
+      }
     }
-    await haltRestackConflict(worktree, range.child, `${detail}${recordFailure}`, events,
-      journal.journal.cause === 'feature-repair'
-        ? { slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent, oldParent: range.oldParent }
-        : undefined);
+    await haltRecordedRestackConflict({
+      worktree, slug, journal, range, replayParent: newParent, replayParentTree,
+      candidateSubjects: await replayCandidateSubjects(git, candidates),
+      commit: conflict.commit, paths: conflict.paths, detail, events, git,
+    });
   }
 }
 
