@@ -10407,6 +10407,7 @@ export class Conductor {
           if (settlement?.kind === 'exhausted' || settlementFailure !== undefined) {
             const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
             const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
+            const refusedRound = settlement?.kind === 'exhausted' && 'round' in settlement ? settlement.round : undefined;
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
             const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
@@ -10447,12 +10448,21 @@ export class Conductor {
               ? undefined
               : withPendingGrowth({
                   ...settlementGrowth,
-                  cap: growthCap,
+                  // A routed settlement reconciles already-settled receipts
+                  // before it refuses the current one.  Its durable round
+                  // detail is consequently the only truthful numerator and
+                  // cap for this halt; the flat ledger read above can lag it.
+                  ...(refusedRound === undefined ? {} : {
+                    added: refusedRound.settledAdded,
+                    remaining: Math.max(0, refusedRound.growthCap - refusedRound.settledAdded),
+                    cap: refusedRound.growthCap,
+                  }),
+                  cap: refusedRound?.growthCap ?? growthCap,
                   capSource: settlementLedger?.effectiveGrowthCap === undefined
                     ? 'config-derived' as const
                     : 'raised' as const,
                   authoredSource: settlementAuthoredSource,
-                }, settlementLedger?.pendingRepair);
+                }, refusedRound === undefined ? settlementLedger?.pendingRepair : { charges: refusedRound.charges });
             const detail = settlementFailure === undefined
               ? renderKickbackBudgetView(
                   settlementLedger?.gates[gate],
@@ -10471,10 +10481,10 @@ export class Conductor {
               const capEntry = await recordKickbackCapEvidence(this.projectRoot, gate, {
                 consumed: allowance === 'laps'
                   ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
-                  : settlementGrowth?.added ?? growthCap ?? 0,
+                  : refusedRound?.settledAdded ?? settlementGrowth?.added ?? growthCap ?? 0,
                 limit: allowance === 'laps'
                   ? settlementLedger?.gates[gate]?.effectiveLapCap ?? fallbackLapCap
-                  : growthCap ?? 0,
+                  : refusedRound?.growthCap ?? growthCap ?? 0,
                 latestReason: findings,
                 allowance,
               });
