@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { vi } from 'vitest';
 
 import {
@@ -47,12 +51,18 @@ export async function captureRubricPrompt(
   stepId = `prompt-${rubric}`,
 ): Promise<string> {
   const invoke = vi.fn().mockResolvedValue({ success: false, exitCode: 0 });
-  const runner = new DefaultStepRunner({ invoke }, stepId, '/tmp/project');
-  const branch = { rubric, skillName: getBuildReviewRubricDescriptor(rubric).skillName, policy };
+  const projectDir = await mkdtemp(join(tmpdir(), 'build-review-prompt-capture-'));
 
-  await (runner as unknown as {
-    dispatchBuildReviewRubric: (value: typeof branch, input: ReturnType<typeof projection>) => Promise<unknown>;
-  }).dispatchBuildReviewRubric(branch, projection(rubric));
+  try {
+    const runner = new DefaultStepRunner({ invoke }, stepId, projectDir);
+    const branch = { rubric, skillName: getBuildReviewRubricDescriptor(rubric).skillName, policy };
 
-  return (invoke.mock.calls[0]![0] as InvokeOptions).prompt;
+    await (runner as unknown as {
+      dispatchBuildReviewRubric: (value: typeof branch, input: ReturnType<typeof projection>) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection(rubric));
+
+    return (invoke.mock.calls[0]![0] as InvokeOptions).prompt;
+  } finally {
+    await rm(projectDir, { recursive: true, force: true });
+  }
 }
