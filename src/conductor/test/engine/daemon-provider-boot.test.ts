@@ -1,10 +1,11 @@
-// Covers: task:13, task:14, task:21
+// Covers: task:2, task:13, task:14, task:21
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import {
   CLI_PROVIDER_DISPATCHING_COMMANDS,
   bootDispatchingCliProviders,
@@ -27,8 +28,8 @@ vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/engine/cli-builtins.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/cli-builtins.js')>();
+vi.mock('../../src/cli-builtins.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/cli-builtins.js')>();
   return {
     ...actual,
     registerCliBuiltins: (...args: Parameters<typeof actual.registerCliBuiltins>) => {
@@ -124,6 +125,7 @@ describe('runDaemonMode provider discovery at boot', () => {
       processed: [],
       stoppedReason: 'backlog_drained',
     });
+    const start = vi.spyOn(TerminalSubscriber.prototype, 'start');
     const { runDaemonMode } = await import('../../src/daemon-cli.js');
 
     await runDaemonMode({
@@ -148,6 +150,9 @@ describe('runDaemonMode provider discovery at boot', () => {
       'discover:codex',
       'discover:pi',
       'registerBuiltins',
+    ]);
+    expect(start).toHaveBeenCalledWith([
+      expect.objectContaining({ name: 'daemon-log' }),
     ]);
     expect(records.filter((record) => record.type === 'provider_discovery')).toEqual([
       expect.objectContaining({

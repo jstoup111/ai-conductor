@@ -11,13 +11,13 @@ import {
   type BuiltInProviderId,
   type ProviderWith,
 } from '../../execution/provider-catalog.js';
-import { isProviderSetupUnavailableError } from '../provider-setup-failure.js';
+import { isProviderSetupUnavailableError } from '../../execution/provider-setup-failure.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { emitTranscriptHarvest, retireProviderHome, transcriptCapture, transcriptCaptureLeaseStep, type ProviderHomeTranscriptRetirement, type TranscriptCaptureSource } from './transcript-harvest.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 
 export type SelfHostProvider = ProviderWith<'selfHost'>;
 export type SelfHostProviderId = Extract<BuiltInProviderId, SelfHostProvider['id']>;

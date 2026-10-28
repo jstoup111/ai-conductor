@@ -6,7 +6,7 @@ import {
 } from './session-event-producer.js';
 import type { SessionCommandRefusedEvent } from '../types/events.js';
 import { isSessionEventIdentity } from './session-event-identity.js';
-import { isFeatureSlug } from '../engine/worktree.js';
+import { isFeatureSlug } from './feature-slug.js';
 
 /**
  * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.

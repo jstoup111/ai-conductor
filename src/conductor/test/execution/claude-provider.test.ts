@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -92,7 +94,7 @@ describe('ClaudeProvider', () => {
       resume: false,
     }));
     mockEnsureGitGuardForDispatch.mockResolvedValue(null);
-    provider = new ClaudeProvider(undefined, mockExeca as never);
+    provider = new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never);
   });
 
   const baseOptions: InvokeOptions = {
@@ -496,7 +498,7 @@ describe('ClaudeProvider', () => {
       const subprocessFactory = vi.fn(() =>
         Promise.resolve({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false }) as any,
       );
-      provider = new ClaudeProvider(undefined, subprocessFactory);
+      provider = new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory);
       const invoke = vi.spyOn(provider, 'invoke');
 
       await provider.invoke(baseOptions);
@@ -552,7 +554,7 @@ describe('ClaudeProvider', () => {
       const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
         resolveProcess = resolve;
       }), { stdout, kill: vi.fn() });
-      provider = new ClaudeProvider(undefined, () => {
+      provider = new ClaudeProvider(dispatchGitGuard, undefined, () => {
         resolveStarted!();
         return process as any;
       });
@@ -599,7 +601,7 @@ describe('ClaudeProvider', () => {
         }),
         { stdout, kill: vi.fn() },
       );
-      provider = new ClaudeProvider(undefined, () => {
+      provider = new ClaudeProvider(dispatchGitGuard, undefined, () => {
         resolveStarted!();
         return process as any;
       });
@@ -650,7 +652,7 @@ describe('ClaudeProvider', () => {
       const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
         resolveProcess = resolve;
       }), { stdout, kill });
-      provider = new ClaudeProvider(undefined, () => {
+      provider = new ClaudeProvider(dispatchGitGuard, undefined, () => {
         resolveStarted!();
         return process as any;
       });
@@ -758,7 +760,7 @@ describe('ClaudeProvider', () => {
         callOrder.push('spawn permit');
         return { permitted: true as const };
       });
-      provider = new ClaudeProvider(undefined, subprocessFactory);
+      provider = new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory);
 
       await provider.invoke({ ...baseOptions, spawnPermit });
 
@@ -770,7 +772,7 @@ describe('ClaudeProvider', () => {
       const subprocessFactory = vi.fn(() =>
         Promise.resolve({ stdout: 'ok', exitCode: 0, failed: false }) as any,
       );
-      provider = new ClaudeProvider(undefined, subprocessFactory);
+      provider = new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory);
 
       await expect(
         provider.invoke({
@@ -787,7 +789,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock, mockExeca as never);
+      provider = new ClaudeProvider(dispatchGitGuard, clock, mockExeca as never);
       const terminalResult = {
         type: 'result',
         result: 'Done!',
@@ -841,7 +843,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock, mockExeca as never);
+      provider = new ClaudeProvider(dispatchGitGuard, clock, mockExeca as never);
       mockExeca.mockResolvedValue({
         stdout: 'interactive session failed',
         stderr: '',
@@ -895,7 +897,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock, mockExeca as never);
+      provider = new ClaudeProvider(dispatchGitGuard, clock, mockExeca as never);
       mockExeca.mockResolvedValue({
         stdout: JSON.stringify({
           type: 'result',
@@ -1085,7 +1087,7 @@ describe('ClaudeProvider', () => {
     ])('does not add exit facts or an exit diagnostic to a classified $name', async (fixture) => {
       const diagnosticLog = vi.fn();
       const readings = [1_000, 1_050];
-      provider = new ClaudeProvider({
+      provider = new ClaudeProvider(dispatchGitGuard, {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       }, mockExeca as never);
       mockExeca.mockResolvedValue({
@@ -2190,7 +2192,7 @@ describe('ClaudeProvider', () => {
         return { stdout: 'done', stderr: '', exitCode: 0, failed: false } as any;
       });
 
-      const provider = new ClaudeProvider(undefined, mockExeca as never);
+      const provider = new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never);
 
       // First call should detect rate limit
       const result1 = await provider.invoke({ ...baseOptions, interactive: true });

@@ -22,7 +22,7 @@ import { translateAfterRebase } from '../rebase-translate.js';
 import { readState } from '../state.js';
 import { parsePlanTaskBlocks } from '../plan-task-parse.js';
 import { stripInheritedRemBlocks } from '../routing/rem-block-merge.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import type { RestackMoveRef } from './restack-move.js';
 import type { ChildRange, CommitSha, RestackCause } from './restack-types.js';
 

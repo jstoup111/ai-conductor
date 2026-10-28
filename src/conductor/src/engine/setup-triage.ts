@@ -18,7 +18,7 @@
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { SetupFailureAttempt } from './rebase.js';
 import type { SetupRepairRejectionReason } from '../types/events.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';

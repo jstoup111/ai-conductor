@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:11, task:12
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -73,7 +75,7 @@ describe('Pi cost rollup integration', () => {
     model?: string;
     rateCard?: RateCard;
   } = {}): Promise<ProviderAttemptEvent> {
-    const pi = new PiProvider(
+    const pi = new PiProvider(dispatchGitGuard,
       'pi',
       async () => ({ stdout, stderr: '', exitCode: options.exitCode ?? 0 }),
       piEnvironment,

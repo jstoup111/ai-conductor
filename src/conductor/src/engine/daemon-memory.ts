@@ -4,7 +4,7 @@ import { writeHeapSnapshot } from 'node:v8';
 import { join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
-import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+import { ConductorEventEmitter, type EventHandler } from './conductor-event-emitter.js';
 
 export const DEFAULT_HEAP_DUMP_THRESHOLD_MB = 3072;
 export const DEFAULT_HEAP_DUMP_RETENTION = 3;

@@ -5,7 +5,7 @@ import { hasDurableChildState, resolveActiveChild, resolveSealedFirst } from '..
 import { childBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
-import { ConductorEventEmitter } from '../../ui/events.js';
+import { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { checkCascadeCap } from './cascade-cap.js';
 import { defaultTip, runRestack } from './restack-executor.js';
 import type { RestackResolver } from './restack-resolver.js';

@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { type GitRunner } from './pr-labels.js';
 import { type GhRunner } from './owner-gate/identity.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:13, task:14
+// Covers: task:1, task:2, task:6, task:13, task:14
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';

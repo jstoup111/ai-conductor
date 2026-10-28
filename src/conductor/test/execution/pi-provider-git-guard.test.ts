@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:1, task:3, task:4
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -71,7 +73,7 @@ describe('PiProvider git guard dispatch environment', () => {
     vi.clearAllMocks();
     mockEnsureGitGuardForDispatch.mockResolvedValue('/prepared/.pipeline/bin');
     spawn.mockResolvedValue(completePi());
-    provider = new PiProvider('pi', spawn, fakeEnvironment());
+    provider = new PiProvider(dispatchGitGuard, 'pi', spawn, fakeEnvironment());
   });
 
   afterEach(async () => {
@@ -142,7 +144,7 @@ describe('PiProvider git guard dispatch environment', () => {
 
   it('launches a read-only review when a skipped guard would reject', async () => {
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error('git guard repair failed'));
-    const reviewProvider = new PiProvider('pi', spawn, fakeEnvironment(), async () => '/engine/pi-review-extension.ts');
+    const reviewProvider = new PiProvider(dispatchGitGuard, 'pi', spawn, fakeEnvironment(), async () => '/engine/pi-review-extension.ts');
 
     await reviewProvider.invoke({ ...baseOptions, reviewDispatch: true, readOnlyReview: true });
 

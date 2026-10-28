@@ -242,10 +242,11 @@ describe('engine/build-review-contract', () => {
       },
     };
 
-    expect(() => createBuildReviewRubricRegistry([
-      { id: 'testQuality', descriptor: malformed as unknown as typeof BUILD_REVIEW_RUBRIC_REGISTRY.testQuality },
-      { id: 'security', descriptor: BUILD_REVIEW_RUBRIC_REGISTRY.security },
-    ])).toThrow(/testQuality.*output\.jsonSchema/i);
+    expect(() => createBuildReviewRubricRegistry({
+      testQuality: malformed as unknown as typeof BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
+      security: BUILD_REVIEW_RUBRIC_REGISTRY.security,
+      implementationQuality: BUILD_REVIEW_RUBRIC_REGISTRY.implementationQuality,
+    })).toThrow(/testQuality.*output\.jsonSchema/i);
   });
 
   it('rejects an incomplete descriptor at the live custom catalog construction boundary', () => {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from "../types/config.js";
-import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from '../execution/provider-setup-failure.js';
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   deriveBuildReviewInfrastructureFailureReason,

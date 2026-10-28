@@ -9,7 +9,7 @@
 import { access as accessFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { readDaemonBuildToken } from './daemon-build-token.js';
 import { buildAuthRemediationMessage } from './build-auth-message.js';
 import type { StepRunResult } from '../step-runner-types.js';

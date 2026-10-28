@@ -1,4 +1,4 @@
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ConductorEvent } from '../types/events.js';
 import { readGithubBotCredential, readGithubBotToken, type GithubBotCredential, type GithubBotToken } from './github-bot-credential.js';
 import { runBotIdentityRead, type GhRunner } from './tracker-client.js';

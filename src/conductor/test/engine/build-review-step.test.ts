@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2, task:3, task:4
 // Covers: task:9, task:10
 // Covers: task:11
@@ -654,7 +656,7 @@ describe('build_review structured rubric dispatch', () => {
       stderr: '',
       exitCode: 0,
     }));
-    const provider = new ClaudeProvider(undefined, subprocess as never);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, subprocess as never);
 
     const { result } = await dispatchBuiltIn(provider.invoke.bind(provider));
 
@@ -717,7 +719,7 @@ describe('build_review structured rubric dispatch', () => {
   });
 
   it('makes a forced interactive Claude rubric schema refusal observable to the coordinator lane', async () => {
-    const provider = new ClaudeProvider();
+    const provider = new ClaudeProvider(dispatchGitGuard);
     const dispatched = await dispatchRubricContract({
       descriptor: BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract,
       options: { prompt: 'judge', cwd: '/fixture', interactive: true },

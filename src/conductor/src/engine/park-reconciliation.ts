@@ -23,6 +23,8 @@ import { runTrackerAmbientRead } from './tracker-client.js';
 import { makeGitRunner, type GitRunner as RebaseGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
+import type { RefusalReason } from '../types/park.js';
+export type { RefusalReason };
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -76,21 +78,6 @@ export interface UnmergedCommitListing {
   commits: UnmergedCommitSummary[];
   overflow: number;
 }
-
-export type RefusalReason =
-  | 'invalid-slug'
-  | 'in-flight'
-  | 'child-branch'
-  | 'ancestry-check-failed'
-  | 'branch-missing'
-  | 'no-merge-proof'
-  | 'unmerged-commits'
-  | 'branch-behind-merged-head'
-  | 'record-missing'
-  | 'dirty-worktree'
-  | 'worktree-remove-failed'
-  | 'branch-delete-failed'
-  | 'unpark-failed';
 
 /**
  * Refusals raised after the helper began a destructive operation that did not

@@ -2,7 +2,7 @@ import { mkdir, readFile as readFileDefault, rename, writeFile as writeFileDefau
 import { join } from 'node:path';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { createRepairObligationStore } from './repair-obligations.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
 import type { ConductorEvent } from '../types/events.js';
 import { parseDoneWhenCloseSource } from './done-when-test-reference.js';

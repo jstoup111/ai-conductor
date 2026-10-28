@@ -1,19 +1,6 @@
-export const ARTIFACT_KINDS = [
-  'plan',
-  'stories',
-  'prd',
-  'track',
-  'complexity',
-  'conflicts',
-  'coherence',
-  'coherence-waiver',
-  'architecture',
-  'intake',
-  'applicability',
-  'decision',
-] as const;
+import { ARTIFACT_KINDS, type ArtifactKind } from '../types/feature-manifest.js';
 
-export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+export { ARTIFACT_KINDS, type ArtifactKind };
 export type FeatureScopedKind = Exclude<ArtifactKind, 'architecture' | 'decision'>;
 
 export type ManifestKindIdentity = 'normalized-stem' | 'plan-stem' | 'repository';

@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { CodexProvider } from '../../src/execution/codex-provider.js';
@@ -41,7 +43,7 @@ function providerWith(card: RateCard | undefined, seen: Array<string | undefined
     Promise.resolve({ stdout: STDOUT, stderr: '', exitCode: 0 }),
     { kill: vi.fn() },
   );
-  return new CodexProvider(
+  return new CodexProvider(dispatchGitGuard,
     readyDoctor,
     'codex',
     undefined,

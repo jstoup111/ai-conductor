@@ -1,4 +1,4 @@
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import {
   createBotCoAuthorResolver,
   installDaemonBotCoAuthor,

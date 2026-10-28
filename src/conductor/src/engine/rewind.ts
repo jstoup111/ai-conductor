@@ -4,7 +4,7 @@ import { buildStepRegistry } from './steps.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { readState } from './state.js';
 import { loadConfig } from './config.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.js';

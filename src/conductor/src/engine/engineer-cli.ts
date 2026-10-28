@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import { createRegistryReader } from './registry.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';

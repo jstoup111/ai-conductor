@@ -9,6 +9,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
@@ -38,12 +39,11 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { CLAUDE_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 function claudeDisplayName(): string {
-  return providerDescriptor('claude').displayName;
+  return CLAUDE_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -573,6 +573,7 @@ export class ClaudeProvider implements LLMProvider {
   private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
     private readonly executable = 'claude',
@@ -698,7 +699,7 @@ export class ClaudeProvider implements LLMProvider {
     options = enforceFreshSessionOptions(options, 'claude');
     if (options.abortSignal?.aborted) return abortedInvocationResult();
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
     // Claude's native JSON-schema mode is a non-interactive print-mode

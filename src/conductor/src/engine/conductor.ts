@@ -111,7 +111,7 @@ import type {
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ProviderExecutionContext, ProviderCandidate } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
-import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../execution/provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
   CODEX_DISPLAY_NAME,
@@ -119,6 +119,7 @@ import {
   providerDisplayName,
   requireProviderCapability,
   supportsProviderCapability,
+  toProviderId,
 } from '../execution/provider-catalog.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
@@ -157,7 +158,7 @@ import {
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import { StepInFlightTicker } from './step-in-flight-ticker.js';
@@ -3058,7 +3059,7 @@ export class Conductor {
             if (probeFailed) {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: authentication.provider,
+                provider: toProviderId(authentication.provider),
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
@@ -3073,7 +3074,7 @@ export class Conductor {
             } else if (current.state !== 'probe-failed') {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: authentication.provider,
+                provider: toProviderId(authentication.provider),
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,

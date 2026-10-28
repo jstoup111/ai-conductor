@@ -28,6 +28,7 @@ import type {
   MaintenancePhaseOutcome,
 } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 const ACTIVE_STALL_EVENT: ConductorEvent = {
   type: 'build_stall',
@@ -932,7 +933,7 @@ describe('event sink subscriptions', () => {
   it('renders and persists read-only review capability results through the event spine', () => {
     const capability = {
       type: 'build_review_read_only_capability',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       platform: 'linux',
       status: 'unavailable',
       reason: 'probe write was not refused',
@@ -1550,7 +1551,7 @@ describe('event sink subscriptions', () => {
   it('keeps probe-failure progress persisted and rendered without widening audit persistence', () => {
     const progress = {
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,

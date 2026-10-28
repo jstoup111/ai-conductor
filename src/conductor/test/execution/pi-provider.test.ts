@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2, task:3, task:4, task:6, task:7, task:8, task:9, task:10, task:13, task:15, task:16, task:17, task:18
 // Covers: task:4
 import { mkdir, mkdtemp, readFile, readdir, rm, stat as fileStat, writeFile } from 'node:fs/promises';
@@ -192,7 +194,7 @@ describe('Pi frontmatter-named catalog entries', () => {
     const { environment } = fakePiEnvironment({
       files: [harnessPath, '/home/agent/.agents/skills/ac-explore/SKILL.md'],
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:ac-explore\nExplore it.' }))
       .resolves.toMatchObject({ success: true });
@@ -210,7 +212,7 @@ describe('Pi frontmatter-named catalog entries', () => {
     const { environment } = fakePiEnvironment({
       files: [harnessPath, '/home/agent/.agents/skills/pipeline/SKILL.md'],
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
     const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS.build!, 'pi');
 
     expect(prompt).toBe('/skill:pipeline');
@@ -238,7 +240,7 @@ describe('PiProvider', () => {
       exitCode: 0,
     } as ExecaResult);
     ({ environment, stat } = fakePiEnvironment({ files: [harnessPath] }));
-    provider = new PiProvider('/resolved/pi', spawn, environment);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
   });
 
   it('spawns a resolved Pi executable headlessly with its configured provider, model, and thinking effort', async () => {
@@ -401,7 +403,7 @@ describe('PiProvider', () => {
           throw new Error(`ENOENT: ${path}`);
         },
       }));
-      provider = new PiProvider('/resolved/pi', spawn, environment);
+      provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
       const verificationFailure = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
       expect({
         spawned: spawn.mock.calls.length,
@@ -430,7 +432,7 @@ describe('PiProvider', () => {
         files: [harnessPath],
         access: readabilityCheck,
       }));
-      provider = new PiProvider('/resolved/pi', spawn, environment);
+      provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
       const result = await provider.invoke({ ...invokeOptions, systemPrompt: 'S' });
 
@@ -541,7 +543,7 @@ describe('PiProvider', () => {
           throw new Error(`ENOENT: ${path}`);
         },
       }));
-      provider = new PiProvider('/resolved/pi', spawn, environment);
+      provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
       const callsBeforePreSpawnAbort = spawn.mock.calls.length;
       await expect(provider.invoke({ ...invokeOptions, systemPrompt: 'pre-spawn abort', abortSignal: preSpawnController.signal }))
         .resolves.toMatchObject({ output: 'Pi invocation aborted.' });
@@ -603,7 +605,7 @@ describe('PiProvider', () => {
     ['the project catalog', '/workspace/project/.agents/skills/pipeline/SKILL.md', {}],
   ])('invokes a /skill: command found in %s', async (_source, skillPath, env) => {
     ({ environment } = fakePiEnvironment({ files: [harnessPath, skillPath], env }));
-    provider = new PiProvider('/resolved/pi', spawn, environment);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({ success: true });
 
@@ -640,7 +642,7 @@ describe('PiProvider', () => {
       directories,
       env: { PI_HOME: '/legacy/pi-home' },
     }));
-    provider = new PiProvider('/resolved/pi', spawn, environment);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({
       success: false,
@@ -661,7 +663,7 @@ describe('PiProvider', () => {
     ({ environment } = fakePiEnvironment({
       files: [harnessPath, '/home/agent/.agents/skills/fixture/SKILL.md'],
     }));
-    provider = new PiProvider('/resolved/pi', spawn, environment);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:fixture\nBuild it.' })).resolves.toMatchObject({ success: true });
 
@@ -673,7 +675,7 @@ describe('PiProvider', () => {
     ['a dangling symlink', [], []],
   ])('refuses Pi dispatch when HARNESS.md is %s', async (_source, files, directories) => {
     ({ environment } = fakePiEnvironment({ files, directories }));
-    provider = new PiProvider('/resolved/pi', spawn, environment);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: false,
@@ -694,7 +696,7 @@ describe('PiProvider', () => {
       ? [harnessPath, '/workspace/project/.agents/skills']
       : [harnessPath];
     ({ environment } = fakePiEnvironment({ files, directories }));
-    provider = new PiProvider('/resolved/pi', spawn, environment);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
 
@@ -783,7 +785,7 @@ describe('PiProvider', () => {
   it('resolves the candidate provider key into its isolated self-host auth file', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'pi-provider-self-host-'));
     const runner = vi.fn(async () => ({ stdout: 'K' }));
-    const selfHostProvider = new PiProvider('/resolved/pi', spawn, environment, undefined, undefined, runner);
+    const selfHostProvider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, undefined, runner);
 
     try {
       await selfHostProvider.prepareSelfHostAuth({ provider: 'pi', homeDir, model: 'deepseek/x' });
@@ -1136,7 +1138,7 @@ describe('PiProvider native output schema', () => {
     worktree = await mkdtemp(join(tmpdir(), 'pi-native-schema-'));
     scratchHome = join(worktree, '.daemon', 'scratch', 'run-1', 'pi');
     await mkdir(scratchHome, { recursive: true });
-    provider = new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension);
+    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension);
     respond([submitEnd({ verdict: 'pass' }), assistantEnd]);
   });
   afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
@@ -1249,7 +1251,7 @@ describe('PiProvider trust_project_files', () => {
     ['absent', undefined],
     ['false', false],
   ] as const)('passes -na and never -a/--approve/--no-extensions when trust is %s', async (_label, trustProjectFiles) => {
-    await new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles });
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles });
 
     const args = spawn.mock.calls[0]![1];
     expect(args).toContain('-na');
@@ -1259,7 +1261,7 @@ describe('PiProvider trust_project_files', () => {
   });
 
   it('omits -na and --no-extensions when trust_project_files opts in', async () => {
-    await new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles: true });
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles: true });
 
     const args = spawn.mock.calls[0]![1];
     expect(args).not.toContain('-na');
@@ -1283,7 +1285,7 @@ describe('PiProvider subagents', () => {
   });
 
   it('loads the installed extension, seeds the isolated home, and scopes its temp root there', async () => {
-    await new PiProvider('/resolved/pi', spawn, installed()).invoke({
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({
       ...invokeOptions,
       subagents: true,
       selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_CODING_AGENT_DIR: isolatedHome } },
@@ -1303,7 +1305,7 @@ describe('PiProvider subagents', () => {
     ['a read-only review', { subagents: true, readOnlyReview: true }],
     ['a schema-constrained dispatch', { subagents: true, nativeSchema: { name: 'x', schema: { type: 'object' } } }],
   ])('does not load the extension when %s', async (_label, extra) => {
-    await new PiProvider('/resolved/pi', spawn, installed(), vi.fn(async () => '/asset.ts')).invoke({
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed(), vi.fn(async () => '/asset.ts')).invoke({
       ...invokeOptions,
       ...extra,
       nativeSchemaScratchHome: isolatedHome,
@@ -1316,7 +1318,7 @@ describe('PiProvider subagents', () => {
   });
 
   it('fails run-scoped provider-unavailable, naming the install command, when the package is missing', async () => {
-    const result = await new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, subagents: true });
+    const result = await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, subagents: true });
 
     expect(result).toMatchObject({ success: false, providerUnavailable: true, providerUnavailableScope: 'run' });
     expect(result.output).toContain('pi install npm:pi-subagents');
@@ -1324,7 +1326,7 @@ describe('PiProvider subagents', () => {
   });
 
   it('never writes into the operator agent dir when no isolated home is in force', async () => {
-    await new PiProvider('/resolved/pi', spawn, installed()).invoke({ ...invokeOptions, subagents: true });
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({ ...invokeOptions, subagents: true });
 
     const [, args, options] = spawn.mock.calls[0]!;
     expect(args).toContain(packageDir);
@@ -1341,7 +1343,7 @@ describe('PiProvider read-only review argv', () => {
 
   const toolsValue = (args: readonly string[]) => args[args.indexOf('--tools') + 1];
   const invokeReadOnly = (overrides: Partial<InvokeOptions> = {}) =>
-    new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension).invoke({ ...invokeOptions, cwd: worktree, readOnlyReview: true, ...overrides });
+    new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension).invoke({ ...invokeOptions, cwd: worktree, readOnlyReview: true, ...overrides });
 
   beforeEach(async () => {
     vi.clearAllMocks();

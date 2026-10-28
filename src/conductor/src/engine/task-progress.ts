@@ -36,7 +36,7 @@ import {
 } from './done-when-test-reference.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 /**
  * Count of distinct plan task-ids that are "resolved" — i.e. either already

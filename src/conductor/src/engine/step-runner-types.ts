@@ -8,7 +8,7 @@ import type { StepName, ComplexityTier, EffortLevel } from '../types/index.js';
 import type { FullSuiteVerifierResult } from './full-suite-verifier.js';
 import type { ProviderSessionScope } from './provider-session.js';
 import type { ProviderAttemptMetadata, ProviderAttributionMetadata } from './provider-execution.js';
-import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from '../execution/provider-setup-failure.js';
 import type { AcceptedWideningDecision } from './accepted-widenings.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { RemediationProjection } from './remediation-projection.js';

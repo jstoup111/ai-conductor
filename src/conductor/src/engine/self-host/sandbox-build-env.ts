@@ -45,7 +45,7 @@ import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { resolveSkillName } from '../skill-names.js';
 import { emitTranscriptHarvest, retireProviderHome, transcriptCapture, transcriptCaptureLeaseStep, type ProviderHomeTranscriptRetirement, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 export {
   provisionProviderHome,
   type ProviderHome,

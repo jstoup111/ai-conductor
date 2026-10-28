@@ -16,7 +16,7 @@ import { EventPersister } from './event-persister.js';
 import { clearMarker } from './daemon-rekick.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
 import { slicePositionsFromPlan, verifySlicePositions } from './slice-topology.js';
 

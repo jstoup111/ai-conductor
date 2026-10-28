@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2, task:5
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -70,7 +72,7 @@ describe('PiProvider prepared-worktree git guard integration', () => {
       cwd: fixture,
     };
 
-    const result = await new PiProvider('pi', subprocessFactory, fakePiEnvironment()).invoke(options);
+    const result = await new PiProvider(dispatchGitGuard, 'pi', subprocessFactory, fakePiEnvironment()).invoke(options);
 
     expect(result.output.trim().split('\n')[0]).toBe(guardedGit);
     expect(resolvedGit?.stdout.trim()).toBe(guardedGit);
@@ -109,7 +111,7 @@ describe('PiProvider prepared-worktree git guard integration', () => {
         };
       };
 
-      const result = await new PiProvider('pi', subprocessFactory, fakePiEnvironment()).invoke({
+      const result = await new PiProvider(dispatchGitGuard, 'pi', subprocessFactory, fakePiEnvironment()).invoke({
         prompt: 'Run the requested command.',
         sessionId: `pi-git-guard-unprepared-${name}`,
         resume: false,

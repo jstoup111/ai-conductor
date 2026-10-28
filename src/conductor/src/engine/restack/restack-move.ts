@@ -9,7 +9,7 @@ import {
 } from '../rebase.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { resolve } from 'node:path';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   journalStateUpdateLines,
   stagingRefFor,

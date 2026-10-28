@@ -1,7 +1,7 @@
 import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { makeGitRunner } from '../rebase.js';
 import type { GitRunner } from '../rebase.js';
-import { ConductorEventEmitter } from '../../ui/events.js';
+import { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { EventPersister } from '../event-persister.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import type { RestackResolver } from '../restack/restack-resolver.js';

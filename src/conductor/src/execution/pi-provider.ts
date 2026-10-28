@@ -10,11 +10,11 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { piSubagentsArgs, piSubagentsPackageDir, seedPiSubagentsHome } from './pi-subagents.js';
@@ -23,10 +23,10 @@ import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { withholdCost } from './token-usage.js';
-import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { writeScratchSchema } from './scratch-schema.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { PI_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -110,9 +110,8 @@ export async function resolvePiSkill(
   name: string,
   environment: PiEnvironment = defaultPiEnvironment,
 ): Promise<PiSkillResolution> {
-  const descriptor = providerDescriptor('pi');
-  const piAgentDirectory = environment.env[descriptor.homeVariable]
-    ?? join(environment.homeDir(), descriptor.defaultHome);
+  const piAgentDirectory = environment.env.PI_CODING_AGENT_DIR
+    ?? join(environment.homeDir(), '.pi', 'agent');
   const searchedRoots = [
     join(environment.homeDir(), '.agents', 'skills'),
     join(piAgentDirectory, 'skills'),
@@ -214,9 +213,8 @@ type PiJsonEvent = {
   };
 };
 
-/** Resolve lazily because the catalog constructs this adapter. */
 function piDisplayName(): string {
-  return providerDescriptor('pi').displayName;
+  return PI_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -488,6 +486,7 @@ export class PiProvider implements LLMProvider {
   readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly executable = 'pi',
     private readonly subprocessFactory: PiSubprocessFactory = execa,
     private readonly environment: PiEnvironment = defaultPiEnvironment,
@@ -520,7 +519,7 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
 
@@ -541,7 +540,7 @@ export class PiProvider implements LLMProvider {
     // Trimming here would turn ordinary prompt text on a later or indented line
     // into an executable skill command.
     const promptCommand = options.prompt.split('\n', 1)[0]?.split(/\s+/, 1)[0];
-    const prefix = providerDescriptor('pi').invocationPrefix;
+    const prefix = '/skill:';
     const cwd = options.cwd ?? this.environment.cwd();
     if (promptCommand?.startsWith(prefix)) {
       const name = promptCommand.slice(prefix.length);
@@ -610,9 +609,8 @@ export class PiProvider implements LLMProvider {
     // schema-constrained answer never needs a child session.
     let subagentsTempRoot: string | undefined;
     if (options.subagents === true && !options.readOnlyReview && options.nativeSchema === undefined) {
-      const descriptor = providerDescriptor('pi');
-      const operatorAgentDir = this.environment.env[descriptor.homeVariable]
-        ?? join(this.environment.homeDir(), descriptor.defaultHome);
+      const operatorAgentDir = this.environment.env.PI_CODING_AGENT_DIR
+        ?? join(this.environment.homeDir(), '.pi', 'agent');
       const packageDir = piSubagentsPackageDir(operatorAgentDir);
       if (!await isFile(join(packageDir, 'package.json'), this.environment)) {
         const reason = `${piDisplayName()} subagents are enabled (llm_providers.pi.subagents) but ${packageDir} is not installed. Run \`pi install npm:pi-subagents\`.`;
@@ -626,7 +624,7 @@ export class PiProvider implements LLMProvider {
         };
       }
       args.push(...piSubagentsArgs(packageDir));
-      const isolatedAgentDir = options.selfHost?.env[descriptor.homeVariable];
+      const isolatedAgentDir = options.selfHost?.env.PI_CODING_AGENT_DIR;
       if (isolatedAgentDir !== undefined) {
         subagentsTempRoot = (await seedPiSubagentsHome(isolatedAgentDir, options.effort)).tempRoot;
       }

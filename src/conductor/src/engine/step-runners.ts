@@ -183,7 +183,7 @@ import {
   validateBuildReviewDispatchedResult,
   type BuildReviewDispatchableRubric,
 } from './build-review-coordinator.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { classifyBuildReviewCacheLookup, readBuildReviewCacheEntry, tryWriteBuildReviewCacheEntry, writeBuildReviewCacheEntry, type BuildReviewCacheSemanticIdentity } from './build-review-cache.js';
 import {
   BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,

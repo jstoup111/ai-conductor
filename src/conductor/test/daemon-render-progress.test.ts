@@ -13,6 +13,7 @@ import { renderDaemonEvent } from '../src/daemon-cli.js';
 import type { ConductorEvent } from '../src/types/index.js';
 import { openDaemonLog, formatDaemonLogLine } from '../src/engine/daemon-log.js';
 import { computeStatusRow } from '../src/engine/daemon-observe-cli.js';
+import { toProviderId } from '../src/execution/provider-catalog.js';
 
 type BuildProgressEvent = Extract<ConductorEvent, { type: 'build_progress' }>;
 
@@ -439,7 +440,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     const rawDoctorDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
     const [line] = lines({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,

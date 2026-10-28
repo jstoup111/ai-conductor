@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:1, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
@@ -230,7 +232,7 @@ function claudeCapture() {
       return Promise.resolve({ stdout: 'ok', stderr: '', exitCode: 0, failed: false }) as any;
     },
   );
-  return { calls, provider: new ClaudeProvider(undefined, subprocessFactory) };
+  return { calls, provider: new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory) };
 }
 
 function codexCapture() {
@@ -260,7 +262,7 @@ function codexCapture() {
       }) as any;
     },
   );
-  return { calls, provider: new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory as any) };
+  return { calls, provider: new CodexProvider(dispatchGitGuard, runDoctor, 'codex', undefined, subprocessFactory as any) };
 }
 
 function piCapture() {
@@ -279,7 +281,7 @@ function piCapture() {
     },
   );
   // Provision HARNESS.md so Pi's invocation preflight reaches the spawn.
-  const provider = new PiProvider('pi', subprocessFactory, {
+  const provider = new PiProvider(dispatchGitGuard, 'pi', subprocessFactory, {
     stat: async (path) => ({
       isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
       isDirectory: () => false,

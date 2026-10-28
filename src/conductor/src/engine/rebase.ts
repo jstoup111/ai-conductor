@@ -12,7 +12,7 @@ import {
 } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { isPinnedEngineGitCommand, withPinnedGitConfig } from './git-pinned-config.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';

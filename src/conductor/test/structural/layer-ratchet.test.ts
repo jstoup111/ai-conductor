@@ -4,7 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, parseAllowlistEntry, readAllowlistEntries } from './layer-ratchet.js';
+import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, isForbiddenLayerEdge, parseAllowlistEntry, readAllowlistEntries } from './layer-ratchet.js';
 
 const structuralDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = join(structuralDirectory, '../../src');
@@ -193,7 +193,7 @@ describe('structural: layer ratchet', () => {
     ]);
   });
 
-  it('ignores type-only imports, re-exports, and inline import types', () => {
+  it('reports type-only imports, re-exports, and inline import types as upward edges', () => {
     const result = checkLayerRatchet({
       files: new Map([
         ['types/a.ts', [
@@ -208,10 +208,12 @@ describe('structural: layer ratchet', () => {
       allowlist: [],
     });
 
-    expect(result).toEqual({ scannedFileCount: 2, edges: [], violations: [] });
+    expect(result.violations).toEqual([
+      expect.objectContaining({ kind: 'upward', file: 'types/a.ts', line: 1, edge: 'types -> engine' }),
+    ]);
   });
 
-  it('ignores an engine file that reaches ui only through a dynamic import', () => {
+  it('reports an engine file that reaches ui through a dynamic import', () => {
     const result = checkLayerRatchet({
       files: new Map([
         ['engine/a.ts', "await import('../ui/x.js');"],
@@ -220,7 +222,9 @@ describe('structural: layer ratchet', () => {
       allowlist: [],
     });
 
-    expect(result).toEqual({ scannedFileCount: 2, edges: [], violations: [] });
+    expect(result.violations).toEqual([{
+      kind: 'upward', file: 'engine/a.ts', line: 1, imported: 'ui/x.ts', edge: 'engine -> ui',
+    }]);
   });
 
   it('reports an execution value re-export from engine as upward', () => {
@@ -317,11 +321,11 @@ describe('structural: layer ratchet', () => {
       ['engine/b.ts', "import './c.js';"],
       ['engine/c.ts', 'export {};'],
     ])],
-    ['a type-only back edge', new Map([
+    ['a type-only back edge in one layer', new Map([
       ['engine/a.ts', "import './b.js';"],
       ['engine/b.ts', "import type { A } from './a.js';"],
     ])],
-    ['a dynamic-import back edge', new Map([
+    ['a dynamic-import back edge in one layer', new Map([
       ['engine/a.ts', "import './b.js';"],
       ['engine/b.ts', "await import('./a.js');"],
     ])],
@@ -489,12 +493,9 @@ describe('structural: layer ratchet', () => {
     expect(formatRatchetViolations(result.violations)).toContain(entry);
   });
 
-  it.each([
-    ["import type { B } from '../ui/b.js';", 'type-only import'],
-    ['', 'no import'],
-  ])('reports edge-missing for an entry with %s', (source, _description) => {
+  it('reports edge-missing for a removed import', () => {
     const entry = formatAllowlistEntry('engine/a.ts', 'ui/b.ts');
-    expect(checkLayerRatchet({ files: new Map([['engine/a.ts', source], ['ui/b.ts', 'export type B = string;']]), allowlist: [entry] }).violations)
+    expect(checkLayerRatchet({ files: new Map([['engine/a.ts', ''], ['ui/b.ts', 'export type B = string;']]), allowlist: [entry] }).violations)
       .toEqual([{ kind: 'stale-entry', entry, reason: 'edge-missing' }]);
   });
 
@@ -519,5 +520,16 @@ describe('structural: layer ratchet', () => {
     expect(result.scannedFileCount).toBeGreaterThan(0);
     expect(entries.length).toBeGreaterThan(0);
     expect(result.violations, formatRatchetViolations(result.violations)).toEqual([]);
+  });
+
+  // Covers: task:15
+  it('contains no upward-edge entries in the committed allowlist', async () => {
+    const entries = readAllowlistEntries(await readFile(allowlistFile, 'utf8'));
+    const upwardEntries = entries.filter((entry) => {
+      const pair = parseAllowlistEntry(entry);
+      return pair !== undefined && isForbiddenLayerEdge(pair.from, pair.to);
+    });
+
+    expect(upwardEntries).toEqual([]);
   });
 });

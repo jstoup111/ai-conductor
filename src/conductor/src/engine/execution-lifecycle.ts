@@ -4,7 +4,7 @@ import {
 } from '../execution/observed-interval.js';
 import type { ConductorEvent, ExecutionContext } from '../types/events.js';
 import type { StepName } from '../types/steps.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { getGroupForStep } from './steps.js';
 

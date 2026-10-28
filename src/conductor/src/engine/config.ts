@@ -29,7 +29,7 @@ import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED, BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import { parsePrTemplateRegions } from './pr-body-regions.js';
 import { buildStepRegistry } from './steps.js';

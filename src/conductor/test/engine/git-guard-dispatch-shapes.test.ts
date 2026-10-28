@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:10
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -47,8 +49,8 @@ function recorder(provider: Spawn['provider'], spawns: Spawn[], replies: Reply[]
 }
 
 function runtimes(spawns: Spawn[], replies: { claude?: Reply[]; codex?: Reply[] }): ProviderRuntimeSet {
-  const claude = new ClaudeProvider(undefined, recorder('claude', spawns, replies.claude ?? []) as never);
-  const codex = new CodexProvider(
+  const claude = new ClaudeProvider(dispatchGitGuard, undefined, recorder('claude', spawns, replies.claude ?? []) as never);
+  const codex = new CodexProvider(dispatchGitGuard,
     vi.fn(async () => ({
       stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }),
       exitCode: 0,

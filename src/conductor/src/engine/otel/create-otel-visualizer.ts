@@ -1,4 +1,4 @@
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './otel-visualizer.js';
 

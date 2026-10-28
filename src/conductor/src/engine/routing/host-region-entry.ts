@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { resolveFeaturePlanPath } from '../artifacts.js';
 import { checkStepCompletion, type CompletionContext } from '../artifacts.js';
 import { writeFrozenBlocks } from '../remediation-append.js';

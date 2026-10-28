@@ -13,6 +13,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
 import { withholdCost } from './token-usage.js';
@@ -35,15 +36,14 @@ import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { writeScratchSchema } from './scratch-schema.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
-import { providerDescriptor } from './provider-catalog.js';
-import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
+import { CODEX_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 function codexDisplayName(): string {
-  return providerDescriptor('codex').displayName;
+  return CODEX_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -276,6 +276,7 @@ export class CodexProvider implements LLMProvider {
   private readonly cachedLoginSource: string;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
     executable = 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
@@ -342,7 +343,7 @@ export class CodexProvider implements LLMProvider {
     options = enforceFreshSessionOptions(options, 'codex');
     if (options.abortSignal?.aborted) return abortedInvocationResult();
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
     const repl = options.interactive === true;

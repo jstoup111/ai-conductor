@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:2, task:3, task:4, task:5, task:6, task:7
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -208,8 +210,8 @@ describe('ProviderRuntimeSet', () => {
 
     const homeDir = await mkdtemp(join(tmpdir(), 'provider-runtime-'));
     try {
-      const claude = new ClaudeProvider();
-      const codex = new CodexProvider(async () => {
+      const claude = new ClaudeProvider(dispatchGitGuard);
+      const codex = new CodexProvider(dispatchGitGuard, async () => {
         throw new Error('doctor is stubbed');
       });
       const piEnvironment: PiEnvironment = {
@@ -220,6 +222,7 @@ describe('ProviderRuntimeSet', () => {
         cwd: () => homeDir,
       };
       const pi = new PiProvider(
+        dispatchGitGuard,
         'pi',
         async () => ({ stdout: '', stderr: '', exitCode: 0 }),
         piEnvironment,

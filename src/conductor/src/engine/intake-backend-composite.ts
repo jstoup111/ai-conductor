@@ -1,5 +1,5 @@
 import type { ConductorEvent } from '../types/events.js';
-import type { EventHandler } from '../ui/events.js';
+import type { EventHandler } from './conductor-event-emitter.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { RegistryReader } from './registry.js';
 import type { GhRunner } from './tracker-client.js';

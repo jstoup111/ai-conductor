@@ -573,3 +573,171 @@ Tasks 2, 3, 4, 5, 9, 13 ─▶ Task 14 ─▶ Task 15
 - [ ] Every task has a `Done when:` block of falsifiable checks, and no unbounded quality word is left open
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R15a: Remove engine/daemon-command.ts -> cli-defaults.ts and engine/kickback-budget-cli.ts -> cli.ts: move the shared defaults/helpers they consume into engine/ (or types/) and have the entry modules import them downward
+**Gate:** prd-audit
+**Rationale:** Verified (95%): layer-allowlist.txt:52,77,238,243 hold four edges that isForbiddenEdge classifies as upward. The ADR's D6 requires zero upward entries, and tools/ may import only engine/ and types/. Task 15 step 3 already admits removing every remaining upward edge plus its entry, and its RED test for zero upward entries is missing. This is conforming implementation and test work with no architecture decision open.
+**Criterion:** S1.1
+**Parent task:** 15
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R15a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R15b: Route tools/generate-model-table.ts through an engine/ re-export of the provider catalog instead of importing execution/provider-catalog.ts directly
+**Gate:** prd-audit
+**Rationale:** Verified (95%): layer-allowlist.txt:52,77,238,243 hold four edges that isForbiddenEdge classifies as upward. The ADR's D6 requires zero upward entries, and tools/ may import only engine/ and types/. Task 15 step 3 already admits removing every remaining upward edge plus its entry, and its RED test for zero upward entries is missing. This is conforming implementation and test work with no architecture decision open.
+**Criterion:** S1.1
+**Parent task:** 15
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R15b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R15c: Add a test in test/structural/layer-ratchet.test.ts that asserts zero upward-edge entries in layer-allowlist.txt, then delete the four upward entries
+**Gate:** prd-audit
+**Rationale:** Verified (95%): layer-allowlist.txt:52,77,238,243 hold four edges that isForbiddenEdge classifies as upward. The ADR's D6 requires zero upward entries, and tools/ may import only engine/ and types/. Task 15 step 3 already admits removing every remaining upward edge plus its entry, and its RED test for zero upward entries is missing. This is conforming implementation and test work with no architecture decision open.
+**Criterion:** S1.1
+**Parent task:** 15
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R15c is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R15d: Move the transcript-format helpers provider-catalog needs from engine/self-host/transcript-format.ts into execution/, keep an engine re-export, re-point execution/provider-catalog.ts, and delete its allowlist entry
+**Gate:** prd-audit
+**Rationale:** Verified: execution/provider-catalog.ts imports engine/self-host/transcript-format.js, which is an execution->engine upward edge. Moving the pure transcript-format helper into execution/ and leaving an engine re-export follows the same pattern Tasks 3–8 used. Task 15 admits removing the remaining edge.
+**Criterion:** S4.3
+**Parent task:** 15
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R15d is committed and its targeted tests pass.
+
+### Task rem-as-built-R15e: Confirm the daemon-command, kickback-budget-cli and provider-catalog upward edges are gone and their allowlist entries are deleted (see R15a and R15d)
+**Gate:** as-built
+**Rationale:** These are the same three upward edges as S1.1 and S4.3. D6 is unambiguous, so this is conforming BUILD work under Task 15, covered by the R15a and R15d repairs.
+**Governing clause:** adr-2026-10-12-enforced-source-layer-directions decision 6
+**Done when:**
+- adr-2026-10-12-enforced-source-layer-directions decision 6 is satisfied by this task.
+- The repair for task rem-as-built-R15e is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2a: Restore config-driven renderer selection in src/index.ts / src/terminal-builtins.ts so the CLI subscriber starts with registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal'), with a terminal-builtins/CLI-render test asserting a configured non-terminal ui_renderer is honoured
+**Gate:** prd-audit
+**Rationale:** Verified from the audit evidence: the CLI boot no longer selects its renderer through registry.get('ui_renderer', config.ui_renderer ?? 'terminal'), so the ui_renderer config key is silently ignored. That regresses behavior Task 2 must preserve: the 003 UIRenderer contracts stay unchanged and CLI rendering goes through the registered renderer. Task 2 admits the repair.
+**Criterion:** S3.1
+**Parent task:** 2
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2b: In src/daemon-cli.ts / src/terminal-builtins.ts restore the daemon boot so the global subscriber starts with only the daemon-log renderer at its original point after validateProviderInstallation, with the TerminalRenderer registered but not started, and add a daemon-render test asserting this
+**Gate:** prd-audit
+**Rationale:** Verified: the daemon originally started its subscriber with only [daemonLogRenderer]. Now registerTerminalBuiltins always unshifts a TerminalRenderer and starts it earlier, before validateProviderInstallation. That changes daemon output and lifecycle, which Task 2 says must stay unchanged. Task 2 admits the repair.
+**Criterion:** S3.2
+**Parent task:** 2
+**Done when:**
+- [test] S3.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R2b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R11a: Replace duplicate declarations in engine/github-operations.ts, github-bot-auth-refusal.ts, build-review-domain.ts, child-context.ts, restack/restack-types.ts, routing/route-types.ts, park-reconciliation.ts, halt-marker.ts, engineer/land-spec.ts and engineer/intake/sanitize-inbound.ts with imports/re-exports from src/types/
+**Gate:** prd-audit
+**Rationale:** Verified: the moved types were copied into types/ but the original declarations were never removed. Task 11's done-when explicitly requires every former module to import them back with no duplicate, so this is mechanical BUILD work. llm-provider.ts and managed-session-preparation.ts carry the provider port types that Task 10 moved, and the same no-duplicate rule applies to them.
+**Criterion:** S5.2
+**Parent task:** 11
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R11a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R11b: Replace the TokenUsage, ProviderStreamObservation, AuthenticationSource, ProviderExitFacts and CodexProbeFailure declarations in execution/llm-provider.ts, and the one in execution/managed-session-preparation.ts, with re-exports from src/types/, then run typecheck
+**Gate:** prd-audit
+**Rationale:** Verified: the moved types were copied into types/ but the original declarations were never removed. Task 11's done-when explicitly requires every former module to import them back with no duplicate, so this is mechanical BUILD work. llm-provider.ts and managed-session-preparation.ts carry the provider port types that Task 10 moved, and the same no-duplicate rule applies to them.
+**Criterion:** S5.2
+**Parent task:** 11
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R11b is committed and its targeted tests pass.
+
+### Task rem-as-built-R11c: Verify no type moved to types/ is still independently declared at any listed engine/ or execution/ site (see R11a and R11b)
+**Gate:** as-built
+**Rationale:** This finding duplicates S5.2: same duplicate-declaration sites, and Task 11 already requires removing them. It is covered by repairs R11a and R11b.
+**Governing clause:** adr-2026-10-12-enforced-source-layer-directions decision 5
+**Done when:**
+- adr-2026-10-12-enforced-source-layer-directions decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R11c is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R13a: Add test/types/rubric-id-binding.test.ts with @ts-expect-error fixtures for missing/extra rubric ids against Record<BuildReviewRubricId, BuildReviewRubricDescriptor>, plus a runtime check that BUILD_REVIEW_RUBRIC_IDS from types/config.js equals the registry keys
+**Gate:** prd-audit
+**Rationale:** Verified: build-review-registry.ts builds its descriptor record from an array and casts it to a Record, with no satisfies constraint. The test/types/rubric-id-binding.test.ts that Task 13 requires does not exist. Task 13 steps 1 and 3 admit both the RED test and the constraint.
+**Criterion:** S5.5
+**Parent task:** 13
+**Done when:**
+- [test] S5.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R13a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R13b: Declare the real rubric descriptor record in engine/build-review-registry.ts as an object literal that satisfies Record<BuildReviewRubricId, BuildReviewRubricDescriptor>, import BuildReviewRubricId from types/, and remove the `as` cast
+**Gate:** prd-audit
+**Rationale:** Verified: build-review-registry.ts builds its descriptor record from an array and casts it to a Record, with no satisfies constraint. The test/types/rubric-id-binding.test.ts that Task 13 requires does not exist. Task 13 steps 1 and 3 admit both the RED test and the constraint.
+**Criterion:** S5.5
+**Parent task:** 13
+**Done when:**
+- [test] S5.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R13b is committed and its targeted tests pass.
+
+### Task rem-as-built-R13c: Confirm the live registry at build-review-registry.ts is built from the satisfies-constrained record and no longer goes through an `as` cast (see R13b)
+**Gate:** as-built
+**Rationale:** Same defect as S5.5: the array catalog plus cast does not give compile-time completeness. Task 13 admits the repair, covered by R13a and R13b.
+**Governing clause:** adr-2026-10-12-enforced-source-layer-directions decision 5
+**Done when:**
+- adr-2026-10-12-enforced-source-layer-directions decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R13c is committed and its targeted tests pass.
+
+### Task rem-as-built-R13d: Remove the provider literals from execution/build-review-read-only-capability.ts and execution/pi-self-host-auth.ts by sourcing ids and display names from a leaf catalog-identity module (or as injected parameters) without reintroducing the catalog import cycle
+**Gate:** as-built
+**Rationale:** Verified from the diff: provider-id-literals.test.ts adds PROVIDER_LITERAL_CYCLE_BREAK_MODULES and also relaxes the adapter display-name assertion. Task 13 requires that test to pass unchanged with no new allowlist entry. The cycle can be broken without exemptions: the moved helpers can take provider identities from a leaf execution/ module that both the catalog and the helpers import, or receive them as parameters. The approved direction is kept, so no architecture decision is needed.
+**Parent task:** 13
+**Governing clause:** Task 13
+**Done when:**
+- Task 13 is satisfied by this task.
+- The repair for task rem-as-built-R13d is committed and its targeted tests pass.
+
+### Task rem-as-built-R13e: Revert test/engine/provider-id-literals.test.ts to its main-branch form: drop PROVIDER_LITERAL_CYCLE_BREAK_MODULES and restore the adapter display-name assertion, and confirm it passes
+**Gate:** as-built
+**Rationale:** Verified from the diff: provider-id-literals.test.ts adds PROVIDER_LITERAL_CYCLE_BREAK_MODULES and also relaxes the adapter display-name assertion. Task 13 requires that test to pass unchanged with no new allowlist entry. The cycle can be broken without exemptions: the moved helpers can take provider identities from a leaf execution/ module that both the catalog and the helpers import, or receive them as parameters. The approved direction is kept, so no architecture decision is needed.
+**Parent task:** 13
+**Governing clause:** Task 13
+**Done when:**
+- Task 13 is satisfied by this task.
+- The repair for task rem-as-built-R13e is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R10a: In src/conductor/src/execution/llm-provider.ts, replace the local AuthenticationReadinessState declaration with an import and re-export from src/types/provider.ts. Grep execution/ and engine/ for any other independent redeclaration of a provider.ts type, then run npm run typecheck
+**Gate:** prd-audit
+**Rationale:** Verified (99%, observed): src/conductor/src/execution/llm-provider.ts:36-40 still declares AuthenticationReadinessState, and src/conductor/src/types/provider.ts:8 declares it too. Task 10's done-when already requires llm-provider.ts to declare none of the moved types. This is implementation drift against approved architecture, so it is a one-site BUILD fix with no design decision needed.
+**Criterion:** S5.2
+**Parent task:** 10
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R10a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R12a: Add src/conductor/test/types/github-operation-name-binding.test.ts, following rubric-id-binding.test.ts and compile-type-fixture.ts. Use @ts-expect-error to assert that a Record<GithubOperationName, GithubOperationDefinition> registry is a compile error when it has an operation absent from the types/ union, and when it is missing a union member. Also assert that GITHUB_OPERATION_REGISTRY's keys match the union, then run the test and typecheck
+**Gate:** prd-audit
+**Rationale:** Verified (99%, observed): test/types/ contains rubric-id-binding, plugin-kind and unrelated tests, but no github-operation-name-binding.test.ts. The registry-side satisfies binding is already in place. Task 12's [test] done-when requires @ts-expect-error proofs for an extra operation and a missing union member. This is a missing test inside an approved task, so it is BUILD work, modeled on the existing rubric-id-binding test and compile-type-fixture helper.
+**Criterion:** S5.3
+**Parent task:** 12
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R12a is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R13f: In src/conductor/test/engine/provider-id-literals.test.ts, restore main's adapter branch to check display names against BUILT_IN_PROVIDERS rather than foreignProviders. Restore the original 'reports a declared adapter display name embedded in user-facing text' and 'keeps an adapter's own provider id exempt but reports its display name' tests and expectations, and keep the catalogModules set
+**Gate:** as-built
+**Rationale:** Verified (99%, observed via git diff main): provider-id-literals.test.ts:140 was relaxed from BUILT_IN_PROVIDERS to foreignProviders. Two assertions were also inverted: 'reports a declared adapter display name embedded in user-facing text' and 'keeps an adapter's own provider id exempt but reports its display name'. R13e only partly reverted this. The repair restores main's adapter display-name detection and both original assertions. It keeps the permitted catalogModules set, which includes provider-catalog-identities.ts. Any adapter production literal this resurfaces, such as Pi or Codex display text, must source its display name from the catalog. Task 13's no-new-exemptions requirement covers that work, and it preserves completed Task 13 coverage.
+**Parent task:** rem-as-built-R13e
+**Governing clause:** Task rem-as-built-R13e
+**Done when:**
+- Task rem-as-built-R13e is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R13f is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R13g: Fix every production finding the restored guard reports in execution/*-provider.ts adapters by deriving the adapter's display name from the provider catalog identity instead of a string literal. Then confirm provider-id-literals.test.ts passes with no new exemptions
+**Gate:** as-built
+**Rationale:** Verified (99%, observed via git diff main): provider-id-literals.test.ts:140 was relaxed from BUILT_IN_PROVIDERS to foreignProviders. Two assertions were also inverted: 'reports a declared adapter display name embedded in user-facing text' and 'keeps an adapter's own provider id exempt but reports its display name'. R13e only partly reverted this. The repair restores main's adapter display-name detection and both original assertions. It keeps the permitted catalogModules set, which includes provider-catalog-identities.ts. Any adapter production literal this resurfaces, such as Pi or Codex display text, must source its display name from the catalog. Task 13's no-new-exemptions requirement covers that work, and it preserves completed Task 13 coverage.
+**Parent task:** rem-as-built-R13e
+**Governing clause:** Task rem-as-built-R13e
+**Done when:**
+- Task rem-as-built-R13e is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R13g is committed and its targeted tests pass.

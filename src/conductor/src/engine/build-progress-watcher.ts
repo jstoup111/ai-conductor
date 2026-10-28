@@ -7,7 +7,7 @@ import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
 import { heartbeatBelongsToDispatch, readStepHeartbeat } from './step-heartbeat.js';
 import type { ResolvedBuildProgressConfig } from './config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { BuildActivity } from '../types/events.js';

@@ -1,30 +1,17 @@
-import { CHILD_REGION_STEPS, parseChildId, type ChildId } from '../child-context.js';
+import { CHILD_REGION_STEPS, parseChildId } from '../child-context.js';
 import { isValidGitBranchName } from '../git-branch-name.js';
-import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
+import { parseCommitSha } from '../restack/restack-types.js';
 import type { StackedPrsConfig } from '../../types/config.js';
 import type { StepStatus } from '../../types/steps.js';
+import type { ChildId, CommitSha } from '../../types/restack.js';
+import type { HostState, RoundId, RouteKind } from '../../types/routing.js';
+export type { HostState, RoundId, RouteKind };
 
 /** The explicit round bound used by routing-ref teardown. */
 export const MAX_ROUTE_ROUNDS = 999;
 
 /** A validated route-record namespace segment (`r1` through `r999`). */
-export type RoundId = string & { readonly __brand: 'RoundId' };
-
-export type HostState =
-  | 'pending'
-  | 'admitted'
-  | 'repairing'
-  | 'reroute-moved'
-  | 'built'
-  | 'restacked'
-  | 'done'
-  | 'rerouted'
-  | 'abandoning'
-  | 'abandoned';
-
 export type RoundPhase = 'prepared' | 'open' | 'closed';
-
-export type RouteKind = 'audit' | 'revalidate' | 'operator';
 
 /** Makes routing-union consumers fail closed when their union gains a member. */
 export function assertNever(value: never): never {

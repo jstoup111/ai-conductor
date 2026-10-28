@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from './dispatch-git-guard.js';
+
 // Covers: task:1, task:2, task:4, task:5
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -550,7 +552,7 @@ describe('runLiveE2ERunBody authentication source', () => {
 
     try {
       delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-      const provider = new ClaudeProvider();
+      const provider = new ClaudeProvider(dispatchGitGuard);
       const descriptor = {
         id: 'claude',
         expectedAuthenticationSource: 'oauth-token',
