@@ -867,6 +867,35 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.kickbacks).toEqual([]);
   });
 
+  // Covers: S2.4, task:5
+  it('through build_review writes the named HALT after a corrected binding is refused again', async () => {
+    const rejected = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'rejected', caseRef: 'rejected-R' }],
+      cases: [{ caseRef: 'rejected-R', existingCaseId: 'case-R', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'Reject the reserved action.', effect: { kind: 'none' } }],
+    };
+    const run = await fixture({
+      remediateJudgements: [rejected, rejected],
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature,
+          cases: [{
+            id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The action is reserved.', resolution: 'open',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+            effect: { id: 'effect-R', kind: 'action', status: 'reserved' },
+          }],
+        }), 'utf8');
+      },
+    });
+
+    expect(run.remediateDispatches()).toBe(2);
+    const halt = await run.haltMarker();
+    expect(halt).toContain('inadmissible-case-binding');
+    expect(halt).toContain('case case-R bound as reject');
+    expect(halt).toContain('bindable: act');
+  });
+
   it('labels provider failure in the expansion round and retains that round\'s exit facts', async () => {
     const source = projectBuildReviewAggregateSources(customAggregate())![0]!;
     const run = await fixture({
