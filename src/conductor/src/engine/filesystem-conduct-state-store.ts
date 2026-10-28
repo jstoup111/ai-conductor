@@ -184,7 +184,10 @@ export function createFilesystemConductStateStore(
         const state = current.value;
         for (const mutation of batch.mutations) {
           const currentValue = (state as Record<string, unknown>)[mutation.field];
-          if (!stateMutationValuesEqual(currentValue, mutation.expected)) {
+          if (
+            !stateMutationValuesEqual(currentValue, mutation.expected) &&
+            !stateMutationValuesEqual(currentValue, mutation.next)
+          ) {
             return {
               kind: 'conflict',
               message: `Expected ${mutation.field} to match before ${mutation.intent}`,
