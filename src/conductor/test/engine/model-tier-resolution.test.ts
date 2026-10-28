@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:4
 import { afterEach, expect, it } from 'vitest';
 import {
   installResolvedModelTiers,
@@ -11,6 +11,7 @@ import {
 } from '../../src/engine/provider-model-policy.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import { resolveStepConfig } from '../../src/engine/resolved-config.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 const FULL_LISTING = [
   'gpt-6.1-sol',
@@ -118,4 +119,46 @@ it('does not introduce non-tier catalog entries into a materialized policy', () 
     'gpt-reserve',
     'codex-auto-review',
   ]));
+});
+
+it('keeps an operator-configured Codex default model opaque after catalog resolution', () => {
+  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  const config: HarnessConfig = {
+    llm_providers: { codex: { model: 'gpt-5.6-sol' } },
+  };
+
+  const policy = resolveProviderModelPolicy('codex', { config });
+
+  expect(resolveStepConfig('build_review', 'BUILD', policy).model).toBe('gpt-5.6-sol');
+});
+
+it('keeps an operator-configured Codex step model opaque after catalog resolution', () => {
+  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  const config: HarnessConfig = {
+    steps: { build_review: { llm_provider: 'codex', model: 'gpt-5.6-terra' } },
+  };
+
+  expect(resolveStepConfig(
+    'build_review',
+    'BUILD',
+    resolveProviderModelPolicy('codex'),
+    config,
+  ).model).toBe('gpt-5.6-terra');
+});
+
+it('keeps operator-configured Codex model ladders opaque after catalog resolution', () => {
+  installResolvedModelTiers('codex', resolveModelTierFloors(codexFloorIds(), FULL_LISTING));
+  const config: HarnessConfig = {
+    llm_providers: {
+      codex: {
+        model_escalation_order: ['gpt-5.6-luna', 'gpt-5.6-sol'],
+        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-luna'],
+      },
+    },
+  };
+
+  expect(resolveProviderModelPolicy('codex', { config })).toMatchObject({
+    modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-sol'],
+    modelFallbackLadder: ['gpt-5.6-sol', 'gpt-5.6-luna'],
+  });
 });
