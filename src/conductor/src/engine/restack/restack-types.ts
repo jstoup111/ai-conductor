@@ -43,6 +43,7 @@ export type RestackRefusalReason =
   | 'closed-child-rewritten'
   | 'flatten_refused'
   | 'restack-outstanding'
+  | 'journal-live-owner'
   | 'published-stack'
   | 'deferred-base-refresh';
 

@@ -44,6 +44,7 @@
     "prdAuditAppendCap",
     "prdAuditScopeProjection",
     "pushPostFinishShippedRecord",
+    "readBuildReviewAdjudicationArtifactFacts",
     "readRemediationGateAppendBudget",
     "recordActivePlanPath",
     "recordApprovals",

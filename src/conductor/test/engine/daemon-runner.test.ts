@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3, task:6, task:8
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -62,9 +62,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/halt-marker.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/halt-marker.js')>();
+  return { ...actual, writeHaltMarker: vi.fn(actual.writeHaltMarker) };
+});
+
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -87,6 +92,13 @@ import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.j
 import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
+import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
+import { writeHaltMarker } from '../../src/engine/halt-marker.js';
+import { journalRefFor, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
+import type { RestackOpId } from '../../src/engine/restack/restack-types.js';
+import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-rekick.js';
 
 // Covers: task:1
 
@@ -155,7 +167,176 @@ function deps(
   };
 }
 
+async function stackPreflightFixture(slug: string): Promise<string> {
+  const repo = await mkdtemp(join(tmpdir(), 'daemon-runner-stack-preflight-'));
+  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  const commit = async (message: string, path: string, value: string) => {
+    await mkdir(join(repo, path, '..'), { recursive: true });
+    await writeFile(join(repo, path), value);
+    await git(['add', path]);
+    await git(['commit', '-qm', message]);
+    return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  };
+  await initTestRepo(repo);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await git(['add', '.gitignore']);
+  await git(['commit', '-qm', 'ignore pipeline']);
+  await commit('base', 'base.txt', 'base\n');
+  await git(['checkout', '-qb', `feat/c1/${slug}`]);
+  const closed = await commit('closed one', 'one.txt', 'one\n');
+  await git(['update-ref', `refs/conductor/${slug}/closed/c1`, closed]);
+  await git(['checkout', '-qb', `feat/daemon-${slug}`]);
+  await commit('leaf', 'leaf.txt', 'leaf\n');
+  await mkdir(join(repo, '.ai-conductor'));
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n');
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'stories', `${slug}.md`), `# Stories: ${slug}\n\n## Story 1: One\n\n## Story 2: Two\n`);
+  await writeFile(join(repo, '.docs', 'plans', `${slug}.md`), [
+    `# Implementation Plan: ${slug}`, '', `**Stories:** .docs/stories/${slug}.md`, '', '## Slices', '',
+    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Two | 2 |', '',
+    '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
+    '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
+  ].join('\n'));
+  await writeFile(join(repo, 'positions.json'), '[1,2]');
+  const positions = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
+  await git(['update-ref', `refs/conductor/${slug}/positions`, positions]);
+  return repo;
+}
+
+async function leaveLiveRestackJournal(repo: string, slug: string): Promise<void> {
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+  if (processStartTime === undefined) throw new Error('could not read test process start time');
+  const blob = await writeRestackJournalBlob(repo, {
+    opId: 'test-live-owner' as RestackOpId,
+    cause: 'base-refresh',
+    committer: { name: 'Test', email: 'test@example.test', date: '0 +0000' },
+    dirtyPaths: [],
+    refs: [],
+    ranges: [],
+    children: [],
+    state: 'planned',
+    owner: { host: hostname(), pid: process.pid, processStartTime },
+  });
+  await execFile('git', ['update-ref', journalRefFor(slug), blob], { cwd: repo });
+}
+
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('reports a live journal owner and does not retain its mechanical HALT', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      await leaveLiveRestackJournal(worktreePath, ITEM.slug);
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path, slug: ITEM.slug, git: makeGitRunner(worktree.path),
+        });
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(`${process.pid}`) });
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
+        haltClass: 'mechanical', retained: false,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a real stack preflight refusal from the durable HALT, not the no-marker fallback', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path,
+          slug: ITEM.slug,
+          git: makeGitRunner(worktree.path),
+          reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+        });
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome.status).toBe('halted');
+      expect(outcome.reason).toContain('round advance cas-failed');
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a failed stack-preflight HALT write reason instead of the no-marker fallback', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      vi.mocked(writeHaltMarker).mockResolvedValueOnce({
+        status: 'failed',
+        path: join(worktreePath, '.pipeline', 'HALT'),
+        reason: 'injected write failure',
+      });
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path,
+          slug: ITEM.slug,
+          git: makeGitRunner(worktree.path),
+          reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+        });
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome).toMatchObject({
+        status: 'error',
+        reason: expect.stringContaining('round advance cas-failed'),
+      });
+      expect(outcome.reason).toContain('could not be written');
+      expect(outcome.reason).toContain('injected write failure');
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { item: { slug: 'feature-tiered', tier: 'M' as const }, expectedTier: 'M' },
     { item: { slug: 'feature-untiered' }, expectedTier: undefined },

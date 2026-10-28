@@ -34,6 +34,9 @@ import {
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { readBuildReviewAdjudicationArtifactFacts } from './build-review-adjudication-artifact-facts.js';
+export { readBuildReviewAdjudicationArtifactFacts } from './build-review-adjudication-artifact-facts.js';
+import { deriveChangedFileReferences } from './build-review-projections.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
@@ -5506,13 +5509,28 @@ export class Conductor {
       .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
         record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
       .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
+    // `scope-empty` says this rubric deliberately did not judge its settled
+    // sources.  Keep only those sources live: other rubrics can still prove
+    // absence in this same clean lap.
+    const scopeEmptyRubrics = new Set([
+      ...Object.entries(aggregate.results)
+        .filter(([, result]) => result.kind === 'scope-empty')
+        .map(([rubric]) => rubric),
+      ...(aggregate.currentCustomRubrics ?? []).filter((rubric) =>
+        aggregate.customResults?.[rubric]?.result.kind === 'scope-empty',
+      ),
+    ]);
+    let scopeEmptySourceIds = new Set<string>();
     // A clean PASS is the evidence that the content set is empty, whether or
     // not an earlier lap left a work order on disk: absent non-action history
     // settles benignly here too, while the reconciler's shared effect-status
     // test keeps any reserved or failed effect open.
     const retirement = await store.mutate(async (state) => {
+      scopeEmptySourceIds = new Set(state.cases.flatMap((record) => record.sources
+        .filter((source) => scopeEmptyRubrics.has(source.sourceId.split(':', 1)[0]!))
+        .map((source) => source.sourceId)));
       const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
-        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        liveSourceIds: scopeEmptySourceIds, effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
         allowAppliedByAbsence: attemptEvidence.ok,
         resolveAbsentOpenNonActionCases: true,
         referenced: false,
@@ -5546,6 +5564,7 @@ export class Conductor {
       lapId: aggregate.lapId,
       effectiveAcceptedSourceIds: acceptedSourceIds,
       mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+      liveSourceIds: scopeEmptySourceIds,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
@@ -5600,9 +5619,11 @@ export class Conductor {
     }
 
     const priorLaps: Array<{ artifactPath: string; findings: Array<{ findingRef: string; finding: typeof findings[number] }> }> = [];
+    const artifactRoot = pipelinePathFor(this.projectRoot, 'build-review', this.activeRegionChild);
+    const artifactRootRelative = relative(this.projectRoot, artifactRoot);
     let lapIds: readonly string[] = [];
     try {
-      lapIds = await readdir(join(this.projectRoot, '.pipeline', 'build-review'));
+      lapIds = await readdir(artifactRoot);
     } catch {
       // No prior-lap directory is equivalent to no prior attempts.
     }
@@ -5610,7 +5631,7 @@ export class Conductor {
       if (lapId === aggregate.lapId) continue;
       let files: readonly string[] = [];
       try {
-        files = await readdir(join(this.projectRoot, '.pipeline', 'build-review', lapId));
+        files = await readdir(join(artifactRoot, lapId));
       } catch {
         continue;
       }
@@ -5618,11 +5639,11 @@ export class Conductor {
         if (!file.endsWith('.json')) continue;
         try {
           const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(
-            join(this.projectRoot, '.pipeline', 'build-review', lapId, file), 'utf-8',
+            join(artifactRoot, lapId, file), 'utf-8',
           )));
           if (artifact?.result.kind === 'judged' && artifact.result.rubric === 'testQuality') {
             priorLaps.push({
-              artifactPath: `.pipeline/build-review/${lapId}/${file}`,
+              artifactPath: join(artifactRootRelative, lapId, file),
               findings: (artifact.result.findings as readonly BuildReviewFinding[]).map((finding, index) => ({ findingRef: String(index), finding })),
             });
           }
@@ -13914,6 +13935,7 @@ export class Conductor {
                   const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
                   const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
+                  const outOfDeltaFindingIds = effective.effective.outOfDeltaFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
                   // already persisted these rows for this lap; the coordinator
                   // re-runs that same idempotent upsert rather than owning a
@@ -13928,6 +13950,25 @@ export class Conductor {
                     advisoryFindingIds,
                     thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                   });
+                  // Provenance regions are resolved against the immutable
+                  // diff named by each current artifact, never against an
+                  // anchor hash that may be a test title or custom region.
+                  const changedFilesBySource = new Map<string, Promise<ReturnType<typeof deriveChangedFileReferences> | undefined>>();
+                  const artifactFacts = await readBuildReviewAdjudicationArtifactFacts(this.projectRoot, aggregate, {
+                    changedFilesForArtifact: async (artifact) => {
+                      const scope = artifact.reviewScope;
+                      if (scope === undefined || 'kind' in scope) return undefined;
+                      const key = `${scope.mergeBase}..${scope.headSha}`;
+                      let changedFiles = changedFilesBySource.get(key);
+                      if (changedFiles === undefined) {
+                        changedFiles = this.git(['diff', '--no-ext-diff', key], { cwd: this.projectRoot })
+                          .then((result) => deriveChangedFileReferences(result.stdout))
+                          .catch(() => undefined);
+                        changedFilesBySource.set(key, changedFiles);
+                      }
+                      return changedFiles;
+                    },
+                  }, this.activeRegionChild);
                   // Settlement gate: `verdictRaw` is the aggregate the join
                   // recorded after every branch settled; the shared operation
                   // refuses anything that does not parse as that complete lap.
@@ -13940,12 +13981,15 @@ export class Conductor {
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     advisoryFindingIds: new Set(advisoryFindingIds),
+                    outOfDeltaFindingIds: new Set(outOfDeltaFindingIds),
                     declaredSeverityThresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                     suppressions: [...suppressions, ...advisories],
                     resolveOperatorResolvedFindingIds,
                     resolveEffectiveAcceptedSourceIds,
                     mechanical,
                     absenceRetirementMechanicallyHealthy,
+                    priorFindingDigests: artifactFacts.priorFindingDigests,
+                    ...(artifactFacts.provenance === undefined ? {} : { provenance: artifactFacts.provenance }),
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
                       resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
@@ -16861,9 +16905,7 @@ export class Conductor {
         resolverCap: resolveRebaseResolutionAttempts(this.config),
       });
       if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
-        const reason = preflight.kind === 'unavailable'
-          ? `stack preflight unavailable: ${preflight.detail}`
-          : 'stack preflight halted';
+        const reason = `stack preflight ${preflight.kind}: ${preflight.detail}`;
         return { success: false, output: reason };
       }
 

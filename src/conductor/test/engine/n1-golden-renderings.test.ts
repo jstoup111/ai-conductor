@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:17, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-4-n1-golden-leaf-push, task:rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt, task:rem-operator-17-r3
+// Covers: task:1, task:3, task:17, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-4-n1-golden-leaf-push, task:rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt, task:rem-operator-17-r3, task:rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451-2
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -72,6 +72,10 @@ describe('N=1 golden renderings', () => {
     // The child includes this file, but skips this coordinator, so this test
     // directly proves all three Task 17 members pass without recursing.
     if (RECORD || process.env[N1_GOLDEN_SUITE_CHILD] === '1') return;
+    // A concurrent test may mutate TMPDIR after global setup. Preserve the
+    // run-root marker rather than forwarding that mutable value, otherwise
+    // this nested Vitest run can create shell fixtures in the real /tmp.
+    const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
     const result = await execFile(process.execPath, [
       'scripts/run-vitest.mjs',
       'run',
@@ -82,7 +86,15 @@ describe('N=1 golden renderings', () => {
       'test/engine/n1-golden-routing-guard.test.ts',
     ], {
       cwd: join(import.meta.dirname, '..', '..'),
-      env: { ...process.env, [N1_GOLDEN_SUITE_CHILD]: '1' },
+      env: {
+        ...process.env,
+        [N1_GOLDEN_SUITE_CHILD]: '1',
+        ...(runTmpRoot === undefined ? {} : {
+          TMPDIR: runTmpRoot,
+          TMP: runTmpRoot,
+          TEMP: runTmpRoot,
+        }),
+      },
     });
     // The child may report the pre-run stale-root sweep and its teardown's
     // concurrent-tooling notice. Any other child stderr remains a failure.

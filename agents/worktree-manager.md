@@ -29,7 +29,7 @@ Create a worktree for a feature branch:
    d. Report: what `.env.local` values were set
 7. Report: worktree path, branch name, what was inherited, infrastructure setup
 
-### Create Parallel (for pipeline Full autonomy)
+### Create Parallel (isolated worktrees for independent tasks)
 
 Create multiple worktrees for concurrent task execution:
 

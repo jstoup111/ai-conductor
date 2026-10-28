@@ -1,7 +1,7 @@
 ---
 name: pipeline
 disable-model-invocation: true
-description: "Use when executing an implementation plan with multiple tasks. Factory orchestration with three autonomy levels, quality gates, rework budgets, and audit trails."
+description: "Use when executing an implementation plan with multiple tasks. Factory orchestration with ready-frontier parallelism, quality gates, rework budgets, and audit trails."
 enforcement: structural
 phase: build
 standalone: false
@@ -43,15 +43,11 @@ contracts below.
 
 ## Practices
 
-### Autonomy Levels
+### Execution Mode
 
-| Level | Human Role | Agent Authority | When to Use |
-|-------|-----------|----------------|-------------|
-| **Conservative** | Approves each task before execution | Sequential only, proposes before executing | First time using the harness, unfamiliar domain |
-| **Standard** | Reviews at batch boundaries | Parallel agents on non-overlapping files, quality gates | Known domain, trusted test suite |
-| **Full** | Reviews completed features | Parallel agents + parallel worktrees, auto-merge on green | Mature project, well-defined stories |
-
-Default to **Standard** unless the user specifies otherwise.
+There is one mode. The human reviews at batch boundaries; the agent runs quality gates on every
+task and dispatches independent tasks in parallel, up to X at a time (see
+[Parallel Execution](#parallel-execution)).
 
 ### Per-Task Execution
 
@@ -486,7 +482,7 @@ This prevents wasting a full subagent dispatch to redo work that was already com
 ### Rework Budget
 
 Each task gets **3 rework cycles** per quality gate:
-- Cycle 1-2: Auto-fix and re-review (Standard/Full autonomy)
+- Cycle 1-2: Auto-fix and re-review
 - Cycle 3: If still failing, **escalate to user** with full context:
   - What the evaluator found
   - What fixes were attempted
@@ -500,34 +496,45 @@ If stories in `.docs/stories/` have been modified since the plan was created:
 
 ### State Management
 
-Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `rework-N.json`, `commit.txt`, plus `summary.json` for final pipeline metrics).
+Track all state in `.pipeline/`: `config.yaml` (project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `rework-N.json`, `commit.txt`, plus `summary.json` for final pipeline metrics).
 
-### Parallel Execution (Standard and Full Autonomy)
+### Parallel Execution
 
-Standard and Full autonomy MUST schedule work by **ready frontier**, not by walking the plan one
-task at a time. At pipeline start and after every join, build the ready frontier from pending tasks
-whose declared dependencies are completed, then exclude any pair with overlapping likely-touched
-files. Dependent or overlapping-file tasks stay sequential and move to the next frontier after the
-earlier task completes. Conservative autonomy remains sequential and does not require fan-out.
+Every plan MUST schedule work by **ready frontier**, not by walking the plan one task at a time. At
+pipeline start and after every join, build the ready frontier from pending tasks whose declared
+dependencies are completed, then exclude any pair with overlapping likely-touched files. Dependent
+or overlapping-file tasks stay sequential and move to the next frontier after the earlier task
+completes.
 
-When a Standard or Full ready frontier contains two or more independent tasks, use one host-native
-fan-out operation to dispatch up to 3 independent tasks concurrently. Do not emit one dispatch,
-wait for it, and then emit the next. The provider-specific seams are explicit:
+**The parallel cap X.** Dispatch at most 3 independent tasks concurrently, and never more than the
+host can run at once. Before each fan-out, set X = min(3, free sub-agent slots on this host):
+
+- **Codex** states its capacity in its multi-agent instructions ("There are N available
+  concurrency slots… including you"). Free slots are N − 1 (this session) minus any sub-agents
+  already active. The operator raises N with `[agents] max_threads` in `~/.codex/config.toml`.
+- **Claude Code** allows `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` concurrent Agent-tool sub-agents
+  per session (default 20). Free slots are that limit minus sub-agents already running, so X is
+  normally 3.
+- A host with no native concurrent-dispatch facility has 0 free slots.
+
+When X = 1 (one free slot, none, or a frontier of one task), run the frontier sequentially, one at a
+time, in this session. That is a normal schedule, not a failure: never halt or ask the operator to choose
+a mode because fewer slots are free. Record X for each frontier in the batch-boundary report so the
+reduced parallelism is visible.
+
+Daemon concurrency does not change X. Each daemon dispatch is its own host session with its own
+slots.
+
+When X ≥ 2 and the ready frontier holds two or more independent tasks, use one host-native fan-out
+operation to dispatch up to X of them concurrently. Do not emit one dispatch, wait for it, and then
+emit the next. The provider-specific seams are explicit:
 
 - Claude Code performs one response containing multiple Agent tool dispatches, one per selected
   task, then waits for all dispatched agents to return.
 - Codex performs one response containing multiple `collaboration.spawn_agent` calls, one per
   selected task, then waits for all dispatched agents to return with `collaboration.wait_agent`.
 
-Before the first Standard or Full fan-out, verify that the selected host exposes its native
-concurrent-dispatch facility. If native fan-out is unavailable or unsupported, fail closed before
-task mutation: report the selected provider, the missing fan-out capability, and the recovery action
-(use a supported host or explicitly restart in Conservative autonomy). Never silently serialize a
-Standard or Full frontier.
-
-Parallel agents may share the same directory only when their file sets are non-overlapping. Full
-autonomy may instead isolate those same independent tasks in separate worktrees, but worktree
-isolation does not make dependent or overlapping-file tasks eligible for the same frontier.
+Parallel agents share the same directory, so their file sets must not overlap.
 
 **When to parallelize:**
 - Tasks touch different files (check `**Files likely touched:**` in the plan)
@@ -536,7 +543,7 @@ isolation does not make dependent or overlapping-file tasks eligible for the sam
 
 **How to parallelize:**
 1. Build the ready frontier from dependency and likely-touched-file metadata
-2. Select at most 3 mutually independent tasks
+2. Compute X, then select at most X mutually independent tasks
 3. Dispatch all selected tasks in one host-native fan-out operation
 4. Each agent receives: the task description, the test directory, the source directory
 5. Wait for every concurrent dispatch to complete before verification
@@ -544,20 +551,6 @@ isolation does not make dependent or overlapping-file tasks eligible for the sam
    interaction risk needs checking, run only the relevant tests. Uncertain scope returns
    configured suite proof to `test_suite`; never use a full-suite fallback here.
 7. If tests fail: identify the conflict, fix sequentially, and verify only the affected behavior
-
-**Worktree-based parallelism (Full autonomy only):**
-For mutually independent tasks that need stronger isolation:
-- In Claude Code, dispatch the `worktree-manager` agent with `model="haiku"` to create parallel
-  worktrees under `.worktrees/`; other supported hosts use the native equivalent with the same
-  isolated-worktree responsibility.
-- Each worktree gets its own task batch
-- After completion, merge results back sequentially
-- The worktree-manager handles merge order and conflict resolution, using targeted checks
-  only for changed behavior and leaving configured suite verification to `test_suite`
-- Never place dependent or overlapping-file tasks in the same ready frontier; defer them even when
-  separate worktrees could be created.
-
-**Conservative autonomy:** All tasks run sequentially. No parallel execution.
 
 ### Batch Boundaries
 
@@ -584,10 +577,8 @@ At natural batch boundaries (after completing a group of related tasks):
   `$architecture-diagram`)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)
-- Report batch status as a single line: `Batch N: X/Y PASS, Z rework`
-- In Conservative mode: get explicit approval to continue
-- In Standard mode: continue unless the user intervenes
-- In Full mode: continue automatically
+- Report batch status as a single line: `Batch N: <passed>/<total> PASS, <rework> rework, cap X`
+- Continue unless the user intervenes
 
 ### Memory Checkpoint (Per-Batch)
 
@@ -622,7 +613,7 @@ Required fields (all numeric unless noted):
 {
   "plan_ref": "<relative path to plan file>",
   "complexity_tier": "S|M|L",
-  "autonomy_level": "conservative|standard|full",
+  "max_parallel": 0,
   "tasks_total": 0,
   "tasks_completed": 0,
   "tasks_skipped": 0,
@@ -645,7 +636,7 @@ Write the file while the data is still in context.
 
 ## Verification
 
-- [ ] Autonomy level set (default: Standard)
+- [ ] Parallel cap X computed from free host slots before each fan-out
 - [ ] Implementation plan loaded and validated
 - [ ] Each task follows TDD cycle (not skipping RED or DOMAIN phases)
 - [ ] Every subagent dispatch's line 1 is exactly `Task: <id>` (bare plan id) so the session
