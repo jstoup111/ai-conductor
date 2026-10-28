@@ -11,6 +11,7 @@ import {
   renderOwnershipRefusal,
   worktreeFeatureOwnershipSource,
 } from '../../src/engine/feature-ownership.js';
+import type { DocsPath } from '../../src/engine/feature-manifest.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCallback);
@@ -154,7 +155,7 @@ describe('renderOwnershipRefusal', () => {
   it('names every drift path with its specific recovery', () => {
     expect(renderOwnershipRefusal({
       kind: 'drift',
-      manifestPath: '.docs/f/manifest.json',
+      manifestPath: '.docs/f/manifest.json' as DocsPath,
       drift: [
         { path: '.docs/coherence/f.md', reason: 'missing' },
         { path: '.docs/stories/extra.md', reason: 'unlisted' },
