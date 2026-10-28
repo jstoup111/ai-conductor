@@ -1,10 +1,11 @@
-import { MAX_CHILD_ID } from '../child-context.js';
+import { MAX_CHILD_ID, parseChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { pushedTipIntentRef, pushedTipRef } from '../push-lease.js';
 import type { GitRunner } from '../rebase.js';
 import { routingTeardownRefNames } from '../routing/routing-refs.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from './restack-journal.js';
 import { cascadesRefFor } from './cascade-cap.js';
+import { conflictParentRefFor, conflictRecordRefFor, resolutionRefFor } from './restack-conflict-record.js';
 
 /**
  * The feature-owned conductor refs have deliberately finite names.  Cleanup
@@ -18,13 +19,17 @@ export function featureConductorRefNames(slug: string): readonly string[] {
     cascadesRefFor(slug),
     `refs/conductor/${slug}/leaf-moved`,
     journalRefFor(slug),
+    conflictRecordRefFor(slug),
+    conflictParentRefFor(slug),
   ];
   for (let id = 1; id <= MAX_CHILD_ID; id += 1) {
     const child = childBranchFor(slug, id);
-    if (!child.ok) continue;
+    const childId = parseChildId(id);
+    if (!child.ok || !childId) continue;
     refs.push(
       pushedTipRef(slug, child.branch),
       pushedTipIntentRef(slug, child.branch),
+      resolutionRefFor(slug, childId),
     );
   }
   return refs;

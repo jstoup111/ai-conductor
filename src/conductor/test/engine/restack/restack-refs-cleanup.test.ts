@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { parseChildId } from '../../../src/engine/child-context.js';
+import { MAX_CHILD_ID, parseChildId } from '../../../src/engine/child-context.js';
 import { reconcileMergedPark } from '../../../src/engine/park-reconciliation.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import {
@@ -88,6 +88,42 @@ function routingFixtureRefs() {
 }
 
 describe('deleteFeatureConductorRefs (real local Git)', () => {
+  // Covers: task:12
+  it('lists conflict and every child resolution ref, then deletes them during single-slug reclaim', async () => {
+    const subject = await fixture();
+    const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const expected = [
+      'refs/conductor/demo/restack/conflict/record',
+      'refs/conductor/demo/restack/conflict/parent',
+      ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/resolution/c${index + 1}`),
+    ];
+
+    expect(featureConductorRefNames('demo')).toEqual(expect.arrayContaining(expected));
+    for (const ref of expected) await subject.git(['update-ref', ref, tip]);
+
+    await expect(deleteFeatureConductorRefs('demo', subject.git)).resolves.toBe(true);
+    for (const ref of expected) {
+      await expect(subject.git(['rev-parse', '-q', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
+    }
+  });
+
+  // Covers: task:12
+  it('leaves another slug’s conflict and resolution refs intact', async () => {
+    const subject = await fixture();
+    const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const protectedRefs = [
+      'refs/conductor/demo/restack/conflict/record',
+      'refs/conductor/demo/restack/conflict/parent',
+      ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/resolution/c${index + 1}`),
+    ];
+    for (const ref of protectedRefs) await subject.git(['update-ref', ref, tip]);
+
+    await expect(deleteFeatureConductorRefs('dem', subject.git)).resolves.toBe(true);
+    for (const ref of protectedRefs) {
+      await expect(subject.git(['rev-parse', '-q', '--verify', ref])).resolves.toMatchObject({ exitCode: 0 });
+    }
+  });
+
   it('uses closure-gated, explicit batched names to remove routing refs but leaves a prefix decoy', async () => {
     const subject = await fixture();
     const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
