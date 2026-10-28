@@ -4591,13 +4591,18 @@ export class Conductor {
         // this finding: the former judges it a human decision, while the
         // latter binds it to already-authored work rather than plan growth.
         // Count both so the exact-match check below does not report the
-        // finding `Missing`. Sealed-artifact and publication dispositions
-        // sharing this early return keep their existing `Missing` reporting
-        // untouched.
+        // finding `Missing`. A sealed-artifact step disposition is the planner
+        // sending the finding to DECIDE, tasks or not (#3471): credit it and
+        // halt with it below, as #3320 does for task-free escalations.
+        // Publication keeps its existing `Missing` reporting.
+        const sealedEscalation = sealedArtifactGapIds.has(gap.id) &&
+          remediationDispositionAppendsToPlan(gap.disposition);
         if (
-          (gap.disposition === 'halt' || gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) &&
+          (sealedEscalation || gap.disposition === 'halt' ||
+            gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) &&
           asBuiltFindings.has(gap.id)
         ) {
+          if (sealedEscalation) escalatedAsBuiltGaps.push(gap);
           admittedAsBuiltFindingCounts.set(
             gap.id,
             (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
