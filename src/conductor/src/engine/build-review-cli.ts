@@ -46,6 +46,7 @@ export interface BuildReviewFindingsDeps {
 export interface BuildReviewAcceptCommand {
   readonly kind: 'accept';
   readonly feature: string;
+  readonly child?: string;
   readonly lapId: string;
   readonly findingId: string;
   readonly rationale: string;
@@ -710,21 +711,20 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   if (!requestedLap || !command.rationale.trim()) {
     return refuse('invalid-lap-or-blank-rationale', 'build-review accept: requires an exact current lap and non-empty rationale.');
   }
+  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  if (command.child !== undefined && child === undefined) {
+    return refuse('invalid-child', `build-review accept: refused for '${command.feature}'; invalid child id '${command.child}'.`);
+  }
   const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
-  const readAggregate = async (): Promise<ReturnType<typeof parseBuildReviewAggregate>> => {
-    try {
-      return parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
-    } catch {
-      return undefined;
-    }
-  };
+  const readAggregate = () => readCliBuildReviewAggregate(worktree, child, readFile);
   // Each precondition refuses under its own reason. A single catch-all made a
   // stale lap, an unknown finding id, and a store rejection indistinguishable
   // to the operator reading the refusal (#1769).
-  const aggregate = await readAggregate();
-  if (!aggregate) {
+  const aggregateRead = await readAggregate();
+  if (!aggregateRead.ok) {
     return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; the current build-review aggregate is missing or malformed.`);
   }
+  const aggregate = aggregateRead.aggregate;
   if (aggregate.lapId !== requestedLap) {
     return refuse('requested-lap-not-current', `build-review accept: refused for '${command.feature}'; lap '${command.lapId}' is not the current lap ('${aggregate.lapId}').`);
   }
@@ -738,8 +738,10 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
     const unchanged = async (): Promise<boolean> => {
-      const current = await readAggregate();
-      return current !== undefined && current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
+      const currentRead = await readAggregate();
+      if (!currentRead.ok) return false;
+      const current = currentRead.aggregate;
+      return current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
         JSON.stringify(current.results) === JSON.stringify(aggregate.results) &&
         JSON.stringify(current.customResults) === JSON.stringify(aggregate.customResults) &&
         JSON.stringify(current.currentCustomRubrics) === JSON.stringify(aggregate.currentCustomRubrics);
