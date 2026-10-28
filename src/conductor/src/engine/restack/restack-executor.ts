@@ -36,7 +36,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { writeConflictRecord } from './restack-conflict-record.js';
+import { consumeRecordedResolution, writeConflictRecord } from './restack-conflict-record.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { emitRestackRefused } from './restack-events.js';
@@ -720,6 +720,32 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         overlaps.set(range.child, []);
         parent = adopted;
         continue;
+      }
+      if (options.cause === 'feature-repair' && range.kind !== 'leaf-unentered') {
+        const recorded = await consumeRecordedResolution({ slug: options.slug, range, parent, committer: journal.journal.committer, git });
+        if (recorded.kind === 'stale') {
+          await abortJournal(options.worktree, journal, git, moves);
+          await haltRestack(options.worktree, 'restack-resolution-stale', options.events, { child: range.child, detail: recorded.field });
+          terminal = true;
+          return haltedResult(options.worktree);
+        }
+        if (recorded.kind === 'consumed') {
+          const ownership = await checkPathOwnership(range, parent, recorded.tip, git);
+          if (ownership.kind === 'refused') {
+            await abortJournal(options.worktree, journal, git, moves);
+            await haltRestack(options.worktree, 'replay-mismatch', options.events, { child: range.child, detail: ownership.paths.join(', ') });
+            terminal = true;
+            return haltedResult(options.worktree);
+          }
+          const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', recorded.tip, recorded.rewrites, { git });
+          if (updated.kind !== 'updated') throw new Error('restack journal changed while consuming resolution');
+          journal = updated.journal;
+          await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'consumed', tip: recorded.tip });
+          exactRewrites.set(range.child, recorded.rewrites);
+          overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
+          parent = recorded.tip;
+          continue;
+        }
       }
       let replay;
       try {
