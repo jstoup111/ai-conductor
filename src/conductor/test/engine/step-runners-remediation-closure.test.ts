@@ -1,5 +1,6 @@
 // Covers: task:6
 // Covers: task:10
+// Covers: task:11
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import * as providerScratch from '../../src/engine/self-host/provider-scratch.js';
 import {
   REMEDIATION_CLOSURE_JUDGEMENT_SCHEMA,
   type RemediationClosureInput,
@@ -250,5 +252,28 @@ describe('DefaultStepRunner.dispatchRemediationClosureJudgement', () => {
     expect(firstOptions?.nativeSchemaScratchHome).not.toBe(secondOptions?.nativeSchemaScratchHome);
     expect(firstOptions?.nativeSchemaScratchRoot).toBe(first.projectDir);
     expect(secondOptions?.nativeSchemaScratchRoot).toBe(second.projectDir);
+  });
+
+  it('leaves the closure unjudged after scratch acquisition fails twice without starting Codex', async () => {
+    const { runner, codexInvoke, lifecycle } = await subject({ reviewProviders: ['codex'] });
+    const acquire = vi.spyOn(providerScratch, 'acquireScratchHome')
+      .mockRejectedValue(new Error('scratch permission denied'));
+
+    try {
+      await expect(runner.dispatchRemediationClosureJudgement(input)).resolves.toMatchObject({
+        kind: 'unavailable', attempts: 2, cause: expect.stringContaining('scratch permission denied'),
+      });
+
+      expect(acquire).toHaveBeenCalledTimes(2);
+      expect(codexInvoke).not.toHaveBeenCalled();
+      const attempts = lifecycle.mock.calls
+        .filter(([, metadata]) => (metadata as { provider?: string }).provider === 'codex');
+      expect(attempts).toEqual([
+        ['build', expect.objectContaining({ provider: 'codex', invoked: false })],
+        ['build', expect.objectContaining({ provider: 'codex', invoked: false })],
+      ]);
+    } finally {
+      acquire.mockRestore();
+    }
   });
 });
