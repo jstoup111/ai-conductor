@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   selfHealAcceptanceRed: vi.fn(),
   drainRoutingOutboxes: vi.fn(async () => ({ kind: 'drained' as const })),
   reconcileRounds: undefined as undefined | (() => Promise<unknown>),
+  routedExitContinuation: undefined as undefined | (() => Promise<unknown>),
   consumeLowestQueued: undefined as undefined | (() => Promise<unknown>),
   operatorRevalidation: false,
   revalidationRecord: undefined as undefined | import('../../../src/engine/routing/route-types.js').RouteRecord,
@@ -50,6 +51,8 @@ vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal)
     ...actual,
     reconcileRounds: (...args: Parameters<typeof actual.reconcileRounds>) =>
       mocks.reconcileRounds === undefined ? actual.reconcileRounds(...args) : mocks.reconcileRounds(),
+    exitRoutedHostAndReconcile: (...args: Parameters<typeof actual.exitRoutedHostAndReconcile>) =>
+      mocks.routedExitContinuation === undefined ? actual.exitRoutedHostAndReconcile(...args) : mocks.routedExitContinuation(),
   };
 });
 vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOriginal) => {
@@ -114,6 +117,7 @@ afterEach(async () => {
   mocks.selfHealAcceptanceRed.mockReset();
   mocks.drainRoutingOutboxes.mockClear();
   mocks.reconcileRounds = undefined;
+  mocks.routedExitContinuation = undefined;
   mocks.consumeLowestQueued = undefined;
   mocks.operatorRevalidation = false;
   mocks.revalidationRecord = undefined;
@@ -276,7 +280,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     expect(mocks.drainRoutingOutboxes).toHaveBeenCalledOnce();
   });
 
-  it('keeps the HALT a refused routed exit wrote instead of replacing it with a generic refusal', async () => {
+  it('invokes a halted routed exit once and preserves its own HALT content', async () => {
     const { root } = await routedFixture();
     await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
       acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
@@ -317,6 +321,43 @@ describe('Conductor routed acceptance verify-green path', () => {
 
     expect(requestRoutedExit).toHaveBeenCalledOnce();
     expect(await readFile(join(root, '.pipeline', 'HALT'), 'utf8')).toBe(restackHalt);
+  });
+
+  it('turns an in-loop stalled routed continuation into a mechanical HALT and routing-stall event', async () => {
+    const { root } = await routedFixture();
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    const events = new ConductorEventEmitter();
+    const observed: unknown[] = [];
+    events.on('routing_rounds_stalled', (event) => observed.push(event));
+    mocks.routedExitContinuation = async () => ({
+      kind: 'continued',
+      next: {
+        kind: 'stalled', detail: 'round r1 cannot admit host 1',
+        rounds: [{ roundId, readable: true, unsettledHosts: { [child]: 'pending' } }],
+      },
+    });
+    const active = { kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo' } as const;
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events, stepRunner: { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) }, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: {
+        resolveActiveChild: vi.fn().mockResolvedValueOnce(active).mockResolvedValueOnce(active).mockResolvedValueOnce({
+          kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [child], routedRepair: { child, roundId },
+        }),
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        requestRoutedExit: vi.fn(async () => ({ kind: 'no-commit-done' as const })),
+      },
+    });
+
+    await conductor.run();
+
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routing rounds stalled: r1 (1: pending)');
+    expect(observed).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
   });
 
   it('hands the step runner conflict resolver to the routed exit restack', async () => {

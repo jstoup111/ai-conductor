@@ -1,6 +1,6 @@
 // Covers: task:5, task:8, task:12, task:rem-prd-audit-W9
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, rename, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rename, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -66,6 +66,10 @@ async function fixture() {
   return { repo, git };
 }
 
+async function refNames(repo: string): Promise<string> {
+  return (await execFile('git', ['for-each-ref', '--format=%(refname)'], { cwd: repo })).stdout;
+}
+
 describe('stack preflight routing', () => {
   it('defers a due base refresh for an admitted round before reconciliation navigates to build', async () => {
     const subject = await fixture();
@@ -122,7 +126,15 @@ describe('stack preflight routing', () => {
 
     persister.start();
     try {
+      const refsBefore = await refNames(subject.repo);
+      const pipelineBefore = (await readdir(join(subject.repo, '.pipeline'))).sort();
       await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+      const firstHalt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+      expect(firstHalt.split('\n', 1)[0]).toBe('routing rounds stalled: r1 (1: pending); test reconciliation stall');
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+      expect(await refNames(subject.repo)).toBe(refsBefore);
+      expect((await readdir(join(subject.repo, '.pipeline'))).filter((name) => !pipelineBefore.includes(name)).sort())
+        .toEqual(['HALT', 'HALT.class', 'events.jsonl']);
       await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
       await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted' });
       await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -135,6 +147,10 @@ describe('stack preflight routing', () => {
         'routing_rounds_stalled', 'loop_halt',
       ]);
       expect(escalated.filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt)).toEqual([1, 2, 3]);
+      const thirdHalt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+      expect(thirdHalt.split('\n', 1)[0]).toBe('routing rounds stalled: r1 (1: pending); test reconciliation stall');
+      expect(escalated.filter((event) => event.type === 'loop_halt').map((event) => (event as { reason?: string }).reason))
+        .toEqual([firstHalt.trim(), firstHalt.trim(), thirdHalt.trim()]);
 
       await events.emit({
         type: 'routed_repair_phase', eventId: 'progress', occurredAt: '2026-10-28T00:00:00.000Z',
@@ -184,6 +200,13 @@ describe('stack preflight routing', () => {
         .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number })
         .filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt);
       expect(attempts).toEqual([1, 1, 1]);
+
+      const retained = 'an earlier durable halt must not be replaced\n';
+      await writeFile(join(subject.repo, '.pipeline', 'HALT'), retained);
+      await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), 'needs-human');
+      roundId = roundA;
+      await runStackPreflight({ ...options, hasLiveHalt: async () => false });
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(retained);
     } finally {
       persister.stop();
     }
@@ -256,4 +279,31 @@ describe('stack preflight routing', () => {
       persister.stop();
     }
   });
+
+  it('makes resumed-exit admission and unreadable-record refusals durable mechanical stalls without moving routing refs', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const refsBefore = await refNames(subject.repo);
+    for (const next of [
+      { detail: 'routing round r1 could not admit host 1', rounds: [{ roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } }] },
+      { detail: 'routing round r1 is unreadable', rounds: [{ roundId, readable: false as const }] },
+      { detail: 'routing rounds r1 and r2 include unreadable r2', rounds: [
+        { roundId, readable: true as const, unsettledHosts: { [child]: 'pending' as const } },
+        { roundId: parseRoundId('r2')!, readable: false as const },
+      ] },
+    ]) {
+      await rm(join(subject.repo, '.pipeline', 'HALT'), { force: true });
+      await rm(join(subject.repo, '.pipeline', 'HALT.class'), { force: true });
+      await expect(runStackPreflight({
+        worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo),
+        reconcileRounds: async () => ({ kind: 'resume-exit', roundId, host: child }),
+        exitRoutedHostAndReconcile: async () => ({ kind: 'continued', next: { kind: 'stalled', ...next } }),
+      })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(next.detail);
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+      expect(await refNames(subject.repo)).toBe(refsBefore);
+    }
+  });
+
 });
