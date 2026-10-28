@@ -19,6 +19,7 @@ import {
   validateProviderCatalog,
 } from '../../src/execution/provider-catalog.js';
 import { parsePiModelId, parsePiModelListing } from '../../src/execution/pi-provider.js';
+import { parseCodexModelListing } from '../../src/execution/codex-provider.js';
 import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
 
 const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUTABLE'] as const;
@@ -149,6 +150,18 @@ describe('built-in provider catalog', () => {
       claude: undefined,
       codex: undefined,
       pi: { argv: ['--list-models'], parse: parsePiModelListing },
+    });
+  });
+
+  it('declares the Codex tier catalog without enabling configured-id validation', () => {
+    const codex = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'codex')!;
+
+    expect({
+      modelCatalog: codex.modelCatalog,
+      modelTierCatalog: codex.modelTierCatalog,
+    }).toEqual({
+      modelCatalog: undefined,
+      modelTierCatalog: { argv: ['debug', 'models'], parse: parseCodexModelListing },
     });
   });
 
