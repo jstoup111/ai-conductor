@@ -23,6 +23,7 @@ import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import type { PublicationMember } from './stack-publication-record.js';
 import { makeGitRunner } from './rebase.js';
 import { hasDurableChildState } from './child-cursor.js';
+import { gitRefManifestSource, resolveFeatureArtifact } from './feature-manifest-source.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -80,7 +81,6 @@ export async function resolveFeatureRemoteMutation(input: {
   readonly git: FeatureMutationGitReader;
   readonly gh: GhRunner;
 }): Promise<GithubMutationExecutionContext | undefined> {
-  const featureMarker = `.docs/intake/${input.slug}.md`;
   const destination = input.branch.startsWith('refs/')
     ? input.branch
     : `refs/heads/${input.branch}`;
@@ -100,6 +100,15 @@ export async function resolveFeatureRemoteMutation(input: {
     return undefined;
   }
 
+  const intake = await resolveFeatureArtifact(
+    gitRefManifestSource(input.cwd, defaultBranch),
+    input.slug,
+    'intake',
+    async () => [`.docs/intake/${input.slug}.md`],
+  );
+  const featureMarker = intake.paths[0];
+  if (featureMarker === undefined || (intake.origin === 'manifest' && intake.missing.includes(featureMarker))) return undefined;
+
   return {
     provenance: {
       repository: targets.targets[0].repository,
@@ -118,8 +127,16 @@ export async function resolveFeatureRemoteMutation(input: {
         resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.cwd),
       provenanceDiscovery: {
         readCommittedRecords: async ({ ref }) => {
-          const { stdout } = await input.git(['show', `${ref}:${featureMarker}`]);
-          return [{ path: featureMarker, content: stdout }];
+          const source = gitRefManifestSource(input.cwd, ref);
+          const artifact = await resolveFeatureArtifact(source, input.slug, 'intake', async () => [`.docs/intake/${input.slug}.md`]);
+          const path = artifact.paths[0];
+          if (path === undefined || (artifact.origin === 'manifest' && artifact.missing.includes(path))) return [];
+          if (artifact.origin === 'manifest') {
+            const content = await source.readFile(path);
+            return content === null ? [] : [{ path, content }];
+          }
+          const { stdout: content } = await input.git(['show', `${ref}:${path}`]);
+          return [{ path, content }];
         },
       },
     },

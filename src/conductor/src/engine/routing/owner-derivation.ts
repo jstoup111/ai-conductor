@@ -4,6 +4,11 @@ import { parseChildId, type ChildId } from '../child-context.js';
 import type { SliceTopologyMembership } from '../slice-topology.js';
 import { parsePlanTaskBodies } from '../plan-task-parse.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
+import {
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+  worktreeManifestSource,
+} from '../feature-manifest-source.js';
 
 export type TaskBoundOwnerReason =
   | 'task-slice'
@@ -71,8 +76,16 @@ async function readCommittedPlanText(projectRoot: string, featureSlug?: string):
       }
     }
     if (typeof slug !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) return undefined;
-    return await readFile(join(projectRoot, '.docs', 'plans', `${slug}.md`), 'utf8');
-  } catch {
+    const plan = await resolveFeatureArtifact(
+      worktreeManifestSource(projectRoot),
+      slug,
+      'plan',
+      async () => [`.docs/plans/${slug}.md`],
+    );
+    const planPath = plan.paths.find((path) => plan.origin === 'legacy' || !plan.missing.includes(path));
+    return planPath === undefined ? undefined : await readFile(join(projectRoot, planPath), 'utf8');
+  } catch (error) {
+    if (error instanceof MalformedFeatureManifestError) throw error;
     // A lost engine-state/plan pair is unreadable; guessing from another
     // feature's plan would assign a remediation task to the wrong child.
     return undefined;

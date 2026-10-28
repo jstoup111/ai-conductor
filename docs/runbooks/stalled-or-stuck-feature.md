@@ -50,8 +50,10 @@ with a reason and remedy. This is a discovery refusal, not a feature HALT: no fe
 on the `NEEDS YOU:` line; `daemon status` reads the latest snapshot without a restart.
 
 **Diagnosis:** Read the `BLOCKED` line. Common reasons are `unresolvable-stories-ref`,
-`stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`, and
-`missing-coherence`. `adr-not-approved` means the default branch's `.docs/decisions/` corpus
+`stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`,
+`missing-coherence`, and `malformed-manifest`. `malformed-manifest` means
+`.docs/<slug>/manifest.json` failed validation; the remedy names the defect — see
+[feature manifest](../reference/artifacts.md#feature-manifest). `adr-not-approved` means the default branch's `.docs/decisions/` corpus
 contains an ADR whose first declared status is not `APPROVED` or `SUPERSEDED` (or that declares no
 status); it blocks every merged spec, not just the one it names. The
 snapshot is `.daemon/blocked.json`; a missing or malformed snapshot means only that no completed

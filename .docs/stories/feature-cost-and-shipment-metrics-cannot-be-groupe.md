@@ -72,7 +72,7 @@ As an operator charting throughput and halt rates, I want `conductor.feature.dis
 - Given tierless terminal records from an older ledger, when replayed through the existing event path, then they remain accepted and record tierless outcomes
 - Given a `feature_dispatch_started` with no `tier` key, when the listener records it, then the `conductor.feature.dispatches` point has no `tier` attribute and no placeholder value
 - Given a `feature_dispatch_ended` with no `tier` key that halted and no preceding terminal event, when the listener records it, then neither the `conductor.feature.halts` point nor the `conductor.run.outcomes` point has a `tier` attribute
-- Given a `feature_shipped` with `tier: 'S'` whose `active.state` is `partial`, when the listener records it, then the wall histogram point carries `tier=S` and no active-duration point is recorded at all — the tier does not cause a fabricated active duration
+- Given a `feature_shipped` with `tier: 'S'` whose `active.state` is `partial` and which carries no `activeMs`, when the listener records it, then the wall histogram point carries `tier=S` and no active-duration point is recorded at all — the tier does not cause a fabricated active duration
 
 ### Done When
 - [ ] Both terminal event variants declare optional `tier?: ComplexityTier`; completion reads `state.complexity_tier` and the centralized halt helper reads `haltState.complexity_tier`

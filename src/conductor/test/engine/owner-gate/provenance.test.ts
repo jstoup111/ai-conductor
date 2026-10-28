@@ -19,6 +19,9 @@ function gitReturning(result: Partial<GitResult>): GitStub {
   const calls: string[][] = [];
   const git: GitRunner = async (args) => {
     calls.push([...args]);
+    if (args[1]?.endsWith('/manifest.json')) {
+      return { exitCode: 128, stdout: '', stderr: 'fatal: path does not exist' };
+    }
     return { exitCode: 0, stdout: '', stderr: '', ...result };
   };
   return { git, calls };
@@ -33,7 +36,7 @@ describe('readSpecOwnerStamp', () => {
       present: true,
       id: 'alice',
     });
-    expect(calls[0]).toEqual(['show', 'main:.docs/intake/my-slug.md']);
+    expect(calls.at(-1)).toEqual(['show', 'main:.docs/intake/my-slug.md']);
   });
 
   it('reads an absent marker (git non-zero) as un-owned', async () => {
