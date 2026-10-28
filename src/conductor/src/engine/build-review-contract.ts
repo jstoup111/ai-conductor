@@ -1,4 +1,19 @@
 import type { BuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import type { BuildReviewSeverity } from '../types/build-review.js';
+
+export const BUILD_REVIEW_SEVERITY_DEFINITIONS: Readonly<Record<BuildReviewSeverity, string>> = Object.freeze({
+  critical: 'security exposure, data loss, or wrong results',
+  major: 'a real defect or broken invariant',
+  minor: 'a real, low-impact quality issue',
+  nit: 'cosmetic, such as naming or style',
+});
+
+export function renderBuildReviewSeverityDefinitions(): string {
+  const definitions = Object.entries(BUILD_REVIEW_SEVERITY_DEFINITIONS)
+    .map(([severity, meaning]) => `\`${severity}\`: ${meaning}`)
+    .join('; ');
+  return `Every finding requires \`severity\`. Severity definitions: ${definitions}.`;
+}
 
 /** JSON Schema stays structural so the native provider seam owns its dialect. */
 export type RubricOutputJsonSchema = Readonly<Record<string, unknown>>;
