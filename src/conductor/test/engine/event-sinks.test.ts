@@ -381,6 +381,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'remediation_case_refuted',
   'prd_widening_reconciled',
   'build_review_scope_summary',
+  'build_review_review_scope',
   'build_review_scope_incomplete',
   'ci_failed',
   'shipped_pr_readiness',

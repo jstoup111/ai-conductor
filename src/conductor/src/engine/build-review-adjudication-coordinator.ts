@@ -236,6 +236,8 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly suppressedFindingIds?: ReadonlySet<string>;
   /** Threshold-advisory findings are history, not remediate sources. */
   readonly advisoryFindingIds?: ReadonlySet<string>;
+  /** Delta-excluded findings are observable scope bookkeeping, never work. */
+  readonly outOfDeltaFindingIds?: ReadonlySet<string>;
   readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
   /** Re-reads the separate operator authority before every provider boundary. */
@@ -296,7 +298,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // Legacy direct coordinator callers did not carry the distinct signal. The
   // conductor always supplies it; retain the historical value for those tests
   // and integrations until they adopt the new boundary input.
-  const absenceRetirementMechanicallyHealthy = input.absenceRetirementMechanicallyHealthy ?? input.mechanical === 'healthy';
+  const absenceRetirementMechanicallyHealthy =
+    input.absenceRetirementMechanicallyHealthy ?? input.mechanical === 'healthy';
   const store = new RemediationCaseStore(input.projectRoot, input.feature, {
     ...(input.child === undefined ? {} : { child: input.child }),
   });
@@ -328,7 +331,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
    * question is this helper's whole job; choosing a route belongs to `finalize`,
    * which reads the store first.
    */
-  const nonActionable = (findingId: string): boolean => input.suppressedFindingIds?.has(findingId) === true || input.advisoryFindingIds?.has(findingId) === true;
+  const nonActionable = (findingId: string): boolean => input.suppressedFindingIds?.has(findingId) === true || input.advisoryFindingIds?.has(findingId) === true || input.outOfDeltaFindingIds?.has(findingId) === true;
   const allOperatorResolved = (accepted: ReadonlySet<string>): boolean =>
     sources.every((source) => accepted.has(source.findingId) || nonActionable(source.findingId));
   /** Settlement is per rubric-namespaced SOURCE; see `finalizedBuildReviewSourceIds`. */
@@ -365,6 +368,24 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
     return fail(`${prefix} ${failure.reason}`);
   };
+  const scopeEmptyRubrics = new Set([
+    ...Object.entries(input.aggregate.results)
+      .filter(([, result]) => result.kind === 'scope-empty')
+      .map(([rubric]) => rubric),
+    ...(input.aggregate.currentCustomRubrics ?? []).filter((rubric) =>
+      input.aggregate.customResults?.[rubric]?.result.kind === 'scope-empty',
+    ),
+  ]);
+  // Scope-empty means a rubric deliberately did not inspect its settled
+  // sources. Keep just those durable sources live at every absence-retirement
+  // seam, while still allowing a different rubric's absent source to settle.
+  const scopedSourceState = scopeEmptyRubrics.size === 0 ? undefined : await store.read();
+  if (scopedSourceState !== undefined && !scopedSourceState.ok) return failStore('case store', scopedSourceState);
+  const scopeEmptySourceIds = new Set(scopedSourceState?.state.cases.flatMap((record) => record.sources
+    .filter((source) => scopeEmptyRubrics.has(source.sourceId.split(':', 1)[0]!))
+    .map((source) => source.sourceId)) ?? []);
+  const retainScopeEmptySources = (liveSourceIds: ReadonlySet<string>): ReadonlySet<string> =>
+    scopeEmptySourceIds.size === 0 ? liveSourceIds : new Set([...liveSourceIds, ...scopeEmptySourceIds]);
   const suppressionStore = new RemediationCaseStore(input.projectRoot, input.feature);
   // Not a second writer: the same seam the effective-verdict path already ran
   // for this lap. Its upsert is keyed by finding id, so re-running it here is a
@@ -384,9 +405,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // case's finding is gone; an operator-accepted source stays "live" here so
   // `finalize` retires it under operator attribution instead.
   if (input.mechanical === 'healthy') {
-    const strandedLiveSourceIds = new Set(sources
+    const strandedLiveSourceIds = retainScopeEmptySources(new Set(sources
       .filter((source) => !nonActionable(source.findingId))
-      .map(buildReviewAdjudicationSourceId));
+      .map(buildReviewAdjudicationSourceId)));
     const strandedSettlement = await settleStrandedBuildReviewActionReservations({
       store,
       liveSourceIds: strandedLiveSourceIds,
@@ -427,7 +448,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
   let liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
-    new Set(sources.filter((source) => !accepted.has(source.findingId) && !nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId));
+    retainScopeEmptySources(new Set(sources.filter((source) => !accepted.has(source.findingId) && !nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)));
   /**
    * The single terminal exit: settle durable state, then choose a route from
    * what actually survived.
@@ -480,7 +501,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         lapId: input.aggregate.lapId,
         effectiveAcceptedSourceIds: new Set(),
         mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
-        liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
+        liveSourceIds: retainScopeEmptySources(new Set(sources.map(buildReviewAdjudicationSourceId))),
         resolveAbsentOpenNonActionCases: true,
         allowAppliedByAbsence: true,
       });
@@ -545,7 +566,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
             },
           };
         if (!retiresOpenBuildReviewCase(withOrigins, {
-          liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
+          liveSourceIds: retainScopeEmptySources(new Set(sources.map(buildReviewAdjudicationSourceId))),
           effectiveAcceptedSourceIds: acceptedSourceIds,
           mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
         })) return withOrigins;
@@ -829,13 +850,13 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
   );
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
-    new Set(sources.filter((source) =>
+    retainScopeEmptySources(new Set(sources.filter((source) =>
       !accepted.has(source.findingId) && !nonActionable(source.findingId) &&
       !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
       !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
-    ).map(buildReviewAdjudicationSourceId));
+    ).map(buildReviewAdjudicationSourceId)));
   if (currentSources.length === 0) {
-    liveSourceIdsFor = () => new Set();
+    liveSourceIdsFor = () => retainScopeEmptySources(new Set());
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, settleAbsentAttempted: true, dispatchSkipped: true });
   }
   // Frozen at dispatch: the exact source set the judge was asked about. Every
@@ -843,7 +864,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const dispatchSources = currentSources;
   const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
-    new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
+    retainScopeEmptySources(new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId)));
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
@@ -1123,6 +1144,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // stop. Do not ask reconciliation to settle that stop by absence before
     // its durable replay/persistence path sees the proposed escalation.
     effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
+    liveSourceIds: retainScopeEmptySources(new Set(graph.graph.sourceOutcomes.map((source) => source.sourceId))),
     mechanicallyHealthy: absenceRetirementMechanicallyHealthy && escalationCases.length === 0,
     resolveAbsentOpenNonActionCases: absenceRetirementMechanicallyHealthy && escalationCases.length === 0,
     allowAppliedByAbsence: true,

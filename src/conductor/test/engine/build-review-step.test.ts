@@ -1,5 +1,6 @@
 // Covers: task:2, task:3, task:4
 // Covers: task:9, task:10
+// Covers: task:11
 // Covers: task:5
 // Covers: task:rem-as-built-rem-ab14-1
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -1013,6 +1014,62 @@ describe('build_review structured rubric dispatch', () => {
     expect(custom).toMatchObject({ kind: 'structured', parsed: { kind: 'custom-findings', findings: [] } });
     expect(customInvoke.mock.calls[0]?.[0]?.prompt).toMatch(/^bundle text\n\n\$portable-policy/);
     expect(customInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+  });
+
+  // Covers: task:11
+  it('settles an empty custom delta without catalog or provider dispatch', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-scope-empty-'));
+    const invoke = vi.fn();
+    const catalog = vi.fn();
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke }, 'custom-scope-empty', projectDir, {
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      buildReviewPolicyCatalog: catalog,
+      events,
+    });
+
+    try {
+      const outcome = await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+          pipelineDir?: string,
+          executionContext?: unknown,
+          reviewScope?: unknown,
+        ) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, undefined, join(projectDir, '.pipeline'), undefined, {
+        mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity: 'sha256:policy',
+        predecessorLapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b', reviewedHunks: [], deltaHunks: [], outOfDeltaSourceIds: [],
+      });
+
+      expect(outcome).toMatchObject({
+        id: 'custom-policy', success: true,
+        member: { declaration: { rubricId: 'custom-policy' }, result: { kind: 'scope-empty', rubric: 'custom-policy' } },
+      });
+      expect(catalog).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalled();
+      expect(skips).toContainEqual(expect.objectContaining({
+        type: 'build_review_rubric_skipped', rubric: 'custom-policy', reason: 'scope-empty',
+      }));
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'build-review', 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', 'custom-policy.json'), 'utf8'))).toMatchObject({
+        result: { kind: 'scope-empty', rubric: 'custom-policy' },
+        reviewScope: { mode: 'delta', deltaHunks: [] },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it.each(['missing', 'malformed'] as const)('routes an adapter %s structured-result marker to the root rejection', async (structuredResultFailure) => {

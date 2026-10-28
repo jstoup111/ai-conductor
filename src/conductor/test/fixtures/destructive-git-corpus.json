@@ -2,6 +2,8 @@
   {"name":"reset abbreviated hard","argv":["reset","--har"],"command":"git reset --har","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
   {"name":"branch bundled delete force","argv":["branch","-df","unreachable"],"command":"git branch -df unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
   {"name":"branch abbreviated delete force","argv":["branch","--delete","--forc","unreachable"],"command":"git branch --delete --forc unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
+  {"name":"branch ambiguous delete prefix force","argv":["branch","--dele","--forc","unreachable"],"command":"git branch --dele --forc unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
+  {"name":"branch delete-merged ignores force","argv":["branch","--delete-merged","origin/main","--force"],"command":"git branch --delete-merged origin/main --force","pathGuard":"allow","hook":"allow"},
   {"name":"config-env global prefix","argv":["--config-env=core.pager=PAGER","reset","--hard"],"command":"git --config-env=core.pager=PAGER reset --hard","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
   {"name":"clean bundled force","argv":["clean","-xdf"],"command":"git clean -xdf","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
   {"name":"push plus refspec","argv":["push","origin","+main"],"command":"git push origin +main","pathGuard":"refuse","hook":"refuse","spellingOnly":true},

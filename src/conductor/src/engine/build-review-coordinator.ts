@@ -18,6 +18,7 @@ import {
   type BuildReviewLapId,
   type BuildReviewCoordinatorFailureReason,
   type BuildReviewSkip,
+  type BuildReviewScopeEmpty,
   type BuildReviewCandidateScopeCandidate,
   type BuildReviewCandidateScopeResolutionContext,
 } from "./build-review-domain.js";
@@ -37,6 +38,7 @@ import {
 import {
   parseBuildReviewBranchArtifact,
   type BuildReviewBranchArtifact,
+  type BuildReviewReviewScope,
 } from "./build-review-artifacts.js";
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
@@ -92,6 +94,7 @@ type BuildReviewPassReason = "build_review_no_rubrics" | "test_quality_empty_sco
 
 export type BuildReviewCoordinatedBranch =
   | BuildReviewSkip
+  | BuildReviewScopeEmpty
   | { readonly kind: "cache-hit"; readonly rubric: BuildReviewRubricId; readonly result: BuildReviewJudgedResult }
   | { readonly kind: "dispatched"; readonly rubric: BuildReviewRubricId; readonly result: BuildReviewJudgedResult }
   | {
@@ -147,6 +150,8 @@ export interface BuildReviewCoordinationInput {
   /** Test seam for an engine-held projection corruption at branch settlement. */
   /** Legacy test seams may override one projection; unset members use the engine-derived projection. */
   readonly projections?: Partial<BuildReviewRubricProjections>;
+  /** Durable scope records are owned by the runner; the coordinator carries them to each branch artifact. */
+  readonly reviewScopes?: Readonly<Partial<Record<BuildReviewRubricId, BuildReviewReviewScope>>>;
   readonly preflight: () => Promise<TautologyPreflightResult>;
   /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
   readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
@@ -541,6 +546,18 @@ function validWrittenArtifact(
     projectionBoundResult.snapshotDigest === projection.snapshotDigest ? projectionBoundResult : undefined;
 }
 
+function validWrittenScopeEmptyArtifact(
+  candidate: unknown,
+  rubric: BuildReviewRubricId,
+  projection: BuildReviewRubricProjection,
+): BuildReviewScopeEmpty | undefined {
+  const artifact = parseBuildReviewBranchArtifact(candidate);
+  const result = artifact?.result;
+  return artifact?.rubric === rubric && artifact.lapId === projection.lapId &&
+    artifact.snapshotDigest === projection.snapshotDigest && result?.kind === 'scope-empty' &&
+    result.rubric === rubric ? result as BuildReviewScopeEmpty : undefined;
+}
+
 /**
  * Coordinates the closed fan-out for exactly one frozen input snapshot. It
  * always waits for every cache miss under the configured cap; a single
@@ -605,7 +622,8 @@ export async function coordinateBuildReviewRubrics(
     (branch) => !("kind" in branch) && branch.rubric === TEST_QUALITY_RUBRIC,
   );
   let preflight: TautologyPreflightResult | undefined;
-  if (testQualityEnabled && !emptyTestQualityScope) {
+  const testQualityScopeEmpty = input.reviewScopes?.testQuality?.mode === 'delta' && input.reviewScopes.testQuality.deltaHunks.length === 0;
+  if (testQualityEnabled && !emptyTestQualityScope && !testQualityScopeEmpty) {
     try {
       preflight = await input.preflight();
     } catch {
@@ -639,6 +657,7 @@ export async function coordinateBuildReviewRubrics(
     } : {
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
+    ...(input.reviewScopes === undefined ? {} : { reviewScopes: input.reviewScopes }),
     ...(input.inputs.securitySourceSnapshot === undefined ? {} : { securitySnapshot: input.inputs.securitySourceSnapshot }),
   };
   // The descriptor is the live projection seam.  Keeping construction here
@@ -678,6 +697,30 @@ export async function coordinateBuildReviewRubrics(
     if (projection.rubric !== branch.rubric) {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-rubric-mismatch"));
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
+      continue;
+    }
+    if (projection.reviewScope?.mode === 'delta' && projection.reviewScope.deltaHunks.length === 0) {
+      const scopeEmpty: BuildReviewScopeEmpty = { kind: 'scope-empty', rubric: branch.rubric };
+      try {
+        const written = validWrittenScopeEmptyArtifact(await input.writeArtifact({
+          rubric: branch.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          result: scopeEmpty,
+          provenance: { kind: 'fresh' },
+          ...(input.reviewScopes?.[branch.rubric] === undefined ? {} : { reviewScope: input.reviewScopes[branch.rubric] }),
+        }), branch.rubric, projection);
+        if (!written) {
+          resolved.set(branch.rubric, infrastructure(branch.rubric, 'artifact-write-failed'));
+          await input.emit?.({ type: 'build_review_rubric_infrastructure_failure', rubric: branch.rubric, lapId: input.lapId, reason: 'artifact-write-failed' });
+          continue;
+        }
+        resolved.set(branch.rubric, written);
+        await input.emit?.({ type: 'build_review_rubric_skipped', rubric: branch.rubric, lapId: input.lapId, reason: 'scope-empty' });
+      } catch {
+        resolved.set(branch.rubric, infrastructure(branch.rubric, 'artifact-write-failed'));
+        await input.emit?.({ type: 'build_review_rubric_infrastructure_failure', rubric: branch.rubric, lapId: input.lapId, reason: 'artifact-write-failed' });
+      }
       continue;
     }
     const projectionBytes = Buffer.byteLength(canonicalJson(projection as unknown as BuildReviewProjectionJson), "utf8");
@@ -764,6 +807,7 @@ export async function coordinateBuildReviewRubrics(
           snapshotDigest: projection.snapshotDigest,
           result: cachedResult,
           provenance: cache.hit.provenance,
+          ...(input.reviewScopes?.[branch.rubric] === undefined ? {} : { reviewScope: input.reviewScopes[branch.rubric] }),
         }), branch.rubric, projection);
         resolved.set(branch.rubric, result
           ? { kind: "cache-hit", rubric: branch.rubric, result }
@@ -842,6 +886,7 @@ export async function coordinateBuildReviewRubrics(
             snapshotDigest: projection.snapshotDigest,
             result,
             provenance: { kind: "fresh" },
+            ...(input.reviewScopes?.[rubric] === undefined ? {} : { reviewScope: input.reviewScopes[rubric] }),
           }), rubric, projection);
         } catch {
           return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
