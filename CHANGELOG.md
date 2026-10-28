@@ -200,6 +200,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators see actionable daemon startup state in a compact dashboard. ([implementation PR #3440](https://github.com/jstoup111/ai-conductor/pull/3440)).
 - Daemon operators receive durable, actionable HALTs when stack preflight refuses to proceed. ([implementation PR #3470](https://github.com/jstoup111/ai-conductor/pull/3470)).
 - The destructive-git guard recognizes Git 2.56 `git branch --delete-merged`, `--dry-run` and `--forked`. ([implementation PR #3485](https://github.com/jstoup111/ai-conductor/pull/3485)).
+- Telemetry users receive an explicit missing-active-duration counter instead of dropped duration data. ([implementation PR #3486](https://github.com/jstoup111/ai-conductor/pull/3486)).
 
 ## Migration
 
