@@ -55,6 +55,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plan reviews refuse oversized prompts with an actionable size override. ([implementation PR #3425](https://github.com/jstoup111/ai-conductor/pull/3425)).
 - Operators can configure remediation lap caps by complexity tier. ([implementation PR #3443](https://github.com/jstoup111/ai-conductor/pull/3443)).
 - Pi-backed steps now receive the engine-built system prompt reliably. ([implementation PR #3441](https://github.com/jstoup111/ai-conductor/pull/3441)).
+- Readers gain committed per-feature artifact manifests that make feature artifact discovery unambiguous. ([implementation PR #3426](https://github.com/jstoup111/ai-conductor/pull/3426)).
 
 ### Changed
 
