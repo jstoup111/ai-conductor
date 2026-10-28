@@ -4,6 +4,19 @@ spec_hash: 156deed97f84e30417a2793b126c72d4c77f9206ec006b1f0fdee8a370a5662f
 pr: https://github.com/jstoup111/ai-conductor/pull/3512
 shipped: 2026-10-28
 engine_version: 20261028T094637Z-b99addfc8337
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "No story or task covers changing the session-command audit gate. The change was made so the new operator-only rate-card refresh warning would pass the audit, but its effect is broader: it removes a whole finding class from a fail-closed repository gate. That is a gate-weakening outside this feature's intent. It is not user-visible at runtime, but could let an unclassified engine instruction slip past review. Confidence about 70% on how often the dropped reason fires in practice."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This is test-harness hygiene unrelated to Codex tier resolution and outside every story. It is confined to the test runner, with no product or user-visible effect."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
