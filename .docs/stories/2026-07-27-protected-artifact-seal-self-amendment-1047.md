@@ -28,7 +28,8 @@ review have something concrete to act on.
 ### Happy Path
 
 - **Given** a sealed workspace whose `.docs/architecture/<feature>.md` content has changed and
-  whose stem names the current `featureDesc`,
+  which is the current feature's own artifact (for a feature without an artifact manifest, its stem
+  names the current `featureDesc`; for a feature with one, the manifest lists it),
 - **When** `verifyProtectedArtifactSeal` runs,
 - **Then** the verdict is still `{ ok: true }` (the build is NOT halted),
 - **And** the verdict carries a `selfAmendments` list containing one entry for that path,

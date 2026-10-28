@@ -126,6 +126,12 @@ Spec 3 changes the layout and content.
    authoritative. Without a manifest, `conduct` resolves exactly as today. Spec 3 owns `conduct`
    registration together with its `feature_desc`-keyed readers (assumption A3).
 
+   > **Amended 2026-10-28 by #3418:** land is no longer the only writer. Spec 2 adds the
+   > operator-only `ai-conductor register-artifact` command, which registers an in-scope artifact
+   > added after land through the same renderer and emits `feature_artifacts_registered` on the
+   > feature worktree's spine. See `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest`
+   > decision 8.
+
 7. **Drift checks and manifest protection belong to spec 2.** Spec 1 adds no drift refusal. The
    phase-scoped docs write guard covers Edit, Write and NotebookEdit but not Bash, so a BUILD agent
    could still rewrite the manifest; spec 2, which owns the seal, hooks and build_review scope, makes
@@ -135,6 +141,12 @@ Spec 3 changes the layout and content.
      (assumption A4 holds that no BUILD step adds one)
    - `docs-prune` leaves a pruned feature's manifest on the default branch; post-prune audits read
      the parent commit, where manifest and files agree, and spec 2 moves retention onto the manifest
+
+   > **Amended 2026-10-28 by #3418:** spec 2 closes all three holes. The manifest is sealed and
+   > refused at commit for every tool, including Bash. Drift in either direction stops the run at
+   > the next BUILD/SHIP step boundary naming each path. A file added after land is registered by
+   > the operator command. Prune removes the manifest with the feature's prunable files. See
+   > `adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest` decisions 2 to 5, 8 and 9.
 
 8. **Daemon discovery reads manifests.** Candidates are the slugs of `.docs/*/manifest.json` in the
    prefetched default-branch tree plus today's `.docs/plans/` stems, de-duplicated by slug. The
