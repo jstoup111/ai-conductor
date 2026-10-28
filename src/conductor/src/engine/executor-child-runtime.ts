@@ -24,7 +24,11 @@ import { discoverInstalledProviders } from './provider-discovery.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
 import { normalizeProviderSelection, validateProviderInstallation, validateRegisteredProviderSelections } from './provider-selection.js';
-import { validateConfiguredProviderModels } from './provider-model-probe.js';
+import {
+  resolveProviderModelTiers,
+  validateConfiguredProviderModels,
+  type ProviderModelProbeRunner,
+} from './provider-model-probe.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
@@ -189,6 +193,8 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   worktree: { path: string; branch: string };
   projectRoot: string;
   supervisorEngineVersionId: string;
+  /** Injectable only for the child boot's provider-tier catalog probe. */
+  providerModelProbeRunner?: ProviderModelProbeRunner;
 }): Promise<FeatureExecutionOutcome> {
   const { order, events, signal, worktree, projectRoot } = input;
   if (signal.aborted) return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
@@ -206,7 +212,16 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   registerBuiltins(registry, config?.codex_doctor_timeout_seconds, new Set(discovery.installed));
   registry.markInitialized();
   validateProviderInstallation({ config: config ?? {}, discovery });
-  await validateConfiguredProviderModels({ config: config ?? {}, discovery });
+  await validateConfiguredProviderModels({
+    config: config ?? {},
+    discovery,
+    ...(input.providerModelProbeRunner ? { runner: input.providerModelProbeRunner } : {}),
+  });
+  await resolveProviderModelTiers({
+    discovery,
+    projectRoot,
+    ...(input.providerModelProbeRunner ? { runner: input.providerModelProbeRunner } : {}),
+  });
   validateRegisteredProviderSelections({ config: config ?? {}, registeredProviders: registry.list('llm_provider') });
 
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);

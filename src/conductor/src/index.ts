@@ -56,6 +56,7 @@ import {
   type ProviderVersionProbeRunner,
 } from './engine/provider-discovery.js';
 import {
+  resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './engine/provider-model-probe.js';
@@ -570,6 +571,11 @@ export async function bootDispatchingCliProviders(options: {
   await validateConfiguredProviderModels({
     config: options.config ?? {},
     discovery,
+    ...(options.providerModelProbeRunner ? { runner: options.providerModelProbeRunner } : {}),
+  });
+  await resolveProviderModelTiers({
+    discovery,
+    projectRoot: options.rendererOpts.projectRoot,
     ...(options.providerModelProbeRunner ? { runner: options.providerModelProbeRunner } : {}),
   });
   validateRegisteredProviderSelections({
