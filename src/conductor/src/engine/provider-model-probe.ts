@@ -151,7 +151,9 @@ export async function resolveProviderModelTiers(
       [...resolvedIds].flatMap(([floor, resolved]) => floor === resolved ? [] : [resolved]),
     )) {
       if (pricedModels?.[model] !== undefined) continue;
+      // ai-conductor:session-command-context=operator-only
       warn(`${descriptor.displayName} model ${model} has no rate-card price; run ai-conductor rate-card refresh --model ${model}`);
+      // /ai-conductor:session-command-context
     }
   } catch (error) {
     const timeout = error instanceof Error && error.message === `${descriptor.displayName} model listing timed out.`;
