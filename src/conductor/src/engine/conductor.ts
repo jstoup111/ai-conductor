@@ -182,6 +182,11 @@ import {
   verifyProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
 } from './protected-artifact-seal.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+} from './feature-ownership.js';
 import { describeResealRecovery } from './reseal-cli.js';
 import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
@@ -11050,33 +11055,45 @@ export class Conductor {
             // commit identity. They remain outside this committed-artifact
             // boundary; real feature worktrees always supply one.
             if (currentCommit) {
-              const sealVerdict = await verifyProtectedArtifactSeal({
-                projectRoot: this.projectRoot,
-                baselineCommit: baselineCommit ?? undefined,
-                featureDesc: state.feature_desc,
-                // #976: lets the seal tolerate protected-artifact drift that is
-                // byte-identical to the base branch tip — i.e. another feature's
-                // already-merged PR, picked up by this feature's rebase — while
-                // still halting on any in-worktree mutation.
-                baseBranch: this.baseBranch,
-                onRebaseline: (event) => this.surfaceProtectedArtifactRebaseline(event),
-              });
-              if (!sealVerdict.ok) {
-                protectedArtifactIssue = sealVerdict.reason;
-                if (step.name === 'build') {
-                  const recovery = await describeResealRecovery(this.projectRoot, sealVerdict.path);
-                  if (recovery) protectedArtifactIssue += `\n${recovery}`;
-                }
-              } else {
-                if (sealVerdict.selfAmendments.length > 0) {
-                  console.warn(
-                    `Protected artifact self-amendments detected: ${sealVerdict.selfAmendments.map(({ path }) => path).join(', ')}. Each amendment must be justified by the approved plan and will be judged by build_review.`,
+              const ownershipSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+              const ownership = ownershipSlug === undefined
+                ? { kind: 'legacy' as const }
+                : await computeFeatureOwnership(
+                    worktreeFeatureOwnershipSource(this.projectRoot),
+                    ownershipSlug,
+                    this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
                   );
-                }
-                if (step.phase === 'BUILD' && baselineCommit) {
-                  // Persist only after the workspace matches committed DECIDE
-                  // content. createProtectedArtifactSeal is immutable once present.
-                  await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+              if (ownership.kind === 'drift' || ownership.kind === 'malformed') {
+                protectedArtifactIssue = renderOwnershipRefusal(ownership);
+              } else {
+                const sealVerdict = await verifyProtectedArtifactSeal({
+                  projectRoot: this.projectRoot,
+                  baselineCommit: baselineCommit ?? undefined,
+                  featureDesc: state.feature_desc,
+                  // #976: lets the seal tolerate protected-artifact drift that is
+                  // byte-identical to the base branch tip — i.e. another feature's
+                  // already-merged PR, picked up by this feature's rebase — while
+                  // still halting on any in-worktree mutation.
+                  baseBranch: this.baseBranch,
+                  onRebaseline: (event) => this.surfaceProtectedArtifactRebaseline(event),
+                });
+                if (!sealVerdict.ok) {
+                  protectedArtifactIssue = sealVerdict.reason;
+                  if (step.name === 'build') {
+                    const recovery = await describeResealRecovery(this.projectRoot, sealVerdict.path);
+                    if (recovery) protectedArtifactIssue += `\n${recovery}`;
+                  }
+                } else {
+                  if (sealVerdict.selfAmendments.length > 0) {
+                    console.warn(
+                      `Protected artifact self-amendments detected: ${sealVerdict.selfAmendments.map(({ path }) => path).join(', ')}. Each amendment must be justified by the approved plan and will be judged by build_review.`,
+                    );
+                  }
+                  if (step.phase === 'BUILD' && baselineCommit) {
+                    // Persist only after the workspace matches committed DECIDE
+                    // content. createProtectedArtifactSeal is immutable once present.
+                    await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+                  }
                 }
               }
             }
