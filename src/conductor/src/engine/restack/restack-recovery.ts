@@ -38,7 +38,7 @@ import {
   RoutedApplyPlanRefChangedError,
   runRestack,
 } from './restack-executor.js';
-import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { writeConflictRecord } from './restack-conflict-record.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
@@ -412,6 +412,10 @@ type ResumePlannedResult =
     readonly kind: 'conflict-unresolved';
     readonly journal: StoredRestackJournal;
     readonly child: ChildRange['child'];
+    /** The live parent used for this replay, not the range's historical parent. */
+    readonly newParent: CommitSha;
+    /** Ordered subjects from the resolver's engine-owned replay todo. */
+    readonly candidateSubjects: readonly string[];
     readonly commit: CommitSha;
     readonly paths: readonly string[];
     readonly detail?: string;
@@ -514,6 +518,8 @@ async function resumePlanned(
           kind: 'conflict-unresolved',
           journal: current,
           child: range.child,
+          newParent: parent,
+          candidateSubjects: await replayCandidateSubjects(git, resolution.candidates),
           commit: conflict.commit,
           paths: conflict.paths,
           ...('reason' in resolution.outcome ? { detail: resolution.outcome.reason } : {}),
@@ -721,19 +727,19 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         let recordFailure = '';
         if (journal.journal.cause === 'feature-repair') {
           try {
-            const tree = await git(['rev-parse', '--verify', `${range.oldParent}^{tree}`]);
+            const tree = await git(['rev-parse', '--verify', `${resumed.newParent}^{tree}`]);
             const newParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
             if (!newParentTree) throw new Error('cannot read replay parent tree');
             const written = await writeConflictRecord(options.worktree, options.slug, {
               opId: journal.journal.opId, child: resumed.child, oldParent: range.oldParent, oldTip: range.oldTip,
-              newParent: range.oldParent, newParentTree, candidateSubjects: [], commit: resumed.commit, paths: resumed.paths,
+              newParent: resumed.newParent, newParentTree, candidateSubjects: resumed.candidateSubjects, commit: resumed.commit, paths: resumed.paths,
             }, { git });
             if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
           } catch (error) { recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`; }
         }
         await haltRestackConflict(options.worktree, resumed.child, `${detail}${recordFailure}`, options.events,
           journal.journal.cause === 'feature-repair'
-            ? { slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: range.oldParent, oldParent: range.oldParent }
+            ? { slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: resumed.newParent, oldParent: range.oldParent }
             : undefined);
         return { kind: 'halted' };
       }
