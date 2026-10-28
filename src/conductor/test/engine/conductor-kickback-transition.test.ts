@@ -609,7 +609,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       expect(await dispatchKickbackBudgetCommand(
         { kind: 'kickback-budget', action: 'inspect', feature: 'transition', format: 'human', child: '2' },
         { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
-      )).toBe(0);
+      )).toBe(1);
       const haltLine = halt.split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
       const inspectLine = output.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
       expect(inspectLine).toBe(haltLine);
