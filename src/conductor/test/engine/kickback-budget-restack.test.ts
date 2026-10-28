@@ -24,6 +24,7 @@ import {
   updateCascadeLimit,
 } from '../../src/engine/restack/cascade-cap.js';
 import { runRestack } from '../../src/engine/restack/restack-executor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repos: string[] = [];
@@ -225,6 +226,38 @@ describe('restack kickback budget storage', () => {
     await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
       kind: 'counts', counts: { counts: { 1: 8 }, limits: { 1: 10 } },
     });
+
+    await rm(join(subject.repo, '.pipeline', 'HALT'), { force: true });
+    await rm(join(subject.repo, '.pipeline', 'HALT.class'), { force: true });
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const exhausted = await realCascadeCapCliFixture({ tier: 'L', charged: 10 });
+    const exhaustedBlob = (await makeGitRunner(exhausted.repo)(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ version: 1, counts: { 1: 10 }, limits: { 1: 10 } }),
+    })).stdout.trim();
+    await makeGitRunner(exhausted.repo)(['update-ref', cascadesRefFor('demo'), exhaustedBlob]);
+    await expect(runRestack({
+      worktree: exhausted.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(exhausted.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    await expect(readFile(join(exhausted.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toContain('originating child 1 reached 10/10 cascades');
+
+    const lowered = await realCascadeCapCliFixture({ tier: 'L', charged: 5 });
+    const loweredBlob = (await makeGitRunner(lowered.repo)(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ version: 1, counts: { 1: 5 }, limits: { 1: 5 } }),
+    })).stdout.trim();
+    await makeGitRunner(lowered.repo)(['update-ref', cascadesRefFor('demo'), loweredBlob]);
+    const loweredEvents: Array<{ type: string; reason?: string; child?: number }> = [];
+    const loweredEmitter = new ConductorEventEmitter();
+    loweredEmitter.on('restack_refused', (event) => { loweredEvents.push(event); });
+    await expect(runRestack({
+      worktree: lowered.repo, slug: 'demo', cause: 'feature-repair', events: loweredEmitter, git: makeGitRunner(lowered.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    expect(loweredEvents).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+    await expect(readFile(join(lowered.repo, '.pipeline', 'HALT'), 'utf8')).resolves
+      .toContain('originating child 1 reached 5/5 cascades');
   });
 
   it('refuses a restack raise when the tier allowance changed after the cap halt', async () => {
@@ -377,8 +410,53 @@ describe('restack kickback budget storage', () => {
     expect(second.code).toBe(0);
     expect(second.printed).toContain('Kickback budget (restack): 3/4 consumed; 1 remaining');
     await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
-      kind: 'counts',
-      counts: { counts: { 1: 3, 2: 3 }, limits: { 1: 4, 2: 4 } },
+      kind: 'counts', counts: { counts: { 1: 3, 2: 3 }, limits: { 1: 4, 2: 4 } },
+    });
+
+    const tierL = await realCascadeCapCliFixture({ tier: 'L', charged: 8 });
+    const tierLBlob = (await makeGitRunner(tierL.repo)(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ version: 1, counts: { 1: 8 }, limits: { 2: 5 } }),
+    })).stdout.trim();
+    await makeGitRunner(tierL.repo)(['update-ref', cascadesRefFor('demo'), tierLBlob]);
+    await expect(runRestack({
+      worktree: tierL.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(tierL.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    const tierLEvents: unknown[] = [];
+    expect(await dispatchKickbackBudgetCommand({
+      kind: 'kickback-budget', action: 'raise', feature: 'demo', gate: 'restack', child: '1', by: 2,
+      rationale: 'raise the tier-L stopped cascade', format: 'human',
+    }, {
+      cwd: tierL.root, resolveMainRoot: async () => tierL.root, isInteractive: () => true,
+      resolveOperator: () => 'operator', print: () => {}, appendEvent: (_worktree, event) => { tierLEvents.push(event); },
+    })).toBe(0);
+    expect(tierLEvents).toContainEqual(expect.objectContaining({
+      type: 'kickback_budget_adjustment_authorized', beforeLimit: 8, afterLimit: 10,
+    }));
+    await expect(readCascadeCounts(tierL.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts', counts: { counts: { 1: 8 }, limits: { 1: 10, 2: 5 } },
+    });
+
+    const stale = await realCascadeCapCliFixture({ tier: 'M', charged: 3 });
+    await expect(runRestack({
+      worktree: stale.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(stale.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    const before = await readCascadeCounts(stale.repo, 'demo');
+    if (before.kind !== 'counts') throw new Error('unreadable cascades');
+    await writeFile(join(stale.root, '.ai-conductor', 'config.yml'), [
+      'stacked_prs:', '  enabled: true', '  route_whole_feature_fixes: true', '  max_restack_cascades:', '    M: 4', '',
+    ].join('\n'));
+    const printed: string[] = [];
+    expect(await dispatchKickbackBudgetCommand({
+      kind: 'kickback-budget', action: 'raise', feature: 'demo', gate: 'restack', child: '1', by: 2,
+      rationale: 'reject stale tier-M cap evidence', format: 'human',
+    }, {
+      cwd: stale.root, resolveMainRoot: async () => stale.root, isInteractive: () => true,
+      resolveOperator: () => 'operator', print: (message) => { printed.push(message); },
+    })).toBe(1);
+    expect(printed.join('\n')).toContain('current cap evidence is missing or no longer matches the live halt');
+    await expect(readCascadeCounts(stale.repo, 'demo')).resolves.toMatchObject({ kind: 'counts', blob: before.blob });
+    await expect(readKickbackLedger(stale.repo, child(2))).resolves.not.toMatchObject({
+      gates: { restack: { resumeAuthorization: expect.anything() } },
     });
   });
 

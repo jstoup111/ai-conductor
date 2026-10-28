@@ -216,6 +216,20 @@ describe('restack cascade cap (real local Git)', () => {
       worktree: halted.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(halted.repo),
     })).resolves.toEqual({ kind: 'halted' });
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+
+    const malformed = await fixture({ tier: 'L' });
+    const blob = (await makeGitRunner(malformed.repo)(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
+    await malformed.git(['update-ref', cascadesRefFor('demo'), blob]);
+    const malformedRecords: Array<{ type: string; reason?: string; child?: number }> = [];
+    const malformedEvents = new ConductorEventEmitter();
+    malformedEvents.on('restack_refused', (event) => { malformedRecords.push(event); });
+    await expect(runRestack({
+      worktree: malformed.repo, slug: 'demo', cause: 'feature-repair', events: malformedEvents, git: makeGitRunner(malformed.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    expect(malformedRecords).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+    await expect(readFile(join(malformed.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(malformed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cascadesRefFor('demo'));
+    await expect(malformed.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
   });
 
   it('does not enforce or charge a cascade cap for a base refresh', async () => {
