@@ -192,6 +192,7 @@ import {
   filterRestageChanges,
   extractPrUrl,
 } from './state.js';
+import { stateMutationValuesEqual } from './conduct-state-conflicts.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -2551,6 +2552,30 @@ export class Conductor {
     const result = await readState(this.stateFilePath);
     if (!result.ok) throw new Error(result.error.message);
     return result.value;
+  }
+
+  /**
+   * Advance clean fields to values an engine writer already made durable.
+   *
+   * Local changes retain their original compare-and-swap baseline so a peer's
+   * same-field update still refuses the next write rather than being lost.
+   */
+  private async adoptDurableState(state: ConductState): Promise<void> {
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+
+    const durable = this.activeRegionChild === undefined
+      ? await readState(this.stateFilePath)
+      : await readConductStateOverlay(this.projectRoot, this.activeRegionChild);
+    if (!durable.ok) return;
+
+    const current = state as Record<string, unknown>;
+    for (const [field, value] of Object.entries(durable.value)) {
+      if (stateMutationValuesEqual(current[field], value)) continue;
+      if (!stateMutationValuesEqual(current[field], snapshot[field])) continue;
+      current[field] = value;
+      snapshot[field] = value;
+    }
   }
 
   private async initializeRunState(state: ConductState): Promise<boolean> {

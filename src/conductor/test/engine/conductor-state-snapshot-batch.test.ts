@@ -1,3 +1,4 @@
+// Covers: task:2
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -23,7 +24,10 @@ describe('conductor state batches advance the lost-update baseline', () => {
       name: string;
       mutations: { field: string; expected: unknown; intent: string; next: unknown }[];
     }): Promise<void>;
+    adoptDurableState(state: ConductState): Promise<void>;
+    commitStateChanges(state: ConductState, name: string, changes: Record<string, unknown>): Promise<void>;
     persistPendingStateChanges(state: ConductState, name: string): Promise<void>;
+    persistedStateSnapshot: ConductState | undefined;
   };
 
   const newConductor = (): Conductor => {
@@ -99,5 +103,78 @@ describe('conductor state batches advance the lost-update baseline', () => {
     const persisted = await readPersisted();
     expect(persisted.complexity_tier).toBe('M');
     expect(persisted.prd_audit).toBe('skipped');
+  });
+
+  it('adopts a clean durable value without writing and can commit a later transition', async () => {
+    await writeFile(statePath, JSON.stringify({ plan: 'done', prd_audit: 'done' }), 'utf8');
+    const conductor = newConductor();
+    const internals = conductorInternals(conductor);
+    const state = { plan: 'done', prd_audit: 'done' } as ConductState;
+    await internals.initializeRunState(state);
+    await writeFile(statePath, JSON.stringify({ ...(await readPersisted()), prd_audit: 'pending' }), 'utf8');
+    const bytesBefore = await readFile(statePath, 'utf8');
+
+    await internals.adoptDurableState(state);
+
+    expect({
+      state: state.prd_audit,
+      snapshot: internals.persistedStateSnapshot?.prd_audit,
+      bytesAfter: await readFile(statePath, 'utf8'),
+    }).toEqual({ state: 'pending', snapshot: 'pending', bytesAfter: bytesBefore });
+
+    await internals.commitStateChanges(state, 'join validation verification group', { prd_audit: 'done' });
+    expect((await readPersisted()).prd_audit).toBe('done');
+  });
+
+  it('preserves a dirty field and its conflict baseline when durable state changes', async () => {
+    await writeFile(statePath, JSON.stringify({ plan: 'done', prd_audit: 'done' }), 'utf8');
+    const conductor = newConductor();
+    const internals = conductorInternals(conductor);
+    const state = { plan: 'done', prd_audit: 'done' } as ConductState;
+    await internals.initializeRunState(state);
+    state.prd_audit = 'stale';
+    await writeFile(statePath, JSON.stringify({ ...(await readPersisted()), prd_audit: 'pending' }), 'utf8');
+
+    await internals.adoptDurableState(state);
+
+    expect({ state: state.prd_audit, snapshot: internals.persistedStateSnapshot?.prd_audit }).toEqual({
+      state: 'stale', snapshot: 'done',
+    });
+    await expect(internals.persistPendingStateChanges(state, 'persist conductor transition'))
+      .rejects.toThrow('Expected prd_audit to match');
+    expect((await readPersisted()).prd_audit).toBe('pending');
+  });
+
+  it('keeps the adopted baseline guarded against a later durable write', async () => {
+    await writeFile(statePath, JSON.stringify({ plan: 'done', prd_audit: 'done' }), 'utf8');
+    const conductor = newConductor();
+    const internals = conductorInternals(conductor);
+    const state = { plan: 'done', prd_audit: 'done' } as ConductState;
+    await internals.initializeRunState(state);
+    await writeFile(statePath, JSON.stringify({ ...(await readPersisted()), prd_audit: 'pending' }), 'utf8');
+    await internals.adoptDurableState(state);
+    await writeFile(statePath, JSON.stringify({ ...(await readPersisted()), prd_audit: 'stale' }), 'utf8');
+
+    await expect(internals.commitStateChanges(state, 'join validation verification group', { prd_audit: 'done' }))
+      .rejects.toThrow('Expected prd_audit to match before join validation verification group');
+    expect((await readPersisted()).prd_audit).toBe('stale');
+  });
+
+  it('leaves loaded state in place when the state file is missing until a commit restores it', async () => {
+    await writeFile(statePath, JSON.stringify({ plan: 'done', prd_audit: 'done' }), 'utf8');
+    const conductor = newConductor();
+    const internals = conductorInternals(conductor);
+    const state = { plan: 'done', prd_audit: 'done' } as ConductState;
+    await internals.initializeRunState(state);
+    const loaded = { ...state };
+    await rm(statePath);
+
+    await internals.adoptDurableState(state);
+
+    expect(state).toEqual(loaded);
+    await expect(readFile(statePath, 'utf8')).rejects.toThrow();
+
+    await internals.commitStateChanges(state, 'join validation verification group', { prd_audit: 'pending' });
+    expect(await readPersisted()).toMatchObject({ ...loaded, prd_audit: 'pending' });
   });
 });
