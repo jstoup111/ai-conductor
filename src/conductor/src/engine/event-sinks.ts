@@ -71,6 +71,7 @@ export const EVENT_SINKS = {
   restack_planned: { render: false, persist: true, audit: false, otel: false },
   restack_applied: { render: false, persist: true, audit: false, otel: false },
   restack_conflict: { render: false, persist: true, audit: false, otel: false },
+  restack_resolution: { render: false, persist: true, audit: false, otel: false },
   restack_refused: { render: false, persist: true, audit: false, otel: false },
   restack_recovered: { render: false, persist: true, audit: false, otel: false },
   push_lease_refused: { render: false, persist: true, audit: false, otel: false },
