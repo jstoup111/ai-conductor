@@ -298,6 +298,16 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       // restack from the former host's closure.
       if (reconciled.kind === 'leaf-returned' && consumed.kind === 'none') {
         if (!await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+          // A carried child deliberately survives an operator abandon.  It is
+          // no longer covered by the just-closed round, so do not let the
+          // terminal fast path hide its unlanded closed-child commit.
+          const returnedCursor = await resolveActiveChild(options.worktree, options.slug, { git: options.git });
+          if (returnedCursor.kind === 'repair-pending') {
+            return {
+              kind: 'halted',
+              detail: unlandedClosedChildCommitsHalt(options.slug, returnedCursor.repairChildren).trimEnd(),
+            };
+          }
           return { kind: 'repaired' };
         }
         return { kind: 'unavailable', detail: 'routing leaf return did not reach a terminal routing state' };

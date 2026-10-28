@@ -120,7 +120,7 @@ describe('operator abandon recovery (real local Git)', () => {
     const subject = await fixture();
     await expect(abandonOperatorRound({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git })).resolves.toEqual({ kind: 'abandoned' });
 
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toMatchObject({ kind: 'clear' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toMatchObject({ kind: 'repaired' });
     await expect(branch(subject.git)).resolves.toBe('feat/daemon-demo');
     await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({ kind: 'record', record: { phase: 'closed', hosts: { 1: 'abandoned' } } });
     await rootIsUnchanged(subject);
@@ -139,7 +139,7 @@ describe('operator abandon recovery (real local Git)', () => {
       return subject.git(args, options);
     };
 
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: recovering })).resolves.toMatchObject({ kind: 'clear' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: recovering })).resolves.toMatchObject({ kind: 'repaired' });
     expect(syncs).toBe(stage === 'moved' ? 1 : 0);
     expect(syncBranches).toEqual(stage === 'moved' ? ['feat/c1/demo'] : []);
     await expect(branch(subject.git)).resolves.toBe('feat/daemon-demo');
