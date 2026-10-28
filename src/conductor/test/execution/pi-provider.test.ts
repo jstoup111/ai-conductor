@@ -637,7 +637,7 @@ describe('PiProvider', () => {
     ['only the retired PI_HOME catalog', ['/legacy/pi-home/skills/pipeline/SKILL.md'], []],
     ['only the retired project .pi catalog', ['/workspace/project/.pi/skills/pipeline/SKILL.md'], []],
     ['a directory without SKILL.md', [], ['/home/agent/.agents/skills/pipeline']],
-  ])('refuses an unresolvable Pi command found in %s without spawning', async (_source, extraFiles, directories) => {
+  ])('refuses an unresolvable Pi command found in %s without spawning the provider', async (_source, extraFiles, directories) => {
     ({ environment } = fakePiEnvironment({
       files: [harnessPath, ...extraFiles],
       directories,
