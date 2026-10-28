@@ -676,7 +676,7 @@ describe('PiProvider', () => {
   it.each([
     ['missing', [], []],
     ['a dangling symlink', [], []],
-  ])('refuses Pi dispatch when HARNESS.md is %s', async (_source, files, directories) => {
+  ])('refuses Pi dispatch when HARNESS.md is %s or subagents are unavailable', async (_source, files, directories) => {
     ({ environment } = fakePiEnvironment({ files, directories }));
     provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
