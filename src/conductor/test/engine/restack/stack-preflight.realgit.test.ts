@@ -323,7 +323,7 @@ describe('runStackPreflight (real local Git)', () => {
     await git(['checkout', '-qb', 'feat/daemon-demo']);
     await commit('leaf', 'leaf.txt', 'leaf\n');
     await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
+    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
     await writeSliceTopologyFixture(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
       sliceMembership: { taskSlices: { a: 2, b: 4, c: 7 }, titles: ['two', 'four', 'leaf'] },

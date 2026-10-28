@@ -1,4 +1,4 @@
-// Covers: task:2, task:7, task:8, task:9, task:31.1, task:rem-as-built-1-r2
+// Covers: task:2, task:7, task:8, task:9, task:31.1, task:rem-as-built-1-r2, task:rem-as-built-rem-as-built-r14
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -74,6 +74,19 @@ async function fixture() {
   return { repo, git, commit, closed };
 }
 
+async function flatFixture() {
+  const repo = await mkdtemp(join(tmpdir(), 'stack-preflight-flat-'));
+  repositories.push(repo);
+  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'preflight@example.test']);
+  await git(['config', 'user.name', 'Stack preflight']);
+  await writeFile(join(repo, 'base.txt'), 'base\n');
+  await git(['add', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
+  return { repo };
+}
+
 async function appendRepair(subject: Awaited<ReturnType<typeof fixture>>) {
   await subject.git(['checkout', '-q', 'feat/c1/demo']);
   await subject.commit('operator change', 'operator.txt', 'X\n');
@@ -104,6 +117,36 @@ async function expectCursorRefusal(
 }
 
 describe('stack preflight live-HALT gate', () => {
+  it.each([
+    ['flat', async () => ({ ...await flatFixture(), expected: { kind: 'no-stack' as const } })],
+    ['routing-off', async () => {
+      const subject = await fixture();
+      await writeFile(join(subject.repo, '.ai-conductor', 'config.yml'), [
+        'stacked_prs:',
+        '  enabled: true',
+        '  max_slices: 3',
+        '  route_whole_feature_fixes: false',
+        '',
+      ].join('\n'));
+      return { repo: subject.repo, expected: { kind: 'clear' as const } };
+    }],
+  ] as const)('%s features do not read repairing, routes, or revalidate refs', async (_kind, create) => {
+    const subject = await create();
+    const git = makeGitRunner(subject.repo);
+    const forbiddenReads: string[][] = [];
+    const guardedGit: GitRunner = async (args, options) => {
+      if (args.some((arg) => /refs\/conductor\/demo\/(?:repairing|routes|revalidate)(?:\/|$)/.test(arg))) {
+        forbiddenReads.push(args);
+        throw new Error('routing refs must not be read');
+      }
+      return git(args, options);
+    };
+
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: guardedGit }))
+      .resolves.toEqual(subject.expected);
+    expect(forbiddenReads).toEqual([]);
+  });
+
   it('keeps a non-Git N=1 fixture on the flat path without probing journal refs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stack-preflight-non-git-'));
     repositories.push(root);

@@ -1,4 +1,4 @@
-// Covers: task:3, task:10
+// Covers: task:3, task:10, task:rem-as-built-rem-as-built-r9
 import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
@@ -628,5 +628,15 @@ describe('build-review rubric prompt view', () => {
 
     expect(JSON.stringify(projections.testQuality)).toBe(before);
     expect(buildReviewRubricPromptView(projections.security)).toBe(projections.security);
+  });
+
+  it('renders an operator host work order in the grader prompt', () => {
+    const projection = deriveBuildReviewRubricProjections(withSnapshot(source(), {
+      operatorWorkOrder: 'Land the reviewer-approved parser correction.',
+    })).implementationQuality;
+
+    expect(JSON.stringify(buildReviewRubricPromptView(projection))).toContain(
+      'Land the reviewer-approved parser correction.',
+    );
   });
 });

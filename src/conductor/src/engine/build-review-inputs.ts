@@ -89,6 +89,8 @@ export interface BuildReviewInputs {
    * head, no fetch needed) — `false` on both "fetched a stale ref" and the
    * no-remote/probe-failure fallback. */
   fresh: boolean;
+  /** Durable reason for an operator-owned routed repair, when this is its host review. */
+  operatorWorkOrder?: string;
   /** Engine-recorded aggregate failures exposed after base advances. The
    * grader judges whether diff hunks implement them; they are not exemptions. */
   repairContext?: TestSuiteRemediationRecord[];
@@ -138,6 +140,8 @@ export interface BuildReviewSourceSnapshot {
   readonly headSha: string;
   readonly diff: string;
   readonly planBody: string;
+  /** Operator landing reason, pinned with the remaining grader source. */
+  readonly operatorWorkOrder?: string;
   readonly repairContext: readonly TestSuiteRemediationRecord[];
   readonly removalContext: {
     readonly deletedFiles: readonly string[];
@@ -266,6 +270,8 @@ export interface BuildReviewInputOptions {
   readonly securityScope?: 'leaf' | 'non-leaf';
   /** Child-local suite evidence that must prove the review's test-suite gate. */
   readonly activeChild?: FullSuiteActiveChild;
+  /** Durable operator landing reason supplied by the routed host owner. */
+  readonly operatorWorkOrder?: string;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -1012,6 +1018,7 @@ export async function assembleBuildReviewInputs(
     headSha: liveHeadSha,
     diff: diffResult.stdout,
     planBody,
+    ...(options.operatorWorkOrder === undefined ? {} : { operatorWorkOrder: options.operatorWorkOrder }),
     repairContext: Object.freeze([...repairContext]),
     removalContext: Object.freeze({
       deletedFiles: Object.freeze([...removalContext.deletedFiles]),
@@ -1054,6 +1061,7 @@ export async function assembleBuildReviewInputs(
     trackingRefSha,
     remoteHeadSha,
     fresh,
+    ...(options.operatorWorkOrder === undefined ? {} : { operatorWorkOrder: options.operatorWorkOrder }),
     removalContext: sourceSnapshot.removalContext,
     repairContext,
     repairProvenance,

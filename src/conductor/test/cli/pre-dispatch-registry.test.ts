@@ -1,3 +1,4 @@
+// Covers: task:10
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +9,13 @@ import { diffDetectorSets, undeclaredRegistryCommands } from './support/cli-cata
 import { createProgram } from '../../src/cli.js';
 
 describe('pre-dispatch command registry', () => {
+  // Covers: task:10
+  it('registers stack land with its pre-dispatch detector and declared command path', () => {
+    expect(PRE_DISPATCH_COMMANDS).toContainEqual({
+      detector: 'detectStackLandCommand', commandPath: ['stack', 'land'], helpOwner: 'router',
+    });
+  });
+
   // Covers: task:1, task:19
   it('covers exactly the detectors invoked by the pre-dispatch chains', async () => {
     const source = await readFile(join(process.cwd(), 'src', 'index.ts'), 'utf8');

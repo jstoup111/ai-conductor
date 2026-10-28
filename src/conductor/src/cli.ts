@@ -444,6 +444,57 @@ export interface KickbackBudgetDispatch {
   format: 'human' | 'json';
 }
 
+/** Parsed open-path arguments for an operator stack landing. */
+export interface StackLandOpenDispatch {
+  kind: 'stack-land';
+  slug: string;
+  child: string;
+  carry: readonly string[];
+  reason: string;
+}
+
+/** Parsed declaration of an already-open operator stack landing. */
+export interface StackLandDoneDispatch {
+  kind: 'stack-land-done';
+  slug: string;
+}
+
+/** Parsed abandonment of an already-open operator stack landing. */
+export interface StackLandAbandonDispatch {
+  kind: 'stack-land-abandon';
+  slug: string;
+}
+
+export type StackLandDispatch = StackLandOpenDispatch | StackLandDoneDispatch | StackLandAbandonDispatch;
+
+/** Parse the open, declaration, and abandon grammars. */
+export function detectStackLandCommand(argv: readonly string[]): StackLandDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'land') return null;
+  if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--done') {
+    const slug = argv[5];
+    return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-done', slug };
+  }
+  if (argv.length === 7 && argv[4] === '--slug' && argv[5] && argv[6] === '--abandon') {
+    const slug = argv[5];
+    return slug.includes('/') || slug === '.' || slug === '..' ? null : { kind: 'stack-land-abandon', slug };
+  }
+  const values = new Map<string, string>();
+  const carry: string[] = [];
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || value === undefined || !['--slug', '--child', '--carry', '--reason'].includes(flag)) return null;
+    if (flag === '--carry') { carry.push(value); continue; }
+    if (values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug');
+  const child = values.get('--child');
+  const reason = values.get('--reason');
+  if (!slug || !child || reason === undefined || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
+  return { kind: 'stack-land', slug, child, carry, reason };
+}
+
 export interface HaltClearDispatch {
   kind: 'halt-clear';
   feature: string;
@@ -799,6 +850,7 @@ export function createProgram(): Command {
     'scope-check',
     'task-membership-check',
     'round-stamp',
+    'stack-commit-guard',
   ]) {
     program.command(command, { hidden: true });
   }
@@ -872,6 +924,17 @@ export function createProgram(): Command {
     .option('--by <n>', 'Positive amount to raise the limit by (raise only)')
     .option('--rationale <text>', 'Operator rationale (raise and reset)')
     .option('--format <format>', 'Output format: human | json');
+
+  const stack = program
+    .command('stack')
+    .description('Operate on a stacked feature');
+  stack
+    .command('land')
+    .description('Open an operator-owned landing on a closed stack child')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--child <n>', 'Closed child to host the landing')
+    .option('--carry <n>', 'Closed child with post-closure commits to carry')
+    .requiredOption('--reason <text>', 'Reason for the landing');
 
   const buildReview = program
     .command('build-review')

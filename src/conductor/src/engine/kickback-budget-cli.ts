@@ -7,10 +7,9 @@ import { appendCloseoutEvent, appendKickbackBudgetAuthorizationEvent, readKickba
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackGateEntry, type KickbackLedger } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView, withPendingGrowth, type KickbackPlanGrowthView } from './kickback-budget-view.js';
-import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
+import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
@@ -316,12 +315,15 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       return 1;
     }
   }
-  const parked = await isOperatorParked(root, command.feature);
-  if (!parked) {
-    const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
-    if (result !== 0) { print(`kickback-budget: could not park '${command.feature}'.`); return 1; }
+  let ownedPark: Awaited<ReturnType<typeof createOwnedPark>>;
+  try {
+    ownedPark = await createOwnedPark(root, command.feature);
+  } catch {
+    print(`kickback-budget: could not park '${command.feature}'.`);
+    return 1;
   }
-  const ownsPark = !parked;
+  const ownedParkToken = ownedPark.created ? ownedPark.token : undefined;
+  const parked = !ownedPark.created;
   let staged = false;
   let committed = false;
   let liveHaltGeneration = '';
@@ -401,9 +403,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   } finally {
     // Pre-stage refusals have left no durable change and release the temporary
     // park. Once staged, retain it until the adjustment is fully observable.
-    if (ownsPark && (!staged || committed)) {
-      await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
-    } else if (ownsPark) {
+    if (ownedParkToken !== undefined && (!staged || committed)) {
+      await releaseOwnedPark(root, command.feature, ownedParkToken);
+    } else if (ownedParkToken !== undefined) {
       print(`kickback-budget: adjustment is staged but incomplete; feature remains parked. Reconcile or unpark '${command.feature}' explicitly after recovery.`);
     }
   }

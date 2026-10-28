@@ -89,7 +89,7 @@ describe('rewindState', () => {
     rebase: 'done', finish: 'done', last_step: 'finish',
   };
 
-  it('keeps the rewind command boundary reachable only from the CLI entry module', () => {
+  it('limits rewind-module consumers to the CLI dispatcher and stack landing halt cleanup', () => {
     const sourceRoot = resolve(import.meta.dirname, '../../src');
     const rewindModule = resolve(sourceRoot, 'engine/rewind.ts');
     const configPath = resolve(import.meta.dirname, '../../tsconfig.json');
@@ -105,7 +105,10 @@ describe('rewindState', () => {
       return declaration?.fileName === rewindModule ? [sourceFile.fileName] : [];
     }));
 
-    expect(importers).toEqual([resolve(sourceRoot, 'index.ts')]);
+    expect(importers).toEqual([
+      resolve(sourceRoot, 'engine/stack-land-cli.ts'),
+      resolve(sourceRoot, 'index.ts'),
+    ]);
   });
 
   it('refuses an unknown target by name and lists the resolved registry without mutating', async () => {

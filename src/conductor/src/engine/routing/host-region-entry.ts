@@ -186,7 +186,7 @@ function terminalJournal(journal: Awaited<ReturnType<typeof readRestackJournal>>
   return routingFenceOpen(journal);
 }
 
-async function hostTarget(
+export async function resolveHostEntryTarget(
   git: GitRunner,
   slug: string,
   host: ChildId,
@@ -234,7 +234,7 @@ async function verifyOrSwitch(
     : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to host branch ${target.branch}` };
 }
 
-async function restageHostRegion(
+export async function restageHostRegion(
   worktree: string,
   slug: string,
   host: ChildId,
@@ -273,8 +273,79 @@ async function restageHostRegion(
       const result = await state.applyBatch({ name: `restage revalidate host ${host} region`, mutations });
       return 'message' in result ? { kind: 'refused', detail: `cannot restage revalidate host ${host}: ${result.message}` } : { kind: 'restaged' };
     }
+    case 'operator': {
+      const operator = record.operator;
+      if (operator === undefined) return { kind: 'refused', detail: `operator host ${host} has no operator context` };
+      const state = createRoutedConductStateStore(worktree, host);
+      const current = await state.read();
+      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      const orderedSteps = ['acceptance_specs', 'build', 'test_suite', 'build_review'] as const;
+      const restageSteps = operator.origin === 'land'
+        ? (['acceptance_specs', 'test_suite', 'build_review'] as const)
+        : orderedSteps.slice(orderedSteps.indexOf(operator.entryStep));
+      const mutations = restageSteps
+        .filter((step) => current.value[step] !== 'pending')
+        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage operator host ${host} ${step}` } as StateMutation<ConductState>));
+      if (mutations.length === 0) return { kind: 'restaged' };
+      const result = await state.applyBatch({ name: `restage operator host ${host} region`, mutations });
+      return 'message' in result ? { kind: 'refused', detail: `cannot restage operator host ${host}: ${result.message}` } : { kind: 'restaged' };
+    }
   }
   return assertNever(record.kind);
+}
+
+export type PinHostEntryResult =
+  | { readonly kind: 'pinned'; readonly stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' }; readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+/**
+ * Persist the host's closure/tree baseline before any caller switches its
+ * worktree.  Operator landings and conductor-driven routing share this exact
+ * durable entry fence so a crash cannot grade against the post-closure tip.
+ */
+export async function pinHostEntry(
+  worktree: string,
+  slug: string,
+  stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' },
+  host: ChildId,
+  git: GitRunner,
+): Promise<PinHostEntryResult> {
+  const resolved = await resolveHostEntryTarget(git, slug, host);
+  if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
+  let current = stored;
+  let pinnedBase = current.record.entry?.host === host ? current.record.entry.pinnedBase : undefined;
+  if (current.record.entry?.host !== host) {
+    const queue = await readRevalidationQueue(worktree, slug, { git });
+    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
+    const pinContext = (() => {
+      switch (current.record.kind) {
+        case 'revalidate':
+          return !queued || queue.kind !== 'queue'
+            ? { kind: 'refused' as const }
+            : { kind: 'ready' as const, revalidation: { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha } };
+        case 'audit':
+          return { kind: 'ready' as const, revalidation: queued && queue.kind === 'queue' ? { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha } : undefined };
+        case 'operator':
+          return { kind: 'ready' as const, revalidation: undefined };
+      }
+      return assertNever(current.record.kind);
+    })();
+    if (pinContext.kind === 'refused') return { kind: 'refused', detail: `revalidate host ${host} has no queued entry to pin` };
+    const { revalidation } = pinContext;
+    const next = {
+      ...current.record,
+      entry: { host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
+    };
+    const wrote = await writeRoutingTransaction(worktree, slug, [
+      { kind: 'update-record', previous: current, record: next },
+    ], { git });
+    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot pin routing host entry: ${wrote.kind}` };
+    pinnedBase = resolved.pinnedBase;
+    const reread = await readRouteRecord(worktree, slug, current.record.roundId, { git });
+    if (reread.kind !== 'record') return { kind: 'refused', detail: `routing record ${current.record.roundId} is unavailable after pin` };
+    current = reread;
+  }
+  return { kind: 'pinned', stored: current, target: resolved.target, pinnedBase: pinnedBase! };
 }
 
 async function bindHostObligations(
@@ -363,38 +434,29 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     return { kind: 'refused', detail: journal.kind === 'unreadable' ? 'restack journal is unreadable' : 'restack journal is non-terminal' };
   }
 
-  let stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable` };
+  let loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (loaded.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable` };
+  let stored = loaded;
+  if (stored.record.kind === 'operator' && stored.record.operator?.declaration === undefined) {
+    return {
+      kind: 'refused',
+      detail:
+        `operator-round-undeclared: landing ${input.roundId} on child ${input.host} is awaiting ` +
+        // ai-conductor:session-command-context=operator-only
+        'ai-conductor stack land --done or ai-conductor stack land --abandon',
+        // /ai-conductor:session-command-context
+    };
+  }
   const hostState = stored.record.hosts[input.host];
   if (hostState !== 'admitted' && hostState !== 'repairing') {
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} is not admitted` };
   }
 
-  const resolved = await hostTarget(git, input.slug, input.host);
-  if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
-  let pinnedBase = stored.record.entry?.host === input.host ? stored.record.entry.pinnedBase : undefined;
-  if (stored.record.entry?.host !== input.host) {
-    let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
-    const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
-    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === input.host) : undefined;
-    if (stored.record.kind === 'revalidate' && (!queued || queue.kind !== 'queue')) {
-      return { kind: 'refused', detail: `revalidate host ${input.host} has no queued entry to pin` };
-    }
-    if (queued && queue.kind === 'queue') {
-      revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
-    }
-    const next = {
-      ...stored.record,
-      entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
-    };
-    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
-      { kind: 'update-record', previous: stored, record: next },
-    ], { git });
-    if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot pin routing host entry: ${wrote.kind}` };
-    pinnedBase = resolved.pinnedBase;
-    stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-    if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after pin` };
-  }
+  const pinned = await pinHostEntry(input.worktree, input.slug, stored, input.host, git);
+  if (pinned.kind === 'refused') return pinned;
+  const resolved = { target: pinned.target };
+  const pinnedBase = pinned.pinnedBase;
+  stored = pinned.stored;
 
   const switched = await verifyOrSwitch(input, resolved.target, git);
   if (switched.kind === 'refused') return switched;
@@ -457,25 +519,33 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   // task still dispatches and an N=1 route keeps its established planner-side
   // guard.  Do not transition to repairing: no provider may run for a
   // derived no-op round.
-  if (stored.record.kind === 'audit') {
-    const completion = await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
-      ...input.completionContext,
-      projectRoot: input.worktree,
-      planPath,
-      featureDesc: input.slug,
-      activeChild: input.host,
-    });
-    if (completion.done) {
-      return {
-        kind: 'derived-already-complete',
-        detail:
-          `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
-          'every routed task is already evidence-complete',
-      };
+  const auditAlreadyComplete = await (async (): Promise<boolean> => {
+    switch (stored.record.kind) {
+      case 'audit':
+        return (await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
+          ...input.completionContext,
+          projectRoot: input.worktree,
+          planPath,
+          featureDesc: input.slug,
+          activeChild: input.host,
+        })).done;
+      case 'revalidate':
+      case 'operator':
+        return false;
     }
+    return assertNever(stored.record.kind);
+  })();
+  if (auditAlreadyComplete) {
+    return {
+      kind: 'derived-already-complete',
+      detail:
+        `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
+        'every routed task is already evidence-complete',
+    };
   }
-  stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
+  loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (loaded.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
+  stored = loaded;
   const recordWithBindings = { ...stored, record: bound.record };
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
   if (repairing.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };

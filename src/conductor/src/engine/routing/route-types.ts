@@ -2,6 +2,7 @@ import { CHILD_REGION_STEPS, parseChildId, type ChildId } from '../child-context
 import { isValidGitBranchName } from '../git-branch-name.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import type { StackedPrsConfig } from '../../types/config.js';
+import type { StepStatus } from '../../types/steps.js';
 
 /** The explicit round bound used by routing-ref teardown. */
 export const MAX_ROUTE_ROUNDS = 999;
@@ -17,11 +18,13 @@ export type HostState =
   | 'built'
   | 'restacked'
   | 'done'
-  | 'rerouted';
+  | 'rerouted'
+  | 'abandoning'
+  | 'abandoned';
 
 export type RoundPhase = 'prepared' | 'open' | 'closed';
 
-export type RouteKind = 'audit' | 'revalidate';
+export type RouteKind = 'audit' | 'revalidate' | 'operator';
 
 /** Makes routing-union consumers fail closed when their union gains a member. */
 export function assertNever(value: never): never {
@@ -41,6 +44,8 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
         case 'restacked': return false;
         case 'done': return false;
         case 'rerouted': return false;
+        case 'abandoning': return false;
+        case 'abandoned': return false;
       }
       return assertNever(to);
     case 'admitted':
@@ -53,6 +58,8 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
         case 'restacked': return false;
         case 'done': return false;
         case 'rerouted': return false;
+        case 'abandoning': return true;
+        case 'abandoned': return false;
       }
       return assertNever(to);
     case 'repairing':
@@ -65,6 +72,8 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
         case 'restacked': return false;
         case 'done': return true;
         case 'rerouted': return false;
+        case 'abandoning': return true;
+        case 'abandoned': return false;
       }
       return assertNever(to);
     case 'reroute-moved':
@@ -77,6 +86,8 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
         case 'restacked': return false;
         case 'done': return false;
         case 'rerouted': return true;
+        case 'abandoning': return false;
+        case 'abandoned': return false;
       }
       return assertNever(to);
     case 'built':
@@ -89,11 +100,14 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
         case 'restacked': return true;
         case 'done': return false;
         case 'rerouted': return false;
+        case 'abandoning': return false;
+        case 'abandoned': return false;
       }
       return assertNever(to);
     case 'restacked':
     case 'done':
     case 'rerouted':
+    case 'abandoned':
       switch (to) {
         case 'pending': return false;
         case 'admitted': return false;
@@ -103,6 +117,22 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
         case 'restacked': return false;
         case 'done': return false;
         case 'rerouted': return false;
+        case 'abandoning': return false;
+        case 'abandoned': return false;
+      }
+      return assertNever(to);
+    case 'abandoning':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return false;
+        case 'repairing': return false;
+        case 'reroute-moved': return false;
+        case 'built': return false;
+        case 'restacked': return false;
+        case 'done': return false;
+        case 'rerouted': return false;
+        case 'abandoning': return false;
+        case 'abandoned': return true;
       }
       return assertNever(to);
   }
@@ -293,6 +323,8 @@ export interface RouteRecord {
   readonly hosts: Readonly<Record<ChildId, HostState>>;
   readonly currentHostIndex: number;
   readonly receipt: RoundReceipt;
+  /** Required only for the `operator` route kind; rejected on every other kind. */
+  readonly operator?: OperatorRouteSection;
   /** Immutable authored-task denominator captured when the route was admitted. */
   readonly sealedAuthored?: number;
   /** As-built findings that remain pending while this route is open. */
@@ -347,6 +379,42 @@ export interface RevalidationQueueEntry {
 
 export type RegionGate = typeof CHILD_REGION_STEPS[number];
 
+/** The two commands that can open an operator-owned routing round. */
+export type OperatorRoundOrigin = 'land' | 'rewind';
+
+/** A closed child whose post-closure tip is explicitly carried by the round. */
+export interface CarriedOperatorChild {
+  readonly child: ChildId;
+  readonly tip: CommitSha;
+}
+
+/** Byte-preserving child-region state needed to restore an abandoned round. */
+export interface PriorOperatorRegion {
+  readonly statuses: Readonly<Record<RegionGate, StepStatus>>;
+  readonly verdicts: Readonly<Record<string, string>>;
+}
+
+/** Durable command, declaration, branch-tip, and recovery context for an operator route. */
+export interface OperatorRouteSection {
+  readonly origin: OperatorRoundOrigin;
+  readonly reason: string;
+  readonly operator: string;
+  readonly entryStep: RegionGate;
+  /** Present only when this round created the feature's park marker. */
+  readonly park?: { readonly token: string };
+  readonly carried: readonly CarriedOperatorChild[];
+  readonly otherTips: Readonly<Record<string, CommitSha>>;
+  readonly priorRegion: PriorOperatorRegion;
+  /** A landing is undeclared until the operator records the host tip and time. */
+  readonly declaration?: { readonly tip: CommitSha; readonly at: string };
+  /** Recovery state written while an operator abandons its round. */
+  readonly abandon?: {
+    readonly rejectedTip: CommitSha;
+    readonly resetTip: CommitSha;
+    readonly stage: 'moved' | 'synced';
+  };
+}
+
 export interface RevalidationQueueRecord {
   readonly generation: number;
   readonly entries: readonly RevalidationQueueEntry[];
@@ -354,11 +422,12 @@ export interface RevalidationQueueRecord {
 }
 
 const hostStates = new Set<HostState>([
-  'pending', 'admitted', 'repairing', 'reroute-moved', 'built', 'restacked', 'done', 'rerouted',
+  'pending', 'admitted', 'repairing', 'reroute-moved', 'built', 'restacked', 'done', 'rerouted', 'abandoning', 'abandoned',
 ]);
 const roundPhases = new Set<RoundPhase>(['prepared', 'open', 'closed']);
-const routeKinds = new Set<RouteKind>(['audit', 'revalidate']);
+const routeKinds = new Set<RouteKind>(['audit', 'revalidate', 'operator']);
 const regionGates = new Set<RegionGate>(CHILD_REGION_STEPS);
+const stepStatuses = new Set<StepStatus>(['pending', 'in_progress', 'done', 'failed', 'refused', 'skipped', 'stale']);
 const ROUND_ID = /^r([1-9]\d*)$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -512,6 +581,95 @@ function parseLeafReturn(value: unknown): { readonly branch: string; readonly he
   return head === undefined ? undefined : { branch: value.branch, head };
 }
 
+function parseOperatorSection(value: unknown): OperatorRouteSection | undefined {
+  if (!isRecord(value)) return undefined;
+  const origin = value.origin === 'land' || value.origin === 'rewind' ? value.origin : undefined;
+  const reason = nonEmptyString(value.reason);
+  const operator = nonEmptyString(value.operator);
+  const entryStep = typeof value.entryStep === 'string' && regionGates.has(value.entryStep as RegionGate)
+    ? value.entryStep as RegionGate
+    : undefined;
+  if (!origin || !reason || !operator || !entryStep || !Array.isArray(value.carried) || !isRecord(value.otherTips)
+    || !isRecord(value.priorRegion)) return undefined;
+
+  let park: { readonly token: string } | undefined;
+  if (value.park !== undefined) {
+    const token = isRecord(value.park) ? nonEmptyString(value.park.token) : undefined;
+    if (!token) return undefined;
+    park = { token };
+  }
+
+  const carried: CarriedOperatorChild[] = [];
+  const carriedChildren = new Set<ChildId>();
+  for (const rawCarried of value.carried) {
+    const child = isRecord(rawCarried) ? parseChild(rawCarried.child) : undefined;
+    const tip = isRecord(rawCarried) && typeof rawCarried.tip === 'string' ? parseCommitSha(rawCarried.tip) : undefined;
+    if (!child || !tip || carriedChildren.has(child)) return undefined;
+    carriedChildren.add(child);
+    carried.push({ child, tip });
+  }
+
+  const otherTips: Record<string, CommitSha> = {};
+  for (const [branch, rawTip] of Object.entries(value.otherTips)) {
+    const tip = typeof rawTip === 'string' ? parseCommitSha(rawTip) : undefined;
+    if (!isValidGitBranchName(branch) || !tip) return undefined;
+    otherTips[branch] = tip;
+  }
+  if (Object.keys(otherTips).length === 0) return undefined;
+
+  const statuses: Partial<Record<RegionGate, StepStatus>> = {};
+  if (!isRecord(value.priorRegion.statuses)) return undefined;
+  for (const gate of CHILD_REGION_STEPS) {
+    const status = value.priorRegion.statuses[gate];
+    if (typeof status !== 'string' || !stepStatuses.has(status as StepStatus)) return undefined;
+    statuses[gate] = status as StepStatus;
+  }
+  if (Object.keys(value.priorRegion.statuses).some((key) => !regionGates.has(key as RegionGate))
+    || !isRecord(value.priorRegion.verdicts)) return undefined;
+  const verdicts: Record<string, string> = {};
+  for (const [file, bytes] of Object.entries(value.priorRegion.verdicts)) {
+    if (!nonEmptyString(file) || typeof bytes !== 'string') return undefined;
+    verdicts[file] = bytes;
+  }
+  const priorRegion: PriorOperatorRegion = {
+    statuses: statuses as Record<RegionGate, StepStatus>,
+    verdicts,
+  };
+
+  let declaration: OperatorRouteSection['declaration'];
+  if (value.declaration !== undefined) {
+    const tip = isRecord(value.declaration) && typeof value.declaration.tip === 'string'
+      ? parseCommitSha(value.declaration.tip)
+      : undefined;
+    const at = isRecord(value.declaration) ? nonEmptyString(value.declaration.at) : undefined;
+    if (!tip || !at || Number.isNaN(Date.parse(at))) return undefined;
+    declaration = { tip, at };
+  }
+
+  let abandon: OperatorRouteSection['abandon'];
+  if (value.abandon !== undefined) {
+    const rejectedTip = isRecord(value.abandon) && typeof value.abandon.rejectedTip === 'string'
+      ? parseCommitSha(value.abandon.rejectedTip)
+      : undefined;
+    const resetTip = isRecord(value.abandon) && typeof value.abandon.resetTip === 'string'
+      ? parseCommitSha(value.abandon.resetTip)
+      : undefined;
+    const stage = isRecord(value.abandon) && (value.abandon.stage === 'moved' || value.abandon.stage === 'synced')
+      ? value.abandon.stage
+      : undefined;
+    if (!rejectedTip || !resetTip || !stage) return undefined;
+    abandon = { rejectedTip, resetTip, stage };
+  }
+
+  return {
+    origin, reason, operator, entryStep,
+    ...(park === undefined ? {} : { park }),
+    carried, otherTips, priorRegion,
+    ...(declaration === undefined ? {} : { declaration }),
+    ...(abandon === undefined ? {} : { abandon }),
+  };
+}
+
 function parseOutboxEntry(value: unknown): OutboxEntry | undefined {
   if (!isRecord(value)) return undefined;
   const eventId = nonEmptyString(value.eventId);
@@ -626,12 +784,12 @@ interface RouteLifecycleState {
 
 /** A host that has entered its region and not yet moved its repair away. */
 function isActiveHostState(state: HostState): boolean {
-  return state === 'admitted' || state === 'repairing';
+  return state === 'admitted' || state === 'repairing' || state === 'abandoning';
 }
 
 /** A host whose region work finished in place rather than by moving upward. */
 function isCompletedHostState(state: HostState): boolean {
-  return state === 'built' || state === 'restacked' || state === 'done';
+  return state === 'built' || state === 'restacked' || state === 'done' || state === 'abandoned';
 }
 
 /** A host whose repair was moved to a higher host by a verified reroute. */
@@ -698,8 +856,8 @@ function hasConsistentRouteLifecycle(state: RouteLifecycleState): boolean {
     case 'closed':
       // ADR decision 6: a round closes when its last host is restacked, done
       // or rerouted, so no host is in flight, built, or awaiting a reroute sync.
-      return reroute === undefined && (current === 'restacked' || current === 'done')
-        && others.every((hostState) => hostState === 'restacked' || hostState === 'done' || hostState === 'rerouted');
+      return reroute === undefined && (current === 'restacked' || current === 'done' || current === 'abandoned')
+        && others.every((hostState) => hostState === 'restacked' || hostState === 'done' || hostState === 'rerouted' || hostState === 'abandoned');
   }
   return assertNever(phase);
 }
@@ -731,6 +889,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const fallback = value.fallback === undefined ? undefined : Array.isArray(value.fallback) ? value.fallback.map(parseRouteFallback) : undefined;
   const reroute = value.reroute === undefined ? undefined : parseReroutePhase(value.reroute);
   const leafReturn = value.leafReturn === undefined ? undefined : parseLeafReturn(value.leafReturn);
+  const operator = value.operator === undefined ? undefined : parseOperatorSection(value.operator);
   const currentHostIndex = value.currentHostIndex;
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
@@ -739,7 +898,10 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
     || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
     || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)
-    || (value.leafReturn !== undefined && leafReturn === undefined)) return undefined;
+    || (value.leafReturn !== undefined && leafReturn === undefined)
+    || (value.operator !== undefined && operator === undefined)
+    || (kind === 'operator' && (operator === undefined || Object.keys(hosts).length !== 1))
+    || (kind !== 'operator' && operator !== undefined)) return undefined;
   if (!hasConsistentRouteLifecycle({
     phase, hosts, currentHostIndex, entry, fallback: fallback as RouteFallback[] | undefined, reroute,
   })) return undefined;
@@ -754,6 +916,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     hosts,
     currentHostIndex,
     receipt,
+    ...(operator === undefined ? {} : { operator }),
     ...(sealedAuthored === undefined ? {} : { sealedAuthored }),
     ...(pendingAsBuiltFindings === undefined ? {} : { pendingAsBuiltFindings }),
     ...(entry === undefined ? {} : { entry }),

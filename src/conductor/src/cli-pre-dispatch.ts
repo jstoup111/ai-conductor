@@ -58,6 +58,8 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectScopeCheckCommand', commandPath: ['scope-check'], helpOwner: 'router' },
   { detector: 'detectTaskMembershipCheckCommand', commandPath: ['task-membership-check'], helpOwner: 'router' },
   { detector: 'detectRoundStampCommand', commandPath: ['round-stamp'], helpOwner: 'router' },
+  { detector: 'detectStackCommitGuardCommand', commandPath: ['stack-commit-guard'], helpOwner: 'router' },
+  { detector: 'detectStackLandCommand', commandPath: ['stack', 'land'], helpOwner: 'router' },
   { detector: 'detectEvidenceCommand', commandPath: ['evidence'], helpOwner: 'router' },
   { detector: 'detectKpiCommand', commandPath: ['kpi'], helpOwner: 'router' },
   { detector: 'detectBuildAuthStatusCommand', commandPath: ['build-auth-status'], helpOwner: 'router' },

@@ -98,6 +98,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly changedFiles: readonly ChangedFileReference[];
   /** The hunk subset this rubric judges; the whole diff remains context. */
   readonly reviewScope: BuildReviewProjectionReviewScope;
+  /** Durable operator landing reason for a routed operator host, when present. */
+  readonly operatorWorkOrder?: string;
 }
 
 export interface TestQualityProjection extends CommonProjection<'testQuality'> {
@@ -477,6 +479,7 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     headSha: snapshot.headSha,
     changedFiles,
     reviewScope,
+    ...(snapshot.operatorWorkOrder === undefined ? {} : { operatorWorkOrder: snapshot.operatorWorkOrder }),
   };
 }
 

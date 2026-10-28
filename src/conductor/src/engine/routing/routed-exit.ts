@@ -57,6 +57,8 @@ function pendingHost(state: HostState): boolean {
     case 'restacked':
     case 'done':
     case 'rerouted':
+    case 'abandoning':
+    case 'abandoned':
       return false;
   }
   return assertNever(state);
@@ -193,7 +195,7 @@ export async function returnToLeaf(
   worktree: string,
   slug: string,
   stored: StoredRouteRecord,
-  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter } = {},
+  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean } = {},
 ): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
@@ -223,8 +225,13 @@ export async function returnToLeaf(
     if (reread.kind !== 'record') return { kind: 'unavailable', detail: 'cannot reread leaf return record' };
     currentStored = reread;
   }
-  const restageFailure = await restageLeafGates(worktree);
-  if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
+  // An operator abandon restores the host's prior region and deliberately
+  // discards its landing. Returning from that path is bookkeeping only: the
+  // leaf's prior whole-feature validation remains authoritative.
+  if (!options.abandon) {
+    const restageFailure = await restageLeafGates(worktree);
+    if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
+  }
   const closed = { ...currentStored.record, phase: 'closed' as const };
   const closedWrite = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: currentStored, record: closed }], { git });
   if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
@@ -296,6 +303,16 @@ export async function hostNoOpEvidence(
 
 function halted(detail: string): RequestRoutedExitResult {
   return { kind: 'halted', detail };
+}
+
+function unlandedClosedChildCommitsHalt(slug: string, host: ChildId, child: ChildId): string {
+  return [
+    `unlanded-closed-child-commits: child ${child}`,
+    // ai-conductor:session-command-context=operator-only
+    `ai-conductor stack land --slug ${slug} --child ${host} --carry ${child} --reason "<why>"`,
+    // /ai-conductor:session-command-context
+    '',
+  ].join('\n');
 }
 
 /**
@@ -399,6 +416,17 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     const child = cursor.foreignRoundChildren[0]!;
     await writeHaltMarker(input.worktree, `routing foreign-round commit: child ${child}\n`, 'needs-human', input.events);
     return halted(`routed exit host ${input.host}: foreign round on child ${child}`);
+  }
+  const declaredOrigins = new Set(cursor.coOrigins ?? []);
+  const uncarried = cursor.repairChildren.find((child) => child !== input.host && !declaredOrigins.has(child));
+  if (uncarried !== undefined) {
+    await writeHaltMarker(
+      input.worktree,
+      unlandedClosedChildCommitsHalt(input.slug, input.host, uncarried),
+      'needs-human',
+      input.events,
+    );
+    return halted(`routed exit host ${input.host}: unlanded closed-child commits on child ${uncarried}`);
   }
   const origins = [...new Set([input.host, ...(cursor.coOrigins ?? [])])].sort((left, right) => left - right) as ChildId[];
   const restack = await runRestack({

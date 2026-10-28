@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -16,8 +15,9 @@ import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingEligible, routingSettingOn } from '../routing/route-types.js';
-import { drainRoutingOutboxes } from '../routing/route-record-store.js';
+import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
 import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
+import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
 import { requestRoutedExit } from '../routing/routed-exit.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
@@ -91,6 +91,19 @@ async function liveHaltExists(worktree: string): Promise<boolean> {
   return access(join(worktree, HALT_MARKER)).then(() => true).catch(() => false);
 }
 
+function unlandedClosedChildCommitsHalt(slug: string, children: readonly number[]): string {
+  const [host, ...carried] = children;
+  const subject = children.length === 1 ? `child ${host}` : `children ${children.join(', ')}`;
+  const carry = carried.map((child) => ` --carry ${child}`).join('');
+  return [
+    `unlanded-closed-child-commits: ${subject}`,
+    // ai-conductor:session-command-context=operator-only
+    `ai-conductor stack land --slug ${slug} --child ${host}${carry} --reason "<why>"`,
+    // /ai-conductor:session-command-context
+    '',
+  ].join('\n');
+}
+
 function stageDetail(stage: string, detail: string): string {
   return detail.trim() || `stack preflight: ${stage} refused`;
 }
@@ -108,16 +121,22 @@ async function haltForLiveJournalOwner(
 
 /**
  * Make the durable stack coherent before an entry point judges the active
- * child.  The journal is always probed first, even for a flat feature: an
- * interrupted stack cannot be made safe by losing its worktree metadata.
+ * child. Durable-state detection includes the journal, so an interrupted
+ * stack cannot be flattened by lost worktree metadata.
  */
 async function runStackPreflightInner(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
-  // Unit fixtures and legacy N=1 callers can have neither a Git boundary nor
-  // child state.  They cannot contain a journal ref, so the flat path must not
-  // fail while attempting its Git-backed recovery probe.
-  if (!existsSync(join(options.worktree, '.git')) && !await hasDurableChildState(options.worktree, options.slug, { git: options.git })) {
-    return { kind: 'no-stack' };
-  }
+  // Establish whether the feature is stacked before touching routing state.
+  // A journal itself establishes durable child state, so this still recovers
+  // interrupted stacks while keeping N=1 features on their historical path.
+  const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
+  if (durable === 'git-error') return haltUnresolvableCursor(options, 'git-error', 'cannot inspect durable child state');
+  if (!durable) return { kind: 'no-stack' };
+
+  // Routing-off stacks retain the ordinary restack/recovery path, but must
+  // never inspect routing refs while doing so.
+  const config = await loadConfig(options.worktree);
+  const routingEnabled = config.ok && routingSettingOn(config.config);
+
   // Publication freezes new rewrites, not a resume which has no rewrite to
   // perform. A settled feature-repair journal may still be cleaned, but its
   // base-refresh follow-on must not move published member refs.
@@ -152,12 +171,44 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   if (secondRecovery.kind === 'halted') return { kind: 'halted', detail: 'restack journal recovery halted' };
   if (secondRecovery.kind === 'unavailable') return haltUnresolvableCursor(options, 'git-error', secondRecovery.detail);
 
-  const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
-  if (durable === 'git-error') return haltUnresolvableCursor(options, 'git-error', 'cannot inspect durable child state');
-  if (!durable) return { kind: recovery.kind === 'none' && secondRecovery.kind === 'none' ? 'no-stack' : 'recovered' };
+  // The hook cannot see a --no-verify commit or a ref move made elsewhere.
+  // Check an active operator host before any route admission, ref movement, or
+  // the undeclared-round stop that Task 15 adds at this same boundary.
+  const marker = routingEnabled
+    ? await readRepairMarker(options.worktree, options.slug, { git: options.git })
+    : undefined;
+  if (marker?.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot read operator repair marker' };
+  if (marker?.kind === 'marker') {
+    const stored = await readRouteRecord(options.worktree, options.slug, marker.marker.roundId, { git: options.git });
+    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot read operator round ${marker.marker.roundId}` };
+    if (stored.record.kind === 'operator') {
+      const tips = await checkOperatorTips({
+        worktree: options.worktree,
+        slug: options.slug,
+        record: stored.record,
+        ...(options.git === undefined ? {} : { git: options.git }),
+      });
+      if (tips.kind === 'unavailable') return { kind: 'unavailable', detail: tips.detail };
+      if (tips.kind === 'moved') {
+        const reason = formatOperatorHaltReason('operator-round-branch-moved', stored.record.roundId);
+        const details = tips.branches.map(({ branch, recorded, current }) => `${branch} (recorded ${recorded}, current ${current})`).join(', ');
+        const body = `${reason}\noperator round ${stored.record.roundId} branch moved: ${details}\n`;
+        return { kind: 'halted', detail: body.trimEnd() };
+      }
+      // An abandon has already durably chosen its host reset; it must reach
+      // round reconciliation even though it has no landing declaration.
+      if (stored.record.operator?.declaration === undefined && stored.record.hosts[marker.marker.host] !== 'abandoning') {
+        const reason = formatOperatorHaltReason('operator-round-undeclared', stored.record.roundId);
+        const body = `${reason}\noperator round ${stored.record.roundId} landing on child ${marker.marker.host} is awaiting ` +
+          // ai-conductor:session-command-context=operator-only
+          'ai-conductor stack land --done or ai-conductor stack land --abandon\n';
+          // /ai-conductor:session-command-context
+        return { kind: 'halted', detail: body.trimEnd() };
+      }
+    }
+  }
 
-  const config = await loadConfig(options.worktree);
-  const receiptCursor = config.ok && routingSettingOn(config.config)
+  const receiptCursor = routingEnabled
     ? await resolveActiveChild(options.worktree, options.slug, { git: options.git })
     : undefined;
   if (config.ok && receiptCursor !== undefined && routingEligible(receiptCursor, config.config)) {
@@ -241,6 +292,12 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
     await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
     return { kind: 'halted', detail: 'published stack refused restack repair' };
+  }
+
+  // A raw closed-child commit needs an operator landing to declare it done;
+  // routing must never silently replay it into a routed feature repair.
+  if (marker?.kind === 'absent' && config.ok && routingEligible(cursor, config.config)) {
+    return { kind: 'halted', detail: unlandedClosedChildCommitsHalt(options.slug, cursor.repairChildren).trimEnd() };
   }
 
   // Check every origin before creating a journal. runRestack repeats the

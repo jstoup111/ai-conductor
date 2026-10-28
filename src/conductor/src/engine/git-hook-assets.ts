@@ -292,6 +292,8 @@ const protectedArtifactPathCase = `    ${PROTECTED_ARTIFACT_DIRECTORIES
   .flatMap((directory) => [directory, `${directory}/*`])
   .join('|')})`;
 
+const stackCommitGuard = `${shellQuote(resolveCanonicalLauncher())} stack-commit-guard`;
+
 /**
  * pre-commit hook
  *
@@ -307,6 +309,11 @@ export const PRE_COMMIT_HOOK = [
   'if [[ "${CONDUCT_ENGINE_COMMIT:-}" == "1" ]]; then exit 0; fi',
   '',
   'WORKTREE_ROOT="$(git rev-parse --show-toplevel)"',
+  'CURRENT_BRANCH="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"',
+  'case "$CURRENT_BRANCH" in',
+  `  feat/c*/*|feat/daemon-*) CONDUCT_STACK_GUARD_PROJECT_ROOT="$WORKTREE_ROOT" ${stackCommitGuard} ;;`,
+  'esac',
+  '',
   'MARKER="$WORKTREE_ROOT/.pipeline/phase-active"',
   '[[ -f "$MARKER" ]] || exit 0',
   'PHASE="$(sed -n "s/^phase: //p" "$MARKER" | head -1)"',

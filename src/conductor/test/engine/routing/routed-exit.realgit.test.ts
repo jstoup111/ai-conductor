@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14
+// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -12,7 +12,7 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor, MAX_RESTACK_CASCADES_PER_CHILD } from '../../../src/engine/restack/cascade-cap.js';
 import { journalRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { readRevalidationQueue, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { routedRepairPhaseEvent } from '../../../src/engine/routing/routing-events.js';
 vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/routed-exit.js')>();
@@ -105,6 +105,25 @@ async function replaceRoute(subject: SweepRepository & { readonly gitRunner: Ret
   const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
   if (stored.kind !== 'record') throw new Error('fixture route is missing');
   await subject.gitRunner(['update-ref', routeRecordRefFor('demo', roundId), await blob(subject.gitRunner, change(stored.record)), stored.blob]);
+}
+
+async function declareCarryingOperatorRound(
+  subject: SweepRepository & { readonly gitRunner: ReturnType<typeof makeGitRunner> },
+  carriedTip: string,
+): Promise<void> {
+  const hostTip = (await subject.gitRunner(['rev-parse', 'feat/c1/demo'])).stdout.trim() as never;
+  const leafTip = (await subject.gitRunner(['rev-parse', 'feat/daemon-demo'])).stdout.trim() as never;
+  await replaceRoute(subject, (record) => ({
+    ...record,
+    kind: 'operator',
+    operator: {
+      origin: 'land', reason: 'carry reviewer edit', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+      carried: [{ child: childTwo, tip: carriedTip as never }],
+      otherTips: { 'feat/c2/demo': carriedTip as never, 'feat/daemon-demo': leafTip },
+      priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      declaration: { tip: hostTip, at: '2026-10-26T00:00:00.000Z' },
+    },
+  }));
 }
 
 function addOutbox(record: RouteRecord): RouteRecord {
@@ -368,11 +387,6 @@ describe('routed exit (real local Git)', () => {
   it('restacks an empty metadata commit instead of treating its matching tree as a no-commit exit', async () => {
     const subject = await fixture(false);
     await subject.gitRunner(['commit', '--allow-empty', '-qm', 'metadata only']);
-    await subject.gitRunner(['checkout', '-q', 'feat/c2/demo']);
-    await subject.gitRunner(['merge', '--no-ff', '-m', 'carry metadata', 'feat/c1/demo']);
-    await subject.gitRunner(['checkout', '-q', 'feat/daemon-demo']);
-    await subject.gitRunner(['merge', '--no-ff', '-m', 'carry child two', 'feat/c2/demo']);
-    await subject.gitRunner(['checkout', '-q', 'feat/c1/demo']);
     const recorded = recordingRunner(subject.gitRunner);
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: recorded.git })).resolves.toEqual({ kind: 'restacked' });
     const routeBlobs = updateTransactions(recorded.calls).flatMap((input) => [...input.matchAll(new RegExp(`update ${routeRecordRefFor('demo', roundId)} ([0-9a-f]{40})`, 'g'))]).map((match) => match[1]!);
@@ -454,17 +468,47 @@ describe('routed exit (real local Git)', () => {
     await expect(readFile(join(foreign.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
-  it('charges every unstamped co-origin and records both origins in the routed journal', async () => {
+  it('halts an audit exit with an uncarried unstamped child without restacking', async () => {
     const subject = await fixture(true);
     await subject.git(['checkout', '-q', 'feat/c2/demo']);
-    await subject.commit('uncommitted operator repair', 'operator.txt', 'operator\n');
+    await subject.commit('unlanded reviewer edit', 'review.txt', 'review\n');
     await subject.git(['checkout', '-q', 'feat/c1/demo']);
     const recorded = recordingRunner(subject.gitRunner);
+
+    const cursor = await resolveActiveChild(subject.repo, 'demo', { git: subject.gitRunner });
+    expect(cursor).toMatchObject({
+      kind: 'repair-pending', repairChildren: [host, childTwo],
+    });
+    expect(cursor).not.toHaveProperty('coOrigins');
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: recorded.git }))
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('unlanded closed-child commits') });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'unlanded-closed-child-commits: child 2',
+    );
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(await refExists(subject.gitRunner, journalRefFor('demo'))).toBe(false);
+    expect(updateTransactions(recorded.calls).some((input) => new RegExp(`(?:create|update) ${journalRefFor('demo')}`).test(input))).toBe(false);
+  });
+
+  it('charges each declared carried co-origin and queues it in the applied transaction', async () => {
+    const subject = await fixture(true);
+    await subject.git(['checkout', '-q', 'feat/c2/demo']);
+    const carriedTip = await subject.commit('uncommitted operator repair', 'operator.txt', 'operator\n');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await declareCarryingOperatorRound(subject, carriedTip);
+    const recorded = recordingRunner(subject.gitRunner);
+    await expect(resolveActiveChild(subject.repo, 'demo', { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'repair-pending', coOrigins: [childTwo],
+    });
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: recorded.git })).resolves.toEqual({ kind: 'restacked' });
     const journal = await createdJournal(subject, recorded.calls);
     expect(journal.originatingChildren).toEqual([1, 2]);
     const cascades = await subject.gitRunner(['cat-file', '-p', (await subject.gitRunner(['rev-parse', cascadesRefFor('demo')])).stdout.trim()]);
     expect(JSON.parse(cascades.stdout)).toMatchObject({ counts: { '1': 1, '2': 1 } });
+    await expect(readRevalidationQueue(subject.repo, 'demo', { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'queue', queue: { entries: [expect.objectContaining({ child: childTwo })] },
+    });
   });
 
   it('halts before planning when a routed origin set excludes its host', async () => {

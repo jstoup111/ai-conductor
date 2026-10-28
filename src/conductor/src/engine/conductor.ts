@@ -211,7 +211,7 @@ import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type Activ
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
-import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
+import { assertNever, emptyUnsettledReceipt, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
@@ -848,7 +848,21 @@ export class Conductor {
         return false;
       }
       const route = await readRouteRecord(this.projectRoot, slug, execution.roundId!);
-      if (route.kind !== 'record' || route.record.kind !== 'revalidate' || route.record.phase !== 'open') {
+      if (route.kind !== 'record') {
+        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
+        return false;
+      }
+      const revalidationOpen = (() => {
+        switch (route.record.kind) {
+          case 'revalidate':
+            return route.record.phase === 'open';
+          case 'audit':
+          case 'operator':
+            return false;
+        }
+        return assertNever(route.record.kind);
+      })();
+      if (!revalidationOpen) {
         await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
         return false;
       }
@@ -6813,6 +6827,7 @@ export class Conductor {
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
+      let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
         // Receipt recovery is meaningful only for a routed stack.  Keep the
         // N=1 path byte-for-byte free of route-ref probes.
@@ -6859,7 +6874,11 @@ export class Conductor {
           const cursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
           if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
             await this.activateChildRegionState(state, cursor.position, cursor.isLeaf);
-            if (getStepStatus(state, 'build') !== 'pending') {
+            routedHostEntryStep = preflight.kind === 'navigate-leaf-to-build' ? preflight.entryStep : undefined;
+            // Operator admission already restaged its recorded region gates.
+            // A generic navigate-back here would incorrectly re-pend build
+            // for a landing, whose build is deliberately left complete.
+            if (routedHostEntryStep === undefined && getStepStatus(state, 'build') !== 'pending') {
               await this.navigateStateBack(state, 'build', steps);
             }
             routedLeafBuildResume = true;
@@ -7048,6 +7067,10 @@ export class Conductor {
         }
       }
       startIndex = resolvedIndex;
+      // An operator round has already selected and restaged the host region
+      // durably.  Its admission record, not the leaf's old resume state,
+      // decides the first region gate after a restart.
+      if (routedHostEntryStep !== undefined) startIndex = indexOf(routedHostEntryStep);
     }
 
     // Do this before any per-worktree reset or sidecar load. Those helpers
@@ -10514,6 +10537,19 @@ export class Conductor {
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
+        if (step.name === 'build') {
+          const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+          if (slug) {
+            const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+            if (execution.source === 'routed-host' && execution.roundId !== undefined) {
+              const route = await readRouteRecord(this.projectRoot, slug, execution.roundId);
+              const workOrder = route.kind === 'record' && route.record.kind === 'operator'
+                ? route.record.allocation[execution.target.child]?.retryHint
+                : undefined;
+              if (workOrder && !retryHint?.includes(workOrder)) retryHint = [retryHint, workOrder].filter(Boolean).join('\n\n');
+            }
+          }
+        }
         if (step.name === 'build' && this.buildReviewAdjudicationEnabled()) {
           // Durable, not process-local: this is the clause an in-memory hint
           // alone can never satisfy (Task 18 Done-when 5).
@@ -11204,9 +11240,21 @@ export class Conductor {
               const cursor = await this.resolveActiveChild(this.projectRoot, routedClaimSlug);
               routedClaimExecution = resolveExecutionChild(cursor, routedClaimSlug);
             }
-            routedPrerequisiteClaim = routedClaimExecution?.source === 'routed-host' && routedClaimExecution.roundId !== undefined
-              ? { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId }
-              : undefined;
+            if (routedClaimExecution?.source === 'routed-host' && routedClaimExecution.roundId !== undefined && routedClaimSlug !== undefined) {
+              const route = await readRouteRecord(this.projectRoot, routedClaimSlug, routedClaimExecution.roundId);
+              if (route.kind === 'record') {
+                routedPrerequisiteClaim = (() => {
+                  switch (route.record.kind) {
+                    case 'audit':
+                      return { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
+                    case 'revalidate':
+                    case 'operator':
+                      return undefined;
+                  }
+                  return assertNever(route.record.kind);
+                })();
+              }
+            }
             result =
               missingWorktree ??
               (step.name === 'complexity'

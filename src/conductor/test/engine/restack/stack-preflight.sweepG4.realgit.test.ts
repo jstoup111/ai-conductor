@@ -534,7 +534,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
       vi.clearAllMocks();
     }
-    // (b) No durable child state: only the guarded journal probe runs.
+    // (b) No durable child state: the durable-state probe preserves the flat path.
     {
       const repo = await mkdtemp(join(tmpdir(), 'stack-preflight-sweep-flat-'));
       repositories.push(repo);
@@ -554,7 +554,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       await expect(runStackPreflight({ worktree: repo, slug: 'demo', baseRefreshDue: true, git: makeGitRunner(repo) }))
         .resolves.toEqual({ kind: 'no-stack' });
 
-      expect(recoverRestackJournal).toHaveBeenCalled();
+      expect(recoverRestackJournal).not.toHaveBeenCalled();
       expect(resolveActiveChild).not.toHaveBeenCalled();
       expect(checkCascadeCap).not.toHaveBeenCalled();
       expect(runRestack).not.toHaveBeenCalled();

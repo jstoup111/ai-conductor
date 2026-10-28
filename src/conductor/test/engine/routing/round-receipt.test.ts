@@ -1,4 +1,4 @@
-// Covers: task:60
+// Covers: task:7, task:60
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,10 +21,11 @@ vi.mock('../../../src/engine/kickback-ledger.js', async (importOriginal) => {
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { settleRoundAtDispatch } from '../../../src/engine/routing/round-receipt.js';
-import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges } from '../../../src/engine/routing/route-types.js';
+import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 
 const host = parseChildId(1)!;
 const leaf = parseChildId(2)!;
@@ -73,7 +74,59 @@ async function fixture(options: { readonly laps?: ReceiptLapCharges; readonly le
   return { root, git, firstHost: options.leafOnly ? leaf : host };
 }
 
+async function operatorFixture() {
+  const subject = await fixture({ leafOnly: true });
+  const initial = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
+  if (initial.kind !== 'record') throw new Error('missing initial operator route record');
+  if ((await admitRound(subject.root, 'demo', initial.record, subject.firstHost, { git: subject.git })).kind !== 'admitted') {
+    throw new Error('cannot admit operator route record');
+  }
+  const stored = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
+  if (stored.kind !== 'record') throw new Error('missing operator route record');
+  const tip = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+  if (!tip) throw new Error('invalid operator tip');
+  const operator: RouteRecord = {
+    ...stored.record,
+    kind: 'operator',
+    receipt: emptyUnsettledReceipt(),
+    operator: {
+      origin: 'land',
+      reason: 'reviewer requested change',
+      operator: 'operator@example.test',
+      entryStep: 'build',
+      carried: [],
+      otherTips: { 'feat/daemon-demo': tip },
+      priorRegion: {
+        statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
+        verdicts: {},
+      },
+    },
+  };
+  if ((await writeRouteRecord(subject.root, stored, operator, { git: subject.git })).kind !== 'updated') {
+    throw new Error('cannot write operator route record');
+  }
+  return subject;
+}
+
 describe('round receipt settlement', () => {
+  it('acknowledges an operator dispatch without settling or charging its empty receipt', async () => {
+    const subject = await operatorFixture();
+    try {
+      const before = await readKickbackLedger(subject.root);
+      const result = await settleRoundAtDispatch({
+        projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: subject.firstHost,
+        budgets: budgets(), routing, git: subject.git,
+      });
+
+      expect(result).toEqual({ kind: 'acknowledged' });
+      expect(result).not.toHaveProperty('settlementId');
+      expect(await readKickbackLedger(subject.root)).toEqual(before);
+      await expect(readRouteRecord(subject.root, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({
+        kind: 'record', record: { receipt: { laps: {}, growth: 0, taskless: {}, acks: {} } },
+      });
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
   it('uses the parser current host for sparse host keys before settling', async () => {
     const root = await mkdtemp(join(tmpdir(), 'round-receipt-sparse-hosts-'));
     const git = makeGitRunner(root);

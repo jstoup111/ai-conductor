@@ -88,6 +88,7 @@ import {
   dispatchDecideGrantCommand,
   detectHaltClearCommand,
   detectKickbackBudgetCommand,
+  detectStackLandCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -101,6 +102,7 @@ import {
 } from './cli.js';
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
+import { dispatchStackLandCommand } from './engine/stack-land-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
 import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
@@ -222,6 +224,10 @@ import {
   detectRoundStampCommand,
   runRoundStamp,
 } from './engine/round-stamp-cli.js';
+import {
+  detectStackCommitGuardCommand,
+  runStackCommitGuard,
+} from './engine/stack-commit-guard-cli.js';
 import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
@@ -972,6 +978,12 @@ async function dispatchCliCommand(): Promise<void> {
     return;
   }
 
+  const stackLandCmd = detectStackLandCommand(process.argv);
+  if (stackLandCmd) {
+    process.exitCode = await dispatchStackLandCommand(stackLandCmd);
+    return;
+  }
+
   const haltClearCmd = detectHaltClearCommand(process.argv);
   if (haltClearCmd) {
     process.exitCode = await dispatchHaltClearCommand(haltClearCmd);
@@ -1238,6 +1250,11 @@ async function dispatchCliCommand(): Promise<void> {
       projectRoot,
       commitMessagePath: roundStampCmd.commitMessagePath,
     }));
+  }
+
+  if (detectStackCommitGuardCommand(process.argv)) {
+    const projectRoot = process.env.CONDUCT_STACK_GUARD_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runStackCommitGuard({ projectRoot }));
   }
 
   // Evidence subcommand (`evidence judge <slug>`, Task 19) runs NON-INTERACTIVELY and exits —

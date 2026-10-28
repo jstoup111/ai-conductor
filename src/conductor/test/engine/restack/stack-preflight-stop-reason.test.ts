@@ -131,6 +131,10 @@ async function expectUnavailableHalt(
 
 async function appendBaseRefreshRepair(subject: Awaited<ReturnType<typeof fixture>>) {
   const git = (args: string[]) => execFile('git', args, { cwd: subject.repo });
+  // A raw closed-child commit under whole-feature routing is an unlanded
+  // operator edit that must be declared through `stack land`; these cases
+  // exercise the ordinary feature-repair restack path instead.
+  await writeFile(join(subject.repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
   await git(['branch', 'feat/c2/demo', 'feat/daemon-demo']);
   await git(['checkout', '-q', 'main']);
   await writeFile(join(subject.repo, 'base.txt'), 'advanced\n');
@@ -326,12 +330,10 @@ describe('stack preflight stop reasons', () => {
     expect(loopHalts).toEqual([]);
   });
 
-  it('does not create a HALT or emit loop_halt for recovered', async () => {
+  // Durable child state is established before journal recovery, so a
+  // recovered journal on a stacked feature continues to the cursor judgement.
+  it('does not create a HALT or emit loop_halt after a recovered journal', async () => {
     const subject = await fixture();
-    const git = (args: string[]) => execFile('git', args, { cwd: subject.repo });
-    await git(['update-ref', '-d', 'refs/conductor/demo/closed/c1']);
-    await git(['update-ref', '-d', 'refs/conductor/demo/positions']);
-    await git(['branch', '-D', 'feat/c1/demo']);
     vi.mocked(recoverRestackJournal)
       .mockResolvedValueOnce({ kind: 'recovered', fromState: 'ready' })
       .mockResolvedValueOnce({ kind: 'none' });
@@ -341,7 +343,7 @@ describe('stack preflight stop reasons', () => {
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'recovered' });
+    })).resolves.toEqual({ kind: 'clear' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(loopHalts).toEqual([]);
   });

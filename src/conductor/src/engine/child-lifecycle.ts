@@ -28,6 +28,13 @@ export interface ChildLifecycleTarget {
   readonly branch: string;
 }
 
+/** CLI recovery paths without an active event spine deliberately emit nothing. */
+export type ChildLifecycleEventEmitter = Pick<ConductorEventEmitter, 'emit'>;
+
+export const noOpChildLifecycleEvents: ChildLifecycleEventEmitter = {
+  async emit(): Promise<void> {},
+};
+
 /** The cursor-owned branch target needed to enter or advance a BUILD region. */
 export interface ActiveChildLifecycleTarget extends ChildLifecycleTarget {
   readonly isLeaf: boolean;
@@ -66,7 +73,7 @@ export async function startChild(
   worktree: string,
   slug: string,
   child: ChildId,
-  _emitter: ConductorEventEmitter,
+  _emitter: ChildLifecycleEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<StartChildResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
@@ -136,7 +143,7 @@ export async function startChild(
 export async function switchToChild(
   worktree: string,
   target: ChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   previous?: ChildLifecycleTarget,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
@@ -167,7 +174,7 @@ export async function enterChildRegion(
   worktree: string,
   slug: string,
   target: ActiveChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   previous?: ChildLifecycleTarget,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
@@ -212,7 +219,7 @@ export async function closeChild(
   worktree: string,
   slug: string,
   child: ChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
@@ -315,7 +322,7 @@ export async function advanceChildRegion(
   worktree: string,
   slug: string,
   completed: ActiveChildLifecycleTarget,
-  emitter: ConductorEventEmitter,
+  emitter: ChildLifecycleEventEmitter,
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);

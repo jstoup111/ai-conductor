@@ -17,6 +17,7 @@ import { readFullSuiteEvidence } from './full-suite-evidence.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
+import { readRouteRecord } from './routing/route-record-store.js';
 import { parseChildId, isRegionStep, type ChildId } from './child-context.js';
 import { readConductStateOverlay } from './conduct-state-store.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
@@ -125,6 +126,14 @@ export interface ActiveChildDashboardState {
   child: ChildId;
   total: number;
   taskIds: readonly string[];
+  /** An open operator round selected by the routed-repair cursor. */
+  operatorLanding?: OperatorLandingDashboardState;
+}
+
+/** The declaration state needed to render an operator-owned landing. */
+export interface OperatorLandingDashboardState {
+  child: ChildId;
+  awaitingDone: boolean;
 }
 
 /** A stack that cannot be projected must remain visible as a stack failure. */
@@ -458,12 +467,23 @@ async function loadDashboardWorktreeState(
   const execution = resolveExecutionChild(cursor, slug);
   if (!('target' in execution)) return flat;
   const executionChild = execution.target.child;
+  let operatorLanding: OperatorLandingDashboardState | undefined;
+  if (cursor.routedRepair !== undefined) {
+    const route = await readRouteRecord(wt, slug, cursor.routedRepair.roundId);
+    if (route.kind === 'record' && route.record.kind === 'operator' && route.record.phase === 'open') {
+      operatorLanding = {
+        child: cursor.routedRepair.child,
+        awaitingDone: route.record.operator?.declaration === undefined,
+      };
+    }
+  }
   const activeChild = {
     child: executionChild,
     total: positions.length,
     taskIds: Object.entries(topology.sliceMembership.taskSlices)
       .filter(([, position]) => position === executionChild)
       .map(([taskId]) => taskId),
+    ...(operatorLanding === undefined ? {} : { operatorLanding }),
   };
   const overlay = await readConductStateOverlay(wt, executionChild);
   if (overlay.ok) return { present: true, state: overlay.value, activeChild };
@@ -989,7 +1009,11 @@ function prSuffix(prUrl?: string): string {
 function activeChildSuffix(entry: { activeChild?: ActiveChildDashboardState; stackTopology?: StackTopologyDashboardState }): string {
   if (entry.activeChild) {
     const tasks = entry.activeChild.taskIds.length === 0 ? '' : `; tasks ${entry.activeChild.taskIds.join(', ')}`;
-    return ` (child ${entry.activeChild.child}/${entry.activeChild.total}${tasks})`;
+    const landing = entry.activeChild.operatorLanding;
+    const operatorLanding = landing === undefined
+      ? ''
+      : `; operator landing open on child ${landing.child}${landing.awaitingDone ? '; awaiting --done' : ''}`;
+    return ` (child ${entry.activeChild.child}/${entry.activeChild.total}${tasks}${operatorLanding})`;
   }
   return entry.stackTopology ? ` (stack unavailable: ${entry.stackTopology.cause})` : '';
 }

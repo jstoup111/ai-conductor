@@ -1,8 +1,8 @@
-// Covers: task:48
+// Covers: task:7, task:16, task:48
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
@@ -17,6 +17,7 @@ import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import type { RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { seedTaskStatus } from '../../../src/engine/task-seed.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -61,7 +62,7 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
     acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
   }));
   const created = await createRouteRecord(repo, 'demo', {
-    roundId, ...(kind === 'audit' ? { kind, sealedAuthored: 1 } : { kind }),
+    roundId, ...(kind === 'revalidate' ? { kind } : { kind, sealedAuthored: 1 }),
     items: [{ findingId: 'finding', kind, owner: child, host: child, reason: 'task-slice', fallback: [] }],
     allocation: { [child]: {
       remTaskIds: ['rem-prd-audit-T1'],
@@ -443,5 +444,64 @@ describe('routed host region entry (real local Git)', () => {
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { hosts: { 1: 'repairing' } },
     });
+  });
+
+  // Covers: task:16
+  it('refuses an undeclared operator landing before it mutates the host region', async () => {
+    const subject = await fixture();
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing route record');
+    const tip = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    if (!tip) throw new Error('invalid operator tip');
+    const operator: RouteRecord = {
+      ...stored.record,
+      kind: 'operator',
+      operator: {
+        origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/daemon-demo': tip },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      },
+    };
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: operator }]))
+      .resolves.toEqual({ kind: 'updated' });
+
+    await expect(entered(subject)).resolves.toMatchObject({
+      kind: 'refused', detail: 'operator-round-undeclared: landing r1 on child 1 is awaiting ai-conductor stack land --done or ai-conductor stack land --abandon',
+    });
+    const afterRefusal = await readRouteRecord(subject.repo, 'demo', roundId);
+    expect(afterRefusal).toMatchObject({ kind: 'record', record: { hosts: { 1: 'admitted' } } });
+    if (afterRefusal.kind !== 'record') throw new Error('missing route record after refusal');
+    expect(afterRefusal.record.entry).toBeUndefined();
+    await expect(subject.git(['symbolic-ref', '--short', 'HEAD'])).resolves.toMatchObject({ stdout: 'feat/daemon-demo' });
+  });
+
+  it('enters a declared operator host without the build-completion or route-into-no-op guards', async () => {
+    const subject = await fixture();
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing route record');
+    const tip = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    if (!tip) throw new Error('invalid operator tip');
+    const operator: RouteRecord = {
+      ...stored.record,
+      kind: 'operator',
+      operator: {
+        origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/daemon-demo': tip },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+        declaration: { tip, at: '2026-10-25T00:00:00.000Z' },
+      },
+    };
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: operator }]))
+      .resolves.toEqual({ kind: 'updated' });
+    const checkCompletion = vi.fn(async () => ({ done: true }));
+
+    await expect(enterHostRegion({
+      worktree: subject.repo, slug: 'demo', roundId, host: child,
+      emitter: new ConductorEventEmitter(), git: subject.git, planPath, checkCompletion,
+    })).resolves.toMatchObject({ kind: 'entered', pinnedBase: subject.closure });
+
+    expect(checkCompletion).not.toHaveBeenCalled();
+    await expect(readFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8').then(JSON.parse))
+      .resolves.toMatchObject({ acceptance_specs: 'pending', build: 'done', test_suite: 'pending', build_review: 'pending' });
   });
 });

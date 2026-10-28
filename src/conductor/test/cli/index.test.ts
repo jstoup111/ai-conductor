@@ -49,6 +49,7 @@ const HIDDEN_PRE_DISPATCH_COMMANDS = [
   'scope-check',
   'task-membership-check',
   'round-stamp',
+  'stack-commit-guard',
 ] as const;
 
 const VISIBLE_PRE_DISPATCH_COMMANDS = [
@@ -81,6 +82,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'build-auth-status',
   'halt-issues',
   'plan-protected-targets',
+  'stack',
   'monitor',
   'daemon',
 ] as const;

@@ -1546,13 +1546,59 @@ the corrective restoration also failed and needs operator attention.
 
 With `--child <k>`, `--to` must be a child-region step: `acceptance_specs`, `build`, `test_suite`, or
 `build_review`; any other target exits 1. The target must be earlier than child `k`'s own `last_step`.
-The command demotes child `k`'s region from the target, then the region steps of every existing child
-above `k` in ascending order, then every later whole-feature step in the flat state. It then clears
-those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
-`Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
-An explicit `--child <k>` naming a closed child other than the execution child exits 1 with
-`child <k> is closed and cannot be rewound (#3203)`. To change a closed child, commit to its branch and let the next
-[restack](configuration.md#restack) carry the change upward.
+For an open child, the command demotes child `k`'s region from the target, then the region steps of
+every existing child above `k` in ascending order, then every later whole-feature step in the flat
+state. It then clears those verdicts and the halt markers, emits `operator_rewind` with a `child`
+field, and prints `Rewound child <k> to <step>.` A failure restores every changed store and leaves
+the halt in place.
+
+### Closed-child landing and rewind
+
+Do not commit directly to a closed child's branch or rely on a later restack to carry that commit.
+First identify the affected path's stack owner with one of these read-only commands; each prints JSON
+with the matching children, their positions, branch names, and slice titles:
+
+```bash
+ai-conductor stack owners --slug <slug> --path <path> [--path <path> ...]
+ai-conductor stack owners --slug <slug> --diff <git-range>
+```
+
+Open a landing on the lowest closed child that owns the change. If a closed child above that host
+already has post-closure commits that must travel with the landing, name each one with `--carry`:
+
+```bash
+ai-conductor stack land --slug <slug> --child <k> [--carry <j> ...] --reason "<why>"
+```
+
+The command prepares the host branch for the operator change and parks the feature. It acquires the
+feature dispatch lease for its mutation; a live or unreadable lease owner is refused. Its park is
+token-owned: `--done` or `--abandon` removes it only when this landing created that exact park, so an
+earlier or later operator park remains in force. Commit the reviewer change on the prepared host
+branch, then declare it from that clean branch:
+
+```bash
+ai-conductor stack land --slug <slug> --done
+```
+
+Declaration records the change and lets the daemon re-validate the host from `acceptance_specs`. To
+discard an open landing instead, run:
+
+```bash
+ai-conductor stack land --slug <slug> --abandon
+```
+
+It restores the host through its recorded recovery stages. `stack land`, `--done`, and `--abandon`
+each acquire the feature dispatch lease while they mutate the feature.
+
+To rewind a closed child, use the declared operator-round form rather than the open-child rewind:
+
+```bash
+ai-conductor rewind --to <step> --child <k> --reason "<why>"
+```
+
+For a closed child, `<step>` must be `acceptance_specs`, `build`, `test_suite`, or `build_review`.
+The command requires the live halt and opens a declared round on the closed host at that step; the
+daemon then resumes the host through the routed exit. `--done` is for `stack land` rounds only.
 See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`
