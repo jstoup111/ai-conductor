@@ -324,17 +324,19 @@ describe('Conductor routed acceptance verify-green path', () => {
     expect(await readFile(join(root, '.pipeline', 'HALT'), 'utf8')).toBe(restackHalt);
   });
 
-  it('turns an in-loop stalled routed continuation into a mechanical HALT and routing-stall event', async () => {
+  it.each([
+    ['a healthy', () => {}],
+    ['a failing', () => { throw new Error('forwarder unavailable'); }],
+  ])('turns an in-loop stalled routed continuation into a mechanical HALT and durable routing-stall event with %s non-ledger listener', async (_label, listener) => {
     const { root } = await routedFixture();
     await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
       acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
     }));
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
-    const observed: unknown[] = [];
-    events.on('routing_rounds_stalled', (event) => {
-      observed.push(event);
-    });
+    // Daemon executors forward every event over IPC; only the ledger write
+    // decides whether the stall is recorded and therefore retryable.
+    events.on('routing_rounds_stalled', listener);
     mocks.routedExitContinuation = async () => ({
       kind: 'continued',
       next: {
@@ -363,7 +365,10 @@ describe('Conductor routed acceptance verify-green path', () => {
 
       await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
       await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routing rounds stalled: r1 (1: pending)');
-      expect(observed).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
+      const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+      expect(ledger.filter((event) => event.type === 'routing_rounds_stalled')).toEqual([
+        expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 }),
+      ]);
     } finally {
       persister.stop();
     }

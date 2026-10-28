@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChildId } from '../child-context.js';
 import { ConductorEventEmitter } from '../conductor-event-emitter.js';
-import { emitOnActiveEventSpineOrThrow, FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
+import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
 import { makeGitRunner } from '../rebase.js';
 import { operatorRoundEvent, remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
 import {
@@ -196,7 +196,9 @@ export async function recordRoundStall(
     .join('; ');
   const detail = `routing rounds stalled: ${rendered}; ${stall.detail}`;
   try {
-    await emitOnActiveEventSpineOrThrow(events, { type: 'routing_rounds_stalled', rounds, detail, attempt });
+    // Only the ledger write decides retryability; an unrelated listener's
+    // failure must not turn a recorded stall into a needs-human halt.
+    await persistOnActiveEventSpine(events, { type: 'routing_rounds_stalled', rounds, detail, attempt });
   } catch {
     // A retryable halt without its attempt in the event spine could retry
     // forever, so leave the class unset for the caller's needs-human halt.

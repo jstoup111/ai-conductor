@@ -299,21 +299,6 @@ export async function persistOnActiveEventSpine(
   return persister.persistDurably(event);
 }
 
-/**
- * Emit through the active event spine while preserving persistence failures.
- * The active-owner check keeps a missing ledger from looking like successful
- * best-effort delivery, while `emitOrThrow` still notifies other listeners.
- */
-export async function emitOnActiveEventSpineOrThrow(
-  events: ConductorEventEmitter,
-  event: ConductorEvent,
-): Promise<void> {
-  if (activePersisters.get(events) === undefined) {
-    throw new EventPersistError('<active event spine>', new Error('no active event persister'));
-  }
-  await events.emitOrThrow(event);
-}
-
 function readCanonicalEvents(filePath: string): string | undefined {
   if (!existsSync(filePath) || !statSync(filePath).isFile()) return undefined;
   return readFileSync(filePath, 'utf8');
