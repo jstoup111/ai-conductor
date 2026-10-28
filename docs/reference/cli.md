@@ -533,6 +533,12 @@ never rewrites the ledger.
 When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
 and the budget lines still print.
 
+A stacked feature with an active child also prints `RESTACK CASCADES [<slug>]: <allowance>; <children>`.
+`<allowance>` is the [restack cascade allowance](configuration.md#restack) phrase, for example
+`tier L allowance 8 (default)`; `<children>` is `none charged` or
+`child <k> <consumed>/<limit>[ (raised)], ...`. An unreadable cascade ref prints
+`RESTACK CASCADES [<slug>]: unavailable (<error>)`.
+
 Each in-progress feature also prints one `KICKBACK BUDGET [<slug>]:` line for `prd_audit` and one for
 `architecture_review_as_built`, even before any halt. Each line is the
 [`kickback-budget inspect`](#ai-conductor-kickback-budget) human view joined with ` | `, prefixed with
@@ -1392,6 +1398,14 @@ plan-growth `raise --by` that lets `build` settle the repair. Without a resolved
 `planGrowth.pendingGrowth: { total, byGate, projected, minimumRaise? }`. A pending repair that charges
 laps but no growth adds neither.
 
+With `--child`, inspect also prints a restack cascade summary headed
+`Restack cascades — tier <T> allowance <n> (<default|configured>)`, then one
+`child <k>: <consumed>/<limit> consumed; <remaining> remaining` line per charged or raised child
+(suffixed ` (raised)` for a raised limit), or `none charged`. JSON adds
+`restackCascades: { tier, allowance, source, children: [{ child, consumed, limit, remaining, raised }] }`.
+An unreadable `refs/conductor/<slug>/cascades` prints `Restack cascades: unavailable (<error>)`, adds
+`restackCascades: { unavailable }` to JSON, and exits 1.
+
 Inspect reports each gate's resume authorization against the live halt generation. Human output
 prints one `Resume authorization:` line per gate:
 
@@ -1436,7 +1450,8 @@ authorization to, child `k`'s ledger; the feature-wide gates always use the flat
 `--child <k>`, where `k` is the originating child the halt names. The live halt must be
 `needs-human` and its cap evidence must name the same originating child; otherwise the command
 exits 1 and changes nothing. The cap evidence is read from the active child's ledger, and the
-originating child's count and limit (default 3) from `refs/conductor/<slug>/cascades`, so the
+originating child's count and limit (its raised limit, else the feature's
+[cascade allowance](configuration.md#restack)) from `refs/conductor/<slug>/cascades`, so the
 originating child needs no child state directory. `raise` raises that child's cascade limit by
 `--by`; `reset` returns its count to zero.
 

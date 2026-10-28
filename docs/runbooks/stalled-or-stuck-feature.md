@@ -1286,7 +1286,7 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 
 | Reason | Meaning |
 | --- | --- |
-| `cascade-cap` | The named originating child already caused its allowed feature repairs (default 3). |
+| `cascade-cap` | The named originating child already caused its allowed feature repairs (its [tier allowance](../reference/configuration.md#restack); default `S`/`M` 3, `L` 8). |
 | `closed-child-rewritten` | A closed child's branch no longer contains its closure tip. |
 | `range-not-ancestor` | A closure tip is not an ancestor of the named next child's branch. |
 | `dirty-overlap` | Uncommitted tracked changes overlap paths the restack would rewrite. |
