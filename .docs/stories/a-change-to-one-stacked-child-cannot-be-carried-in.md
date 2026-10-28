@@ -400,6 +400,8 @@ so that a repair loop halts with the child named instead of churning indefinitel
 - Given cap evidence for child 1, when `kickback-budget raise --gate restack --child 2` runs, then it is refused, and the ref is unchanged.
 - Given the CLI's update to `cascades` loses a race with a concurrent write, when it ends, then it has failed, no resume authorization is staged, and the concurrent write is kept.
 - Given repairs originate from child 1 and child 2 alternately, when counts are read, then each child's count reflects only the restacks it originated, and the leaf's count is 0.
+- Given the operator raised child 1's cascade limit from 3 to 4 and child 2 then originates its third cascade, when the next repair is due, then it halts naming child 2 at 3/3, and the HALT's `Kickback budget (restack)` line reads `3/3 consumed; 0 remaining`, because a raise never changes another originating child's limit (#3475).
+- Given that child 2 cascade-cap halt, when the operator runs `kickback-budget raise --gate restack --child 2 --by 1`, then it is accepted, `refs/conductor/demo/cascades` holds limit 4 for both child 1 and child 2, and the printed budget reads `3/4 consumed; 1 remaining`; the restack limit is read from the cap evidence and the `cascades` ref, never from a limit shared on the active child's ledger entry (#3475).
 
 ### Done When
 - [ ] The bound is 3, charged to the originating child, and checked before any journal exists.
