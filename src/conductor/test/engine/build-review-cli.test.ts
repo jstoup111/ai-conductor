@@ -166,7 +166,7 @@ describe('build-review findings CLI', () => {
     const createCaseStore = vi.fn((_worktree: string, _feature: unknown, child?: ChildId) => ({
       read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: child === 2 ? [childCase] : [{ ...childCase, id: 'C0' }] } }),
     }));
-    const readKickbackGateEntry = vi.fn(async () => ({
+    const readKickbackGateEntry = vi.fn(async (_worktree: string, _child?: ChildId) => ({
       mechanicalFaults: 1,
       lastMechanicalFault: { rubric: 'testQuality' as const, reason: 'malformed-artifact' as const, detail: 'child fault', lapId: 'lap-child-2' },
     }));
@@ -1242,7 +1242,7 @@ describe('build-review accept', () => {
     it('accepts a current flat test-quality finding through the real disposition store and reports it accepted', async () => {
     const print = vi.fn();
     const appendEvent = vi.fn();
-    const readAggregate = vi.fn(async () => JSON.stringify(testQualityAggregate));
+    const readAggregate = vi.fn(async (_path: string) => JSON.stringify(testQualityAggregate));
     const request = { kind: 'accept' as const, feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' };
     expect(request).not.toHaveProperty('child');
 
