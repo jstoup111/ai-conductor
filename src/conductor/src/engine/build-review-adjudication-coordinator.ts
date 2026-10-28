@@ -24,7 +24,7 @@ import { projectBuildReviewAggregateSources, type BuildReviewAggregate, type Bui
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
-import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { bindableDispositions, classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
 import { buildReviewProvenanceCandidates, type BuildReviewFindingHunkTarget, type BuildReviewProvenanceArtifact } from './build-review-review-frontier.js';
@@ -305,9 +305,18 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
 
 function describeInvalidRemediationJudgement(
   reason: string,
-  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] },
+  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] }
+    | { readonly bindings: readonly { readonly existingCaseId: string; readonly disposition: string; readonly bindableDispositions: readonly string[] }[] },
 ): string {
-  if (reason !== 'unknown-admission-task' || rejection === undefined) {
+  if (reason === 'inadmissible-case-binding' && rejection !== undefined && 'bindings' in rejection) {
+    const bindings = rejection.bindings.map((binding) =>
+      `case ${binding.existingCaseId} bound as ${binding.disposition}; bindable: ${binding.bindableDispositions.join(', ')}`,
+    );
+    return bindings.length === 0
+      ? `invalid remediation judgement ${reason}`
+      : `invalid remediation judgement ${reason} (${bindings.join('; ')})`;
+  }
+  if (reason !== 'unknown-admission-task' || rejection === undefined || !('indexOnlyTaskIds' in rejection)) {
     return `invalid remediation judgement ${reason}`;
   }
   const details = [
@@ -953,31 +962,53 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     retainScopeEmptySources(new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId)));
-  const freshContext = assembleBuildReviewAdjudicationContext({
+  // Each adjudication round must carry this exact shared projection. Only the
+  // admitted expansion task bodies and binding correction change by round.
+  const dispatchContextInput = {
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
+    taskStatus, attemptedCaseIds,
     priorFindingDigests: input.priorFindingDigests,
+  };
+  const buildDispatchContext = async ({
+    expansionTaskIds = [],
+    bindingCorrections,
+  }: {
+    readonly expansionTaskIds?: readonly string[];
+    readonly bindingCorrections?: Parameters<typeof assembleBuildReviewAdjudicationContext>[0]['bindingCorrections'];
+  } = {}) => assembleBuildReviewAdjudicationContext({
+    ...dispatchContextInput,
+    planContract: await scopedPlanContract(
+      input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds,
+    ),
+    ...(bindingCorrections === undefined ? {} : { bindingCorrections }),
   });
+  const freshContext = await buildDispatchContext();
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   let dispatchContext = freshContext.context;
   let expansionTaskIds: readonly string[] | undefined;
+  let bindingCorrections: Parameters<typeof assembleBuildReviewAdjudicationContext>[0]['bindingCorrections'];
   let accepted: {
     readonly judgement: RemediationCaseJudgement;
     readonly validation: { readonly ok: true; readonly graph: RemediationCaseGraph };
     readonly provenanceCandidatesByCaseRef: ReadonlyMap<string, readonly RemediationCaseRecord[]>;
   } | undefined;
-  for (let round = 0; round < 2; round += 1) {
+  let dispatchPurpose: 'initial' | 'expansion' | 'correction' = 'initial';
+  for (let round = 0; round < 3; round += 1) {
     await input.emit?.({
       type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId,
       ...(expansionTaskIds === undefined ? {} : { expansionTaskIds }),
+      ...(bindingCorrections === undefined ? {} : {
+        bindingCorrectionCaseIds: [...new Set(bindingCorrections.map((correction) => correction.existingCaseId))]
+          .sort((left, right) => left.localeCompare(right)),
+      }),
     });
     let judgement: RemediationCaseJudgement;
     try {
       judgement = await input.judge(dispatchContext);
     } catch (error) {
       const detail = error instanceof RemediateDispatchError
-        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${round === 1 ? ' (expansion round)' : ''}`
+        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${dispatchPurpose === 'initial' ? '' : ` (${dispatchPurpose} round)`}`
         : `remediate judgement failed: ${error instanceof Error ? error.message : String(error)}`;
       return failUnlessAccepted(detail, { settleAbsentAttempted: true });
     }
@@ -1013,6 +1044,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       )),
       declaredSeverityThresholds: input.declaredSeverityThresholds,
       allowedDistinctFromCaseIdsByCaseRef,
+      bindableDispositionsByCaseId: Object.fromEntries(prior.state.cases.map((record) => [
+        record.id,
+        bindableDispositions(record, attempted, carryInput),
+      ])),
     };
     const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, validationReferences);
     if (graph.ok) {
@@ -1022,21 +1057,28 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const classification = dispatchContext.mode === 'case-v2' && graph.reason === 'unknown-admission-task'
       ? classifyIndexOnlyAdmission(dispatchSourceIds, judgement, validationReferences, graph)
       : undefined;
-    if (round === 0 && classification?.kind === 'index-only') {
+    // Expansion is only a retry of the original judgement. Once a binding
+    // correction has been issued, its correction context is authoritative and
+    // an index-only response must fail closed instead of replacing it.
+    if (bindingCorrections === undefined && expansionTaskIds === undefined && classification?.kind === 'index-only') {
       expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
-      const expandedContext = assembleBuildReviewAdjudicationContext({
-        aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-        operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-        planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
-        priorFindingDigests: input.priorFindingDigests,
-      });
+      const expandedContext = await buildDispatchContext({ expansionTaskIds });
       if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = expandedContext.context;
+      dispatchPurpose = 'expansion';
+      continue;
+    }
+    if (bindingCorrections === undefined && graph.reason === 'inadmissible-case-binding') {
+      bindingCorrections = graph.bindings;
+      const correctedContext = await buildDispatchContext({ expansionTaskIds, bindingCorrections });
+      if (!correctedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(correctedContext.stop)}`, { settleAbsentAttempted: true });
+      dispatchContext = correctedContext.context;
+      dispatchPurpose = 'correction';
       continue;
     }
     return failUnlessAccepted(describeInvalidRemediationJudgement(
       classification?.kind === 'other' ? classification.reason : graph.reason,
-      graph.reason === 'unknown-admission-task' ? graph : undefined,
+      graph.reason === 'unknown-admission-task' || graph.reason === 'inadmissible-case-binding' ? graph : undefined,
     ), { settleAbsentAttempted: true });
   }
   if (!accepted) return failUnlessAccepted('invalid remediation judgement unknown-admission-task', { settleAbsentAttempted: true });

@@ -92,6 +92,33 @@ export interface RemediationCaseCarryInput {
   readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
 }
 
+export type BindableRemediationCaseDisposition = Exclude<RemediationCaseRow['disposition'], 'escalate'>;
+
+const ALL_BINDABLE_DISPOSITIONS = ['act', 'advisory', 'defer', 'refute', 'reject'] as const satisfies readonly BindableRemediationCaseDisposition[];
+
+/**
+ * The engine-owned transition vocabulary for a binding to durable case state.
+ * Escalations remain an unbound decision-stop lane, so they are intentionally
+ * absent from the reviewer-visible binding contract.
+ */
+export function bindableDispositions(
+  record: RemediationCaseRecord,
+  attemptedCaseIds: ReadonlySet<string>,
+  carryInput?: RemediationCaseCarryInput,
+): readonly BindableRemediationCaseDisposition[] {
+  if (carryInput && isCarryEligibleRemediationCase(record, carryInput)) return ALL_BINDABLE_DISPOSITIONS;
+  if (record.disposition !== 'act') {
+    return record.disposition === 'escalate' ? [] : [record.disposition];
+  }
+
+  const bindable: BindableRemediationCaseDisposition[] = ['act'];
+  if (record.effect.kind === 'action' && record.effect.status === 'applied') {
+    bindable.push('defer');
+    if (record.resolution === 'open' && attemptedCaseIds.has(record.id)) bindable.push('refute');
+  }
+  return bindable;
+}
+
 /** A durable operator decision carries only after its origin remains effective in a later lap. */
 export function isCarryEligibleRemediationCase(
   record: RemediationCaseRecord,
@@ -341,6 +368,9 @@ function reconcileState(
     let admitsDeferral = false;
     let admitsActionRetry = false;
     if (!admitsCarry) {
+      if (caseRow.disposition !== 'escalate' && !bindableDispositions(existing, attemptedIds).includes(caseRow.disposition)) {
+        return { ok: false, reason: 'illegal-disposition-transition' };
+      }
       admitsRefutation = caseRow.disposition === 'refute'
         && existing.disposition === 'act'
         && existing.resolution === 'open'
@@ -366,7 +396,6 @@ function reconcileState(
         && existing.effect.kind === 'action'
         && existing.effect.status === 'failed';
       if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-      if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
     }
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);

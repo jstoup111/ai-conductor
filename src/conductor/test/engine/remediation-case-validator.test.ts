@@ -1,5 +1,9 @@
-// Covers: task:1, task:2, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3, task:rem-prd-audit-r18-4, task:rem-as-built-r18-5
-import { describe, expect, it } from 'vitest';
+// Covers: task:1, task:2, task:3, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3, task:rem-prd-audit-r18-4, task:rem-as-built-r18-5
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   classifyIndexOnlyAdmission,
@@ -10,6 +14,8 @@ import {
 import * as buildReviewAdjudication from '../../src/engine/build-review-adjudication.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import type { BuildReviewSeverity } from '../../src/engine/build-review-domain.js';
+import { bindableDispositions, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import { RemediationCaseStore, type RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import {
   assembleBuildReviewAdjudicationContext,
   buildReviewAdjudicationSourceId,
@@ -21,6 +27,15 @@ const CURRENT_SOURCE_IDS = [
   'testQuality:finding-3',
   'testQuality:finding-4',
 ] as const;
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
+    recursive: true,
+    force: true,
+  })));
+});
 
 function expectUnknownAdmissionTaskRejection(
   result: ReturnType<typeof validateRemediationCaseGraph>,
@@ -206,7 +221,211 @@ function advisoryReferences(
   };
 }
 
+const CASE_BINDING_SOURCE = 'testQuality:F2';
+const CASE_BINDING_RECORDED_AT = '2026-10-28T00:00:00.000Z';
+const CASE_BINDING_REFUTATION = {
+  claim: 'The attempted action is absent from the current tree.',
+  assertions: [{
+    assertion: 'The current tree omits the attempted action.',
+    verdict: 'refuted' as const,
+    evidence: [{ path: 'test/current.test.ts', excerpt: 'omits the attempted action' }],
+  }],
+} as const;
+
+function durableActionCase(id: string, effectStatus: 'applied' | 'reserved' = 'applied'): RemediationCaseRecord {
+  return {
+    id,
+    domain: 'build_review',
+    disposition: 'act',
+    priority: 'high',
+    rationale: 'The existing action remains recorded.',
+    confidence: 'high',
+    resolution: 'open',
+    sources: [{ sourceId: `prior:${id}`, outcome: 'acted', recordedAt: CASE_BINDING_RECORDED_AT }],
+    effect: effectStatus === 'applied'
+      ? { id: `effect:${id}`, kind: 'action', status: 'applied', workOrderId: `order:${id}` }
+      : { id: `effect:${id}`, kind: 'action', status: 'reserved' },
+  };
+}
+
+function boundJudgement(
+  caseId: string,
+  disposition: 'act' | 'defer' | 'reject' | 'refute' | 'advisory',
+): RemediationCaseJudgement {
+  const outcome = disposition === 'act' ? 'acted'
+    : disposition === 'defer' ? 'deferred'
+      : disposition === 'reject' ? 'rejected'
+        : disposition === 'refute' ? 'refuted'
+          : 'advisory';
+  const effect = disposition === 'act'
+    ? { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the validated case binding.' }] }
+    : disposition === 'defer'
+      ? { kind: 'deferral' as const, title: 'Deferred binding', body: 'Deferred.', exclusionRationale: 'Outside the plan.' }
+      : { kind: 'none' as const };
+  return {
+    mode: 'case-v1',
+    domain: 'build_review',
+    sourceOutcomes: [{ sourceId: CASE_BINDING_SOURCE, outcome, caseRef: `row:${caseId}:${disposition}` }],
+    cases: [{
+      caseRef: `row:${caseId}:${disposition}`,
+      existingCaseId: caseId,
+      disposition,
+      priority: 'medium',
+      rationale: 'The case disposition is admitted by the engine-provided transition set.',
+      confidence: 'high',
+      effect,
+      ...(disposition === 'refute' ? { refutation: CASE_BINDING_REFUTATION } : {}),
+      ...(disposition === 'advisory' ? { adjudicatedSeverity: 'minor' as const } : {}),
+    }],
+  } as RemediationCaseJudgement;
+}
+
 describe('remediation case graph validator', () => {
+  // Covers: S3.2, task:3
+  it('rejects an existing-case binding outside the engine-provided disposition set', () => {
+    const judgement = {
+      ...VALID_JUDGEMENT,
+      cases: [...VALID_JUDGEMENT.cases.slice(0, 2), {
+        ...VALID_JUDGEMENT.cases[2],
+        existingCaseId: 'case-A',
+      }],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement, {
+      bindableDispositionsByCaseId: { 'case-A': ['act', 'defer', 'refute'] },
+    })).toEqual({
+      ok: false,
+      reason: 'inadmissible-case-binding',
+      bindings: [{
+        caseRef: 'case-c',
+        existingCaseId: 'case-A',
+        disposition: 'reject',
+        bindableDispositions: ['act', 'defer', 'refute'],
+      }],
+    });
+  });
+
+  // Covers: S3.2, task:3
+  it('keeps missing source rejection ahead of inadmissible existing-case bindings', () => {
+    const judgement = {
+      ...VALID_JUDGEMENT,
+      sourceOutcomes: VALID_JUDGEMENT.sourceOutcomes.slice(0, 3),
+      cases: [...VALID_JUDGEMENT.cases.slice(0, 2), {
+        ...VALID_JUDGEMENT.cases[2],
+        existingCaseId: 'case-A',
+      }],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement, {
+      bindableDispositionsByCaseId: { 'case-A': ['act', 'defer', 'refute'] },
+    })).toEqual({ ok: false, reason: 'missing-source' });
+  });
+
+  // Covers: S3.2, task:3
+  it('does not apply existing-case binding admission to an escalation row', () => {
+    const judgement = {
+      ...VALID_CASE_V2_JUDGEMENT,
+      sourceOutcomes: [...VALID_CASE_V2_JUDGEMENT.sourceOutcomes.slice(0, 3), {
+        ...VALID_CASE_V2_JUDGEMENT.sourceOutcomes[3],
+        outcome: 'escalate',
+      }],
+      cases: [...VALID_CASE_V2_JUDGEMENT.cases.slice(0, 2), {
+        ...VALID_CASE_V2_JUDGEMENT.cases[2],
+        existingCaseId: 'case-A',
+        disposition: 'escalate',
+        escalation: { owner: 'architecture' },
+        effect: { kind: 'none' },
+      }],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement, {
+      ...CASE_V2_ADMISSION,
+      existingCaseIds: ['existing-case-1', 'case-A'],
+      bindableDispositionsByCaseId: { 'case-A': ['act'] },
+    })).not.toMatchObject({ ok: false, reason: 'inadmissible-case-binding' });
+  });
+
+  // Covers: S3.2, task:3
+  it('does not apply existing-case binding admission to an unmapped existing id', () => {
+    const judgement = {
+      ...VALID_JUDGEMENT,
+      cases: [...VALID_JUDGEMENT.cases.slice(0, 2), {
+        ...VALID_JUDGEMENT.cases[2],
+        existingCaseId: 'case-unmapped',
+      }],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement, {
+      bindableDispositionsByCaseId: { 'case-A': ['act'] },
+    })).not.toMatchObject({ ok: false, reason: 'inadmissible-case-binding' });
+  });
+
+  // Covers: S3.2, task:3
+  it('admits every bindable disposition that reconciliation can apply without an illegal transition', async () => {
+    const attemptedCaseIds = new Set(['case-A']);
+    const carryInput = {
+      currentLapId: 'lap-current',
+      effectiveAcceptedSourceIds: new Set(['prior:case-C']),
+    };
+    const cases: readonly RemediationCaseRecord[] = [
+      durableActionCase('case-A'),
+      durableActionCase('case-U'),
+      durableActionCase('case-R', 'reserved'),
+      {
+        id: 'case-J', domain: 'build_review', disposition: 'reject', priority: 'medium',
+        rationale: 'The finding remains rejected.', confidence: 'high', resolution: 'resolved',
+        sources: [{ sourceId: 'prior:case-J', outcome: 'rejected', recordedAt: CASE_BINDING_RECORDED_AT }],
+        effect: { kind: 'none' },
+      },
+      {
+        id: 'case-F', domain: 'build_review', disposition: 'refute', priority: 'medium',
+        rationale: 'The finding remains refuted.', confidence: 'high', resolution: 'resolved',
+        sources: [{ sourceId: 'prior:case-F', outcome: 'refuted', recordedAt: CASE_BINDING_RECORDED_AT }],
+        effect: { kind: 'none' }, refutation: CASE_BINDING_REFUTATION,
+      },
+      {
+        ...durableActionCase('case-C'),
+        resolution: 'resolved',
+        operatorAcceptance: { origins: [{ sourceId: 'prior:case-C', lapId: 'lap-prior' }] },
+      },
+    ];
+    const bindableDispositionsByCaseId = Object.fromEntries(cases.map((record) => [
+      record.id,
+      bindableDispositions(record, attemptedCaseIds, record.id === 'case-C' ? carryInput : undefined),
+    ]));
+
+    for (const record of cases) {
+      for (const disposition of bindableDispositionsByCaseId[record.id]!) {
+        const judgement = boundJudgement(record.id, disposition);
+        const validation = validateRemediationCaseGraph([CASE_BINDING_SOURCE], judgement, {
+          bindableDispositionsByCaseId,
+          sourceRubrics: { [CASE_BINDING_SOURCE]: 'testQuality' },
+          sourceReviewerSeverities: { [CASE_BINDING_SOURCE]: 'major' },
+          declaredSeverityThresholds: { testQuality: 'major' },
+        });
+        expect(validation.ok).toBe(true);
+        if (!validation.ok) continue;
+
+        const projectRoot = await mkdtemp(join(tmpdir(), 'remediation-case-validator-'));
+        temporaryDirectories.push(projectRoot);
+        const store = new RemediationCaseStore(projectRoot, {
+          version: 'v1', repository: 'acme/conductor', feature: 'validator-binding-compatibility',
+        });
+        await store.mutate(async (state) => ({ value: undefined, nextState: { ...state, cases: [record] } }));
+        const caseRef = judgement.cases[0]!.caseRef;
+        const result = await reconcileRemediationCases(store, {
+          graph: validation.graph,
+          recordedAt: CASE_BINDING_RECORDED_AT,
+          generateId: () => 'unused-id',
+          attemptedCaseIds: [...attemptedCaseIds],
+          ...(record.id === 'case-C' ? { carry: { caseRefs: [caseRef], lapId: carryInput.currentLapId } } : {}),
+        });
+
+        expect(result).not.toMatchObject({ ok: false, reason: 'illegal-disposition-transition' });
+      }
+    }
+  });
+
   it.each([
     ['case-v1', advisoryJudgement('case-v1')],
     ['case-v2', advisoryJudgement('case-v2')],

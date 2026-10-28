@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  bindableDispositions,
   classifyRemediationCaseReuse,
   isCarryEligibleRemediationCase,
   reconcileRemediationCases,
@@ -182,6 +183,39 @@ describe('remediation case reconciler', () => {
     ['an open action with an acceptance origin', { ...acceptedOnPriorLap, resolution: 'open' as const }, 'resume'],
   ] as const)('classifies %s bindings before ordinary reuse', (_label, record, expected) => {
     expect(classifyRemediationCaseReuse(record, new Set<string>(), carryInput)).toBe(expected);
+  });
+
+  it.each([
+    ['case-A', durableAction({ id: 'case-A' }), new Set(['case-A']), undefined, ['act', 'defer', 'refute']],
+    ['case-U', durableAction({ id: 'case-U' }), new Set<string>(), undefined, ['act', 'defer']],
+    ['case-R', durableAction({ id: 'case-R', effect: { id: 'effect-R', kind: 'action', status: 'reserved' } }), new Set<string>(), undefined, ['act']],
+    ['case-J', durableAction({ id: 'case-J', disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' } }), new Set<string>(), undefined, ['reject']],
+    ['case-F', durableAction({ id: 'case-F', disposition: 'refute', resolution: 'resolved', effect: { kind: 'none' }, refutation: REFUTATION }), new Set<string>(), undefined, ['refute']],
+    ['case-C', acceptedOnPriorLap, new Set<string>(), carryInput, ['act', 'advisory', 'defer', 'refute', 'reject']],
+  ] as const)('lists only the dispositions bindable to %s', (_label, record, attemptedCaseIds, carry, expected) => {
+    expect(bindableDispositions(record, attemptedCaseIds, carry)).toEqual(expected);
+  });
+
+  it('refuses a rejected binding to a reserved action without changing durable state', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: {
+      ...state,
+      cases: [durableAction({ id: 'case-R', effect: { id: 'effect-R', kind: 'action', status: 'reserved' } })],
+    } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({
+        caseRef: 'rejected-reserved', existingCaseId: 'case-R', disposition: 'reject', priority: 'low',
+        rationale: 'The reserved action cannot be rejected.', confidence: 'low', effect: { kind: 'none' },
+      }, [{ sourceId: 'testQuality:F2', outcome: 'rejected', caseRef: 'rejected-reserved' }]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'must-not-be-used',
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      { ok: false, reason: 'illegal-disposition-transition' }, before,
+    ]);
   });
 
   // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
@@ -817,6 +851,33 @@ describe('remediation case reconciler', () => {
       id: 'case-1', disposition: 'refute', resolution: 'resolved',
       effect: { id: 'effect-refute', kind: 'deferral', status: 'reserved' }, refutation: REFUTATION,
     }] } });
+  });
+
+  // Covers: task:1
+  it('keeps the transition refusals and attempted-action refute/defer admissions', async () => {
+    const rejectedRecords: ReadonlyArray<readonly [RemediationCaseRecord, readonly string[]]> = [
+      [durableAction(), []],
+      [durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } }), ['case-1']],
+      [durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'work order failed' } }), ['case-1']],
+      [durableAction({ disposition: 'defer', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: RECORDED_AT }], effect: { id: 'effect-1', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' } }), []],
+      [durableAction({ disposition: 'reject', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'rejected', recordedAt: RECORDED_AT }], effect: { kind: 'none' } }), []],
+    ];
+    for (const [record, attemptedCaseIds] of rejectedRecords) {
+      const root = await createProjectRoot();
+      const store = new RemediationCaseStore(root, FEATURE);
+      await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [record] } }));
+      await expect(reconcileRemediationCases(store, { graph: refuteGraph(), recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'unused', attemptedCaseIds }))
+        .resolves.toEqual({ ok: false, reason: 'illegal-disposition-transition' });
+    }
+    const refuteStore = new RemediationCaseStore(await createProjectRoot(), FEATURE);
+    await refuteStore.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+    await expect(reconcileRemediationCases(refuteStore, { graph: refuteGraph(), recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'unused', attemptedCaseIds: ['case-1'] }))
+      .resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ disposition: 'refute', resolution: 'resolved' })] } });
+    const deferStore = new RemediationCaseStore(await createProjectRoot(), FEATURE);
+    await deferStore.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+    const deferCase = { caseRef: 'defer-case', existingCaseId: 'case-1', disposition: 'defer' as const, priority: 'medium' as const, rationale: 'The remaining work is outside the plan.', confidence: 'medium' as const, effect: { kind: 'deferral' as const, title: 'Follow up', body: 'The change is outside this repair.', exclusionRationale: 'Outside the approved scope.' } };
+    await expect(reconcileRemediationCases(deferStore, { graph: graph(deferCase, [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', caseRef: 'defer-case' }]), recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds('defer-effect') }))
+      .resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ disposition: 'defer', effect: { id: 'defer-effect', kind: 'deferral', status: 'reserved' } })] } });
   });
 
   it.each([

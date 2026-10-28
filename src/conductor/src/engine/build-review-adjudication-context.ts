@@ -2,7 +2,12 @@ import { BUILD_REVIEW_FINDING_VOCABULARIES } from './build-review-domain.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
-import { isCarryEligibleRemediationCase, type RemediationCaseCarryInput } from './remediation-case-reconciler.js';
+import {
+  bindableDispositions,
+  isCarryEligibleRemediationCase,
+  type BindableRemediationCaseDisposition,
+  type RemediationCaseCarryInput,
+} from './remediation-case-reconciler.js';
 import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import type {
   RemediationCaseDisposition,
@@ -54,6 +59,8 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly rationale: string;
   readonly confidence: RemediationCaseRecord['confidence'];
   readonly resolution: RemediationCaseRecord['resolution'];
+  /** Engine-computed dispositions this prior case can accept when bound. */
+  readonly bindableDispositions: readonly BindableRemediationCaseDisposition[];
   readonly sources: readonly BuildReviewAdjudicationPriorSource[];
   readonly effect: RemediationCaseEffect;
   /** Engine-projected evidence that this prior case may carry a later binding. */
@@ -72,6 +79,14 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly recurrenceOf?: readonly string[];
   /** Prior cases retained as distinct from this case. */
   readonly distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
+}
+
+/** A refused binding fed to the one correction-round judgement. */
+export interface BuildReviewAdjudicationBindingCorrection {
+  readonly caseRef: string;
+  readonly existingCaseId: string;
+  readonly disposition: RemediationCaseDisposition;
+  readonly bindableDispositions: readonly BindableRemediationCaseDisposition[];
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -156,6 +171,8 @@ export interface BuildReviewAdjudicationContext {
   /** Per-rubric thresholds are engine facts that bound an advisory downgrade. */
   readonly declaredSeverityThresholds: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   readonly admittedDispositions: readonly RemediationCaseDisposition[];
+  /** Present only while correcting a refused binding from the prior judgement. */
+  readonly bindingCorrections?: readonly BuildReviewAdjudicationBindingCorrection[];
 }
 
 export interface AssembleBuildReviewAdjudicationContextInput {
@@ -179,6 +196,8 @@ export interface AssembleBuildReviewAdjudicationContextInput {
    * this pure context boundary owns projection and byte accounting.
    */
   readonly priorFindingDigests?: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest>;
+  /** Refused bindings supplied only to the one corrected re-judgement. */
+  readonly bindingCorrections?: readonly BuildReviewAdjudicationBindingCorrection[];
 }
 
 export type BuildReviewAdjudicationContextStop =
@@ -508,6 +527,7 @@ function comparePriorSources(left: RemediationCaseSourceLink, right: Remediation
 
 function freezePriorCase(
   caseRecord: RemediationCaseRecord,
+  attemptedCaseIds: ReadonlySet<string>,
   carryInput: RemediationCaseCarryInput | undefined,
   includedDigestKeys: ReadonlySet<string>,
   priorFindingDigests: ReadonlyMap<string, BuildReviewAdjudicationPriorFindingDigest> | undefined,
@@ -532,6 +552,7 @@ function freezePriorCase(
     rationale: caseRecord.rationale,
     confidence: caseRecord.confidence,
     resolution: caseRecord.resolution,
+    bindableDispositions: Object.freeze([...bindableDispositions(caseRecord, attemptedCaseIds, carryInput)]),
     sources: Object.freeze(sources),
     effect: Object.freeze({ ...caseRecord.effect }) as RemediationCaseEffect,
     ...(operatorAccepted === undefined ? {} : { operatorAccepted }),
@@ -640,8 +661,16 @@ export function assembleBuildReviewAdjudicationContext(
   ) ? 'case-v2' as const : 'case-v1' as const;
   const freezePriorCases = (includedDigestKeys: ReadonlySet<string>): readonly BuildReviewAdjudicationPriorCase[] =>
     Object.freeze(input.priorCases
-      .map((caseRecord) => freezePriorCase(caseRecord, input.carryInput, includedDigestKeys, input.priorFindingDigests))
+      .map((caseRecord) => freezePriorCase(caseRecord, attempted, input.carryInput, includedDigestKeys, input.priorFindingDigests))
       .sort((left, right) => left.id.localeCompare(right.id)));
+  const bindingCorrections = input.bindingCorrections === undefined || input.bindingCorrections.length === 0
+    ? undefined
+    : Object.freeze(input.bindingCorrections.map((correction) => Object.freeze({
+      caseRef: correction.caseRef,
+      existingCaseId: correction.existingCaseId,
+      disposition: correction.disposition,
+      bindableDispositions: Object.freeze([...correction.bindableDispositions]),
+    })));
   const contextFor = (
     priorCases: readonly BuildReviewAdjudicationPriorCase[],
     priorDigestsOmitted: number,
@@ -679,6 +708,7 @@ export function assembleBuildReviewAdjudicationContext(
       'act', 'defer', 'reject', 'refute', ...(Object.values(input.declaredSeverityThresholds ?? {}).some((threshold) => threshold !== 'nit') ? ['advisory' as const] : []),
       ...(mode === 'case-v2' ? ['escalate' as const] : []),
     ]),
+    ...(bindingCorrections === undefined ? {} : { bindingCorrections }),
   });
   const digestCandidates = input.priorCases.flatMap((caseRecord) => [...caseRecord.sources]
     .sort(comparePriorSources)
