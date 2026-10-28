@@ -4,6 +4,19 @@ spec_hash: dbb1ee723e5eca8f2bb46f728bc2b83de70689ad372cb0a9e4e340f7990e2b5a
 pr: https://github.com/jstoup111/ai-conductor/pull/3520
 shipped: 2026-10-28
 engine_version: 20261028T113352Z-172d3daf40b7
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is an unplanned change to HALT/detail text. It keeps the existing expansion label correct now that a correction round can occupy the second slot; without it, a correction-round failure would be mislabelled 'expansion round'. It follows directly from adding the correction round."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This is an unplanned behaviour choice that enforces the planned three-dispatch bound and keeps the correction context authoritative. It is consistent with the amended ADR D2 bound, and it fails closed instead of widening autonomy."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
