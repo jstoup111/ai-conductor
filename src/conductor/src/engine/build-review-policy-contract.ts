@@ -2,7 +2,11 @@ import { relative } from 'node:path';
 
 import type { CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import type { ProviderWith } from '../execution/provider-catalog.js';
-import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
+import {
+  renderBuildReviewSeverityDefinitions,
+  renderRubricContractShape,
+  type RubricContractDescriptor,
+} from './build-review-contract.js';
 import { BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE } from './build-review-source-region-admission.js';
 
 /** The first engine-owned contract for an installed read-only review policy. */
@@ -212,7 +216,8 @@ export function renderBuildReviewPolicyContract(
     '',
     'Return only an engine-defined custom reviewer payload; do not use another output contract or a standalone presentation format.',
     `Shared findings payload schema: ${renderRubricContractShape(options.contract)}`,
-    'Payload variants: {"kind":"custom-findings","version":"v2","findings":[...]} when you can judge the question (an empty findings array means no concern), or {"kind":"unsupported-policy","requirement":"<what the policy needs that the read-only review role cannot provide>"} when you cannot. Every finding requires severity: critical (security exposure, data loss, or wrong results), major (real defect or broken invariant), minor (real low-impact quality issue), or nit (cosmetic naming or style). Include no other fields.',
+    renderBuildReviewSeverityDefinitions(),
+    'Payload variants: {"kind":"custom-findings","version":"v2","findings":[...]} when you can judge the question (an empty findings array means no concern), or {"kind":"unsupported-policy","requirement":"<what the policy needs that the read-only review role cannot provide>"} when you cannot. Include no other fields.',
     `Source region rule: ${BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE}`,
     'The engine stamps policy, provider, lap, verdict, and all aggregate metadata after validating the payload.',
     '',
