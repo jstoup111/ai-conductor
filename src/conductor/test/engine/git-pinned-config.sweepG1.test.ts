@@ -105,6 +105,7 @@ describe('engine git pin travels only in the environment (sweep G1)', () => {
       ['remote'],
       ['rev-list', '--count', 'HEAD..main'],
       ['rev-parse', 'main'],
+      ['symbolic-ref', 'refs/remotes/origin/HEAD'],
       ['rev-parse', 'HEAD'],
       ['merge-base', 'HEAD', 'main'],
       ['rev-parse', 'main'],

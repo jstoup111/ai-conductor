@@ -290,7 +290,11 @@ describe('conductor protected-artifact self-amendment advisory', () => {
         /\.docs\/architecture\/feature\.md.*\.docs\/plans\/feature\.md.*approved plan.*build_review/s,
       )],
       firstDispatchedStep: 'build',
-      firstBuildSealCreation: [{ projectRoot, baselineCommit: 'approved-commit' }],
+      firstBuildSealCreation: [{
+        projectRoot,
+        baselineCommit: 'approved-commit',
+        ownership: { kind: 'legacy' },
+      }],
     });
   });
 
