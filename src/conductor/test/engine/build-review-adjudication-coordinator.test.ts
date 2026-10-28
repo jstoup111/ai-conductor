@@ -403,6 +403,65 @@ describe('coordinateBuildReviewAdjudication', () => {
   const customAggregate = customMixedAggregate();
   const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
 
+  // Covers: S2.1, S2.2, S2.3, task:4
+  it('re-judges one refused binding without mutating durable state before the correction', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-A', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The first repair was attempted.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+        effect: { id: 'effect-A', kind: 'action', status: 'applied', workOrderId: 'order-A' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-A',
+      cases: [{ caseId: 'case-A', priority: 'high', tasks: [{ title: 'The attempted repair' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'correction.test.ts'), 'the attempted repair is absent\n', 'utf8');
+    const contexts: unknown[] = [];
+    const snapshots: string[][] = [];
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const rejected: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-A' }],
+      cases: [{ caseRef: 'rejected-A', existingCaseId: 'case-A', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'The earlier action should be rejected.', effect: { kind: 'none' } }],
+    };
+    const refuted: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'refuted-A' }],
+      cases: [{
+        caseRef: 'refuted-A', existingCaseId: 'case-A', disposition: 'refute', priority: 'high', confidence: 'high', rationale: 'The attempted action is absent from the current tree.', effect: { kind: 'none' },
+        refutation: { claim: 'The attempted repair is absent.', assertions: [{ assertion: 'The tree omits the repair.', verdict: 'refuted', evidence: [{ path: 'test/correction.test.ts', excerpt: 'attempted repair is absent' }] }] },
+      }],
+    };
+    const judge = vi.fn(async (context: unknown) => {
+      contexts.push(context);
+      snapshots.push(await Promise.all([
+        readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8'),
+        readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8'),
+        readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8').catch(() => ''),
+      ]));
+      return contexts.length === 1 ? rejected : refuted;
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(contexts[0]).not.toHaveProperty('bindingCorrections');
+    expect(contexts[1]).toMatchObject({ bindingCorrections: [{ caseRef: 'rejected-A', existingCaseId: 'case-A', disposition: 'reject', bindableDispositions: ['act', 'defer', 'refute'] }] });
+    expect(snapshots[1]).toEqual(snapshots[0]);
+    expect(events.map((event) => event.type)).not.toContain('remediation_adjudication_failed');
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'case-A', disposition: 'refute', resolution: 'resolved' })] } });
+  });
+
   it('rejects an advisory judgement when its live source rubric lacks a declared threshold', async () => {
     const advisoryJudgement = (): RemediationCaseJudgement => ({
       mode: 'case-v1', domain: 'build_review',

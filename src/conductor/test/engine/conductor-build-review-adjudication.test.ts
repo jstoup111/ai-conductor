@@ -29,6 +29,7 @@ import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-revie
 import { EventPersister } from '../../src/engine/event-persister.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import type { RemediationCaseV2Judgement } from '../../src/engine/remediation-case-artifact.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
@@ -823,6 +824,47 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(halt).toContain('remediate judgement failed:');
     expect(halt).not.toContain('claude subprocess exited without a classifiable result');
     expect(halt).not.toContain('processErrorCode=E2BIG');
+  });
+
+  // Covers: S2.1, S2.2, S2.3, task:4
+  it('re-dispatches remediate with binding corrections before routing the corrected refutation', async () => {
+    const rejected = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'rejected', caseRef: 'rejected-A' }],
+      cases: [{ caseRef: 'rejected-A', existingCaseId: 'case-A', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'Reject the earlier action.', effect: { kind: 'none' } }],
+    };
+    const refuted = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'refuted', caseRef: 'refuted-A' }],
+      cases: [{
+        caseRef: 'refuted-A', existingCaseId: 'case-A', disposition: 'refute', priority: 'high', confidence: 'high', rationale: 'The repair is absent.', effect: { kind: 'none' },
+        refutation: { claim: 'The repair is absent.', assertions: [{ assertion: 'The tree proves absence.', verdict: 'refuted', evidence: [{ path: 'test/example.test.ts', excerpt: 'assertion' }] }] },
+      }],
+    };
+    const run = await fixture({
+      remediateJudgements: [rejected, refuted],
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        await mkdir(join(root, 'test'), { recursive: true });
+        await writeFile(join(root, 'test', 'example.test.ts'), 'assertion\n', 'utf8');
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature,
+          cases: [{
+            id: 'case-A', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The repair was attempted.', resolution: 'open',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+            effect: { id: 'effect-A', kind: 'action', status: 'applied', workOrderId: 'order-A' },
+          }],
+        }), 'utf8');
+        await publishBuildReviewWorkOrder(root, { version: 'v1', domain: 'build_review', feature, effectId: 'effect-A', cases: [{ caseId: 'case-A', priority: 'high', tasks: [{ title: 'The attempted repair' }] }] });
+        await markBuildReviewWorkOrderAttempted(root, feature);
+      },
+    });
+
+    expect(run.remediateDispatches()).toBe(2);
+    expect(run.retryReasons.get('remediate')).toContain('bindingCorrections');
+    expect(run.retryReasons.get('remediate')).toContain('case-A');
+    expect(await run.haltMarker()).toBe('');
+    expect(run.kickbacks).toEqual([]);
   });
 
   it('labels provider failure in the expansion round and retains that round\'s exit facts', async () => {
