@@ -1,5 +1,4 @@
-import { posix, win32 } from 'node:path';
-import { planStem } from './artifacts.js';
+import { basename, posix, win32 } from 'node:path';
 import { resolveFeatureArtifact, type ManifestSource } from './feature-manifest-source.js';
 
 const STORIES_LINE = /^\s*\*\*Stories:\*\*\s*(.*?)\s*$/im;
@@ -73,7 +72,8 @@ export async function resolveFeatureStoriesRef(
 ): Promise<string | null> {
   const resolution = await resolveFeatureArtifact(
     source,
-    planStem(planRepoPath),
+    // Same derivation as artifacts.planStem; importing artifacts.ts here would close a layer cycle.
+    basename(planRepoPath, '.md'),
     'stories',
     async () => {
       const legacy = resolvePlanStoriesPath(planRepoPath, planContent);

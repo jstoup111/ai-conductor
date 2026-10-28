@@ -62,7 +62,9 @@ function publicationProvenance(root: string) {
     async () => ({ stdout: '' }),
     gitRunner,
   );
-  return publication.remote.mutation;
+  const mutation = publication.remote.mutation;
+  if (mutation === undefined) throw new Error('spec publication has no remote mutation');
+  return mutation;
 }
 
 describe('engineer spec-branch manifest routing (Task 14)', () => {
