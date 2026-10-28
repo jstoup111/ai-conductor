@@ -6,6 +6,7 @@ import { loadConfig } from './config.js';
 import { readGitBlobs, type GitBlobBatchRunner } from './git-blob-batch.js';
 import { resolveDocsAllowlist } from './phase-marker.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import type { FeatureOwnership } from './feature-ownership.js';
 import { readRouteRecord, type RouteRecordGitRunner } from './routing/route-record-reader.js';
 import { parseRoundId, routingEligible } from './routing/route-types.js';
 
@@ -158,6 +159,12 @@ export interface CreateProtectedArtifactSealOptions {
   projectRoot: string;
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
   baselineCommit: string;
+  /**
+   * The feature's ownership result. Manifest-backed features seal every
+   * listed protected-kind path and the manifest itself; absent preserves the
+   * legacy folder-only policy for existing callers.
+   */
+  ownership?: SealOwnership;
   /** Test seam for observing the bounded committed-blob read. */
   runner?: GitBlobBatchRunner;
 }
@@ -207,6 +214,8 @@ export interface VerifyProtectedArtifactSealOptions {
    * tolerated (fully protected, prior behavior).
    */
   featureDesc?: string;
+  /** The ownership result used to derive manifest-backed seal membership. */
+  ownership?: SealOwnership;
   /**
    * The feature's base branch NAME (no `origin/` prefix), e.g. `main`. Enables
    * the base-inheritance tolerance in `inspectSeal`: drift that is byte-identical
@@ -227,6 +236,8 @@ export interface VerifyProtectedArtifactSealOptions {
   fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
+
+type SealOwnership = Extract<FeatureOwnership, { readonly kind: 'legacy' | 'manifest' }>;
 
 export type ProtectedArtifactSealVerdict =
   | {
@@ -634,15 +645,38 @@ export async function readOperatorReseals(projectRoot: string): Promise<Operator
   }
 }
 
-async function committedProtectedPaths(projectRoot: string, baselineCommit: string): Promise<string[]> {
+function ownershipProtectedPaths(ownership: SealOwnership | undefined): string[] {
+  if (ownership?.kind !== 'manifest') return [];
+  return [...new Set([...ownership.protectedPaths, ownership.manifestPath])].sort(comparePaths);
+}
+
+function isManifestSelfAmendmentPath(ownership: SealOwnership | undefined, path: string): boolean {
+  return ownership?.kind === 'manifest' && ownership.protectedPaths.some((protectedPath) => protectedPath === path);
+}
+
+async function committedProtectedPaths(
+  projectRoot: string,
+  baselineCommit: string,
+  ownership?: SealOwnership,
+): Promise<string[]> {
   const result = await execa(
     'git',
-    ['ls-tree', '-r', '-z', '--name-only', baselineCommit, '--', ...PROTECTED_ARTIFACT_DIRECTORIES],
+    [
+      'ls-tree',
+      '-r',
+      '-z',
+      '--name-only',
+      baselineCommit,
+      '--',
+      ...PROTECTED_ARTIFACT_DIRECTORIES,
+      ...ownershipProtectedPaths(ownership),
+    ],
     { cwd: projectRoot },
   );
   return result.stdout
     .split('\0')
     .filter(Boolean)
+    .filter((path, index, paths) => paths.indexOf(path) === index)
     .sort(comparePaths);
 }
 
@@ -661,9 +695,10 @@ async function contentAtCommit(
 async function protectedArtifactBlobsAtCommit(
   projectRoot: string,
   commit: string,
+  ownership?: SealOwnership,
   runner?: GitBlobBatchRunner,
 ): Promise<{ paths: string[]; blobs: Map<string, Buffer> }> {
-  const paths = await committedProtectedPaths(projectRoot, commit);
+  const paths = await committedProtectedPaths(projectRoot, commit, ownership);
   const blobs = await readGitBlobs(projectRoot, commit, paths, { runner });
   const missingPath = paths.find((path) => !blobs.has(path));
   if (missingPath !== undefined) {
@@ -675,8 +710,9 @@ async function protectedArtifactBlobsAtCommit(
 async function protectedArtifactsAtCommit(
   projectRoot: string,
   commit: string,
+  ownership?: SealOwnership,
 ): Promise<Map<string, Buffer>> {
-  const { paths, blobs } = await protectedArtifactBlobsAtCommit(projectRoot, commit);
+  const { paths, blobs } = await protectedArtifactBlobsAtCommit(projectRoot, commit, ownership);
   return new Map(paths.map((path) => [
     path,
     Buffer.from(blobs.get(path)!.toString('utf8')),
@@ -892,6 +928,7 @@ async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<
   const { paths, blobs } = await protectedArtifactBlobsAtCommit(
     options.projectRoot,
     options.baselineCommit,
+    options.ownership,
     options.runner,
   );
   const protectedArtifacts = paths.map((path) => ({
@@ -1144,6 +1181,7 @@ async function inspectSeal(
   seal: ProtectedArtifactSeal,
   featureDesc?: string,
   baseBranch?: string,
+  ownership?: SealOwnership,
   excludedPaths?: ReadonlySet<string>,
   engineAppendedTaskIds?: readonly string[],
 ): Promise<ProtectedArtifactSealVerdict> {
@@ -1193,9 +1231,13 @@ async function inspectSeal(
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
-  const discoveredPaths = (await Promise.all(
+  const directoryPaths = (await Promise.all(
     PROTECTED_ARTIFACT_DIRECTORIES.map((directory) => workspaceProtectedPaths(projectRoot, directory)),
-  )).flat().sort(comparePaths);
+  )).flat();
+  const ownershipPaths = await Promise.all(ownershipProtectedPaths(ownership).map(async (path) => (
+    await readContainedProtectedArtifact(projectRoot, path) === undefined ? [] : [path]
+  )));
+  const discoveredPaths = [...new Set([...directoryPaths, ...ownershipPaths.flat()])].sort(comparePaths);
   const actualPaths: string[] = [];
   for (const path of discoveredPaths) {
     const classification = classifyMutationTarget({
@@ -1234,7 +1276,7 @@ async function inspectSeal(
     const currentFingerprint = fingerprint(content);
     if (currentFingerprint !== sealedFingerprint) {
       if (engineAppendedTaskIds?.length) {
-        const sealedContent = (await protectedArtifactsAtCommit(projectRoot, seal.baselineCommit).catch(() => undefined))?.get(path);
+        const sealedContent = (await protectedArtifactsAtCommit(projectRoot, seal.baselineCommit, ownership).catch(() => undefined))?.get(path);
         if (
           sealedContent !== undefined
           && fingerprint(sealedContent) === sealedFingerprint
@@ -1246,7 +1288,9 @@ async function inspectSeal(
       // it already contains is neither a local amendment nor a seal violation.
       const inheritance = await inheritedFromBase(path);
       if (inheritance.inheritance === 'inherited') continue;
-      if (featureDesc && namesOwnFeature(path, featureDesc)) {
+      if (isManifestSelfAmendmentPath(ownership, path) || (
+        ownership?.kind !== 'manifest' && featureDesc && namesOwnFeature(path, featureDesc)
+      )) {
         selfAmendments.push({ path, sealedFingerprint: sealedFingerprint!, currentFingerprint });
       } else {
         const missingRef = await missingBaseRef();
@@ -1296,9 +1340,14 @@ export async function verifyProtectedArtifactSeal(
   }
   return inspectSeal(
     options.projectRoot,
-    await createSeal({ projectRoot: options.projectRoot, baselineCommit: options.baselineCommit }),
+    await createSeal({
+      projectRoot: options.projectRoot,
+      baselineCommit: options.baselineCommit,
+      ownership: options.ownership,
+    }),
     options.featureDesc,
     options.baseBranch,
+    options.ownership,
   );
 }
 
@@ -1459,6 +1508,7 @@ async function verifyExistingProtectedArtifactSeal(
     seal,
     options.featureDesc,
     options.baseBranch,
+    options.ownership,
     undefined,
     options.toleratesEngineAppendedRemediation
       ? [
@@ -1610,7 +1660,7 @@ export async function prepareProtectedArtifactReseal({
       }
     }
   }
-  const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, new Set(paths));
+  const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, undefined, new Set(paths));
   if (!classification.ok) throw new ProtectedArtifactResealRefusal(classification.reason, classification.path);
   // The initial inspection deliberately excludes requested paths: those paths
   // are about to be operator-resealed. A missing requested path needs one
@@ -1628,6 +1678,7 @@ export async function prepareProtectedArtifactReseal({
       seal,
       featureDesc,
       baseBranch,
+      undefined,
       new Set(paths.filter((candidate) => candidate !== path)),
     );
     if (!targetInspection.ok) throw new ProtectedArtifactResealRefusal(targetInspection.reason, targetInspection.path);
