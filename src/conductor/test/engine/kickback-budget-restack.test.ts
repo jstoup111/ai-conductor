@@ -14,6 +14,7 @@ import { detectKickbackBudgetCommand } from '../../src/cli.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { sealSliceTopologyPositions, writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
@@ -248,6 +249,39 @@ describe('restack kickback budget storage', () => {
     expect(printed.join('\n')).toContain('current cap evidence is missing or no longer matches the live halt');
     const after = await readCascadeCounts(subject.repo, 'demo');
     expect(after).toMatchObject({ kind: 'counts', blob: before.blob });
+  });
+
+  it('reconciles an authorized tier-L restack raise through inspect exactly once', async () => {
+    const subject = await realCascadeCapCliFixture({ tier: 'L', charged: 8 });
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+    const before = await readCascadeCounts(subject.repo, 'demo');
+    if (before.kind !== 'counts') throw new Error('unreadable cascades');
+    const crashingAppend = (worktree: string, event: Parameters<typeof appendCloseoutEvent>[1]) => {
+      appendCloseoutEvent(worktree, event);
+      throw new Error('simulated crash after the authorization event');
+    };
+
+    expect(await dispatchKickbackBudgetCommand({
+      kind: 'kickback-budget', action: 'raise', feature: 'demo', gate: 'restack', child: '1', by: 2,
+      rationale: 'raise the tier L stopped cascade', format: 'human',
+    }, {
+      cwd: subject.root, resolveMainRoot: async () => subject.root, isInteractive: () => true,
+      resolveOperator: () => 'operator', print: () => {}, appendEvent: crashingAppend,
+    })).toBe(1);
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'counts', blob: before.blob });
+
+    const inspect = () => dispatchKickbackBudgetCommand({
+      kind: 'kickback-budget', action: 'inspect', feature: 'demo', format: 'human',
+    }, { cwd: subject.root, resolveMainRoot: async () => subject.root, print: () => {} });
+    expect(await inspect()).toBe(0);
+    const first = await readCascadeCounts(subject.repo, 'demo');
+    expect(first).toMatchObject({ kind: 'counts', counts: { counts: { 1: 8 }, limits: { 1: 10 } } });
+    if (first.kind !== 'counts') throw new Error('unreadable reconciled cascades');
+
+    expect(await inspect()).toBe(0);
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'counts', blob: first.blob });
   });
 
   it('resets the originating child cascade budget from a real cascade-cap halt', async () => {
