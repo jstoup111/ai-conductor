@@ -165,7 +165,13 @@ import { renderBuildReviewFrozenInputScope } from './build-review-materializatio
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES } from './build-review-input-integrity.js';
 import { BuildReviewLapGate } from './build-review-lap-gate.js';
-import { canonicalizeBuildReviewCustomFindingIdentity, canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
+import {
+  canonicalizeBuildReviewCustomFindingIdentity,
+  canonicalizeBuildReviewFindingIdentity,
+  stampBuildReviewCustomJudgedResult,
+  type BuildReviewCustomFindingIdentity,
+  type BuildReviewFindingIdentity,
+} from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
   emitBuildReviewCacheDiscard,
@@ -185,10 +191,11 @@ import {
   buildReviewRubricPromptPath,
   readBuildReviewBranchArtifact,
   writeBuildReviewBranchArtifact,
+  type BuildReviewBranchArtifact,
   type BuildReviewBranchProvenance,
   type BuildReviewCustomArtifactMember,
 } from './build-review-artifacts.js';
-import { joinBuildReviewRubricOutcomes, type BuildReviewAggregate } from './build-review-aggregate.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import {
   buildReviewLiveActSourceIds,
   buildReviewPolicyIdentity,
@@ -200,7 +207,7 @@ import {
 } from './build-review-review-frontier.js';
 import { deriveChangedFileReferences } from './build-review-projections.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
-import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, matchesBuildReviewDisposition } from './build-review-dispositions.js';
 import {
   buildReviewConfidenceFloors,
   buildReviewSeverityThresholds,
@@ -209,7 +216,6 @@ import {
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import { RemediationCaseStore } from './remediation-case-store.js';
 import { persistBuildReviewSuppressions, projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   bumpMechanicalFaultsInLedger,
@@ -224,11 +230,17 @@ import {
   diagnoseBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
+  parseBuildReviewCustomReviewerPayload,
+  parseBuildReviewJudgedResult,
   parseBuildReviewRubricResult,
   renderBuildReviewJudgedResultRejection,
   renderBuildReviewUnresolvedSkillRemedy,
+  isBelowSeverityThreshold,
+  type BuildReviewCustomFinding,
+  type BuildReviewFinding,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { buildReviewSeverityThresholdPolicies, finalizedBuildReviewSourceIds, RemediationCaseStore } from './remediation-case-store.js';
 import { buildReviewRubricPromptView, type BuildReviewRubricProjection } from './build-review-projections.js';
 import { classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
 import {
@@ -610,6 +622,67 @@ export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
     }
   }
   return { resolved: false, reason: 'rebase skill returned no parseable result' };
+}
+
+/**
+ * Branch artifacts persist out-of-delta ids bare because each artifact is
+ * already per-rubric; frontier sources are rubric-qualified, so qualify the
+ * persisted ids into the same key space before settlement compares them.
+ */
+function rubricQualifiedReviewScope<T extends { readonly outOfDeltaSourceIds: readonly string[] }>(rubric: string, scope: T): T {
+  return { ...scope, outOfDeltaSourceIds: scope.outOfDeltaSourceIds.map((id) => `${rubric}:${id}`) };
+}
+
+type BuildReviewSettledArtifactFinding = {
+  readonly sourceId: string;
+  readonly finding: BuildReviewFinding | BuildReviewCustomFinding;
+  readonly identity: BuildReviewFindingIdentity | BuildReviewCustomFindingIdentity;
+};
+
+/**
+ * Converts durable artifact findings back into the typed shape the frontier
+ * needs. Custom branch artifacts deliberately retain untrusted findings as
+ * unknown, so malformed historical evidence stays unsettled rather than
+ * becoming scope authority.
+ */
+function settledBuildReviewArtifactFindings(
+  artifact: BuildReviewBranchArtifact,
+): readonly BuildReviewSettledArtifactFinding[] {
+  if (artifact.result.kind !== 'judged') return [];
+
+  const builtin = parseBuildReviewJudgedResult(artifact.result);
+  if (builtin !== undefined && builtin.rubric === artifact.rubric) {
+    return builtin.findings.flatMap((finding) => {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric: builtin.rubric,
+        contractVersion: builtin.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
+      });
+      return identity === undefined ? [] : [{ sourceId: identity.id, finding, identity }];
+    });
+  }
+
+  return artifact.result.findings.flatMap((value): readonly BuildReviewSettledArtifactFinding[] => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+    const source = value as Record<string, unknown>;
+    const payload = parseBuildReviewCustomReviewerPayload({
+      kind: 'custom-findings',
+      version: source.severity === undefined ? 'v1' : 'v2',
+      findings: [{
+        concernId: source.concernId,
+        summary: source.summary,
+        evidenceLocations: source.evidenceLocations,
+        sourceRegions: source.sourceRegions,
+        ...(source.confidence === undefined ? {} : { confidence: source.confidence }),
+        ...(source.severity === undefined ? {} : { severity: source.severity }),
+        ...(source.causeHunk === undefined ? {} : { causeHunk: source.causeHunk }),
+      }],
+    });
+    const finding = payload?.kind === 'custom-findings' ? payload.findings[0] : undefined;
+    const identity = canonicalizeBuildReviewCustomFindingIdentity(value);
+    return finding === undefined || identity === undefined ? [] : [{ sourceId: identity.id, finding, identity }];
+  });
 }
 
 export interface StepRunnerOptions {
@@ -3331,6 +3404,44 @@ export class DefaultStepRunner implements StepRunner {
         return identity === undefined ? [] : [{ sourceId: `${rubric}:${identity.id}`, finding }];
       });
     };
+    // Scope is derived from durable authority, not from a prior lap's wording
+    // or finding id.  An unavailable authority settles nothing, which keeps
+    // the next lap conservative without turning its read failure into a new
+    // review fault.
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectDir);
+    const dispositions = feature === undefined
+      ? []
+      : await new BuildReviewDispositionStore(this.projectDir).list(feature).then((listed) => listed.ok ? listed.records : []);
+    let finalizedSources = new Set<string>();
+    if (feature !== undefined && config.adjudication.enabled) {
+      try {
+        const cases = await new RemediationCaseStore(this.projectDir, feature, child === undefined ? {} : { child }).read();
+        if (cases.ok) finalizedSources = new Set(finalizedBuildReviewSourceIds(
+          cases.state.cases,
+          buildReviewSeverityThresholdPolicies(buildReviewSeverityThresholds(config)),
+        ));
+      } catch {
+        // The effective resolver uses the same fail-closed meaning: unreadable
+        // case state is never evidence that a source is settled.
+      }
+    }
+    const nonBlockingSourcesFor = (
+      rubric: string,
+      artifacts: readonly import('./build-review-artifacts.js').BuildReviewBranchArtifact[],
+      policy: { readonly min_confidence: number; readonly min_severity?: import('./build-review-domain.js').BuildReviewSeverity },
+    ): ReadonlySet<string> => {
+      const settled = new Set<string>();
+      for (const artifact of artifacts) {
+        for (const { sourceId, finding, identity } of settledBuildReviewArtifactFindings(artifact)) {
+          const sourceSettledByCase = finalizedSources.has(`${rubric}:${sourceId}`);
+          const sourceSettledByDisposition = feature !== undefined && matchesBuildReviewDisposition(feature, identity, dispositions);
+          const sourceSettledByThreshold = (finding.confidence !== undefined && finding.confidence < policy.min_confidence) ||
+            (finding.severity !== undefined && policy.min_severity !== undefined && isBelowSeverityThreshold(finding.severity, policy.min_severity));
+          if (sourceSettledByCase || sourceSettledByDisposition || sourceSettledByThreshold) settled.add(`${rubric}:${sourceId}`);
+        }
+      }
+      return settled;
+    };
     const reviewScopes: Partial<Record<BuildReviewRubricResult['rubric'], import('./build-review-artifacts.js').BuildReviewReviewScope>> = {};
     const reviewScopeChangedFiles: Partial<Record<BuildReviewRubricResult['rubric'], readonly import('./build-review-projections.js').ChangedFileReference[]>> = {};
     for (const entry of config.catalog.filter((candidate): candidate is import('./resolved-config.js').ResolvedBuildReviewBuiltinCatalogEntry => candidate.kind === 'builtin')) {
@@ -3400,8 +3511,9 @@ export class DefaultStepRunner implements StepRunner {
         unknownSourceIds: new Set(unknownSources.map((source) => source.sourceId)),
         unknownSources,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
-          ? [{ reviewScope: artifact.reviewScope, findings: judgedSourcesFor(entry.id, artifact) }]
+          ? [{ reviewScope: rubricQualifiedReviewScope(entry.id, artifact.reviewScope), findings: judgedSourcesFor(entry.id, artifact) }]
           : []),
+        nonBlockingSourceIds: nonBlockingSourcesFor(entry.id, artifacts, entry.policy),
       });
       const decision = decideBuildReviewReviewScope({
         lapId, changedFiles: scopeChangedFiles, mergeBase: scopeSnapshot.mergeBase, headSha: scopeSnapshot.headSha,
@@ -3454,8 +3566,9 @@ export class DefaultStepRunner implements StepRunner {
         unappliedLiveSourceIds: liveActSourceIds.unappliedLiveSourceIds,
         appliedLiveSourceIds: liveActSourceIds.appliedLiveSourceIds,
         laps: artifacts.flatMap((artifact) => artifact.reviewScope && !('kind' in artifact.reviewScope) && artifact.result.kind === 'judged'
-          ? [{ reviewScope: artifact.reviewScope, findings: customJudgedSourcesFor(entry.id, artifact) }]
+          ? [{ reviewScope: rubricQualifiedReviewScope(entry.id, artifact.reviewScope), findings: customJudgedSourcesFor(entry.id, artifact) }]
           : []),
+        nonBlockingSourceIds: nonBlockingSourcesFor(entry.id, artifacts, entry.policy),
       });
       const decision = decideBuildReviewReviewScope({
         lapId, changedFiles, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha, policyIdentity,
@@ -3468,7 +3581,6 @@ export class DefaultStepRunner implements StepRunner {
         }),
       });
       if (decision !== undefined) {
-        customReviewScopes[entry.id] = decision;
         await this.events?.emit({ type: 'build_review_review_scope', rubric: entry.id, lapId, mode: decision.mode, reason: decision.reason, deltaHunkCount: decision.deltaHunks.length, settledHunkCount: settled.length });
       }
       return decision;
@@ -3998,6 +4110,42 @@ export class DefaultStepRunner implements StepRunner {
       child,
       adjudicationEnabled: config.adjudication.enabled,
     });
+    // A later lap needs the current out-of-delta classification to decide
+    // whether this hunk remains unsettled.  Branch artifacts are the durable
+    // scope authority, so stamp the ids back into the exact per-rubric record
+    // before publishing the aggregate that exposes the effective verdict.
+    if (effective.ok && (effective.effective.outOfDeltaFindingIds?.length ?? 0) > 0) {
+      const outOfDelta = new Set(effective.effective.outOfDeltaFindingIds);
+      const sources = projectBuildReviewAggregateSources(aggregate) ?? [];
+      const scopes: Array<[string, import('./build-review-artifacts.js').BuildReviewReviewScope]> = [
+        ...Object.entries(reviewScopes),
+        ...Object.entries(customReviewScopes),
+      ] as Array<[string, import('./build-review-artifacts.js').BuildReviewReviewScope]>;
+      try {
+        await Promise.all(scopes.map(async ([rubric, reviewScope]) => {
+          const outOfDeltaSourceIds = sources
+            .filter((source) => source.rubric === rubric && outOfDelta.has(source.findingId))
+            .map((source) => source.findingId);
+          if (outOfDeltaSourceIds.length === 0) return;
+          const updatedScope = { ...reviewScope, outOfDeltaSourceIds };
+          if (rubric in reviewScopes) reviewScopes[rubric as BuildReviewRubricResult['rubric']] = updatedScope;
+          else customReviewScopes[rubric] = updatedScope;
+          const artifact = await readBuildReviewBranchArtifact(
+            this.projectDir, rubric, lapId, inputs.sourceSnapshot.digest,
+            { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename },
+            child,
+          );
+          if (!artifact) throw new Error(`missing current-lap ${rubric} artifact`);
+          const { version: _version, ...writableArtifact } = artifact;
+          await writeBuildReviewBranchArtifact(this.projectDir, {
+            ...writableArtifact,
+            reviewScope: updatedScope,
+          }, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename }, child);
+        }));
+      } catch (error) {
+        return { success: false, output: `build_review could not persist out-of-delta scope: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
       : aggregate;
@@ -4349,7 +4497,7 @@ export class DefaultStepRunner implements StepRunner {
           if (resolveReviewScope !== undefined) {
             reviewScope = await resolveReviewScope(actualPolicyIdentity);
           } else if (reviewScope !== undefined && reviewScope.policyIdentity !== actualPolicyIdentity) {
-            const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff).flatMap((file) =>
+            const fullHunks = deriveChangedFileReferences(inputs.sourceSnapshot.diff ?? '').flatMap((file) =>
               file.hunks.map((hunk) => ({ path: file.path, contentHash: hunk.contentHash })),
             );
             reviewScope = {
@@ -4478,10 +4626,13 @@ export class DefaultStepRunner implements StepRunner {
           }),
         }));
         const invoked = dispatched.invocation;
-        if (scopeEmpty) return { kind: 'judged' as const, result: {
-          ...invoked,
-          output: JSON.stringify({ declaration, result: { kind: 'scope-empty', rubric: entry.id } }),
-        } };
+        if (scopeEmpty) {
+          await this.events?.emit({ type: 'build_review_rubric_skipped', rubric: entry.id, lapId, reason: 'scope-empty' });
+          return { kind: 'judged' as const, result: {
+            ...invoked,
+            output: JSON.stringify({ declaration, result: { kind: 'scope-empty', rubric: entry.id } }),
+          } };
+        }
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success && dispatched.kind !== 'root-rejection') {
           coverageFailure = true;
@@ -4730,7 +4881,10 @@ export class DefaultStepRunner implements StepRunner {
           ...(cacheProvenance === undefined ? {} : {
             reuse: { sourceLapId: cacheProvenance.cachedLapId, sourceSnapshotDigest: cacheProvenance.cachedSnapshotDigest },
           }),
-          ...(reviewScope === undefined ? {} : { reviewScope }),
+          // A failed dispatch never judged this scope. Persisting the
+          // pre-dispatch decision here would let a later lap treat failed
+          // infrastructure as settled review evidence.
+          ...(reviewScope === undefined || durableMember.result.kind === 'infrastructure-failure' ? {} : { reviewScope }),
         }, {
           readFile: async (path) => readFile(path, 'utf-8'),
           mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,

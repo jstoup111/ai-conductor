@@ -1,7 +1,8 @@
-// Covers: task:2, task:4, task:7, task:8
+// Covers: task:2, task:4, task:7, task:8, task:20
 import { describe, expect, it } from "vitest";
 
 import {
+  buildReviewProvenanceCandidates,
   buildReviewPolicyIdentity,
   buildReviewLiveActSourceIds,
   buildReviewTestScopeUnknownSources,
@@ -11,6 +12,8 @@ import {
   settledBuildReviewHunks,
   type BuildReviewPolicyIdentityInputs,
 } from "../../src/engine/build-review-review-frontier.js";
+import { buildReviewAdjudicationSourceId } from "../../src/engine/build-review-adjudication-context.js";
+import { canonicalizeBuildReviewFindingIdentity } from "../../src/engine/build-review-finding-identity.js";
 import { isBuildReviewFindingOutOfDelta } from "../../src/engine/build-review-aggregate.js";
 import type { BuildReviewReviewScope } from "../../src/engine/build-review-artifacts.js";
 import type {
@@ -87,6 +90,70 @@ function decide(
 }
 
 describe("build-review review frontier", () => {
+  // Covers: task:20
+  it("finds only predecessor-lap applied act provenance on a new delta-hunk source", () => {
+    const predecessorFinding = {
+      concernKind: "injection", summary: "unsafe command", evidenceLocations: ["src/repair.ts:4"],
+      anchor: { rubric: "security" as const, locus: { path: "src/repair.ts", contentHash: `sha256:${"a".repeat(64)}`, display: "command" } },
+    } satisfies BuildReviewFinding;
+    const predecessorSourceId = buildReviewAdjudicationSourceId({
+      rubric: "security",
+      findingId: canonicalizeBuildReviewFindingIdentity({ rubric: "security", contractVersion: "v4", ...predecessorFinding })!.id,
+    });
+    const currentSource = "security:current";
+    const actionRow = {
+      caseRef: "new", disposition: "act" as const, priority: "high" as const,
+      rationale: "repair the new defect", confidence: "high" as const,
+      effect: { kind: "action" as const, route: "build" as const, tasks: [{ title: "Repair" }] },
+    };
+    const applied = (id: string, resolution: "open" | "resolved", sourceId: string) => ({
+      id, domain: "build_review" as const, disposition: "act" as const, priority: "high" as const,
+      rationale: "prior repair", confidence: "high" as const, resolution,
+      sources: [{ sourceId, outcome: "acted" as const, recordedAt: "2026-10-24T00:00:00.000Z" }],
+      effect: { id: `effect-${id}`, kind: "action" as const, status: "applied" as const, workOrderId: `order-${id}` },
+    });
+    const priorArtifact = {
+      rubric: "security", result: {
+        kind: "judged", rubric: "security", lapId: lapId("lap-predecessor"), snapshotDigest: "snapshot",
+        contractVersion: "v4", findings: [predecessorFinding], verdict: "FAIL",
+      },
+    };
+    const candidateInput = {
+      caseRow: actionRow,
+      caseSources: [{ sourceId: currentSource, targets: [{ kind: "hunks" as const, hunks: [{ path: "src/repair.ts", contentHash: "sha256:delta" }] }] }],
+      deltaHunks: [{ path: "src/repair.ts", contentHash: "sha256:delta" }],
+      predecessorArtifacts: [priorArtifact],
+      cases: [
+        applied("open", "open", predecessorSourceId),
+        applied("resolved", "resolved", predecessorSourceId),
+        applied("earlier-only", "resolved", "security:earlier-only"),
+      ],
+    };
+
+    expect(buildReviewProvenanceCandidates(candidateInput).map((record) => record.id)).toEqual(["open", "resolved"]);
+
+    // A predecessor artifact is the authority for this query; a case source
+    // from an earlier lap cannot stand in for it.
+    expect(buildReviewProvenanceCandidates({
+      ...candidateInput,
+      cases: [applied("earlier-only", "resolved", "security:earlier-only")],
+    })).toEqual([]);
+
+    // Binding and authoritative ownership are both terminal exclusions, and
+    // the row's own disposition must be `act` before provenance is relevant.
+    expect(buildReviewProvenanceCandidates({ ...candidateInput, caseRow: { ...actionRow, existingCaseId: "open" } })).toEqual([]);
+    expect(buildReviewProvenanceCandidates({ ...candidateInput, caseRow: { ...actionRow, disposition: "reject" } })).toEqual([]);
+    expect(buildReviewProvenanceCandidates({ ...candidateInput, cases: [...candidateInput.cases, applied("exact-owner", "resolved", currentSource)] })).toEqual([]);
+
+    // Commit trailers are intentionally not an input.  The same durable
+    // artifacts and case store produce the same candidates.
+    const withForeignTaskTrailer = buildReviewProvenanceCandidates({
+      ...candidateInput,
+      intervalCommits: [{ message: "unrelated work\n\nTask: 999" }],
+    } as typeof candidateInput);
+    expect(withForeignTaskTrailer.map((record) => record.id)).toEqual(["open", "resolved"]);
+  });
+
   it("includes every per-rubric policy component except engine identity", () => {
     const baseline = inputs();
     const identity = buildReviewPolicyIdentity("security", baseline);

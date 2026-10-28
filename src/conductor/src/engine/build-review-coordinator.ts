@@ -579,8 +579,10 @@ export async function coordinateBuildReviewRubrics(
     : (typedScope?.targets?.length ?? 0) > 0;
   const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
   const emptyTestQualityScope = !hasEstablishedTargets && !hasConcreteCandidates;
+  const decidedTestQualityDeltaIsEmpty = input.reviewScopes?.testQuality?.mode === 'delta' &&
+    input.reviewScopes.testQuality.deltaHunks.length === 0;
   const otherRubricEnabled = BUILD_REVIEW_RUBRICS.some((rubric) => rubric !== TEST_QUALITY_RUBRIC && input.config.rubrics[rubric]?.enabled);
-  if (input.config.enabled && testQualityPolicy?.enabled && emptyTestQualityScope && !otherRubricEnabled && !input.joinsCustomPolicyLap) {
+  if (input.config.enabled && testQualityPolicy?.enabled && emptyTestQualityScope && !decidedTestQualityDeltaIsEmpty && !otherRubricEnabled && !input.joinsCustomPolicyLap) {
     // An empty scope is still a settled scope assessment: publish its counts and
     // unresolved reasons on the same event as every judged settlement, so a
     // production-only refactor or pure move is observable rather than silent.
@@ -622,7 +624,7 @@ export async function coordinateBuildReviewRubrics(
     (branch) => !("kind" in branch) && branch.rubric === TEST_QUALITY_RUBRIC,
   );
   let preflight: TautologyPreflightResult | undefined;
-  const testQualityScopeEmpty = input.reviewScopes?.testQuality?.mode === 'delta' && input.reviewScopes.testQuality.deltaHunks.length === 0;
+  const testQualityScopeEmpty = decidedTestQualityDeltaIsEmpty;
   if (testQualityEnabled && !emptyTestQualityScope && !testQualityScopeEmpty) {
     try {
       preflight = await input.preflight();

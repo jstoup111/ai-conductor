@@ -29,7 +29,7 @@ import {
   type BuildReviewCustomArtifactMember,
   type BuildReviewReviewScope,
 } from './build-review-artifacts.js';
-import { mapBuildReviewFindingToHunks } from './build-review-review-frontier.js';
+import { mapBuildReviewFindingToHunks } from './build-review-finding-hunks.js';
 import type { ChangedFileReference } from './build-review-projections.js';
 import type { BuildReviewCustomFinding, BuildReviewFinding } from './build-review-domain.js';
 

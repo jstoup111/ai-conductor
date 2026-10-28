@@ -1017,20 +1017,42 @@ describe('build_review structured rubric dispatch', () => {
   });
 
   // Covers: task:11
-  it('settles an empty custom delta without catalog or provider dispatch', async () => {
+  it('settles an empty custom delta after resolving its candidate policy identity without reviewer dispatch', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-scope-empty-'));
     const invoke = vi.fn();
-    const catalog = vi.fn();
+    const catalog = vi.fn(async () => [{
+      semanticName: 'custom-policy', source: 'project' as const, installationOrigin: '/fixture/policy',
+      canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available' as const,
+    }]);
     const events = new ConductorEventEmitter();
     const skips: ConductorEvent[] = [];
     events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
     const entry: ResolvedBuildReviewCustomCatalogEntry = {
       id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
       policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
     };
     const runner = new DefaultStepRunner({ invoke }, 'custom-scope-empty', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
       config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
       buildReviewPolicyCatalog: catalog,
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
       events,
     });
 
@@ -1046,19 +1068,24 @@ describe('build_review structured rubric dispatch', () => {
           pipelineDir?: string,
           executionContext?: unknown,
           reviewScope?: unknown,
+          child?: unknown,
+          onResolvedReviewScope?: unknown,
+          resolveReviewScope?: (policyIdentity: string) => Promise<unknown>,
         ) => Promise<unknown>;
       }).dispatchInstalledBuildReviewPolicy(entry, {
         sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
-      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, undefined, join(projectDir, '.pipeline'), undefined, {
-        mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity: 'sha256:policy',
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }), join(projectDir, '.pipeline'), undefined, undefined, undefined, undefined, async (policyIdentity) => ({
+        mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'head', policyIdentity,
         predecessorLapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b', reviewedHunks: [], deltaHunks: [], outOfDeltaSourceIds: [],
-      });
+      }));
 
       expect(outcome).toMatchObject({
         id: 'custom-policy', success: true,
         member: { declaration: { rubricId: 'custom-policy' }, result: { kind: 'scope-empty', rubric: 'custom-policy' } },
       });
-      expect(catalog).not.toHaveBeenCalled();
+      expect(catalog).toHaveBeenCalledOnce();
       expect(invoke).not.toHaveBeenCalled();
       expect(skips).toContainEqual(expect.objectContaining({
         type: 'build_review_rubric_skipped', rubric: 'custom-policy', reason: 'scope-empty',
