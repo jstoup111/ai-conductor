@@ -155,6 +155,7 @@ export type BuildReviewFindingsDispatch = {
 export type BuildReviewAcceptDispatch = {
   readonly kind: 'accept';
   readonly feature: string;
+  readonly child?: string;
   readonly lapId: string;
   readonly findingId: string;
   readonly rationale: string;
@@ -199,13 +200,14 @@ export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAccep
     return index >= 0 ? args[index + 1] : undefined;
   };
   const feature = read('--feature');
+  const child = read('--child');
   const lapId = read('--lap');
   const findingId = read('--finding');
   const rationale = read('--rationale');
-  const expected = ['--feature', feature, '--lap', lapId, '--finding', findingId, '--rationale', rationale];
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), '--lap', lapId, '--finding', findingId, '--rationale', rationale];
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
-  return { kind: 'accept', feature, lapId, findingId, rationale };
+  return { kind: 'accept', feature, ...(child === undefined ? {} : { child }), lapId, findingId, rationale };
 }
 
 /** Detect only the fully bound, operator-only case-resolution grammar. */
@@ -901,12 +903,13 @@ export function createProgram(): Command {
     .command('findings')
     .description('Render current findings for a feature worktree')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
-    .option('--child <child>', 'Child case-store scope')
+    .option('--child <child>', 'Child review-state scope')
     .option('--json', 'Render machine-readable JSON');
   buildReview
     .command('accept')
     .description('Accept one exact current finding from an interactive terminal')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Child review-state scope')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--finding <id>', 'Exact canonical finding identifier')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');

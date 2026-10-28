@@ -177,7 +177,7 @@ keeps engine prompts and shipped skills from directing a managed session to a re
 
 ```bash
 ai-conductor build-review findings --feature <slug> [--child <child>] [--json]
-ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale <text>
 ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <id> --rationale <text>
 ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
@@ -190,8 +190,9 @@ case adds `recurs from <cases>; <n> of 3 applied attempts`; a `distinctFrom` dec
 declaring case (`distinct from <case>: <reason>`) and on the named case (`declared distinct by <case>:
 <reason>`). A missing
 case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
-`findings` name the store and exit 1 rather than silently omitting its cases. `--child` reads that
-child's case store instead of the feature's. `findings` also lists each carried source (its case,
+`findings` name the store and exit 1 rather than silently omitting its cases. `--child` scopes the read to that
+child's aggregate (`.pipeline/children/<child>/build-review.json`), kickback ledger, and case store;
+operator dispositions stay feature-scoped. `findings` also lists each carried source (its case,
 origin source ids, origin laps, and the origin dispositions' operators and rationales), each
 operator-resolved case (operator, rationale, and time), and each case-store outbox entry the engine has
 not yet delivered; `--json` reports them under `carriedSources`, `operatorResolvedCases`, and
@@ -206,9 +207,14 @@ a resolved local operator identity. It requires the exact current lap identity, 
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
 artifacts and exit 1; successful findings inspection and accepted exact-current findings exit 0.
-A refusal names the check that failed — unreadable aggregate, non-current lap, unknown finding, or a
-disposition-store rejection — and records the same reason on the feature's
-`build_review_disposition_refused` event. `record-reduced-coverage` also requires an interactive
+`accept --child <child>` checks the lap and finding against that child's aggregate and records the
+disposition in the feature's store. A refusal names the check that failed — invalid child id,
+unreadable aggregate, non-current lap, unknown finding, or a disposition-store rejection — and records
+the same reason on the feature's `build_review_disposition_refused` event. Both `findings` and
+`accept` name the aggregate path and whether it is missing, malformed, or unreadable; `findings` also
+names an unreadable disposition store or kickback-ledger gate. When `--child` is omitted and the root
+aggregate is missing on a stacked feature, the message lists the children that have an aggregate and
+asks for `--child <k>`. `record-reduced-coverage` also requires an interactive
 terminal, resolved local operator identity, exact current lap, named rubric, and non-empty rationale.
 It derives the closed infrastructure cause from the current review state; callers cannot supply one.
 It records a decision only when that rubric currently has an exhausted mechanical infrastructure

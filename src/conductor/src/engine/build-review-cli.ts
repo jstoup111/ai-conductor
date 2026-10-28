@@ -1,6 +1,6 @@
-import { readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
+import { access, readFile as readFileDefault, realpath as realpathDefault } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
@@ -17,7 +17,7 @@ import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js'
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import { isRegisteredRubric } from './build-review-registry.js';
-import { parseChildId, type ChildId } from './child-context.js';
+import { listExistingChildren, parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -31,12 +31,14 @@ export interface BuildReviewFindingsDeps {
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
+  /** Lists children that currently have a build-review aggregate for a missing-root hint. */
+  readonly listChildAggregates?: (worktree: string) => Promise<readonly ChildId[]>;
   /** Reads the exact diff named by a persisted lap scope for shared verdict resolution. */
   readonly readCurrentLapChangedFiles?: import('./build-review-effective.js').BuildReviewEffectiveResolverDeps['readCurrentLapChangedFiles'];
   readonly createStore?: (worktree: string) => DispositionStore;
   readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreReader;
-  readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
-  readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
+  readonly readKickbackGateEntry?: (worktree: string, child?: ChildId) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
+  readonly readMechanicalFaults?: (worktree: string, child?: ChildId) => Promise<number | undefined>;
   readonly loadConfig?: (worktree: string) => Promise<ConfigResult>;
   readonly print?: (output: string) => void;
 }
@@ -44,6 +46,7 @@ export interface BuildReviewFindingsDeps {
 export interface BuildReviewAcceptCommand {
   readonly kind: 'accept';
   readonly feature: string;
+  readonly child?: string;
   readonly lapId: string;
   readonly findingId: string;
   readonly rationale: string;
@@ -435,6 +438,112 @@ type ResolvedCliFeature = {
   readonly feature: BuildReviewFeatureIdentity;
 };
 
+class FindingsDispositionStoreError extends Error {
+  constructor(readonly kind: string, readonly detail: string) {
+    super(detail);
+  }
+}
+
+class FindingsLedgerGateError extends Error {
+  constructor(readonly path: string) {
+    super("kickback ledger gate 'build_review' is unreadable");
+  }
+}
+
+type CliAggregateReadResult =
+  | { readonly ok: true; readonly aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>> }
+  | { readonly ok: false; readonly path: string; readonly cause: 'missing' | 'unreadable' | 'malformed'; readonly detail?: string };
+
+type CliAggregateFailure = Extract<CliAggregateReadResult, { readonly ok: false }>;
+
+type CliAggregateFailureDescription = {
+  readonly path: string;
+  readonly predicate: 'is missing' | 'is malformed' | 'could not be read';
+  /** Parenthesized diagnostic, which follows the command-specific feature framing. */
+  readonly trailingDetail: string;
+  readonly stackedChildHint: string;
+};
+
+/**
+ * Keep diagnostic paths tied to the path constructor used for artifact access.
+ * Diagnostics are always slash-delimited, including on a Windows worktree.
+ */
+function pipelineRelativePath(worktree: string, artifact: string, child: ChildId | undefined): string {
+  return relative(worktree, pipelinePathFor(worktree, artifact, child)).replaceAll('\\', '/');
+}
+
+function readErrorDetail(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') return error.code;
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Reads the root or selected child's aggregate through the one path constructor. */
+async function readCliBuildReviewAggregate(
+  worktree: string,
+  child: ChildId | undefined,
+  readFile: (path: string) => Promise<string>,
+): Promise<CliAggregateReadResult> {
+  const path = pipelinePathFor(worktree, 'build-review.json', child);
+  const relativePath = pipelineRelativePath(worktree, 'build-review.json', child);
+  let source: string;
+  try {
+    source = await readFile(path);
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+    return code === 'ENOENT'
+      ? { ok: false, path: relativePath, cause: 'missing' }
+      : { ok: false, path: relativePath, cause: 'unreadable', detail: readErrorDetail(error) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return { ok: false, path: relativePath, cause: 'malformed', detail: 'invalid JSON' };
+  }
+  const aggregate = parseBuildReviewAggregate(parsed);
+  return aggregate
+    ? { ok: true, aggregate }
+    : { ok: false, path: relativePath, cause: 'malformed', detail: 'does not match the build-review aggregate schema' };
+}
+
+async function defaultListChildAggregates(worktree: string): Promise<readonly ChildId[]> {
+  const children = await listExistingChildren(worktree);
+  const aggregates = await Promise.all(children.map(async (child) => {
+    try {
+      await access(pipelinePathFor(worktree, 'build-review.json', child));
+      return child;
+    } catch {
+      return undefined;
+    }
+  }));
+  return aggregates.filter((child): child is ChildId => child !== undefined);
+}
+
+/**
+ * Describes an unreadable CLI aggregate consistently for findings and accept.
+ * Only an omitted root aggregate can direct the operator to child aggregates.
+ */
+async function describeCliAggregateFailure(
+  failure: CliAggregateFailure,
+  worktree: string,
+  child: ChildId | undefined,
+  listChildAggregates: (worktree: string) => Promise<readonly ChildId[]>,
+): Promise<CliAggregateFailureDescription> {
+  const children = failure.cause === 'missing' && child === undefined
+    ? await listChildAggregates(worktree)
+    : [];
+  const predicate = failure.cause === 'missing'
+    ? 'is missing'
+    : failure.cause === 'malformed'
+      ? 'is malformed'
+      : 'could not be read';
+  const trailingDetail = failure.detail === undefined ? '' : ` (${failure.detail})`;
+  const stackedChildHint = children.length === 0
+    ? ''
+    : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${children.join(', ')}).`;
+  return { path: failure.path, predicate, trailingDetail, stackedChildHint };
+}
+
 async function resolveCliMinConfidence(
   worktree: string,
   deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>,
@@ -478,18 +587,28 @@ async function resolveCliFeature(
 /** Read only current feature artifacts; this deliberately never constructs a pipeline or state lease. */
 export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCommand, deps: BuildReviewFindingsDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
+  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  if (command.child !== undefined && child === undefined) {
+    print(`build-review findings: invalid child id '${command.child}'.`);
+    return 1;
+  }
   try {
-    const child = command.child === undefined ? undefined : parseChildId(command.child);
-    if (command.child !== undefined && child === undefined) throw new Error('child scope is invalid');
     const resolved = await resolveCliFeature(command, deps);
     if (!resolved) throw new Error('feature identity is unavailable');
     const { worktree, feature } = resolved;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
-    const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
-    if (!aggregate) throw new Error('aggregate is malformed');
+    const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
+    if (!aggregateRead.ok) {
+      const failure = await describeCliAggregateFailure(
+        aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+      );
+      print(`build-review findings: ${failure.path} ${failure.predicate} for '${command.feature}'${failure.trailingDetail}.${failure.stackedChildHint}`);
+      return 1;
+    }
+    const aggregate = aggregateRead.aggregate;
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const listed = await store.list(feature);
-    if (!listed.ok) throw new Error(listed.message);
+    if (!listed.ok) throw new FindingsDispositionStoreError(listed.kind, listed.message);
     const records = listed.records;
     const caseStore = (deps.createCaseStore ?? ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
       new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild })))(worktree, feature, child);
@@ -499,17 +618,17 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const reducedCoverage = store.listReducedCoverage
       ? await store.listReducedCoverage(feature)
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
-    if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
+    if (!reducedCoverage.ok) throw new FindingsDispositionStoreError(reducedCoverage.kind, reducedCoverage.message);
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
     const minSeverity = await resolveCliMinSeverity(worktree, deps);
     const gateEntry = deps.readKickbackGateEntry
-      ? await deps.readKickbackGateEntry(worktree)
+      ? await deps.readKickbackGateEntry(worktree, child)
       : deps.readMechanicalFaults
-        ? { mechanicalFaults: await deps.readMechanicalFaults(worktree) }
+        ? { mechanicalFaults: await deps.readMechanicalFaults(worktree, child) }
         : await (async () => {
-          const ledger = await readKickbackLedger(worktree);
+          const ledger = await readKickbackLedger(worktree, child);
           if (isUnreadableKickbackGate(ledger, 'build_review')) {
-            throw new Error("kickback ledger gate 'build_review' is unreadable");
+            throw new FindingsLedgerGateError(pipelineRelativePath(worktree, 'kickback-ledger.json', child));
           }
           return ledger.gates.build_review;
         })();
@@ -565,11 +684,20 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, advisories, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
     return 0;
   } catch (error) {
+    if (error instanceof FindingsDispositionStoreError) {
+      print(`build-review findings: .pipeline/build-review-dispositions.json is ${error.kind} for '${command.feature}' (${error.detail}).`);
+      return 1;
+    }
+    if (error instanceof FindingsLedgerGateError) {
+      print(`build-review findings: ${error.path} gate 'build_review' is unreadable for '${command.feature}'.`);
+      return 1;
+    }
     if (error instanceof Error && error.message.startsWith('remediation case store is ')) {
       print(`build-review findings: ${error.message} for '${command.feature}'.`);
       return 1;
     }
-    print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);
+    const detail = error instanceof Error ? error.message : String(error);
+    print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}' (${detail}).`);
     return 1;
   }
 }
@@ -609,21 +737,23 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   if (!requestedLap || !command.rationale.trim()) {
     return refuse('invalid-lap-or-blank-rationale', 'build-review accept: requires an exact current lap and non-empty rationale.');
   }
+  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  if (command.child !== undefined && child === undefined) {
+    return refuse('invalid-child', `build-review accept: refused for '${command.feature}'; invalid child id '${command.child}'.`);
+  }
   const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
-  const readAggregate = async (): Promise<ReturnType<typeof parseBuildReviewAggregate>> => {
-    try {
-      return parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
-    } catch {
-      return undefined;
-    }
-  };
+  const readAggregate = () => readCliBuildReviewAggregate(worktree, child, readFile);
   // Each precondition refuses under its own reason. A single catch-all made a
   // stale lap, an unknown finding id, and a store rejection indistinguishable
   // to the operator reading the refusal (#1769).
-  const aggregate = await readAggregate();
-  if (!aggregate) {
-    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; the current build-review aggregate is missing or malformed.`);
+  const aggregateRead = await readAggregate();
+  if (!aggregateRead.ok) {
+    const failure = await describeCliAggregateFailure(
+      aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+    );
+    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; ${failure.path} ${failure.predicate}${failure.trailingDetail}.${failure.stackedChildHint}`);
   }
+  const aggregate = aggregateRead.aggregate;
   if (aggregate.lapId !== requestedLap) {
     return refuse('requested-lap-not-current', `build-review accept: refused for '${command.feature}'; lap '${command.lapId}' is not the current lap ('${aggregate.lapId}').`);
   }
@@ -637,8 +767,10 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
     const unchanged = async (): Promise<boolean> => {
-      const current = await readAggregate();
-      return current !== undefined && current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
+      const currentRead = await readAggregate();
+      if (!currentRead.ok) return false;
+      const current = currentRead.aggregate;
+      return current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
         JSON.stringify(current.results) === JSON.stringify(aggregate.results) &&
         JSON.stringify(current.customResults) === JSON.stringify(aggregate.customResults) &&
         JSON.stringify(current.currentCustomRubrics) === JSON.stringify(aggregate.currentCustomRubrics);

@@ -395,26 +395,21 @@ In a stacked feature, a child's review state lives under `.pipeline/children/<k>
 | `.pipeline/children/<k>/build-review.json` | The child's aggregate: `lapId` and each rubric's `findings`. |
 | `.pipeline/children/<k>/remediation-cases.json` | The child's remediation cases. |
 
-`ai-conductor build-review findings` and `build-review accept` read only the root
-`.pipeline/build-review.json`. On a stacked child they fail with
-`current feature state is invalid or unavailable`, even when given `--child`. `accept` has no
-`--child` at all. This is [#3448](https://github.com/jstoup111/ai-conductor/issues/3448).
-
-For a `semantic remediation case repeat` or `regression` halt on a child, the halt names the
-recovery command. Follow
-[semantic case repeat or regression](stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
-To read the case and its finding until #3448 lands, use these read-only commands:
+Pass `--child <k>` to inspect or accept against the child's state:
 
 ```bash
-cd .worktrees/<slug>
-python3 -c "
-import json; d=json.load(open('.pipeline/children/<k>/remediation-cases.json'))
-cs=d.get('cases',d); cs=cs.values() if isinstance(cs,dict) else cs
-[print(json.dumps(c,indent=1)) for c in cs if c.get('id')=='<case-id>']"
-python3 -c "
-import json; d=json.load(open('.pipeline/children/<k>/build-review.json'))
-print(d['lapId']); [print(json.dumps(f,indent=1)) for r in d['results'].values() for f in r.get('findings',[])]"
+ai-conductor build-review findings --feature <slug> --child <k>
+ai-conductor build-review accept --feature <slug> --child <k> --lap <lap> --finding <id> --rationale "<why>"
 ```
+
+`--lap` is the child's `lapId`, which `findings --child <k>` prints. Without `--child`, both commands
+read `.pipeline/build-review.json`; on a stacked feature with no root aggregate they report it missing
+and list the children that have one.
+
+For a `semantic remediation case repeat` or `regression` halt on a child, follow
+[semantic case repeat or regression](stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
+The child regression halt still says `build-review accept has no --child yet`; that text is stale, and
+`accept --child <k>` works.
 
 For the other build_review halts, see
 [open action case](stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case) and

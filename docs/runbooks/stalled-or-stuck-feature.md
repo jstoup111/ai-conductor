@@ -1888,7 +1888,7 @@ until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds on
 `remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
 repeating this halt.
 
-On a stacked child, `build-review findings` and `accept` do not yet read the child's state; see
+On a stacked child, pass `--child <child>` to `findings`; see
 [Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
 
 ### build_review halted on a recurrence limit
@@ -1918,7 +1918,7 @@ route is not progress. The engine bound the current source to `<case>` and emitt
 3. If the finding is accepted risk, accept it from an interactive terminal:
 
    ```bash
-   ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"
+   ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale "<why>"
    ```
 
    Otherwise, fix the finding in the feature worktree.
@@ -1957,12 +1957,10 @@ test can fail against the base, so the finding is accepted risk.
 1. Inspect the case and the re-raised finding:
 
    ```bash
-   ai-conductor build-review findings --feature <slug>
+   ai-conductor build-review findings --feature <slug> [--child <child>]
    ```
 
-   On a stacked child, `findings` does not yet read child state. Read
-   `.pipeline/children/<child>/remediation-cases.json` and `.pipeline/children/<child>/build-review.json`
-   instead. See
+   Pass `--child <child>` on a stacked child. See
    [Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
 2. Leave `.pipeline/remediation-cases.json` unchanged. Do not hand-edit case history.
 3. If the finding is accepted risk or already fixed, run the command from the halt in an interactive
@@ -1978,12 +1976,11 @@ test can fail against the base, so the finding is accepted risk.
      re-raised finding instead:
 
      ```bash
-     ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"
+     ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale "<why>"
      ```
 
-     On a stacked child, `accept` has no `--child` yet
-     ([#3448](https://github.com/jstoup111/ai-conductor/issues/3448)). Fix the finding on the child's
-     branch instead.
+     On a stacked child, pass `--child <child>` and the child's lap. The child halt text still says
+     `build-review accept has no --child yet`; that text is stale.
 
    If the finding is real, fix it in the feature worktree. For a repeat, also leave the case open.
 4. Clear the halt with an [audited clear](#audited-clear):
