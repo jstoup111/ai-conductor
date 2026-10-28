@@ -4601,6 +4601,17 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(judge).toHaveBeenCalledTimes(3);
     expect(contexts[2]).toMatchObject({ bindingCorrections: [{ existingCaseId: 'case-A', disposition: 'reject', bindableDispositions: ['act'] }] });
+    const sharedContext = (context: unknown) => {
+      const { planContract, bindingCorrections: _bindingCorrections, ...shared } = context as {
+        readonly planContract: { readonly admittedTaskContracts: unknown; readonly [key: string]: unknown };
+        readonly bindingCorrections?: unknown;
+        readonly [key: string]: unknown;
+      };
+      const { admittedTaskContracts: _admittedTaskContracts, ...sharedPlanContract } = planContract;
+      return { ...shared, planContract: sharedPlanContract };
+    };
+    expect(sharedContext(contexts[1])).toEqual(sharedContext(contexts[0]));
+    expect(sharedContext(contexts[2])).toEqual(sharedContext(contexts[0]));
     expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('inadmissible-case-binding') });
     expect((result as { detail: string }).detail).toContain('case case-A bound as reject');
   });

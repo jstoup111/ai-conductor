@@ -962,12 +962,28 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     retainScopeEmptySources(new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId)));
-  const freshContext = assembleBuildReviewAdjudicationContext({
+  // Each adjudication round must carry this exact shared projection. Only the
+  // admitted expansion task bodies and binding correction change by round.
+  const dispatchContextInput = {
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
+    taskStatus, attemptedCaseIds,
     priorFindingDigests: input.priorFindingDigests,
+  };
+  const buildDispatchContext = async ({
+    expansionTaskIds = [],
+    bindingCorrections,
+  }: {
+    readonly expansionTaskIds?: readonly string[];
+    readonly bindingCorrections?: Parameters<typeof assembleBuildReviewAdjudicationContext>[0]['bindingCorrections'];
+  } = {}) => assembleBuildReviewAdjudicationContext({
+    ...dispatchContextInput,
+    planContract: await scopedPlanContract(
+      input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds,
+    ),
+    ...(bindingCorrections === undefined ? {} : { bindingCorrections }),
   });
+  const freshContext = await buildDispatchContext();
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   let dispatchContext = freshContext.context;
   let expansionTaskIds: readonly string[] | undefined;
@@ -1046,12 +1062,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // an index-only response must fail closed instead of replacing it.
     if (bindingCorrections === undefined && expansionTaskIds === undefined && classification?.kind === 'index-only') {
       expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
-      const expandedContext = assembleBuildReviewAdjudicationContext({
-        aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-        operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-        planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
-        priorFindingDigests: input.priorFindingDigests,
-      });
+      const expandedContext = await buildDispatchContext({ expansionTaskIds });
       if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = expandedContext.context;
       dispatchPurpose = 'expansion';
@@ -1059,12 +1070,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
     if (bindingCorrections === undefined && graph.reason === 'inadmissible-case-binding') {
       bindingCorrections = graph.bindings;
-      const correctedContext = assembleBuildReviewAdjudicationContext({
-        aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-        operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-        planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
-        priorFindingDigests: input.priorFindingDigests, bindingCorrections,
-      });
+      const correctedContext = await buildDispatchContext({ expansionTaskIds, bindingCorrections });
       if (!correctedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(correctedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = correctedContext.context;
       dispatchPurpose = 'correction';
