@@ -95,7 +95,7 @@ describe('stack preflight operator landing guard (real local Git)', () => {
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', git: subject.git, reconcileRounds,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Operator-Halt: operator-round-undeclared r1\n');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
@@ -118,7 +118,7 @@ describe('stack preflight operator landing guard (real local Git)', () => {
     try {
       await expect(runStackPreflight({
         worktree: subject.repo, slug: 'demo', baseRefreshDue: true, git: subject.git, events, reconcileRounds,
-      })).resolves.toEqual({ kind: 'halted' });
+      })).resolves.toMatchObject({ kind: 'halted' });
     } finally {
       persister.stop();
     }

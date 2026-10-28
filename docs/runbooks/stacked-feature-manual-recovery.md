@@ -138,7 +138,9 @@ ai-conductor kickback-budget inspect --feature <slug> --child <origin>   # may s
 
 3. The daemon consumes the authorization and resumes. If the resume then ends with
    `loop ended without DONE or HALT marker` and `Resume authorization: consumed`, the HALT file
-   survived the resume and stack preflight refused on it without saying so. Clear it:
+   survived the resume and stack preflight refused on it without saying so. Engines with the
+   [#3446](https://github.com/jstoup111/ai-conductor/issues/3446) fix instead report the feature
+   `halted` with `live HALT without resume authorization: <first HALT line>`. Either way, clear it:
 
    ```bash
    rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
@@ -225,7 +227,12 @@ round's routed exit, with a `restack_planned` event or a specific restack HALT.
 ## 4. Silent stops: "loop ended without DONE or HALT marker"
 
 Engine defect [#3446](https://github.com/jstoup111/ai-conductor/issues/3446): stack preflight
-refusals stop the run without writing a reason.
+refusals stop the run without writing a reason. Engines with the fix never produce this symptom
+from preflight. Every stopping preflight leaves `.pipeline/HALT` stating its reason, or keeps a
+HALT that was already live, and emits `loop_halt` with that reason; the daemon reports the feature
+`halted`. If the HALT itself cannot be written, the run errors naming both the preflight reason and
+the write failure. Use this section only on older engines, or to replay preflight for the
+sections that link here.
 
 **Symptom.**
 

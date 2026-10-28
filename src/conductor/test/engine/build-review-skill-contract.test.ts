@@ -1,4 +1,4 @@
-// Covers: task:12, task:rem-prd-audit-10
+// Covers: task:12, task:13, task:rem-prd-audit-10
 import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +9,8 @@ import {
   describeBuildReviewJudgedResultRejection,
   parseBuildReviewJudgedResult,
 } from '../../src/engine/build-review-domain.js';
+import { renderBuildReviewFrozenInputScope } from '../../src/engine/build-review-materialization.js';
+import { renderAuxiliarySkillInvocation } from '../../src/engine/skill-invocation.js';
 
 const testQualitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url),
@@ -22,6 +24,18 @@ const implementationQualitySkillPath = fileURLToPath(
 const implementationQualityOpenAiPath = fileURLToPath(
   new URL('../../../../skills/build-review-implementation-quality/agents/openai.yaml', import.meta.url),
 );
+
+const DELTA_CONTRACT = 'Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.';
+
+const BUILD_REVIEW_SKILLS = [
+  ['security', securitySkillPath],
+  ['implementationQuality', implementationQualitySkillPath],
+  ['testQuality', testQualitySkillPath],
+] as const;
+
+function normalizedContract(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
 
 function judgementSection(skill: string): string {
   return skill.split('## Judgement\n')[1]?.split('\n## ')[0] ?? '';
@@ -173,5 +187,34 @@ describe('build-review implementation-quality skill contract', () => {
 
   it('permits the shipped skill to name those reviews as exclusions, not its question', async () => {
     expect(forbiddenImplementationQualityQuestion(await readFile(implementationQualitySkillPath, 'utf8'))).toBeUndefined();
+  });
+});
+
+describe('build-review delta contract', () => {
+  it('states the same delta-review obligation in every built-in skill and the custom-rubric prompt', async () => {
+    for (const [, skillPath] of BUILD_REVIEW_SKILLS) {
+      await expect(readFile(skillPath, 'utf8')).resolves.toSatisfy((skill) =>
+        normalizedContract(skill).includes(DELTA_CONTRACT));
+    }
+
+    expect(normalizedContract(renderBuildReviewFrozenInputScope({
+      contentDigest: 'sha256:content',
+      mergeBase: 'base-sha',
+      headSha: 'head-sha',
+      changes: [],
+      reviewScope: { mode: 'delta', deltaHunks: [] },
+    }))).toContain(DELTA_CONTRACT);
+  });
+
+  it('renders the same security skill contract for Claude and Codex candidates', async () => {
+    const skill = await readFile(securitySkillPath, 'utf8');
+    const claudePrompt = `${renderAuxiliarySkillInvocation('build-review-security', 'claude')}\n${skill}`;
+    const codexPrompt = `${renderAuxiliarySkillInvocation('build-review-security', 'codex')}\n${skill}`;
+
+    expect(claudePrompt).toContain('/build-review-security');
+    expect(codexPrompt).toContain('$build-review-security');
+    expect(normalizedContract(claudePrompt)).toContain(DELTA_CONTRACT);
+    expect(normalizedContract(codexPrompt)).toContain(DELTA_CONTRACT);
+    expect(claudePrompt.slice(claudePrompt.indexOf('\n'))).toBe(codexPrompt.slice(codexPrompt.indexOf('\n')));
   });
 });

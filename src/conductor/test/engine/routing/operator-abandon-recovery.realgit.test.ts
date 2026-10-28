@@ -151,7 +151,7 @@ describe('operator abandon recovery (real local Git)', () => {
     const subject = await fixture({ carry: true });
     await expect(abandonOperatorRound({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git })).resolves.toEqual({ kind: 'abandoned' });
 
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toEqual({ kind: 'halted' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('unlanded-closed-child-commits: child 2');
   });
 });

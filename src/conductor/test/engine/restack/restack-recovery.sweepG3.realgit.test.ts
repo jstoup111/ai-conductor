@@ -1,4 +1,4 @@
-// Covers: task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29, task:rem-prd-audit-rem-prd-audit-R30, task:rem-prd-audit-rem-prd-audit-R31, task:rem-prd-audit-rem-v3-intent-restack
+// Covers: task:1, task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29, task:rem-prd-audit-rem-prd-audit-R30, task:rem-prd-audit-rem-prd-audit-R31, task:rem-prd-audit-rem-v3-intent-restack
 //
 // Crash-recovery tests driven by journals that a real `runRestack` left
 // behind. A wrapping Git runner simulates process death the moment the
@@ -8,7 +8,7 @@
 // process so recovery treats it as abandoned.
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -670,8 +670,8 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     }
   });
 
-  // Covers: task:24, task:rem-prd-audit-rem-prd-audit-R31
-  it('leaves refs, worktree and events.jsonl byte-identical on a second recovery run, and never touches a live owner’s journal', async () => {
+  // Covers: task:1, task:24, task:rem-prd-audit-rem-prd-audit-R31
+  it('reports a live journal owner, recovers foreign or stale owners, and leaves a second recovery byte-identical', async () => {
     const subject = await stackFixture();
     await crashRestackAt(subject, (journal) => journal.state === 'moved');
 
@@ -679,7 +679,10 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     const liveBlob = (await subject.git(['rev-parse', journalRefFor('demo')])).stdout.trim();
     const liveRefs = await refSnapshot(subject.git);
     const liveTree = await worktreeSnapshot(subject);
-    await expect(recoverPersisted(subject.repo)).resolves.toEqual({ kind: 'live-owner' });
+    await expect(recoverPersisted(subject.repo)).resolves.toEqual({
+      kind: 'live-owner',
+      owner: expect.objectContaining({ host: hostname(), pid: process.pid }),
+    });
     expect((await subject.git(['rev-parse', journalRefFor('demo')])).stdout.trim()).toBe(liveBlob);
     expect(await refSnapshot(subject.git)).toBe(liveRefs);
     expect(await worktreeSnapshot(subject)).toBe(liveTree);
@@ -697,5 +700,16 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     expect(await refSnapshot(subject.git)).toBe(refsAfterFirst);
     expect(await worktreeSnapshot(subject)).toBe(treeAfterFirst);
     expect((await readFile(join(subject.repo, '.pipeline', 'events.jsonl'))).equals(eventsAfterFirst)).toBe(true);
+
+    const stale = await stackFixture();
+    await crashRestackAt(stale, (journal) => journal.state === 'moved');
+    const staleRead = await readRestackJournal(stale.repo, 'demo');
+    if (staleRead.kind !== 'journal') throw new Error('expected a journal with a stale owner');
+    const staleBlob = await writeRestackJournalBlob(stale.repo, {
+      ...staleRead.journal,
+      owner: { ...staleRead.journal.owner, processStartTime: 'not-this-process' },
+    });
+    await stale.git(['update-ref', journalRefFor('demo'), staleBlob, staleRead.blob]);
+    await expect(recoverPersisted(stale.repo)).resolves.toEqual({ kind: 'recovered', fromState: 'moved' });
   });
 });

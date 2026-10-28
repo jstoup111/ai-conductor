@@ -1294,6 +1294,12 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 | `replay-mismatch`, `verification-failed` | The replayed result failed path-ownership or post-move verification. |
 | `flatten_refused` | A content-bearing merge in the named child conflicts with its new parent. |
 
+A restack journal still owned by a live process halts `mechanical`, not `needs-human`, with
+`restack journal owned by live process <pid> on <host>` (or `journal owner unreadable`) and a
+`restack_refused` event with reason `journal-live-owner`. Another operation is mid-restack; let it
+finish. No halt record is committed, and the re-kick sweep clears the HALT on a base-branch
+advance; otherwise [clear the halt](#clear-a-halt-and-let-the-feature-resume) once the owner exits.
+
 A `restack conflict child <k>` HALT lists the conflicting commit and paths the resolver could not
 settle within the rebase resolution attempt budget.
 

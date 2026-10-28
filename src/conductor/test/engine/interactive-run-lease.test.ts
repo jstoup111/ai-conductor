@@ -40,7 +40,9 @@ interface StartedCli {
 }
 
 async function waitForPath(path: string, description: string, run?: StartedCli): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  // A cold `tsx` boot of index.ts on a loaded CI runner can take several seconds
+  // before the first provider dispatch; keep this below the 20s test timeout.
+  const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
       await access(path);
@@ -95,6 +97,12 @@ async function createInteractiveFixture(
     await execa('git', ['worktree', 'add', '--detach', activeRoot, 'feat/c1/demo'], { cwd: root });
     await mkdir(join(activeRoot, '.ai-conductor'), { recursive: true });
   }
+  // The spawned CLI runs `bin/update --auto` against the real harness checkout
+  // at startup. In a full clone (CI's checkout, unlike a linked worktree) that
+  // performs a networked release check and can consume the provider-boundary
+  // deadline; disable the advisory check in the fixture's user config.
+  await mkdir(join(home, '.ai-conductor'), { recursive: true });
+  await writeFile(join(home, '.ai-conductor', 'config.yml'), 'conductor:\n  auto_check: false\n');
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'llm_provider: codex\n');
   if (activeRoot !== root) {
     await writeFile(join(activeRoot, '.ai-conductor', 'config.yml'), 'llm_provider: codex\n');
@@ -163,6 +171,7 @@ function startInteractiveEntry(fixture: InteractiveFixture, args: readonly strin
     env: {
       ...process.env,
       HOME: fixture.home,
+      AI_CONDUCTOR_USER_CONFIG_DIR: join(fixture.home, '.ai-conductor'),
       PATH: `${fixture.bin}${delimiter}${process.env.PATH ?? ''}`,
       AI_CONDUCTOR_NO_REAL_EXEC: undefined,
       CONDUCT_DAEMON_SESSION: undefined,

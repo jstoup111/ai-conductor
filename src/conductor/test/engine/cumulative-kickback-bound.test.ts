@@ -214,7 +214,7 @@ describe('cumulative build-review kickback bound', () => {
     const runRubricLap = async (headSha: string) => (makeRunner() as unknown as {
       runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean }>;
     }).runRubricBuildReview({
-      sourceSnapshot: { headSha, digest: 'sha256:fixture', mergeBase: 'base' },
+      sourceSnapshot: { headSha, digest: 'sha256:fixture', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs, resolveBuildReviewConfig(buildReviewConfig));
 
     await runRubricLap('mechanical-one');

@@ -101,7 +101,9 @@ describe('stacked resume after a DECIDE reseal', () => {
     const repo = await resealedFixture();
     await rm(join(repo, planPath));
 
-    await expect(runStackPreflight({ worktree: repo, slug: 'demo', git: makeGitRunner(repo) })).resolves.toEqual({ kind: 'halted' });
+    await expect(runStackPreflight({ worktree: repo, slug: 'demo', git: makeGitRunner(repo) })).resolves.toMatchObject({
+      kind: 'halted', detail: expect.stringContaining('plan-missing'),
+    });
     await expect(readFile(join(repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('plan-missing');
   });
 });

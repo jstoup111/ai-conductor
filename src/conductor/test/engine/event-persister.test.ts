@@ -27,6 +27,7 @@ import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDispo
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
+import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 
 const CURRENT_TEST_SUITE_PROOF = {
   status: 'CURRENT',
@@ -206,6 +207,39 @@ describe('EventPersister', () => {
     expect(scopeSummary).toMatchObject({
       type: 'build_review_scope_summary',
       excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    });
+  });
+
+  // Covers: task:5
+  it('persists a build-review review-scope occurrence with its complete scope summary', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'build_review_review_scope',
+      rubric: 'security',
+      lapId: 'lap-2',
+      mode: 'delta',
+      reason: 'delta',
+      deltaHunkCount: 3,
+      settledHunkCount: 5,
+    } satisfies ConductorEvent;
+    persister.start();
+
+    await emitter.emit(event);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    const { ts: _ts, ...record } = records[0];
+    expect(record).toEqual(event);
+  });
+
+  // Covers: task:5
+  it('registers build-review review-scope occurrences as persistent but non-rendered', () => {
+    expect(EVENT_SINKS).toHaveProperty('build_review_review_scope', {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
     });
   });
 
