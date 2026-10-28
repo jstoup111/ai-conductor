@@ -403,7 +403,7 @@ describe('stack preflight dispatch boundaries', () => {
     const subject = await fixture();
     const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
     const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
-    const loaded = {
+    const loaded: ConductState = {
       ...state,
       feature_desc: 'demo',
       complexity_tier: 'M',
