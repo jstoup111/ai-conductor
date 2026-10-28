@@ -35,6 +35,7 @@ import type {
   RestackRefusalReason,
 } from '../engine/restack/restack-types.js';
 import type { HostState, RoundId, RouteKind } from '../engine/routing/route-types.js';
+import type { ArtifactKind } from '../engine/feature-manifest.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -660,6 +661,11 @@ type ConductorEventBody =
       declined: string[];
       skipped: { reason: string } | null;
       writes: Array<{ target: string; status: string; reason?: string }>;
+    }
+  | {
+      type: 'feature_artifacts_registered';
+      slug: string;
+      added: Array<{ kind: ArtifactKind; path: string }>;
     }
   | {
       type: 'dependency_drift_swept';

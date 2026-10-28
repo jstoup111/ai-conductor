@@ -876,6 +876,11 @@ fails the land. Every decision, including write outcomes, is recorded as a `land
 event in the target repository's `.pipeline/composer-events.jsonl`. Declining a proposal never
 removes an existing declaration or link.
 
+Every successful land regenerates and commits `.docs/<slug>/manifest.json` — see
+[feature manifest](artifacts.md#feature-manifest). The final JSON adds `manifestChanged` (the rendered
+manifest differs from the prior bytes) and `added` (newly registered `{ kind, path }` entries). A changed
+manifest also records a `feature_artifacts_registered` event in `.pipeline/composer-events.jsonl`.
+
 `compose land` keeps amendments to artifacts that already existed at the branch's merge base
 under their original feature names. Those amendments remain in the commit and applicable ADR/coherence
 checks, but cannot replace the current feature's required artifacts. New paths, including rename

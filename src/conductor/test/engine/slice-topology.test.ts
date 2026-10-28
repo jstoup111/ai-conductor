@@ -1,4 +1,4 @@
-// Covers: task:1, task:rem-as-built-1-r1, task:rem-as-built-1-r2, task:rem-operator-17-r3
+// Covers: task:1, task:11, task:rem-as-built-1-r1, task:rem-as-built-1-r2, task:rem-operator-17-r3
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -135,6 +135,39 @@ describe('loadSliceTopology', () => {
     await expect(loadSliceTopology(missingStories, 'demo')).resolves.toMatchObject({
       kind: 'unavailable', cause: 'plan-invalid', storiesPath: '.docs/stories/demo.md',
     });
+  });
+
+  it('reads manifest-relocated stories and complexity, and treats an omitted stories kind as absent', async () => {
+    const root = await fixture({ stories: '' });
+    await mkdir(join(root, '.docs', 'demo'), { recursive: true });
+    await Promise.all([
+      writeFile(join(root, '.docs', 'demo', 'stories.md'), STORIES),
+      writeFile(join(root, '.docs', 'demo', 'complexity.md'), 'Tier: M\nStacked-Delivery: approved\n'),
+      writeFile(join(root, '.docs', 'complexity', 'demo.md'), 'Tier: S\n'),
+      writeFile(join(root, '.docs', 'demo', 'manifest.json'), JSON.stringify({ schemaVersion: 1, slug: 'demo', artifacts: [
+        { kind: 'plan', path: '.docs/plans/demo.md' },
+        { kind: 'stories', path: '.docs/demo/stories.md' },
+        { kind: 'complexity', path: '.docs/demo/complexity.md' },
+      ] })),
+    ]);
+    await expect(loadSliceTopology(root, 'demo')).resolves.toMatchObject({
+      kind: 'sliced', storyOwnership: { '1': 1, '2': 2 }, stackEligibility: { kind: 'eligible' },
+    });
+
+    await writeFile(join(root, '.docs', 'demo', 'manifest.json'), JSON.stringify({ schemaVersion: 1, slug: 'demo', artifacts: [
+      { kind: 'plan', path: '.docs/plans/demo.md' },
+    ] }));
+    await expect(loadSliceTopology(root, 'demo')).resolves.toMatchObject({
+      kind: 'unavailable', cause: 'plan-invalid', violations: [expect.objectContaining({ code: 'stories-path' })],
+    });
+  });
+
+  it('refuses a malformed feature manifest instead of reading legacy stories', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.docs', 'demo'), { recursive: true });
+    await writeFile(join(root, '.docs', 'demo', 'manifest.json'), '{not json');
+
+    await expect(loadSliceTopology(root, 'demo')).rejects.toThrow('.docs/demo/manifest.json');
   });
 
   it('reports a missing plan with its conventional feature path', async () => {

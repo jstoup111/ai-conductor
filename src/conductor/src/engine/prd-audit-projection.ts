@@ -19,7 +19,8 @@ import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js'
 import { parseCoherenceWaiverDeclaration } from './engineer/coherence-waiver.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
 import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 import type { PrdAuditRequirementAssociation } from './prd-audit-contract.js';
@@ -468,7 +469,7 @@ export async function buildPrdAuditProjection(
     return { ok: false, fault: { dimension: 'plan', detail: 'active plan is unreadable' } };
   }
   const intent = planIntent(plan);
-  const storiesRepoPath = resolvePlanStoriesPath(repoPath(projectRoot, planPath), plan);
+  const storiesRepoPath = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), repoPath(projectRoot, planPath), plan);
   if (!intent || !storiesRepoPath) return { ok: false, fault: { dimension: 'plan', detail: 'active plan has incomplete audit context' } };
 
   let stories: string;
@@ -496,14 +497,22 @@ export async function buildPrdAuditProjection(
   }
   if (parsedCriteria.criteria.length === 0 || tasks.length === 0) return { ok: false, fault: { dimension: 'obligations', detail: 'active stories or plan contain no audit obligations' } };
 
-  const coherencePath = join(projectRoot, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
   let coherence: PrdAuditProjection['coherence'] = { kind: 'absent' };
-  try {
-    const parsed = parseCoherenceArtifact(await readFile(coherencePath, 'utf-8'));
-    if (!parsed.ok) return { ok: false, fault: { dimension: 'coherence', detail: parsed.reason } };
-    coherence = parsed.rows;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, fault: { dimension: 'coherence', detail: 'active coherence is unreadable' } };
+  const coherenceArtifact = await resolveFeatureArtifact(
+    worktreeManifestSource(projectRoot),
+    basename(planPath, '.md'),
+    'coherence',
+    async () => [`.docs/coherence/${basename(planPath, '.md')}.md`],
+  );
+  const coherencePath = coherenceArtifact.paths[0];
+  if (coherencePath !== undefined && !(coherenceArtifact.origin === 'manifest' && coherenceArtifact.missing.includes(coherencePath))) {
+    try {
+      const parsed = parseCoherenceArtifact(await readFile(join(projectRoot, coherencePath), 'utf-8'));
+      if (!parsed.ok) return { ok: false, fault: { dimension: 'coherence', detail: parsed.reason } };
+      coherence = parsed.rows;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, fault: { dimension: 'coherence', detail: 'active coherence is unreadable' } };
+    }
   }
 
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
@@ -513,6 +522,13 @@ export async function buildPrdAuditProjection(
   }
   let prd: PrdAuditProjection['prd'] = { kind: 'absent' };
   if (prdPaths.length > 0) {
+    const coherenceWaiverArtifact = await resolveFeatureArtifact(
+      worktreeManifestSource(projectRoot),
+      basename(planPath, '.md'),
+      'coherence-waiver',
+      async () => [`.docs/coherence-waivers/${basename(planPath, '.md')}.md`],
+    );
+    const coherenceWaiverPath = coherenceWaiverArtifact.paths[0];
     try {
       const sources = await Promise.all(prdPaths.sort().map(async (prdPath) => {
         const source = await readFile(prdPath, 'utf-8');
@@ -524,26 +540,29 @@ export async function buildPrdAuditProjection(
       }));
       const first = sources[0]!;
       let waivedRequirements: readonly (PrdAuditRequirementAssociation & { readonly rationale: string })[] = [];
-      try {
-        const waiver = parseCoherenceWaiverDeclaration(await readFile(
-          join(projectRoot, '.docs', 'coherence-waivers', `${basename(planPath, '.md')}.md`),
-          'utf-8',
-        ));
-        if (waiver) {
-          waivedRequirements = waiver.gapIds
-            .map((id) => id.toUpperCase())
-            .filter((id) => /^FR-\d+[A-Za-z]?$/.test(id))
-            .flatMap((requirementId) => {
-              const declarations = sources.filter((source) => source.requirements
-                .some((requirement) => requirement.id.toUpperCase() === requirementId));
-              return declarations.length === 1
-                ? [{ path: declarations[0]!.path, requirementId, rationale: waiver.rationale }]
-                : [];
-            });
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          return { ok: false, fault: { dimension: 'coherence-waiver', detail: 'active coherence waiver is unreadable' } };
+      if (coherenceWaiverPath !== undefined
+        && !(coherenceWaiverArtifact.origin === 'manifest' && coherenceWaiverArtifact.missing.includes(coherenceWaiverPath))) {
+        try {
+          const waiver = parseCoherenceWaiverDeclaration(await readFile(
+            join(projectRoot, coherenceWaiverPath),
+            'utf-8',
+          ));
+          if (waiver) {
+            waivedRequirements = waiver.gapIds
+              .map((id) => id.toUpperCase())
+              .filter((id) => /^FR-\d+[A-Za-z]?$/.test(id))
+              .flatMap((requirementId) => {
+                const declarations = sources.filter((source) => source.requirements
+                  .some((requirement) => requirement.id.toUpperCase() === requirementId));
+                return declarations.length === 1
+                  ? [{ path: declarations[0]!.path, requirementId, rationale: waiver.rationale }]
+                  : [];
+              });
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            return { ok: false, fault: { dimension: 'coherence-waiver', detail: 'active coherence waiver is unreadable' } };
+          }
         }
       }
       prd = { sources, path: first.path, requirements: first.requirements, waivedRequirements };

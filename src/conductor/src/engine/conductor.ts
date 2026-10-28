@@ -295,6 +295,11 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
+import {
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+  worktreeManifestSource,
+} from './feature-manifest-source.js';
 import { resolveHeadSha, resolvePrDisposition } from './run-provenance.js';
 import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
@@ -1400,10 +1405,21 @@ export class Conductor {
     if (!featureDesc || !planPath) return undefined;
     try {
       const stem = planStem(planPath);
-      const intakeMarkerPath = join(this.projectRoot, `.docs/intake/${stem}.md`);
-      const intakeContent = await readFile(intakeMarkerPath, 'utf-8').catch(() => null);
+      const intake = await resolveFeatureArtifact(
+        worktreeManifestSource(this.projectRoot),
+        stem,
+        'intake',
+        async () => [`.docs/intake/${stem}.md`],
+      );
+      const intakePath = intake.paths.find((path) =>
+        intake.origin === 'legacy' || !intake.missing.includes(path),
+      );
+      const intakeContent = intakePath === undefined
+        ? null
+        : await readFile(join(this.projectRoot, intakePath), 'utf-8').catch(() => null);
       return parseIntakeSourceRef(intakeContent);
-    } catch {
+    } catch (error) {
+      if (error instanceof MalformedFeatureManifestError) throw error;
       // Intake marker read failed — no source ref (no-op in every repair).
       return undefined;
     }
@@ -7611,18 +7627,33 @@ export class Conductor {
     const applicabilityMarkerDisposition = async (): Promise<'base' | 'branch-only' | 'interactive'> => {
       const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       if (!slug) return 'base';
-      let content: string | undefined;
       const undatedSlug = slug.replace(/^\d{4}-\d{2}-\d{2}-/, '');
-      try {
-        content = await readFile(join(this.projectRoot, '.docs', 'applicability', `${slug}.md`), 'utf8');
-      } catch {
-        if (undatedSlug === slug) return 'base';
-        try {
-          content = await readFile(join(this.projectRoot, '.docs', 'applicability', `${undatedSlug}.md`), 'utf8');
-        } catch {
-          return 'base';
-        }
-      }
+      const applicability = await resolveFeatureArtifact(
+        worktreeManifestSource(this.projectRoot),
+        slug,
+        'applicability',
+        async () => {
+          const candidates = [
+            `.docs/applicability/${slug}.md`,
+            ...(undatedSlug === slug ? [] : [`.docs/applicability/${undatedSlug}.md`]),
+          ];
+          for (const candidate of candidates) {
+            try {
+              await accessFile(join(this.projectRoot, candidate));
+              return [candidate];
+            } catch {
+              // Continue the legacy dated-to-undated fallback.
+            }
+          }
+          return [];
+        },
+      );
+      const applicabilityPath = applicability.paths.find((path) =>
+        applicability.origin === 'legacy' || !applicability.missing.includes(path),
+      );
+      if (applicabilityPath === undefined) return 'base';
+      const content = await readFile(join(this.projectRoot, applicabilityPath), 'utf8').catch(() => undefined);
+      if (content === undefined) return 'base';
       if (state.applicability_declarations === undefined) return 'interactive';
       const digest = `sha256:${createHash('sha256').update(content, 'utf8').digest('hex')}`;
       return state.applicability_base_content_sha256 === digest ? 'base' : 'branch-only';
@@ -17307,17 +17338,30 @@ export class Conductor {
   private async resolveTrack(state: ConductState): Promise<Track> {
     if (state.track) return state.track;
     try {
-      const dir = join(this.projectRoot, '.docs', 'track');
-      const markers = (await readdir(dir)).filter((f) => f.endsWith('.md'));
       const { featureIdentities, changedPaths } = await buildArtifactResolutionContext(this.projectRoot, {
         featureDesc: state.feature_desc ?? this.featureSlug ?? this.featureDesc,
         git: this.prdAuditGit(),
       });
-      const changed = markers.filter((f) => changedPaths.has(`.docs/track/${f}`));
-      const own = featureIdentities.map((id) => `${id}.md`).find((f) => markers.includes(f))
-        ?? (changed.length === 1 ? changed[0] : undefined);
-      if (own) {
-        const content = await readFile(join(dir, own), 'utf-8');
+      const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      if (!slug) return 'product';
+      const track = await resolveFeatureArtifact(
+        worktreeManifestSource(this.projectRoot),
+        slug,
+        'track',
+        async () => {
+          const dir = join(this.projectRoot, '.docs', 'track');
+          const markers = (await readdir(dir)).filter((f) => f.endsWith('.md'));
+          const changed = markers.filter((f) => changedPaths.has(`.docs/track/${f}`));
+          const own = featureIdentities.map((id) => `${id}.md`).find((f) => markers.includes(f))
+            ?? (changed.length === 1 ? changed[0] : undefined);
+          return own === undefined ? [] : [`.docs/track/${own}`];
+        },
+      );
+      const trackPath = track.paths.find((path) =>
+        track.origin === 'legacy' || !track.missing.includes(path),
+      );
+      if (trackPath) {
+        const content = await readFile(join(this.projectRoot, trackPath), 'utf-8');
         const parsed = parseTrack(content);
         if (parsed) {
           const persisted = await this.currentStateForMutation();
@@ -17331,7 +17375,8 @@ export class Conductor {
           return parsed;
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof MalformedFeatureManifestError) throw error;
       // No marker / unreadable → default product.
     }
     return 'product';
