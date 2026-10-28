@@ -19,7 +19,12 @@ vi.mock('../../../src/engine/kickback-ledger.js', async (importOriginal) => {
 });
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
+import {
+  applyKickbackBudgetAdjustment,
+  readKickbackLedger,
+  recordKickbackCapEvidence,
+  stageKickbackBudgetAdjustment,
+} from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
@@ -238,6 +243,42 @@ describe('round receipt settlement', () => {
       const stored = await readRouteRecord(subject.root, 'demo', subject.roundId, { git: subject.git });
       expect(stored).toMatchObject({ kind: 'record' });
       if (stored.kind === 'record') expect(stored.record.receipt).not.toHaveProperty('settlementId');
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
+  it('reports settled laps for a refused receipt and accepts a matching reset recovery', async () => {
+    const subject = await settlementFixture({ laps: { prd_audit: 1 }, growth: 0 });
+    try {
+      await writeKickbackLedger(subject.root, {
+        version: 1,
+        gates: { prd_audit: { count: 0, cumulative: 0, laps: 2, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 } },
+        growth: { authored: 1, added: 0, byGate: {} },
+      });
+      const ledgerPath = join(subject.root, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath, 'utf8');
+
+      const result = await settleRoundAtDispatch({
+        projectRoot: subject.root, slug: 'demo', roundId: subject.roundId, dispatchingChild: host, budgets: budgets(), routing, git: subject.git,
+      });
+
+      expect(result).toMatchObject({ kind: 'exhausted', gate: 'prd_audit', allowance: 'laps', round: { capEvidence: { consumed: 2, limit: 2 } } });
+      expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+      if (result.kind !== 'exhausted') throw new Error('expected lap exhaustion');
+
+      const capEntry = await recordKickbackCapEvidence(subject.root, result.gate, {
+        ...result.round.capEvidence,
+        allowance: result.allowance,
+        latestReason: 'lap cap exhausted',
+        haltGeneration: 'lap-cap-halt',
+      });
+      const adjustment = {
+        id: 'lap-cap-reset', kind: 'reset' as const, beforeConsumed: 2, afterConsumed: 0,
+        beforeLimit: 2, afterLimit: 2, operator: 'operator', rationale: 'reset reviewed lap budget',
+        timestamp: '2026-10-28T00:00:00.000Z', haltGeneration: capEntry.capEvidence!.haltGeneration,
+      };
+
+      await expect(stageKickbackBudgetAdjustment(subject.root, result.gate, () => adjustment)).resolves.toEqual(adjustment);
+      await expect(applyKickbackBudgetAdjustment(subject.root, result.gate, adjustment, 2)).resolves.toMatchObject({ laps: 0, effectiveLapCap: 2 });
     } finally { await rm(subject.root, { recursive: true, force: true }); }
   });
 

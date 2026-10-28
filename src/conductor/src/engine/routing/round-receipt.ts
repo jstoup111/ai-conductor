@@ -271,10 +271,10 @@ function nextLedgerForReceipt(
     const laps = charges.laps[gate];
     if (laps === undefined) continue;
     const budget = budgetByGate.get(gate);
-    if (!budget) return exhausted(gate, 'laps', next.gates[gate]?.laps ?? 0, 0);
+    if (!budget) return exhausted(gate, 'laps', ledger.gates[gate]?.laps ?? 0, 0);
     const entry = next.gates[gate] ?? defaultGateEntry();
     const lapCap = entry.effectiveLapCap ?? budget.lapCap;
-    if ((entry.laps ?? 0) > lapCap) return exhausted(gate, 'laps', entry.laps ?? 0, lapCap);
+    if ((entry.laps ?? 0) > lapCap) return exhausted(gate, 'laps', ledger.gates[gate]?.laps ?? 0, lapCap);
   }
   if ((next.growth?.added ?? 0) > growthCap) {
     return exhausted(owner, 'growth', round.settledAdded, growthCap);
