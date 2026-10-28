@@ -302,8 +302,8 @@ describe('resolveProviderModelTiers', () => {
     const warn = vi.fn();
     const floorsOnlyRateCard = {
       as_of: '2026-10-25T00:00:00.000Z', source: 'https://example.invalid/rates', models: {
-        'gpt-5.6-luna': { input_cost_per_token: 1 }, 'gpt-5.6-terra': { input_cost_per_token: 1 },
-        'gpt-5.6-sol': { input_cost_per_token: 1 }, 'gpt-6-astra': { input_cost_per_token: 1 },
+        'gpt-5.6-luna': { input_cost_per_token: 1, output_cost_per_token: 1 }, 'gpt-5.6-terra': { input_cost_per_token: 1, output_cost_per_token: 1 },
+        'gpt-5.6-sol': { input_cost_per_token: 1, output_cost_per_token: 1 }, 'gpt-6-astra': { input_cost_per_token: 1, output_cost_per_token: 1 },
       },
     };
     await resolveProviderModelTiers({
@@ -325,7 +325,7 @@ describe('resolveProviderModelTiers', () => {
         ...floorsOnlyRateCard,
         models: {
           ...floorsOnlyRateCard.models,
-          'gpt-6-luna': { input_cost_per_token: 1 }, 'gpt-6.1-sol': { input_cost_per_token: 1 },
+          'gpt-6-luna': { input_cost_per_token: 1, output_cost_per_token: 1 }, 'gpt-6.1-sol': { input_cost_per_token: 1, output_cost_per_token: 1 },
         },
       }),
     });
