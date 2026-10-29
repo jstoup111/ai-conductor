@@ -451,7 +451,7 @@ async function resumePlanned(
   worktree: string,
   journal: StoredRestackJournal,
   git: GitRunner,
-  options: Pick<RecoverRestackJournalOptions, 'resolver' | 'resolverCap'>,
+  options: Pick<RecoverRestackJournalOptions, 'events' | 'resolver' | 'resolverCap'>,
 ): Promise<ResumePlannedResult> {
   if (!await refsStillAtOldValues(journal, git)) return { kind: 'unavailable' };
   let current = journal;
@@ -515,6 +515,13 @@ async function resumePlanned(
         });
         if (updated.kind !== 'updated') return { kind: 'unavailable' };
         current = updated.journal;
+        await options.events?.emit({
+          type: 'restack_resolution',
+          opId: current.journal.opId,
+          child: range.child,
+          action: 'consumed',
+          tip: recorded.tip,
+        });
         parent = recorded.tip;
         continue;
       }
