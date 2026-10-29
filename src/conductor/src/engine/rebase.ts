@@ -32,8 +32,13 @@ import {
   resolveFeaturePlanPath,
   resolveFeaturePrdPaths,
 } from './artifacts.js';
+import { featureManifestPath, parseFeatureManifest } from './feature-manifest.js';
 import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
-import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
+import {
+  MalformedFeatureManifestError,
+  resolveFeatureArtifact,
+  worktreeManifestSource,
+} from './feature-manifest-source.js';
 import {
   computeFeatureOwnership,
   renderOwnershipRefusal,
@@ -1335,17 +1340,40 @@ async function resolveFeatureOwnershipSlug(projectRoot: string): Promise<string 
  * delta; preservation additionally requests the full declared set to bind
  * authority against later input edits. */
 export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
-  if (!force && !delta.some(isReviewDocumentPath)) return [];
   const featureDesc = await resolveFeatureDesc(projectRoot);
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
-  if (context.featureIdentities.length === 0) return delta.filter(isReviewDocumentPath);
   const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
   const manifestSlug = featureDesc ?? (planPath ? basename(planPath, '.md') : undefined);
+  const manifestSource = worktreeManifestSource(projectRoot);
+  const manifestPath = manifestSlug === undefined ? undefined : featureManifestPath(manifestSlug);
+  const rawManifest = manifestPath === undefined ? null : await manifestSource.readFile(manifestPath);
+
+  if (rawManifest !== null && manifestPath !== undefined) {
+    const parsed = parseFeatureManifest(rawManifest, manifestPath, manifestSlug!);
+    if (parsed.kind === 'malformed') throw new MalformedFeatureManifestError(parsed.reason);
+
+    const inputs: string[] = [
+      manifestPath,
+      ...parsed.manifest.artifacts
+        .filter(({ kind }) => kind === 'stories' || kind === 'prd' || kind === 'plan' || kind === 'coherence' || kind === 'decision')
+        .map(({ path }) => path),
+    ];
+    for (const doc of [...new Set(inputs)]) {
+      if (doc.startsWith('.docs/decisions/')) continue;
+      const text = await readFile(join(projectRoot, doc), 'utf8').catch(() => '');
+      for (const stem of citedDecisionStems(text)) inputs.push(`.docs/decisions/${stem}.md`);
+    }
+    const resolved = [...new Set(inputs.map(repoPath))];
+    return force || delta.some((path) => isReviewDocumentPath(path, resolved)) ? resolved : [];
+  }
+
+  if (!force && !delta.some((path) => isReviewDocumentPath(path))) return [];
+  if (context.featureIdentities.length === 0) return delta.filter((path) => isReviewDocumentPath(path));
   const prd = manifestSlug === undefined
     ? { origin: 'legacy' as const, paths: await resolveFeaturePrdPaths(projectRoot, context).then((paths) => paths.map(repoPath)) }
     : await resolveFeatureArtifact(
-      worktreeManifestSource(projectRoot),
+      manifestSource,
       manifestSlug,
       'prd',
       async () => (await resolveFeaturePrdPaths(projectRoot, context)).map(repoPath),
@@ -1358,7 +1386,7 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
     const plan = repoPath(activePlan);
     const stem = basename(plan, '.md');
     const coherence = await resolveFeatureArtifact(
-      worktreeManifestSource(projectRoot),
+      manifestSource,
       featureDesc ?? stem,
       'coherence',
       async () => [`.docs/coherence/${stem}.md`],
@@ -1374,7 +1402,7 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
       featureDesc ?? stem,
       'stories',
       async () => {
-        const legacyStories = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), plan, body);
+        const legacyStories = await resolveFeatureStoriesRef(manifestSource, plan, body);
         return legacyStories === null ? [] : [legacyStories];
       },
     );
@@ -1418,7 +1446,7 @@ export function citedDecisionStems(text: string): string[] {
 
 function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): string[] {
   return [...new Set([...outcome.changedCodePaths,
-    ...(outcome.allChangedPaths ?? []).filter(isReviewDocumentPath)])];
+    ...(outcome.allChangedPaths ?? []).filter((path) => isReviewDocumentPath(path, outcome.documentInputs))])];
 }
 
 export interface PerformRebaseOpts {
