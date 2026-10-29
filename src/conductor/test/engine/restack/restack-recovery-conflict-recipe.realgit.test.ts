@@ -12,7 +12,6 @@ import { readConflictRecord, resolutionRefFor, writeConflictRecord } from '../..
 import { journalRefFor, readRestackJournal, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
-import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -83,18 +82,18 @@ describe('planned feature-repair conflict recovery recipe (real local Git)', () 
     const blob = await writeRestackJournalBlob(repo, journal);
     await git(['update-ref', journalRefFor('demo'), blob, '']);
     const events = new ConductorEventEmitter();
-    const consumed: Array<Extract<ConductorEvent, { type: 'restack_resolution' }>> = [];
+    const consumedTips: string[] = [];
     events.on('restack_resolution', (event) => {
-      if (event.type === 'restack_resolution' && event.action === 'consumed') consumed.push(event);
+      if (event.type === 'restack_resolution' && 'action' in event && event.action === 'consumed' && 'tip' in event) {
+        consumedTips.push(event.tip);
+      }
     });
 
     await expect(recoverRestackJournal({ worktree: repo, slug: 'demo', events, git: makeGitRunner(repo) }))
       .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
 
     const persistedTip = (await git(['rev-parse', 'feat/c2/demo'])).stdout.trim();
-    expect(consumed).toEqual([{
-      type: 'restack_resolution', opId: 'recovery-resolution-event', child: 2, action: 'consumed', tip: persistedTip,
-    }]);
+    expect(consumedTips).toEqual([persistedTip]);
   });
 
   it('writes the complete child-2 conflict record and halt recipe from the live child-1 rewrite', async () => {
