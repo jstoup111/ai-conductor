@@ -212,9 +212,11 @@ describe('authenticated OTLP HTTP export', () => {
         headers: { authorization: { command: ['credential-command'], prefix: 'Bearer ' } }, spool: { enabled: false },
       } }, '/tmp/otel-authenticated-export') as Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>;
       let now = 0;
-      let releaseRefresh!: (result: { stdout: string }) => void;
-      const refresh = new Promise<{ stdout: string }>((resolve) => { releaseRefresh = resolve; });
-      const runner = vi.fn().mockResolvedValueOnce({ stdout: 'tok-1\n' }).mockImplementationOnce(() => refresh);
+      const runner = vi.fn()
+        .mockResolvedValueOnce({ stdout: 'tok-1\n' })
+        .mockImplementationOnce(() => new Promise<{ stdout: string }>((resolve) => {
+          setTimeout(() => resolve({ stdout: 'tok-2\n' }), 1_000);
+        }));
       const exporters = buildExporters(resolved, { env: { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined }, commandRunner: runner, now: () => now });
       const exportOne = () => new Promise<{ code: number }>((resolve) => {
         const span = new BasicTracerProvider().getTracer('otel-authenticated-export-test').startSpan('concurrent-command-export');
@@ -223,10 +225,15 @@ describe('authenticated OTLP HTTP export', () => {
       });
       await expect(exportOne()).resolves.toMatchObject({ code: ExportResultCode.SUCCESS });
       now = 300_000;
+      vi.useFakeTimers();
       const exports = Array.from({ length: 5 }, exportOne);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(runner).toHaveBeenCalledTimes(2);
-      releaseRefresh({ stdout: 'tok-2\n' });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(runner).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(1_000);
+      } finally {
+        vi.useRealTimers();
+      }
       await expect(Promise.all(exports)).resolves.toEqual(Array.from({ length: 5 }, () => expect.objectContaining({ code: ExportResultCode.SUCCESS })));
       await exporters.spanExporter.shutdown();
 

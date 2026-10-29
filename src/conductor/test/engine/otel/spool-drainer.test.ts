@@ -142,7 +142,15 @@ describe('SpoolDrainer', () => {
     let attempts = 0;
     let release!: () => void;
     const tenthAttempt = new Promise<void>((resolve) => { release = resolve; });
-    const drainer = new SpoolDrainer(store, {
+    let releaseMetrics!: () => void;
+    const metricsBlocked = new Promise<void>((resolve) => { releaseMetrics = resolve; });
+    const tracesOnlyStore = Object.create(store) as SpoolStore;
+    const list = store.list.bind(store);
+    tracesOnlyStore.list = async (signal) => {
+      if (signal === 'metrics') await metricsBlocked;
+      return list(signal);
+    };
+    const drainer = new SpoolDrainer(tracesOnlyStore, {
       endpoint: 'http://collector.test', events,
       headers: async () => {
         attempts += 1;
@@ -154,13 +162,14 @@ describe('SpoolDrainer', () => {
     });
     const draining = drainer.drainUntilStopped();
     await tenthAttempt;
+    releaseMetrics();
     await drainer.stop();
     await draining;
 
     expect({ attempts, credentialErrors: errors.filter((event) => JSON.stringify(event).includes('credential')), delays }).toEqual({
       attempts: 10,
       credentialErrors: [expect.objectContaining({ rendererName: 'otel' })],
-      delays: expect.arrayContaining([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000]),
+      delays: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000],
     });
   });
 
