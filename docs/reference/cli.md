@@ -460,7 +460,7 @@ Runs the background build/ship loop, or manages one. Procedures are in
 deliberately checked before every daemon dispatcher — without it, `daemon --help` would be treated as
 an unknown flag and launch a daemon run.
 
-A non-flag token after `daemon` that is not one of `status`, `logs`, `park`, `unpark`,
+A non-flag token after `daemon` that is not one of `status`, `logs`, `stories-refs`, `park`, `unpark`,
 `reclaim-worktree`, `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` prints
 `conduct daemon: unknown subcommand '<token>'.` plus the daemon help to stderr and exits 1.
 
@@ -615,6 +615,43 @@ Reads `.daemon/daemon.log`.
 `--follow` with `--all` prints `--follow is not supported with --all; showing a static snapshot.` and
 does not follow. A missing log prints `(no daemon log yet for <path>)` and contributes 0. Exit 1 when a
 log is unreadable, or when `--all` is used and the registry cannot be read.
+
+### `daemon stories-refs`
+
+```bash
+ai-conductor daemon stories-refs [--repo <path>]
+```
+
+Read-only. Scans every committed spec at the daemon's pinned base — `origin/<default branch>`, else
+the local default branch — and lists each plan whose Stories reference cannot resolve. Specs are
+read from the committed base tree, not the working tree.
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--repo <path>`, `--repo=<path>` | path | cwd | Repo to scan. Resolved to its main repo root. |
+
+Output:
+
+```text
+stories-refs: scanned <n> specs at <base ref> (<short sha>)
+  • <plan> — <state> — <kind> — reference: <reference> — attempted: <paths|none>
+stories-refs: <n> broken (actionable <n>, halted <n>, parked <n>, shipped <n>, processed <n>)
+```
+
+With no findings, the summary line is replaced by
+`stories-refs: clean — no spec has an unresolvable Stories reference`.
+
+| Field | Values |
+| --- | --- |
+| `<kind>` | `missing` — the referenced or manifest-listed stories path is absent at the base; `unresolvable` — the reference cannot be resolved to a path; `malformed-manifest` — `.docs/<slug>/manifest.json` failed validation. |
+| `<state>` | First match wins: `processed` (`.daemon/processed/<slug>` exists), `shipped` (`.docs/shipped/<slug>.md` at the base), `parked` (operator park), `halted` (`.worktrees/<slug>/.pipeline/HALT` without `DONE`), else `actionable`. |
+| `<reference>` | The plan's `**Stories:**` text, `manifest <path>` for a manifest source, or `(no Stories line; same-stem fallback)`. |
+
+Repair `actionable` findings per [blocked merged spec](../runbooks/stalled-or-stuck-feature.md#blocked-merged-spec).
+
+Exit 0 for any completed scan, including one with findings. Exit 1 with
+`stories-refs: scan failed — <reason>` on stderr when the path is not in a Git repository, the base
+cannot be resolved, or the scan throws.
 
 ### `daemon park` and `daemon unpark`
 

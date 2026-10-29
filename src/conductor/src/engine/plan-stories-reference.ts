@@ -6,6 +6,11 @@ const STORIES_LINE = /^\s*\*\*Stories:\*\*\s*(.*?)\s*$/im;
 const MARKDOWN_LINK = /^\[[^\]]+\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)$/;
 const LEADING_MARKDOWN_LINK = /^\[[^\]]+\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)/;
 
+export function readPlanStoriesReferenceText(planContent: string): string | null {
+  const match = planContent.match(STORIES_LINE);
+  return match ? match[1].trim() : null;
+}
+
 function normalizeStoriesReference(reference: string): string {
   const inlineCode = reference.match(/^`([^`]*)`/);
   if (inlineCode) return inlineCode[1].trim();

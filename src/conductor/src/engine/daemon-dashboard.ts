@@ -294,7 +294,7 @@ export interface ScanInheritedStateDeps {
 }
 
 /** The completed-run marker; mirrors the private constant in conductor.ts. */
-const DONE_MARKER = '.pipeline/DONE';
+export const DONE_MARKER = '.pipeline/DONE';
 
 /** `true` when `path` exists (any type), tolerant of missing/unreadable paths. */
 async function pathExists(path: string): Promise<boolean> {

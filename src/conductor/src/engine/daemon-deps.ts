@@ -303,13 +303,27 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
  * resolved (local-only repo with no origin, or never fetched) — preserving the
  * prior behavior for those repos.
  */
-async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Promise<string> {
-  const remote = `origin/${baseBranch}`;
-  try {
-    return (await execa('git', ['rev-parse', '--verify', '--quiet', remote], { cwd: projectRoot })).stdout.trim();
-  } catch {
-    return (await execa('git', ['rev-parse', '--verify', '--quiet', baseBranch], { cwd: projectRoot })).stdout.trim();
+export async function resolveDaemonBase(
+  projectRoot: string,
+  baseBranch: string,
+): Promise<{ ref: string; sha: string } | undefined> {
+  for (const ref of [`origin/${baseBranch}`, baseBranch]) {
+    try {
+      const sha = (await execa('git', ['rev-parse', '--verify', '--quiet', ref], {
+        cwd: projectRoot,
+      })).stdout.trim();
+      return { ref, sha };
+    } catch {
+      // Try the local branch after the remote-tracking ref is unavailable.
+    }
   }
+  return undefined;
+}
+
+async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Promise<string> {
+  const base = await resolveDaemonBase(projectRoot, baseBranch);
+  if (base === undefined) throw new Error(`could not resolve daemon base ${baseBranch}`);
+  return base.sha;
 }
 
 /**
@@ -329,13 +343,7 @@ export async function resolveDaemonBaseSha(
   projectRoot: string,
   baseBranch: string,
 ): Promise<string | undefined> {
-  try {
-    const base = await resolveWorktreeBase(projectRoot, baseBranch);
-    return (await execa('git', ['rev-parse', '--verify', base], { cwd: projectRoot })).stdout.trim();
-  } catch {
-    // Missing base evidence deliberately leaves the marker gate fail-closed.
-    return undefined;
-  }
+  return (await resolveDaemonBase(projectRoot, baseBranch))?.sha;
 }
 
 /** Has this slug already been shipped by the daemon? (for discoverBacklog). */
