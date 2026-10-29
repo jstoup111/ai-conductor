@@ -125,6 +125,27 @@ describe('restack manifest ownership drift (Task 3, real local Git)', () => {
     expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(subject.oldLeaf);
   });
 
+  it('refuses a malformed manifest before it moves a ref', async () => {
+    const subject = await fixture({ unlisted: false });
+    await writeFile(join(subject.repo, '.docs', 'demo', 'manifest.json'), '{ not json\n');
+    await subject.git(['add', '.docs/demo/manifest.json']);
+    await subject.git(['commit', '-qm', 'malformed manifest']);
+    const oldLeaf = (await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim();
+    const leafRef = parseRefName('refs/heads/feat/daemon-demo');
+    const oldSha = parseCommitSha(oldLeaf);
+    const newSha = parseCommitSha(subject.advanced);
+    if (!leafRef || !oldSha || !newSha) throw new Error('fixture must produce valid refs and shas');
+
+    await expect(checkRestackPreMove(subject.repo, [{ ref: leafRef, oldSha, newSha }], leafRef, {
+      git: makeGitRunner(subject.repo),
+      ownershipBase: 'main',
+    })).resolves.toMatchObject({
+      kind: 'seal-refused',
+      detail: expect.stringContaining('Feature artifact manifest is malformed:'),
+    });
+    expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(oldLeaf);
+  });
+
   it('allows a clean manifest-backed child to pass the pre-move seal check', async () => {
     const subject = await fixture({ unlisted: false });
     const leafRef = parseRefName('refs/heads/feat/daemon-demo');

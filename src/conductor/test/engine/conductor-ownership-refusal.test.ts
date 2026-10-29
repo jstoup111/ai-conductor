@@ -199,6 +199,45 @@ describe('conductor manifest ownership refusal at BUILD and SHIP entry', () => {
     expect(marker).not.toContain('allow: .docs/plans/');
   });
 
+  it('restores an enclosing step marker byte-for-byte after nested remediate returns', async () => {
+    const root = await fixture();
+    await git(root, ['checkout', '-qb', 'feature']);
+    await addManifestFeature(root, [
+      { kind: 'plan', path: '.docs/f/plan.md' },
+      { kind: 'stories', path: '.docs/f/review/stories.md' },
+    ]);
+    const enclosingMarker = [
+      'step: build',
+      'phase: BUILD',
+      'written: 2026-10-29T00:00:00.000Z',
+      'allow: .docs/release-waivers/',
+      'own: .docs/f/plan.md',
+      'own: .docs/f/review/stories.md',
+      'protect: .docs/f/plan.md',
+      'protect: .docs/f/review/stories.md',
+      'protect: .docs/f/manifest.json',
+      '',
+    ].join('\n');
+    await write(root, '.pipeline/phase-active', enclosingMarker);
+    const conductor = new Conductor({
+      stateFilePath: join(root, 'conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      baseBranch: 'main',
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+
+    await (conductor as unknown as {
+      runRemediateWithPhaseMarker(
+        state: { feature_desc: string },
+        options: Record<string, never>,
+      ): Promise<unknown>;
+    }).runRemediateWithPhaseMarker({ feature_desc: 'f' }, {});
+
+    await expect(readFile(join(root, '.pipeline', 'phase-active'), 'utf8')).resolves.toBe(enclosingMarker);
+  });
+
   it('refuses remediate drift before writing a marker or dispatching the provider', async () => {
     const root = await fixture();
     await git(root, ['checkout', '-qb', 'feature']);

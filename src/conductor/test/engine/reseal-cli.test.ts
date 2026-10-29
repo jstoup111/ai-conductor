@@ -375,6 +375,47 @@ describe('describeResealRecovery', () => {
 });
 
 describe('dispatchResealCommand', () => {
+  it('refuses a malformed manifest-backed feature without changing its seal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-malformed-manifest-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const planPath = '.docs/plans/repair.md';
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', planPath, '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.docs', 'repair'), { recursive: true });
+      await mkdir(join(worktree, '.docs', 'plans'), { recursive: true });
+      await initTestRepo(worktree);
+      await Promise.all([
+        writeFile(join(worktree, '.docs', 'repair', 'manifest.json'), '{ not json\n'),
+        writeFile(join(worktree, planPath), '# Plan\n'),
+      ]);
+      await execFile('git', ['add', '.docs'], { cwd: worktree });
+      await execFile('git', ['commit', '-qm', 'malformed manifest feature'], { cwd: worktree });
+      await createProtectedArtifactSeal({
+        projectRoot: worktree,
+        baselineCommit: (await execFile('git', ['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim(),
+      });
+      const sealBefore = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+      const err = vi.fn();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        err,
+        resolveBaseBranch: vi.fn().mockResolvedValue('main'),
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith(expect.stringContaining('Feature artifact manifest is malformed:'));
+      await expect(readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')).resolves.toBe(sealBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   async function stackFixture(
     slices: Readonly<Record<number, readonly number[]>>,
     recordedPositions: readonly number[],

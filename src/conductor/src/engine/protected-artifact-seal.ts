@@ -8,6 +8,7 @@ import { resolveDocsAllowlist } from './phase-marker.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
 import {
   computeFeatureOwnership,
+  renderOwnershipRefusal,
   worktreeFeatureOwnershipSource,
   type FeatureOwnership,
 } from './feature-ownership.js';
@@ -1736,9 +1737,22 @@ export async function prepareProtectedArtifactReseal({
       ? await computeFeatureOwnership(worktreeFeatureOwnershipSource(projectRoot), featureDesc, baseBranch)
       : undefined
   );
-  const usableOwnership = ownership?.kind === 'manifest' || ownership?.kind === 'legacy'
-    ? ownership
-    : undefined;
+  let usableOwnership: SealOwnership | undefined;
+  if (ownership !== undefined) {
+    switch (ownership.kind) {
+      case 'manifest':
+      case 'legacy':
+        usableOwnership = ownership;
+        break;
+      case 'malformed':
+      case 'drift':
+        throw new ProtectedArtifactResealRefusal(renderOwnershipRefusal(ownership));
+      default: {
+        const exhaustive: never = ownership;
+        return exhaustive;
+      }
+    }
+  }
   const sealedPaths = new Set(seal.protectedArtifacts.map((artifact) => artifact.path));
   for (const path of paths) {
     const listedProtectedPath = usableOwnership?.kind === 'manifest'

@@ -200,7 +200,12 @@ async function positionChangeRefusal(
   slug: string,
   paths: readonly string[],
 ): Promise<string | undefined> {
-  const planPath = await resolveFeaturePlanPath(worktree, slug);
+  // Ownership validation in the reseal preparation path is responsible for
+  // rendering malformed manifests as a normal reseal refusal. A malformed
+  // manifest cannot identify a plan for this independent stack-topology
+  // check, so leave it to that ownership boundary instead of throwing before
+  // dispatch reaches it.
+  const planPath = await resolveFeaturePlanPath(worktree, slug).catch(() => undefined);
   if (!planPath || !paths.includes(repositoryRelativePath(worktree, planPath))) return undefined;
 
   const planText = await readFile(planPath, 'utf8').catch(() => undefined);

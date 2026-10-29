@@ -6853,11 +6853,14 @@ export class Conductor {
       const reason = error instanceof Error ? error.message : String(error);
       return { success: false, output: reason, refusal: { kind: 'seal', reason } };
     }
+    const markerPath = join(this.projectRoot, '.pipeline', 'phase-active');
+    const priorMarker = existsSync(markerPath) ? await readFile(markerPath) : undefined;
     writePhaseMarker(this.projectRoot, markerOptions);
     try {
       return await this.stepRunner.run('remediate', state, options);
     } finally {
-      removePhaseMarker(this.projectRoot);
+      if (priorMarker === undefined) removePhaseMarker(this.projectRoot);
+      else await writeFile(markerPath, priorMarker);
     }
   }
 

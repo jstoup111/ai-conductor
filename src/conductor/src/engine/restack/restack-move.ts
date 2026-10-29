@@ -220,7 +220,20 @@ export async function checkRestackPreMove(
 
   const ownership = await resolveRestackOwnership(worktree, checkedOut, dependencies);
   if (typeof ownership === 'string') return { kind: 'seal-refused', detail: ownership };
-  if (ownership?.kind === 'drift') return { kind: 'seal-refused', detail: renderOwnershipRefusal(ownership) };
+  if (ownership !== undefined) {
+    switch (ownership.kind) {
+      case 'legacy':
+      case 'manifest':
+        break;
+      case 'drift':
+      case 'malformed':
+        return { kind: 'seal-refused', detail: renderOwnershipRefusal(ownership) };
+      default: {
+        const exhaustive: never = ownership;
+        return exhaustive;
+      }
+    }
+  }
 
   try {
     const seal = await verifyProtectedArtifactSeal({
