@@ -1,6 +1,6 @@
 import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
-// Covers: task:1, task:10, task:15
+// Covers: task:1, task:6, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
