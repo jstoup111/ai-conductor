@@ -17,7 +17,7 @@ const MAX_REFUTATION_EVIDENCE = 8;
  * record therefore has a domain of its own rather than borrowing the
  * build-review disposition vocabulary.
  */
-export type RemediationCaseDomain = 'build_review' | 'prd_widening';
+export type RemediationCaseDomain = 'build_review' | 'prd_widening' | 'as_built';
 /**
  * `carried` is persisted case-store history only. Provider judgements retain
  * their closed source-outcome grammar in `parseSourceRow` below.
