@@ -1,7 +1,7 @@
 import { access, readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GitRunner, FlattenedReplayPlan } from './rebase.js';
-import { buildRewriteMap, buildRewriteMapForRanges, type RewriteMapResult } from './rewrite-map.js';
+import { buildRewriteMapForRanges, type RewriteMapResult } from './rewrite-map.js';
 export { buildRewriteMap, buildRewriteMapForRanges, type RewriteMapResult } from './rewrite-map.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ConductorEvent } from '../types/events.js';
