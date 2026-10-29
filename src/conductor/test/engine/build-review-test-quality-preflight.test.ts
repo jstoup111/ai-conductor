@@ -16,6 +16,7 @@ import {
 import { preflightProjection } from '../../src/engine/build-review-coordinator.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { FeatureOwnership } from '../../src/engine/feature-ownership.js';
+import type { DocsPath } from '../../src/engine/feature-manifest.js';
 
 function scopedCommandResult(command: string) {
   const runner = new DefaultStepRunner({} as never, 'test', process.cwd(), {
@@ -27,12 +28,12 @@ function scopedCommandResult(command: string) {
 }
 
 describe('build-review test-quality preflight', () => {
-  const manifestOwnership = {
+  const manifestOwnership: FeatureOwnership = {
     kind: 'manifest',
-    manifestPath: '.docs/f/manifest.json',
-    ownedPaths: ['.docs/f/review/stories.md'],
+    manifestPath: '.docs/f/manifest.json' as DocsPath,
+    ownedPaths: ['.docs/f/review/stories.md' as DocsPath],
     protectedPaths: [],
-  } as FeatureOwnership;
+  };
 
   it('keeps listed artifacts out of the counterfactual production restore', async () => {
     const paths = ['src/x.ts', 'test/x.test.ts', '.docs/f/review/stories.md'];

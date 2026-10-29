@@ -1677,15 +1677,14 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       const result = await assembleBuildReviewInputs(realGit(), featurePlanPath);
 
-      expect({
-        diff: result.diff,
-        paths: result.sourceSnapshot.sourceChanges.map((change) => change.path),
-      }).toEqual({
-        diff: expect.stringContaining('diff --git a/.docs/plans/fixture.md b/.docs/plans/fixture.md'),
-        paths: expect.arrayContaining(['.docs/plans/fixture.md']),
-      });
+      expect(result.diff).toContain('diff --git a/.docs/plans/fixture.md b/.docs/plans/fixture.md');
+      expect(result.sourceSnapshot.sourceChanges).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: '.docs/plans/fixture.md' }),
+      ]));
       expect(result.diff).not.toContain('.docs/f/manifest.json');
-      expect(result.sourceSnapshot.sourceChanges.map((change) => change.path)).not.toContain('.docs/f/manifest.json');
+      expect(result.sourceSnapshot.sourceChanges).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: '.docs/f/manifest.json' }),
+      ]));
     });
 
     it('keeps another feature’s document in the graded diff', async () => {
@@ -1733,13 +1732,11 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       const result = await assembleBuildReviewInputs(realGit(), legacyPlanPath);
 
-      expect({
-        diff: result.diff,
-        inventory: result.sourceSnapshot.sourceChanges.map((change) => [change.kind, change.path]),
-      }).toEqual({
-        diff: priorDiff,
-        inventory: [['M', '.docs/plans/fixture.md'], ['A', 'feature.txt']],
-      });
+      expect(result.diff).toBe(priorDiff);
+      expect(result.sourceSnapshot.sourceChanges).toEqual([
+        { kind: 'M', path: '.docs/plans/fixture.md' },
+        { kind: 'A', path: 'feature.txt' },
+      ]);
       expect(priorInventory).toContain('M\0.docs/plans/fixture.md\0');
     });
 
