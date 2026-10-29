@@ -3,7 +3,7 @@ import {
   listBacklogCandidates,
   resolveCandidateStories,
 } from './daemon-backlog.js';
-import { isProcessed, resolveDaemonBaseSha } from './daemon-deps.js';
+import { isProcessed, resolveDaemonBase } from './daemon-deps.js';
 import { DONE_MARKER } from './daemon-dashboard.js';
 import { HALT_MARKER } from './halt-marker.js';
 import { readPlanStoriesReferenceText } from './plan-stories-reference.js';
@@ -66,13 +66,13 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
   if (root === null) return { kind: 'failed', reason: 'not inside a Git repository' };
 
   const defaultBranch = await originDefaultBranch(makeGitRunner(root)) ?? 'main';
-  const baseSha = await resolveDaemonBaseSha(root, defaultBranch);
-  if (baseSha === undefined) {
+  const base = await resolveDaemonBase(root, defaultBranch);
+  if (base === undefined) {
     return { kind: 'failed', reason: `could not resolve base ${defaultBranch}` };
   }
 
   try {
-    const tree = gitTreeSource(root, baseSha);
+    const tree = gitTreeSource(root, base.sha);
     const candidates = await listBacklogCandidates(tree);
     const shippedStems = new Set((await listShippedRecords(tree)).map(({ stem }) => stem));
     const broken: BrokenStoriesRef[] = [];
@@ -117,7 +117,7 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
       });
     }
 
-    return { kind: 'ok', baseRef: defaultBranch, baseSha, specCount: candidates.length, broken };
+    return { kind: 'ok', baseRef: base.ref, baseSha: base.sha, specCount: candidates.length, broken };
   } catch (error) {
     return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) };
   }
@@ -125,12 +125,13 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
 
 export function renderStoriesRefsReport(scan: StoriesRefsScan): string[] {
   if (scan.kind === 'failed') return [];
-  const lines = scan.broken.map((finding) => {
+  const lines = [`stories-refs: scanned ${scan.specCount} specs at ${scan.baseRef} (${scan.baseSha.slice(0, 9)})`];
+  lines.push(...scan.broken.map((finding) => {
     const plan = finding.plan ?? '(unresolved plan)';
     const reference = finding.reference ?? '(no Stories line; same-stem fallback)';
     const attempted = finding.attempted.length === 0 ? 'none' : finding.attempted.join(', ');
     return `  • ${plan} — ${finding.state} — ${finding.kind} — reference: ${reference} — attempted: ${attempted}`;
-  });
+  }));
   if (scan.broken.length === 0) return lines;
 
   const counts = Object.fromEntries(

@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:5
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -10,6 +10,8 @@ import {
   buildFeatureManifest,
   renderFeatureManifest,
 } from '../../src/engine/feature-manifest.js';
+import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
+import { resolveDaemonBaseSha } from '../../src/engine/daemon-deps.js';
 import { readPlanStoriesReferenceText } from '../../src/engine/plan-stories-reference.js';
 import {
   renderStoriesRefsReport,
@@ -49,6 +51,28 @@ async function createFixture(files: Record<string, string>): Promise<string> {
   return root;
 }
 
+async function commit(root: string, message: string): Promise<void> {
+  await execFile('git', ['add', '.'], { cwd: root });
+  await execFile('git', ['commit', '--quiet', '-m', message], { cwd: root });
+}
+
+async function addAheadOrigin(root: string, files: Record<string, string>): Promise<string> {
+  const origin = await mkdtemp(join(tmpdir(), 'stories-refs-origin-'));
+  const updater = await mkdtemp(join(tmpdir(), 'stories-refs-updater-'));
+  cleanupRoots.push(origin, updater);
+  await execFile('git', ['init', '--bare', '--initial-branch=main', '--quiet', origin]);
+  await execFile('git', ['remote', 'add', 'origin', origin], { cwd: root });
+  await execFile('git', ['push', '--quiet', '-u', 'origin', 'main'], { cwd: root });
+  await execFile('git', ['clone', '--quiet', origin, updater]);
+  await execFile('git', ['config', 'user.email', 'fixture@example.test'], { cwd: updater });
+  await execFile('git', ['config', 'user.name', 'Stories refs fixture'], { cwd: updater });
+  await writeFixture(updater, files);
+  await commit(updater, 'fix on origin main');
+  await execFile('git', ['push', '--quiet', 'origin', 'main'], { cwd: updater });
+  await execFile('git', ['fetch', '--quiet', 'origin', 'main'], { cwd: root });
+  return (await execFile('git', ['rev-parse', 'origin/main'], { cwd: root })).stdout.trim();
+}
+
 function renderedManifest(slug: string, files: readonly string[]): string {
   return renderFeatureManifest(buildFeatureManifest(slug, files, []));
 }
@@ -61,6 +85,78 @@ function finding(scan: Awaited<ReturnType<typeof scanStoriesRefs>>, slug: string
 }
 
 describe('engine/stories-refs-diagnostic', () => {
+  it('agrees with discovery at origin/main and excludes local, staged, untracked, branch, and worktree-only plans', async () => {
+    const root = await createFixture({
+      '.docs/plans/unresolvable.md': plan('/outside/stories.md'),
+      '.docs/plans/missing.md': plan('.docs/stories/missing.md'),
+      '.docs/malformed/manifest.json': '{ not JSON',
+      '.docs/manifest-missing/manifest.json': renderedManifest('manifest-missing', [
+        '.docs/plans/manifest-missing.md', '.docs/stories/manifest-missing.md',
+      ]),
+      '.docs/plans/manifest-missing.md': plan(),
+      '.docs/plans/resolved.md': plan('.docs/stories/resolved.md'),
+      '.docs/stories/resolved.md': '# Stories',
+      '.docs/plans/processed.md': plan('.docs/stories/processed.md'),
+      '.daemon/processed/processed': '',
+    });
+    const remoteSha = await addAheadOrigin(root, { '.docs/stories/missing.md': '# Stories' });
+
+    await execFile('git', ['checkout', '--quiet', '-b', 'spec/branch-only'], { cwd: root });
+    await writeFixture(root, { '.docs/plans/branch-only.md': plan('.docs/stories/branch-only.md') });
+    await execFile('git', ['add', '.docs/plans/branch-only.md'], { cwd: root });
+    await execFile('git', ['commit', '--quiet', '-m', 'broken plan on spec branch'], { cwd: root });
+    await execFile('git', ['checkout', '--quiet', 'main'], { cwd: root });
+    await writeFixture(root, {
+      '.docs/plans/untracked.md': plan('.docs/stories/untracked.md'),
+      '.docs/plans/staged.md': plan('.docs/stories/staged.md'),
+      '.docs/plans/resolved.md': plan('.docs/stories/now-missing.md'),
+    });
+    await execFile('git', ['add', '.docs/plans/staged.md'], { cwd: root });
+
+    const baseSha = await resolveDaemonBaseSha(root, 'main');
+    expect(baseSha).toBe(remoteSha);
+    if (!baseSha) throw new Error('fixture origin/main did not resolve');
+    const discovery = await discoverBacklog(root, async (slug) => slug === 'processed', () => {}, {
+      baseBranch: baseSha, writeBlockedSnapshot: async () => {},
+    });
+    const scan = await scanStoriesRefs(root);
+    const report = renderStoriesRefsReport(scan);
+    const visible = scan.kind === 'ok'
+      ? scan.broken.filter((entry) => entry.state === 'actionable' || entry.state === 'halted')
+      : [];
+    const blocked = discovery.blocked.filter(({ reason }) => [
+      'unresolvable-stories-ref', 'stories-missing', 'malformed-manifest',
+    ].includes(reason));
+
+    expect(scan).toMatchObject({ kind: 'ok', baseSha: remoteSha });
+    expect(report[0]).toBe(`stories-refs: scanned 6 specs at origin/main (${remoteSha.slice(0, 9)})`);
+    expect(visible.map(({ slug, kind }) => [slug, kind]).sort()).toEqual([
+      ['malformed', 'malformed-manifest'],
+      ['manifest-missing', 'missing'],
+      ['unresolvable', 'unresolvable'],
+    ]);
+    expect(blocked.map(({ slug, reason }) => [slug, reason]).sort()).toEqual([
+      ['malformed', 'malformed-manifest'],
+      ['manifest-missing', 'stories-missing'],
+      ['unresolvable', 'unresolvable-stories-ref'],
+    ]);
+    expect(scan.kind === 'ok' ? scan.broken.map(({ slug }) => slug) : []).not.toEqual(expect.arrayContaining([
+      'missing', 'untracked', 'staged', 'branch-only', 'resolved',
+    ]));
+  });
+
+  it('uses local main in the scan header when origin/main is unavailable', async () => {
+    const root = await createFixture({ '.docs/plans/missing.md': plan('.docs/stories/missing.md') });
+
+    const localSha = await resolveDaemonBaseSha(root, 'main');
+    const scan = await scanStoriesRefs(root);
+
+    expect(scan).toMatchObject({ kind: 'ok', baseSha: localSha });
+    expect(renderStoriesRefsReport(scan)[0]).toBe(
+      `stories-refs: scanned 1 specs at main (${localSha?.slice(0, 9)})`,
+    );
+  });
+
   it('reports a legacy missing Stories file with its raw reference and attempted path', async () => {
     const storiesReference = '.docs/stories/absent.md';
     const planContent = plan(storiesReference);
@@ -171,7 +267,9 @@ describe('engine/stories-refs-diagnostic', () => {
 
     const scan = await scanStoriesRefs(root);
     expect(scan).toMatchObject({ kind: 'ok', specCount: 4, broken: [] });
-    expect(renderStoriesRefsReport(scan)).toEqual([]);
+    expect(renderStoriesRefsReport(scan)).toEqual([
+      `stories-refs: scanned 4 specs at main (${scan.baseSha.slice(0, 9)})`,
+    ]);
   });
 
   it('labels broken plans by lifecycle state and summarizes every state', async () => {
