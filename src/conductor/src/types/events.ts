@@ -509,7 +509,7 @@ type ConductorEventBody =
       type: 'decide_artifacts_pruned';
       removed: string[];
       deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[];
-      skipped: { stem: string; reason: 'no-shipped-record' }[];
+      skipped: { stem: string; reason: 'no-shipped-record' | 'malformed-manifest' }[];
       excluded: string[];
       pullRequestUrl?: string;
     }

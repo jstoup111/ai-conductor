@@ -3,12 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GitRunner } from './pr-labels.js';
 import { DOCS_RETENTION_POLICY, prunableFilesForStem } from './docs-retention.js';
+import { featureManifestPath, parseFeatureManifest } from './feature-manifest.js';
+import { gitRefManifestSource } from './feature-manifest-source.js';
 import type { PullRequestWithFiles } from './pull-request-files.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import { executeGithubOperation } from './github-operations.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 
-export interface DocsPruneSelection { removable: string[]; deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[]; skipped: { stem: string; reason: 'no-shipped-record' }[]; excluded: string[]; stems: Map<string, string[]> }
+type DocsPruneSkippedReason = 'no-shipped-record' | 'malformed-manifest';
+
+export interface DocsPruneSelection { removable: string[]; deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[]; skipped: { stem: string; reason: DocsPruneSkippedReason }[]; excluded: string[]; stems: Map<string, string[]> }
 export class DocsPruneRefusal extends Error {}
 
 export interface DocsPrunePublisher {
@@ -65,9 +69,50 @@ export async function resolveDocsPruneSelection(repoDir: string, git: GitRunner)
   const shipped = tree.filter((p) => p.startsWith('.docs/shipped/') && p.endsWith('.md')).map((p) => p.slice('.docs/shipped/'.length, -3));
   const plans = new Set(tree.filter((p) => p.startsWith('.docs/plans/')).map((p) => p.slice('.docs/plans/'.length, -3)));
   const stems = new Map<string, string[]>(); const excluded: string[] = [];
-  for (const stem of shipped) { const paths = prunableFilesForStem(tree, stem).filter((path) => { const family = DOCS_RETENTION_POLICY.normalizedStemFamilies.find((candidate) => path.startsWith(`.docs/${candidate}/`)); const basename = family ? path.slice(`.docs/${family}/`.length, -3) : undefined; const undated = basename?.replace(/^\d{4}-\d{2}-\d{2}-/, ''); if (basename !== stem && undated && [...plans].filter((s) => s.replace(/^\d{4}-\d{2}-\d{2}-/, '') === undated).length > 1) { excluded.push(path); return false; } return true; }); stems.set(stem, paths); }
-  const skipped = [...plans].filter((stem) => !shipped.includes(stem)).map((stem) => ({ stem, reason: 'no-shipped-record' as const }));
+  const skipped: DocsPruneSelection['skipped'] = [...plans]
+    .filter((stem) => !shipped.includes(stem))
+    .map((stem) => ({ stem, reason: 'no-shipped-record' }));
+  const source = gitRefManifestSource(repoDir, 'origin/main');
+  for (const stem of shipped) {
+    const manifestPath = featureManifestPath(stem);
+    if (!await source.exists(manifestPath)) {
+      stems.set(stem, stemRuledPrunableFiles(tree, stem, plans, excluded));
+      continue;
+    }
+
+    const rawManifest = await source.readFile(manifestPath);
+    if (rawManifest === null) {
+      stems.set(stem, stemRuledPrunableFiles(tree, stem, plans, excluded));
+      continue;
+    }
+
+    const parsed = parseFeatureManifest(rawManifest, manifestPath, stem);
+    if (parsed.kind === 'malformed') {
+      skipped.push({ stem, reason: 'malformed-manifest' });
+      continue;
+    }
+
+    const manifestPaths = parsed.manifest.artifacts
+      .filter((entry) => DOCS_RETENTION_POLICY.prunableKinds.some((kind) => kind === entry.kind))
+      .map((entry) => entry.path);
+    const supplemental = stemRuledPrunableFiles(tree, stem, plans, excluded)
+      .filter((path) => path.startsWith('.docs/halted/') || path.startsWith('.docs/plan-review/') || path.startsWith('.docs/retros/'));
+    stems.set(stem, [...manifestPaths, manifestPath, ...supplemental]);
+  }
   return { removable: [...stems.values()].flat(), deferred: [], skipped, excluded, stems };
+}
+
+function stemRuledPrunableFiles(tree: readonly string[], stem: string, plans: ReadonlySet<string>, excluded: string[]): string[] {
+  return prunableFilesForStem(tree, stem).filter((path) => {
+    const family = DOCS_RETENTION_POLICY.normalizedStemFamilies.find((candidate) => path.startsWith(`.docs/${candidate}/`));
+    const basename = family ? path.slice(`.docs/${family}/`.length, -3) : undefined;
+    const undated = basename?.replace(/^\d{4}-\d{2}-\d{2}-/, '');
+    if (basename !== stem && undated && [...plans].filter((candidate) => candidate.replace(/^\d{4}-\d{2}-\d{2}-/, '') === undated).length > 1) {
+      excluded.push(path);
+      return false;
+    }
+    return true;
+  });
 }
 export function applyOpenPullRequestDeferral(selection: DocsPruneSelection, prs: PullRequestWithFiles[], operatorLogin: string): DocsPruneSelection { const deferred = [...selection.deferred]; const removable = new Set(selection.removable); for (const [stem, paths] of selection.stems) { const hits = prs.filter((pr) => !(pr.author === operatorLogin && pr.headRef.startsWith('docs-prune/')) && pr.changedPaths.some((p) => paths.includes(p))); if (hits.length) { paths.forEach((p) => removable.delete(p)); deferred.push({ stem, paths, reason: 'open-pr-modifies', pullRequests: hits.map((p) => p.url) }); } } return { ...selection, removable: [...removable], deferred }; }
 export async function commitDocsPruneDeletion(input: { repoDir: string; startPoint: string; removable: string[]; git: GitRunner }): Promise<string> { const worktree = await mkdtemp(join(tmpdir(), 'docs-prune-')); try { await input.git(['worktree', 'add', '--detach', worktree, input.startPoint], { cwd: input.repoDir }); if (input.removable.length) await input.git(['rm', '--', ...input.removable], { cwd: worktree }); const changes = (await input.git(['diff', '--cached', '--name-status'], { cwd: worktree })).stdout.split('\n').filter(Boolean); const expected = new Set(input.removable); if (changes.some((line) => { const [status, path] = line.split('\t'); return status !== 'D' || !expected.delete(path); }) || expected.size) throw new Error(`docs-prune commit has unexpected staged path: ${changes.join(', ')}`); await input.git(['commit', '-m', withDaemonCoAuthorTrailer('docs: prune shipped DECIDE artifacts')], { cwd: worktree }); return (await input.git(['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim(); } finally { await input.git(['worktree', 'remove', '--force', worktree], { cwd: input.repoDir }).catch(() => {}); await rm(worktree, { recursive: true, force: true }); } }
