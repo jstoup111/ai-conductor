@@ -87,6 +87,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
@@ -268,18 +269,26 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       const featureDeps = deps({ done: false, halted: false });
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
       featureDeps.runConductor = async (worktree) => {
-        await runStackPreflight({
-          worktree: worktree.path,
-          slug: ITEM.slug,
-          git: makeGitRunner(worktree.path),
-          reconcileRounds: async () => ({
-            kind: 'stalled', detail: 'next-host admission refused',
-            rounds: [{
-              roundId: parseRoundId('r1')!, readable: true,
-              unsettledHosts: { [parseChildId(1)!]: 'pending' },
-            }],
-          }),
-        });
+        const events = new ConductorEventEmitter();
+        const persister = new EventPersister(join(worktree.path, '.pipeline', 'events.jsonl'), events);
+        persister.start();
+        try {
+          await runStackPreflight({
+            worktree: worktree.path,
+            slug: ITEM.slug,
+            events,
+            git: makeGitRunner(worktree.path),
+            reconcileRounds: async () => ({
+              kind: 'stalled', detail: 'next-host admission refused',
+              rounds: [{
+                roundId: parseRoundId('r1')!, readable: true,
+                unsettledHosts: { [parseChildId(1)!]: 'pending' },
+              }],
+            }),
+          });
+        } finally {
+          persister.stop();
+        }
       };
       featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
       featureDeps.beginFeatureRun = () => ({

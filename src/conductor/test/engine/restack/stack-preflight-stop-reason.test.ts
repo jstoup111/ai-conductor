@@ -289,9 +289,10 @@ describe('stack preflight stop reasons', () => {
     const seeded = Buffer.from('operator decision\nneeds-human\n');
     await writeFile(join(subject.repo, '.pipeline', 'HALT'), seeded);
 
-    await expect(runStackPreflight({
+    await expect(withPersistedEvents(subject.repo, (events) => runStackPreflight({
       worktree: subject.repo,
       slug: 'demo',
+      events,
       git: makeGitRunner(subject.repo),
       // The caller has already established the live-HALT check. This isolates
       // the wrapper's non-replacement branch while the stall escalates.
@@ -301,7 +302,7 @@ describe('stack preflight stop reasons', () => {
         detail: 'test reconciliation stall',
         rounds: [{ roundId: 'round-1' as never, readable: false }],
       }),
-    })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+    }))).resolves.toMatchObject({ result: { kind: 'halted', haltClass: 'mechanical' } });
 
     expect((await readFile(join(subject.repo, '.pipeline', 'HALT'))).equals(seeded)).toBe(true);
   });
@@ -444,7 +445,7 @@ describe('stack preflight stop reasons', () => {
     }));
   });
 
-  it('turns an unreadable outbox round set into one mechanical, named stall', async () => {
+  it('keeps an outbox failure unavailable when no durable round can be diagnosed', async () => {
     const subject = await fixture();
     vi.mocked(drainRoutingOutboxes).mockResolvedValueOnce({ kind: 'unavailable' });
 
@@ -453,22 +454,11 @@ describe('stack preflight stop reasons', () => {
       slug: 'demo',
       events,
       git: makeGitRunner(subject.repo),
-      reconcileRounds: async () => ({
-        kind: 'stalled',
-        detail: 'routing round r1 stalled: routing record is unreadable',
-        rounds: [
-          { roundId: 'r1' as never, readable: false },
-          { roundId: 'r2' as never, readable: false },
-        ],
-      }),
+      reconcileRounds: async () => ({ kind: 'none' }),
     }));
 
-    expect(result).toMatchObject({
-      kind: 'halted',
-      haltClass: 'mechanical',
-      detail: expect.stringContaining('r1 (unreadable); r2 (unreadable)'),
-    });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    expect(result).toEqual({ kind: 'unavailable', detail: 'cannot drain routing outbox: unavailable' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
   it('names a lost base-refresh follow-on', async () => {
@@ -482,7 +472,7 @@ describe('stack preflight stop reasons', () => {
     expect(readRestackJournal).toHaveBeenCalled();
   });
 
-  it('writes a markerless routed-exit refusal detail to the HALT and loop halt', async () => {
+  it('turns a markerless routed-exit refusal with an unreadable record into a mechanical HALT', async () => {
     const subject = await fixture();
     vi.mocked(requestRoutedExit).mockResolvedValueOnce({
       kind: 'halted', detail: 'routed exit host 2: leaf compare-and-swap cas-failed',
@@ -496,16 +486,17 @@ describe('stack preflight stop reasons', () => {
       reconcileRounds: async () => ({ kind: 'resume-exit', roundId: 'round-1' as never, host: 2 as never }),
     }));
 
-    expect(result).toEqual({ kind: 'halted', detail: 'routed exit host 2: leaf compare-and-swap cas-failed' });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^routed exit host 2: leaf compare-and-swap cas-failed/);
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    const detail = 'routing round round-1 is unreadable after routed exit: routed exit host 2: leaf compare-and-swap cas-failed';
+    expect(result).toEqual({ kind: 'halted', haltClass: 'mechanical', detail });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^routing round round-1 is unreadable after routed exit/);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
     expect(records.filter((record) => record.type === 'loop_halt')).toEqual([
-      expect.objectContaining({ reason: 'routed exit host 2: leaf compare-and-swap cas-failed' }),
+      expect.objectContaining({ reason: detail }),
     ]);
   });
 
   it.each([
-    ['routed exit', 'stack preflight: routed exit refused', async () => {
+    ['routed exit', 'routing round round-1 is unreadable after routed exit: stack preflight: routed exit refused', async () => {
       const subject = await fixture();
       vi.mocked(requestRoutedExit).mockResolvedValueOnce({ kind: 'halted', detail: '' });
       return { subject, options: { reconcileRounds: async () => ({ kind: 'resume-exit' as const, roundId: 'round-1' as never, host: 2 as never }) } };
