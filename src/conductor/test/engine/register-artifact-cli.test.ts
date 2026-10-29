@@ -14,6 +14,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { prepareProtectedArtifactReseal } from '../../src/engine/protected-artifact-seal.js';
+import type { DocsPath } from '../../src/engine/feature-manifest.js';
 
 const cleanupRoots: string[] = [];
 
@@ -203,9 +204,13 @@ describe('register-artifact validation', () => {
           ...options,
           ownership: {
             kind: 'manifest',
-            manifestPath: '.docs/f/manifest.json',
-            ownedPaths: ['.docs/plans/f.md', '.docs/stories/f.md'],
-            protectedPaths: ['.docs/plans/f.md', '.docs/stories/f.md', '.docs/f/manifest.json'],
+            manifestPath: '.docs/f/manifest.json' as DocsPath,
+            ownedPaths: ['.docs/plans/f.md' as DocsPath, '.docs/stories/f.md' as DocsPath],
+            protectedPaths: [
+              '.docs/plans/f.md' as DocsPath,
+              '.docs/stories/f.md' as DocsPath,
+              '.docs/f/manifest.json' as DocsPath,
+            ],
           },
         });
         return options.seal;
