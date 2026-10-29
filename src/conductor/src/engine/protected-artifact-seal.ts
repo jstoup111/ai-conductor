@@ -1677,10 +1677,12 @@ export async function prepareProtectedArtifactReseal({
   }
   const manifestPath = featureDesc ? `.docs/${featureDesc}/manifest.json` : undefined;
   if (manifestPath && paths.includes(manifestPath)) {
+    // ai-conductor:session-command-context=operator-only
     throw new ProtectedArtifactResealRefusal(
       `Protected artifact reseal target is the feature manifest: ${manifestPath}\nUse ai-conductor register-artifact to change manifest membership.`,
       manifestPath,
     );
+    // /ai-conductor:session-command-context
   }
   const ownership = suppliedOwnership ?? (
     featureDesc && baseBranch

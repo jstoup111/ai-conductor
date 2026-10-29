@@ -1,5 +1,5 @@
 import type { ChildId } from '../child-context.js';
-import { featureSlugOf, leafBranchFor, parseFeatureRef } from '../feature-branch-identity.js';
+import { daemonOwnedSlugOfRef, leafBranchFor } from '../feature-branch-identity.js';
 import { writeHaltMarker, type HaltMarkerWriteResult } from '../halt-marker.js';
 import {
   confirmUntrackedRebasePaths,
@@ -42,7 +42,7 @@ export interface RestackMoveDependencies {
   readonly git?: GitRunner;
   /** Feature and base supplied by the executor's pre-replay ownership check. */
   readonly featureSlug?: string;
-  readonly ownershipBaseRef?: string;
+  readonly ownershipBase?: string;
   /** Number of retries after the first lock failure. */
   readonly retries?: number;
   readonly sleep?: () => Promise<void>;
@@ -102,12 +102,12 @@ async function resolveOwnershipBaseRef(git: GitRunner): Promise<string | undefin
 async function ownershipRefusal(
   worktree: string,
   checkedOut: RefName,
-  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBaseRef'>,
+  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBase'>,
 ): Promise<string | undefined> {
   const git = dependencies.git ?? makeGitRunner(worktree);
-  const slug = dependencies.featureSlug ?? featureSlugOf(parseFeatureRef(checkedOut));
+  const slug = dependencies.featureSlug ?? daemonOwnedSlugOfRef(checkedOut);
   if (slug === undefined) return undefined;
-  const baseRef = dependencies.ownershipBaseRef ?? await resolveOwnershipBaseRef(git);
+  const baseRef = dependencies.ownershipBase ?? await resolveOwnershipBaseRef(git);
   if (baseRef === undefined) return undefined;
   try {
     const ownership = await computeFeatureOwnership(worktreeFeatureOwnershipSource(worktree, git), slug, baseRef);
@@ -176,7 +176,7 @@ export async function checkRestackPreMove(
   worktree: string,
   moves: readonly RestackMoveRef[],
   checkedOut: RefName,
-  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBaseRef'> = {},
+  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBase'> = {},
 ): Promise<RestackPreMoveResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const changedMoves = moves.filter((move) => move.oldSha !== move.newSha && move.ref.startsWith('refs/heads/'));

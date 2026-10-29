@@ -108,7 +108,7 @@ describe('restack manifest ownership drift (Task 3, real local Git)', () => {
 
     await expect(checkRestackPreMove(subject.repo, moves, leafRef, {
       git: makeGitRunner(subject.repo),
-      ownershipBaseRef: 'main',
+      ownershipBase: 'main',
     })).resolves.toMatchObject({
       kind: 'seal-refused',
       detail: expect.stringMatching(/\.docs\/stories\/unlisted\.md: unlisted.*ai-conductor register-artifact/s),

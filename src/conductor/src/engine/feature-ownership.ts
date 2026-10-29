@@ -1,4 +1,5 @@
 import type { ArtifactKind } from '../types/feature-manifest.js';
+import { execa } from 'execa';
 import {
   featureManifestPath,
   MANIFEST_KIND_LOCATIONS,
@@ -6,7 +7,11 @@ import {
   type DocsPath,
 } from './feature-manifest.js';
 import { worktreeManifestSource, type ManifestSource } from './feature-manifest-source.js';
-import { makeGitRunner, type GitRunner } from './rebase.js';
+
+/** Read-only Git boundary needed to derive feature-added paths. */
+export interface FeatureOwnershipGitRunner {
+  (args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+}
 
 export interface FeatureOwnershipSource extends ManifestSource {
   featureAddedPaths(baseRef: string): Promise<readonly string[]>;
@@ -41,7 +46,7 @@ const PROTECTED_KINDS = new Set<ArtifactKind>(['plan', 'stories', 'prd', 'archit
  */
 export function worktreeFeatureOwnershipSource(
   root: string,
-  git: GitRunner = makeGitRunner(root),
+  git: FeatureOwnershipGitRunner = makeFeatureOwnershipGitRunner(root),
 ): FeatureOwnershipSource {
   const manifests = worktreeManifestSource(root);
   return {
@@ -66,6 +71,26 @@ export function worktreeFeatureOwnershipSource(
 
       return [...parseGitPaths(added.stdout), ...parseGitPaths(untracked.stdout)];
     },
+  };
+}
+
+/**
+ * Ownership reads only inspect repository history, so keep this adapter local
+ * instead of importing the mutation-capable rebase runner. That preserves the
+ * layer boundary between ownership policy and rebase orchestration.
+ */
+function makeFeatureOwnershipGitRunner(root: string): FeatureOwnershipGitRunner {
+  return async (args) => {
+    try {
+      const result = await execa('git', args, { cwd: root, reject: false });
+      return {
+        exitCode: typeof result.exitCode === 'number' ? result.exitCode : 1,
+        stdout: typeof result.stdout === 'string' ? result.stdout : '',
+        stderr: typeof result.stderr === 'string' ? result.stderr : '',
+      };
+    } catch {
+      return { exitCode: 1, stdout: '', stderr: '' };
+    }
   };
 }
 
@@ -122,12 +147,14 @@ export function renderOwnershipRefusal(ownership: OwnershipRefusal): string {
     return `Feature artifact manifest is malformed:\n${ownership.reason}\nFix the manifest file before continuing.`;
   }
 
+  // ai-conductor:session-command-context=operator-only
   return [
     'Feature artifact manifest drift:',
     ...ownership.drift.map(({ path, reason }) => reason === 'missing'
       ? `${path}: missing — restore the file.`
       : `${path}: unlisted — register it with ai-conductor register-artifact.`),
   ].join('\n');
+  // /ai-conductor:session-command-context
 }
 
 function parseGitPaths(stdout: string): string[] {

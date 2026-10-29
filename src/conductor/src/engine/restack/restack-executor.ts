@@ -805,7 +805,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, {
       git,
       featureSlug: options.slug,
-      ownershipBaseRef: planningDefault,
+      ownershipBase: planningDefault,
     });
     if (preMove.kind === 'refused') {
       await abortJournal(options.worktree, journal, git, moves);
