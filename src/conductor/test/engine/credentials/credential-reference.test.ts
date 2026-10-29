@@ -22,33 +22,37 @@ describe('parseCredentialReference', () => {
     });
   });
 
-  it.each([
-    ['a string command', { command: 'security' }, /command.*array/i],
-    ['an empty command array', { command: [] }, /command.*non-empty/i],
-    ['a non-string command argument', { command: ['security', 1] }, /command.*string/i],
-    ['an empty command argument', { command: ['security', ''] }, /command.*non-empty/i],
-    ['a non-string prefix', { command: ['security'], prefix: 1 }, /prefix.*string/i],
-    ['zero cache seconds', { command: ['security'], cache_seconds: 0 }, /cache_seconds.*positive integer/i],
-    ['negative cache seconds', { command: ['security'], cache_seconds: -1 }, /cache_seconds.*positive integer/i],
-    ['fractional cache seconds', { command: ['security'], cache_seconds: 0.5 }, /cache_seconds.*positive integer/i],
-    ['string cache seconds', { command: ['security'], cache_seconds: '60' }, /cache_seconds.*positive integer/i],
-  ])('rejects %s without throwing', (_caseName, reference, expectedError) => {
-    expect(() => parseCredentialReference(reference)).not.toThrow();
-    expect(parseCredentialReference(reference)).toEqual({
-      ok: false,
-      error: expect.stringMatching(expectedError),
-    });
+  it('rejects every listed malformed shape without throwing', () => {
+    for (const [reference, expectedError] of [
+      [{ command: 'security' }, /command.*array/i],
+      [{ command: [] }, /command.*non-empty/i],
+      [{ command: ['security', 1] }, /command.*string/i],
+      [{ command: ['security', ''] }, /command.*non-empty/i],
+      [{ command: ['security'], prefix: 1 }, /prefix.*string/i],
+      [{ command: ['security'], cache_seconds: 0 }, /cache_seconds.*positive integer/i],
+      [{ command: ['security'], cache_seconds: -1 }, /cache_seconds.*positive integer/i],
+      [{ command: ['security'], cache_seconds: 0.5 }, /cache_seconds.*positive integer/i],
+      [{ command: ['security'], cache_seconds: '60' }, /cache_seconds.*positive integer/i],
+    ]) {
+      expect(() => parseCredentialReference(reference)).not.toThrow();
+      expect(parseCredentialReference(reference)).toEqual({
+        ok: false,
+        error: expect.stringMatching(expectedError),
+      });
+    }
   });
 
-  it.each([
-    ['both forms', { env: 'OTLP_TOKEN', command: ['security'] }],
-    ['an unknown key', { secret: 'literal' }],
-    ['a literal string', 'literal'],
-  ])('rejects %s by listing the supported forms', (_caseName, reference) => {
-    expect(() => parseCredentialReference(reference)).not.toThrow();
-    expect(parseCredentialReference(reference)).toEqual({
-      ok: false,
-      error: expect.stringMatching(/\{ env: <name> \}.*\{ command: \[\.\.\.\], prefix\?, cache_seconds\? \}/i),
-    });
+  it('lists supported forms for mixed, unknown, and literal references', () => {
+    for (const reference of [
+      { env: 'OTLP_TOKEN', command: ['security'] },
+      { secret: 'literal' },
+      'literal',
+    ]) {
+      expect(() => parseCredentialReference(reference)).not.toThrow();
+      expect(parseCredentialReference(reference)).toEqual({
+        ok: false,
+        error: expect.stringMatching(/\{ env: <name> \}.*\{ command: \[\.\.\.\], prefix\?, cache_seconds\? \}/i),
+      });
+    }
   });
 });
