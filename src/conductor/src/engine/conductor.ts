@@ -1256,6 +1256,8 @@ export class Conductor {
    * `conflict_halt` outcome here drives the loop to HALT.
    */
   private lastRebaseOutcome: RebaseOutcome | null = null;
+  /** Timestamp captured before a rebase dispatch for stale-verdict reconciliation. */
+  private rebaseDispatchStartedAtMs: number | undefined;
   private lastRebaseSealError: string | null = null;
 
   /**
@@ -16327,6 +16329,7 @@ export class Conductor {
         await this.emitLoopHalt(reason);
         return 'halt';
       }
+      await this.reconcileStaleRebaseVerdict(state);
       // A durable completed replay already applied its explicitly named state
       // mutation through applyRebaseTransition. Older/recovery rebase verdicts
       // have no such operation, so consume the rebase-origin kickbacks
@@ -17007,9 +17010,52 @@ export class Conductor {
    * the verdict and so a HALT routes the loop to stop.
    */
   private async runRebaseStep(state: ConductState): Promise<StepRunResult> {
+    this.rebaseDispatchStartedAtMs = Date.now();
+    this.lastRebaseOutcome = null;
     const result = await this.runRebaseStepBody(state);
     await this.adoptDurableState(state);
     return result;
+  }
+
+  /**
+   * A rebase normally persists its own gate verdict. If a prior unsatisfied
+   * verdict survives this dispatch, replay only the side-effect-free outcomes
+   * that can authoritatively refresh the rebase gate without reopening others.
+   */
+  private async reconcileStaleRebaseVerdict(
+    state: ConductState,
+  ): Promise<'fresh' | 'healed' | 'halt'> {
+    const dispatchStartedAtMs = this.rebaseDispatchStartedAtMs;
+    this.rebaseDispatchStartedAtMs = undefined;
+    const verdict = await readVerdict(this.projectRoot, 'rebase');
+    if (
+      dispatchStartedAtMs === undefined ||
+      verdict === null ||
+      verdict.satisfied ||
+      verdict.checkedAt >= dispatchStartedAtMs
+    ) {
+      return 'fresh';
+    }
+
+    const outcome = this.lastRebaseOutcome;
+    if (outcome?.kind !== 'noop' && outcome?.kind !== 'mergeable_skip') return 'fresh';
+
+    const healed = await applyRebaseVerdicts(
+      this.projectRoot,
+      outcome,
+      getStepStatus(state, 'manual_test') !== 'skipped',
+      undefined,
+      undefined,
+      undefined,
+      this.activeRegionChild,
+    );
+    await this.events.emit(this.stampGateTier(this.withActiveRegionChild({
+      type: 'gate_verdict',
+      step: 'rebase',
+      satisfied: healed.satisfied,
+      reason: (await readVerdict(this.projectRoot, 'rebase'))?.reason,
+    })));
+    return 'healed';
   }
 
   private async runRebaseStepBody(state: ConductState): Promise<StepRunResult> {
