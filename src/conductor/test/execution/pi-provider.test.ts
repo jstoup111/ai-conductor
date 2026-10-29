@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
 import {
+  PI_FAILURE_SIGNATURES,
   parsePiModelId,
   parsePiModelListing,
   PiProvider,
@@ -938,7 +939,7 @@ describe('PiProvider', () => {
     });
   });
 
-  it('fails an exit-zero error-stop stream as an ordinary step failure', async () => {
+  it('classifies an anchored exit-zero authentication error stop', async () => {
     spawn.mockResolvedValue({
       stdout: await readFile(new URL('../fixtures/pi-error-stop-stream.jsonl', import.meta.url), 'utf8'),
       stderr: '',
@@ -950,9 +951,9 @@ describe('PiProvider', () => {
     expect(result).toMatchObject({
       success: false,
       exitCode: 0,
-      output: expect.stringContaining('No API key for provider: cline'),
+      output: 'Pi authentication failed: the upstream provider credential is missing or was rejected.',
     });
-    expect(result).not.toHaveProperty('authFailure');
+    expect(result).toHaveProperty('authFailure', true);
     expect(result).not.toHaveProperty('rateLimited');
     expect(result).not.toHaveProperty('modelUnavailable');
   });
@@ -985,7 +986,7 @@ describe('PiProvider', () => {
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: false,
       exitCode: 0,
-      output: expect.stringContaining('No API key for provider: cline'),
+      output: 'Pi authentication failed: the upstream provider credential is missing or was rejected.',
     });
   });
 
@@ -1100,6 +1101,38 @@ describe('PiProvider', () => {
     if (!('modelUnavailable' in expected)) expect(result).not.toHaveProperty('modelUnavailable');
     if (Object.keys(expected).length > 0) expect(result).not.toHaveProperty('exitFacts');
     expect(result).not.toHaveProperty('executionDisposition');
+  });
+});
+
+describe('PiProvider captured failure classification', () => {
+  const spawn = vi.fn<PiSubprocessFactory>();
+  const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment());
+  const invoke = () => provider.invoke(invokeOptions);
+  const errorStream = (message: string) => JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: '', stopReason: 'error', errorMessage: message } });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['pi-1.0.0-e6-rate-limit.jsonl', { rateLimited: true }],
+    ['pi-1.0.0-e8-rate-limit-anthropic.jsonl', { rateLimited: true }],
+    ['pi-1.0.0-e7-usage-exhausted.jsonl', { rateLimited: true, usageExhausted: true, waitSeconds: 3600 }],
+  ])('classifies terminal %s safely', async (name, expected) => {
+    spawn.mockResolvedValue({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
+    await expect(invoke()).resolves.toMatchObject({ success: false, ...expected });
+  });
+
+  it('classifies Pi authentication from stderr and an error stop', async () => {
+    spawn.mockResolvedValueOnce({ stdout: '', stderr: await readFixture('pi-1.0.0-e1-no-api-key.stderr.txt'), exitCode: 1 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('No API key for provider: cline'), stderr: '', exitCode: 0 } as ExecaResult);
+    await expect(invoke()).resolves.toMatchObject({ authFailure: true, authentication: { provider: 'pi', state: 'missing' } });
+    await expect(invoke()).resolves.toMatchObject({ authFailure: true, authentication: { provider: 'pi', state: 'missing' } });
+  });
+
+  it('leaves unanchored failures ordinary', async () => {
+    spawn.mockResolvedValue({ stdout: errorStream('upstream said 429: busy'), stderr: '', exitCode: 0 } as ExecaResult);
+    const result = await invoke();
+    expect(result).not.toHaveProperty('rateLimited');
+    expect(result).not.toHaveProperty('authFailure');
   });
 });
 

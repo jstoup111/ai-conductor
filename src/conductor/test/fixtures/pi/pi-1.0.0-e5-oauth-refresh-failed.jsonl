@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"OAuth refresh failed for anthropic: Anthropic token refresh request failed. url=https://platform.claude.com/v1/oauth/token; details=Error: HTTP request failed. status=400; url=https://platform.claude.com/v1/oauth/token; body={\"error\": \"invalid_grant\", \"error_description\": \"Refresh token not found or invalid\"}; stack=Error: HTTP request failed."}}
+{"type":"agent_end"}

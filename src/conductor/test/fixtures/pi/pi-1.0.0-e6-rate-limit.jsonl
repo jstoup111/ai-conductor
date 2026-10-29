@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}}
+{"type":"agent_end"}

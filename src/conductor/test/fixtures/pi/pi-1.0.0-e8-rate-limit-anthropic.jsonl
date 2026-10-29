@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Number of request tokens has exceeded your per-minute rate limit\"}}"}}
+{"type":"agent_end"}

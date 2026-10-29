@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"500: {\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}"}}
+{"type":"agent_end"}

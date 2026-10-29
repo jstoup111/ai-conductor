@@ -3180,6 +3180,41 @@ export class Conductor {
       }
     }
 
+    if (
+      authentication !== undefined &&
+      readinessDescriptor !== undefined &&
+      supportsProviderCapability(readinessDescriptor, 'credentialFileRecovery') &&
+      'credentialRecoveryFile' in readinessDescriptor &&
+      readinessDescriptor.credentialRecoveryFile !== undefined
+    ) {
+      const home = process.env[readinessDescriptor.homeVariable] ?? join(homedir(), readinessDescriptor.defaultHome);
+      const credentialsPath = join(home, readinessDescriptor.credentialRecoveryFile);
+      const providerName = readinessDescriptor.displayName;
+      await this.events.emit({
+        type: 'credentials_park',
+        reason: `${providerName} credentials rejected or missing — waiting for the ${providerName} credentials file to change`,
+      });
+      const result = await waitForCredentialsChange({
+        initialState: 'expired', credentialsPath, globalConfigDir: '',
+        timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+        sleep: this.sleep, now: () => Date.now(),
+        contentClassifier: (content) => {
+          try {
+            const parsed: unknown = JSON.parse(content);
+            return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+          } catch { return false; }
+        },
+      });
+      if (result.type === 'refreshed') return { disposition: 'recovered' };
+      return {
+        disposition: 'halt',
+        haltReason:
+          `${providerName} credentials did not change before the auth park timed out.\n` +
+          `Credentials file: ${credentialsPath}\n` +
+          `Store a working credential with ${providerName} (/login), or fix the upstream provider's environment key and restart the daemon, then re-queue this feature.`,
+      };
+    }
+
     if (this.selfHost && shPark.buildAuthMode === 'api-key') {
       return {
         disposition: 'halt',
