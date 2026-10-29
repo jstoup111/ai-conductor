@@ -4,6 +4,13 @@ spec_hash: b70d7de457a84fabf07291510a25b2ae66dd7c674ef2a90d84f1a9fc2ab90e3b
 pr: https://github.com/jstoup111/ai-conductor/pull/3527
 shipped: 2026-10-29
 engine_version: 20261028T233532Z-57dec67fd10c
+findings:
+  - gate: architecture_review_as_built
+    finding: "as-built:3d7280e4-0f14-42c7-80d9-b647b964e1ec:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication decision 5"
+    outcome: remediated
+    summary: "Verified (98% confidence): D5.13–D5.15 require an undeclared bound residual rebind to report its routing kind when it reaches the recurrence limit. src/conductor/src/engine/build-review-adjudication-coordinator.ts:1268 emits reRaiseKind only for residual-gap, and src/conductor/src/types/events.ts:1062 excludes undeclared from the halt event type. Both contradict the approved feature diagram at .docs/architecture/build-review-halts-as-regression-when-a-repair-lef.md:58."
 ---
 
 ## Cost
