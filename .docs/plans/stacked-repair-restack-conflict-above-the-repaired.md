@@ -543,3 +543,43 @@ Tasks 6, 8, 10, 11, 13 -> Task 14
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-6: Wrap runStackRestackResolve in acquireFeatureDispatchLease, refuse a live owner by purpose and pid, and release in finally (stack-restack-resolve-cli.ts)
+**Gate:** as-built
+**Rationale:** ADR D3 is authoritative and the code does not conform: the CLI performs no lease acquire or release. Task 6 step 3 already specifies acquireFeatureDispatchLease, so this is BUILD work and needs no architecture change.
+**Governing clause:** adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 3
+**Done when:**
+- adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 3 is satisfied by this task.
+- The repair for task rem-as-built-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-5: Add a checkPathOwnership refusal to checkRestackResolution naming the unowned paths (stack-restack-resolve-cli.ts)
+**Gate:** as-built
+**Rationale:** ADR D3 requires path-ownership refusal before any write, and checkRestackResolution omits it. Task 5 admits the fix.
+**Governing clause:** adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 3
+**Done when:**
+- adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 3 is satisfied by this task.
+- The repair for task rem-as-built-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-10: Call consumeRecordedResolution in resumePlanned: resolved status and rewrites, stale refusal halt, and consumed event (restack-recovery.ts)
+**Gate:** as-built
+**Rationale:** ADR D4 requires recovery to consume a matching resolution like the executor does, and restack-recovery.ts does not. Task 10 admits this.
+**Governing clause:** adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 4
+**Done when:**
+- adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 4 is satisfied by this task.
+- The repair for task rem-as-built-10 is committed and its targeted tests pass.
+
+### Task rem-as-built-3: Pass the replay candidates to haltUnresolvedConflict in the RemBlockBodyMismatchError branch so candidateSubjects is non-empty (restack-executor.ts)
+**Gate:** as-built
+**Rationale:** ADR D1 requires every child-content conflict, including a rem-* body mismatch, to write a complete record and recipe. The executor site omits candidates (Task 3). The recovery site rethrows through a merge-tree-only parser instead of writing the record (Task 4, whose recovery conflict arm must match the executor).
+**Governing clause:** adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 1
+**Done when:**
+- adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 1 is satisfied by this task.
+- The repair for task rem-as-built-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-4: Route recovery's RemBlockBodyMismatchError to the conflict-unresolved arm so it writes the conflict record and recipe instead of rethrowing (restack-recovery.ts)
+**Gate:** as-built
+**Rationale:** ADR D1 requires every child-content conflict, including a rem-* body mismatch, to write a complete record and recipe. The executor site omits candidates (Task 3). The recovery site rethrows through a merge-tree-only parser instead of writing the record (Task 4, whose recovery conflict arm must match the executor).
+**Governing clause:** adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 1
+**Done when:**
+- adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 1 is satisfied by this task.
+- The repair for task rem-as-built-4 is committed and its targeted tests pass.
