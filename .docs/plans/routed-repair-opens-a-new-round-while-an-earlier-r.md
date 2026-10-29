@@ -404,3 +404,20 @@ Task 3 ──► Task 5 ──► Task 6 ──► Task 9
 **Done when:**
 - [test] S1.9 is satisfied by this task.
 - The repair for task rem-prd-audit-rem-prd-S1.9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-rem-prd-S1.8: stack-preflight.ts resume-exit: on exit-halted with unreadableRoundId, replace the mutating reconcileRounds call with read-only diagnoseAffectedRounds + recordRoundStall (mechanical halt naming the round id when no affected rounds), so no earlier pending round is admitted; add a runStackPreflight test with real reconcileRounds where r3 has host 2 pending and r4's reread fails after restack, asserting no create-marker for r3 and a mechanical stall
+**Gate:** prd-audit
+**Rationale:** Verified (95%) at stack-preflight.ts:275-290. The unreadable-round exit-halted branch calls the mutating reconcileRounds. After an applied restack has removed the marker, that call can advanceRound an earlier readable open round and write its create-marker before it reaches the unreadable round. The read-only diagnoseAffectedRounds path that the outbox branch uses (lines 232-247) is the correct pattern. Approved architecture already covers this: plan Task 8 and the bound remediation task. This is implementation and test drift, not an architectural decision.
+**Criterion:** S1.8
+**Parent task:** rem-prd-audit-rem-prd-S1.8
+**Done when:**
+- [test] S1.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-rem-prd-S1.8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R2: round-admission.ts reconcileRounds: when completeRerouteSync succeeds, return navigate-host for the recovered admitted destination (from the updated record) before advancing any other round, instead of setting deferred and continuing; add reconcileRounds tests for the single-open-round case (no deferred/unavailable) and the second-pending-round case (no admission attempted against the recovered host's marker)
+**Gate:** as-built
+**Rationale:** Verified (95%) at round-admission.ts:368-372. A successful completeRerouteSync is discarded: the code sets deferred and continues instead of returning navigation for the newly admitted destination host. That breaks ADR D7, and with an open round it falls through to the unavailable/needs-human path in stack-preflight. The fix is a conforming code change within plan Task 3, which reconciles the marker's round first and continues after a close. No architectural decision is needed.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 7
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R2 is committed and its targeted tests pass.
