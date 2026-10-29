@@ -36,6 +36,17 @@ describe('command credential source', () => {
     await expect(resolver.resolve()).resolves.toEqual({ kind: 'value', value: 'tok-123' });
   });
 
+  it('preserves leading whitespace while trimming trailing command output whitespace', async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: '  tok-123\n' });
+    const resolver = createCredentialResolver(
+      { kind: 'command', argv: ['credential-command'] },
+      {},
+      { commandRunner: runner },
+    );
+
+    await expect(resolver.resolve()).resolves.toEqual({ kind: 'value', value: '  tok-123' });
+  });
+
   it('expands only leading home-directory arguments and preserves shell-looking arguments literally', async () => {
     const runner = vi.fn().mockResolvedValue({ stdout: 'tok-123\n' });
     const resolver = createCredentialResolver(

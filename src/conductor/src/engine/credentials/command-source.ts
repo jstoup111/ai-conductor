@@ -82,7 +82,7 @@ export async function resolveCommandCredential(
         env: scrubTmuxEnvironment({ ...environment }),
       },
     );
-    const value = stdout.trim();
+    const value = stdout.trimEnd();
     return value === ''
       ? { kind: 'unavailable', reason: `${commandSourceName(reference.argv)} is unavailable: command produced empty output.` }
       : { kind: 'value', value: `${reference.prefix ?? ''}${value}` };

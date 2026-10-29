@@ -48,4 +48,17 @@ describe('OTel header provider', () => {
     environment.OTLP_TOKEN = 'rotated';
     await expect(provider()).resolves.toEqual({ authorization: 'rotated' });
   });
+
+  it('retains a __proto__ header as an own resolved header', async () => {
+    const provider = createOtelHeaderProvider(
+      { ['__proto__']: { kind: 'env', variable: 'OTLP_TOKEN' } },
+      undefined,
+      { environment: { OTLP_TOKEN: 'tok-123' } },
+    );
+
+    const headers = await provider();
+
+    expect(Object.hasOwn(headers, '__proto__')).toBe(true);
+    expect(headers['__proto__']).toBe('tok-123');
+  });
 });

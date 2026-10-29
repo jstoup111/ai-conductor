@@ -27,12 +27,12 @@ export function createOtelHeaderProvider(
     createCredentialResolver(reference, options.environment ?? process.env, options),
   ]));
   return async () => {
-    const headers: Record<string, string> = {};
+    const headers: Array<[string, string]> = [];
     for (const [header, resolver] of Object.entries(resolvers)) {
       const result = await resolver.resolve();
       if (result.kind === 'unavailable') throw new CredentialUnavailableError(header, result.reason);
-      headers[header] = result.value;
+      headers.push([header, result.value]);
     }
-    return headers;
+    return Object.fromEntries(headers);
   };
 }
