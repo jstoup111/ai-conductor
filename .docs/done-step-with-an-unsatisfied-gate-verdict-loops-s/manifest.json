@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "done-step-with-an-unsatisfied-gate-verdict-loops-s",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/done-step-with-an-unsatisfied-gate-verdict-loops-s.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/done-step-with-an-unsatisfied-gate-verdict-loops-s.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/done-step-with-an-unsatisfied-gate-verdict-loops-s.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/done-step-with-an-unsatisfied-gate-verdict-loops-s.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/done-step-with-an-unsatisfied-gate-verdict-loops-s.md"
+    }
+  ]
+}
