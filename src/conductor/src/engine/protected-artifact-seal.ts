@@ -1269,6 +1269,15 @@ async function inspectSeal(
     if (classification.kind === 'indeterminate') {
       return protectedArtifactSealFailure(`Indeterminate protected artifact target: ${path}\n${attributionLine('diff-probe-failed')}`, path);
     }
+    // `expected` extends discovery for a manifest-backed durable seal whose
+    // caller no longer has the transient ownership result.  A missing sealed
+    // path is not an indeterminate target, though: leave it out of the actual
+    // surface so the deletion pass below can establish base inheritance and
+    // preserve its established attribution/refusal behavior.
+    if (expected.has(classification.target)
+      && await readContainedProtectedArtifact(projectRoot, classification.target) === undefined) {
+      continue;
+    }
     actualPaths.push(classification.target);
   }
 

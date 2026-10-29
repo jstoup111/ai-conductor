@@ -132,6 +132,31 @@ describe('manifest-backed protected artifact seals (real local Git)', () => {
     await expect(verifyProtectedArtifactSeal({ projectRoot: root })).resolves.toMatchObject({ ok: true });
   });
 
+  it('classifies a deleted manifest-listed path without separately supplied ownership', async () => {
+    const root = await fixture({
+      '.docs/f/manifest.json': manifest([
+        { kind: 'plan', path: '.docs/plans/f.md' },
+        { kind: 'stories', path: '.docs/f/review/stories.md' },
+      ]),
+      '.docs/plans/f.md': 'plan\n',
+      '.docs/f/review/stories.md': 'stories\n',
+    });
+    await createProtectedArtifactSeal({
+      projectRoot: root,
+      baselineCommit: await git(root, ['rev-parse', 'HEAD']),
+      ownership: await ownership(root),
+    });
+    await rm(join(root, '.docs/f/review/stories.md'));
+
+    await expect(verifyProtectedArtifactSeal({
+      projectRoot: root,
+      baseBranch: 'main',
+    })).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Protected artifact deleted: .docs/f/review/stories.md'),
+    });
+  });
+
   it('rejects an unlisted same-stem protected artifact instead of reporting it as a self-amendment', async () => {
     const root = await fixture({
       '.docs/f/manifest.json': manifest([{ kind: 'plan', path: '.docs/plans/f.md' }]),
