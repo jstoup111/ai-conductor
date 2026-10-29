@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-29T11:59:45.917Z
 Slug: path-policy-still-decides-feature-ownership-by-fol
 Class: needs-human
 Halting step: unknown
