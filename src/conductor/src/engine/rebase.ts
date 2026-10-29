@@ -32,10 +32,11 @@ import {
   resolveFeaturePlanPath,
   resolveFeaturePrdPaths,
 } from './artifacts.js';
-import { featureManifestPath } from './feature-manifest.js';
+import { featureManifestPath, type FeatureScopedKind } from './feature-manifest.js';
 import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
 import {
   resolveFeatureArtifact,
+  resolveFeatureDecisionArtifact,
   worktreeManifestSource,
 } from './feature-manifest-source.js';
 import {
@@ -1359,7 +1360,7 @@ async function resolveManifestIdentity(projectRoot: string): Promise<{
   return { featureDesc, planPath, context, manifestSlug: candidates[0] };
 }
 
-const REVIEW_INPUT_ARTIFACT_KINDS = ['stories', 'prd', 'plan', 'coherence', 'decision'] as const;
+const REVIEW_INPUT_ARTIFACT_KINDS = ['stories', 'prd', 'plan', 'coherence'] as const satisfies readonly FeatureScopedKind[];
 
 /**
  * Resolve the declared review-document set when a feature manifest owns the
@@ -1371,14 +1372,18 @@ async function resolveManifestReviewInputPaths(
   manifestSource: ReturnType<typeof worktreeManifestSource>,
   manifestSlug: string,
 ): Promise<string[] | undefined> {
-  const artifacts = await Promise.all(REVIEW_INPUT_ARTIFACT_KINDS.map((kind) =>
-    resolveFeatureArtifact(manifestSource, manifestSlug, kind, async () => []),
-  ));
+  const [artifacts, decisions] = await Promise.all([
+    Promise.all(REVIEW_INPUT_ARTIFACT_KINDS.map((kind) =>
+      resolveFeatureArtifact(manifestSource, manifestSlug, kind, async () => []),
+    )),
+    resolveFeatureDecisionArtifact(manifestSource, manifestSlug, async () => []),
+  ]);
   if (artifacts[0]?.origin !== 'manifest') return undefined;
 
   return [
     featureManifestPath(manifestSlug),
     ...artifacts.flatMap(({ paths }) => paths),
+    ...decisions.paths,
   ];
 }
 

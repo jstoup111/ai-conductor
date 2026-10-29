@@ -6,6 +6,7 @@ import type { BacklogTreeSource } from './backlog-tree-source.js';
 import {
   featureManifestPath,
   parseFeatureManifest,
+  type ArtifactKind,
   type FeatureScopedKind,
 } from './feature-manifest.js';
 
@@ -98,6 +99,31 @@ export async function resolveFeatureArtifact(
   source: ManifestSource,
   slug: string,
   kind: FeatureScopedKind,
+  legacy: () => Promise<readonly string[]>,
+): Promise<FeatureArtifactResolution> {
+  return resolveManifestArtifact(source, slug, kind, legacy);
+}
+
+/**
+ * Resolve decision records explicitly. Decisions are repository-scoped rather
+ * than feature-scoped, so callers must opt into this distinct manifest kind.
+ */
+export async function resolveFeatureDecisionArtifact(
+  source: ManifestSource,
+  slug: string,
+  legacy: () => Promise<readonly string[]>,
+): Promise<FeatureArtifactResolution> {
+  return resolveManifestArtifact(source, slug, 'decision', legacy);
+}
+
+type FeatureArtifactResolution =
+  | { readonly origin: 'legacy'; readonly paths: readonly string[] }
+  | { readonly origin: 'manifest'; readonly paths: readonly string[]; readonly missing: readonly string[] };
+
+async function resolveManifestArtifact(
+  source: ManifestSource,
+  slug: string,
+  kind: FeatureScopedKind | Extract<ArtifactKind, 'decision'>,
   legacy: () => Promise<readonly string[]>,
 ): Promise<
   | { readonly origin: 'legacy'; readonly paths: readonly string[] }
