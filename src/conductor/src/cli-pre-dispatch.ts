@@ -34,6 +34,7 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectHaltClearCommand', commandPath: ['halt-clear'], helpOwner: 'router' },
   { detector: 'detectRewindCommand', commandPath: ['rewind'], helpOwner: 'router' },
   { detector: 'detectResealCommand', commandPath: ['reseal'], helpOwner: 'router' },
+  { detector: 'detectRegisterArtifactCommand', commandPath: ['register-artifact'], helpOwner: 'router' },
   { detector: 'detectMissingResealReasonCommand', commandPath: ['missing-reseal-reason'], helpOwner: 'router' },
   { detector: 'detectTestSuiteCommand', commandPath: ['test-suite'], helpOwner: 'router' },
   { detector: 'detectMemoryCommand', commandPath: ['memory', 'setup'], helpOwner: 'router' },
