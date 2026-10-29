@@ -99,7 +99,7 @@ vocabulary and the plan, so that only routable, correctly owned work reaches adm
 
 #### Negative Paths
 - Given an unknown disposition or halt category value, when it is validated, then the whole plan is rejected naming the value and the accepted set, and a `remediation_disposition_rejected` event is emitted for each rejected entry.
-- Given an `existing-task` disposition that binds a task other than the finding's owning task, when it is validated, then the whole plan is rejected naming both the bound task and the owner.
+- Given an `existing-task` disposition that binds a task other than the finding's owning task, and that task is not a repair task of the prior as-built case named by the disposition's `same` or `recurrence` reconciliation, when it is validated, then the whole plan is rejected naming both the bound task and the owner.
 - Given an `existing-task` disposition binding a task id that is absent from the active plan, or that has no bound task, when it is validated, then the whole plan is rejected naming the field.
 - Given a `build` disposition with no new tasks for any source other than build stall, when it is validated, then the whole plan is rejected naming the empty task list.
 - Given a `halt` disposition without a category, when it is validated, then the whole plan is rejected naming the missing category.
