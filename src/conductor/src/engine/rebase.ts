@@ -2399,12 +2399,14 @@ export async function resolveRebaseConflicts(
   if (conflictOutcome.kind === 'conflict_halt') {
     const manifestConflicts = conflictOutcome.conflicts.filter(isFeatureManifestConflict);
     if (manifestConflicts.length > 0) {
+      // ai-conductor:session-command-context=operator-only
       return {
         ...conflictOutcome,
         reason:
           `feature manifest conflict requires human resolution: ${manifestConflicts.join(', ')}. ` +
           "Recovery: take the base branch's manifest, then re-run ai-conductor register-artifact for each feature artifact entry.",
       };
+      // /ai-conductor:session-command-context
     }
   }
   const resolved = await resolveRebaseConflictsInner(
