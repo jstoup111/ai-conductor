@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "stacked-feature-cost-and-time-cannot-be-broken-dow",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-22-stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-03-stacked-child-plans-identity-and-state.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/stacked-feature-cost-and-time-cannot-be-broken-dow.md"
+    }
+  ]
+}
