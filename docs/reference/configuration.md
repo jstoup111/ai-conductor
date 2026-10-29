@@ -1541,7 +1541,13 @@ a routed round instead of appended to the leaf plan:
 - **Charging.** A round is charged exactly once, at the host's BUILD dispatch, from its route-record
   receipt under the kickback-ledger lease; a resumed dispatch never charges twice and kickback caps
   still apply. A taskless `manual_test` round is charged on its receipt at admission and keeps the
-  self-heal cap.
+  self-heal cap. A receipt that would exceed a lap or plan-growth allowance charges nothing and
+  halts `kickback-cap` naming the exhausted allowance and the round: `Routed round r<n> findings:`,
+  then `Routed round r<n> remediation tasks:` and `Routed round r<n> repairs existing tasks:` when
+  present. The cap evidence and budget view report consumption settled before the round, with the
+  round's charge as pending growth. An absent, malformed, or unreadable route record halts
+  `needs-human` with `Pending remediation findings are unavailable: route record <round-or-ref> is
+  <state>.` instead of reporting an exhausted allowance.
 - **Review.** `build_review` and testQuality grade the host against the round's pinned base. The
   round grants the host one routed-repair credit, consumed before the cumulative kickback bound
   halts.

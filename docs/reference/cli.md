@@ -523,7 +523,7 @@ unknown`. It reads local files only. Verdicts are defined in
 [shipped-PR readiness](../guides/running-the-daemon.md#shipped-pr-readiness).
 
 For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
-kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
+kickback ledger and the `prd_audit` cap resolved from the main checkout's configuration. For a stacked feature the line reads
 `PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
 The authored count comes from the feature's resolved plan — the same selection the daemon uses — so
@@ -1424,8 +1424,8 @@ gate's effective lap limit by `--by`; for a plan-growth halt it increases the fe
 plan-growth cap by `--by`. `reset` returns only a gate's lap count to zero without lowering an
 already authorized effective limit, and refuses plan-growth evidence; use `raise` for that recovery.
 Inspect shows the effective plan-growth cap and whether it is config-derived or raised. With or
-without `--child`, it computes that feature-wide cap from the feature's resolved plan without
-rewriting the ledger; when no plan resolves and the cap was not raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
+without `--child`, it computes that feature-wide cap from the feature's resolved plan and the main
+checkout's configuration without rewriting the ledger; when no plan resolves and the cap was not raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
 mutation, the command temporarily parks an unparked feature while it records the authorization and
 removes that temporary park after success. It preserves a park that already existed; unpark that
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
