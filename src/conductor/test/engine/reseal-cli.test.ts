@@ -375,7 +375,51 @@ describe('describeResealRecovery', () => {
 });
 
 describe('dispatchResealCommand', () => {
-  it('refuses a malformed manifest-backed feature without changing its seal', async () => {
+  it.each([
+    ['cannot resolve its plan path', async (worktree: string) => {
+      await mkdir(join(worktree, '.docs', 'repair', 'manifest.json'), { recursive: true });
+    }, 'cannot resolve sealed plan path'],
+    ['cannot read its resolved plan path', async (worktree: string) => {
+      await mkdir(join(worktree, '.docs', 'repair'), { recursive: true });
+      await writeFile(join(worktree, '.docs', 'repair', 'manifest.json'), JSON.stringify({
+        schemaVersion: 1,
+        slug: 'repair',
+        artifacts: [{ kind: 'plan', path: '.docs/plans/repair.md' }],
+      }));
+      await mkdir(join(worktree, '.docs', 'plans', 'repair.md'), { recursive: true });
+    }, 'cannot read sealed plan .docs/plans/repair.md'],
+  ] as const)('refuses reseal when it %s', async (_description, arrange, refusal) => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-plan-path-failure-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await initTestRepo(worktree);
+      await arrange(worktree);
+      await writeFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), '{"seal":"before"}\n');
+      const sealBefore = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+      const err = vi.fn();
+      const reseal = vi.fn().mockResolvedValue({
+        baselineCommit: 'target', protectedArtifacts: [], rebaselines: [], version: 2,
+      });
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root, isInteractive: true, err, reseal, events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      expect(err).toHaveBeenCalledWith(expect.stringContaining(refusal));
+      expect(reseal).not.toHaveBeenCalled();
+      await expect(readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')).resolves.toBe(sealBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('defers a malformed manifest-backed feature to ownership validation without changing its seal', async () => {
     const root = await mkdtemp(join(tmpdir(), 'reseal-cli-malformed-manifest-'));
     const worktree = join(root, '.worktrees', 'repair');
     const planPath = '.docs/plans/repair.md';
@@ -410,6 +454,7 @@ describe('dispatchResealCommand', () => {
       })).resolves.toBe(1);
 
       expect(err).toHaveBeenCalledWith(expect.stringContaining('Feature artifact manifest is malformed:'));
+      expect(err).toHaveBeenCalledWith(expect.stringContaining('Fix the manifest file before continuing.'));
       await expect(readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')).resolves.toBe(sealBefore);
     } finally {
       await rm(root, { recursive: true, force: true });
