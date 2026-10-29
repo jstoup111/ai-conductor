@@ -1328,23 +1328,44 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
   }
 }
 
-/** Resolve ownership from the same active-plan → plan → feature-desc order as artifacts. */
-async function resolveFeatureOwnershipSlug(projectRoot: string): Promise<string | undefined> {
+/**
+ * Resolve the feature identity used for every manifest lookup in this module.
+ *
+ * `feature_desc` is the durable feature identity; an active-plan path is only
+ * a document location and need not share its filename with the manifest
+ * folder. Prefer a candidate that actually has a manifest, then retain the
+ * first candidate as the legacy fallback so manifest-absent behavior remains
+ * unchanged.
+ */
+async function resolveManifestIdentity(projectRoot: string): Promise<{
+  featureDesc: string | undefined;
+  planPath: string | undefined;
+  context: Awaited<ReturnType<typeof buildArtifactResolutionContext>>;
+  manifestSlug: string | undefined;
+}> {
   const featureDesc = await resolveFeatureDesc(projectRoot);
   const context = await buildArtifactResolutionContext(projectRoot, { featureDesc });
   const planPath = context.activePlanPath ?? await resolveFeaturePlanPath(projectRoot, featureDesc);
-  return planPath ? basename(planPath, '.md') : featureDesc;
+  const candidates = [...new Set([
+    featureDesc,
+    context.activePlanPath ? basename(context.activePlanPath, '.md') : undefined,
+    planPath ? basename(planPath, '.md') : undefined,
+  ].filter((candidate): candidate is string => candidate !== undefined))];
+  const manifestSource = worktreeManifestSource(projectRoot);
+  for (const candidate of candidates) {
+    if (await manifestSource.readFile(featureManifestPath(candidate)) !== null) {
+      return { featureDesc, planPath, context, manifestSlug: candidate };
+    }
+  }
+  return { featureDesc, planPath, context, manifestSlug: candidates[0] };
 }
 
 /** Resolve review inputs.  Ordinary callers resolve only for a document
  * delta; preservation additionally requests the full declared set to bind
  * authority against later input edits. */
 export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
-  const featureDesc = await resolveFeatureDesc(projectRoot);
-  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
-  const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
+  const { featureDesc, planPath, context, manifestSlug } = await resolveManifestIdentity(projectRoot);
   const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
-  const manifestSlug = featureDesc ?? (planPath ? basename(planPath, '.md') : undefined);
   const manifestSource = worktreeManifestSource(projectRoot);
   const manifestPath = manifestSlug === undefined ? undefined : featureManifestPath(manifestSlug);
   const rawManifest = manifestPath === undefined ? null : await manifestSource.readFile(manifestPath);
@@ -1543,7 +1564,7 @@ export async function performRebase(
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
   // authority first so a stale or tampered seal fails before history changes.
   // Repositories predating seals retain the legacy rebase behavior.
-  const ownershipSlug = await resolveFeatureOwnershipSlug(projectRoot);
+  const { featureDesc, manifestSlug: ownershipSlug } = await resolveManifestIdentity(projectRoot);
   let ownership: FeatureOwnership | undefined;
   if (ownershipSlug) {
     ownership = await computeFeatureOwnership(
@@ -1563,7 +1584,7 @@ export async function performRebase(
       // omitting it silently reports a feature's OWN amended DECIDE artifact as
       // a foreign mutation. Resolved here rather than accepted from the caller
       // so no call site can disable the tolerance by forgetting to pass it.
-      featureDesc: await resolveFeatureDesc(projectRoot),
+      featureDesc,
       baseBranch: base.branch,
       ownership: ownership?.kind === 'legacy' || ownership?.kind === 'manifest'
         ? ownership

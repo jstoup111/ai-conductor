@@ -63,6 +63,28 @@ describe('gate invalidation ownership (Task 13)', () => {
     ].sort());
   });
 
+  it('uses the manifest selected for rebase ownership when its plan has a non-slug filename', async () => {
+    await write('.docs/f/manifest.json', JSON.stringify({
+      schemaVersion: 1,
+      slug: 'f',
+      artifacts: [
+        { kind: 'plan', path: '.docs/f/review/custom-plan-name.md' },
+        { kind: 'stories', path: listedStories },
+      ],
+    }));
+    await write('.docs/f/review/custom-plan-name.md', '# Plan\n');
+
+    const inputs = await resolveReviewInputs(root, [listedStories]);
+    const invalidated = classifyGateInvalidation([listedStories], [], true, inputs).invalidated.sort();
+
+    expect(inputs).toEqual(expect.arrayContaining([
+      manifestPath,
+      '.docs/f/review/custom-plan-name.md',
+      listedStories,
+    ]));
+    expect(invalidated).toEqual(['architecture_review_as_built', 'prd_audit']);
+  });
+
   it('invalidates both document surfaces for a listed story or manifest delta', async () => {
     const inputs = await resolveReviewInputs(root, [listedStories]);
     const invalidated = [listedStories, manifestPath].map((path) =>
