@@ -87,6 +87,40 @@ async function writeAsBuiltVerdict(root: string): Promise<void> {
   }, 'as-built-attempt'), { attemptId: 'as-built-attempt', codeStamp: null, policy });
 }
 
+async function writeAsBuiltCases(root: string): Promise<void> {
+  await mkdir(join(root, '.pipeline'), { recursive: true });
+  await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+    version: 'v4',
+    feature: { version: 'v1', repository: 'acme/conductor', feature: 'remediation-projection' },
+    cases: [],
+    prdWideningCases: [{
+      id: 'prd-case-1', domain: 'prd_widening',
+      originalSources: [{ sourceId: 'S1.1', snapshot: 'An unrelated widening record.' }],
+      currentSources: [], relationships: [],
+    }],
+    asBuiltCases: [{
+      id: 'case-open', domain: 'as_built', status: 'open', repairTaskIds: ['rem-as-built-t1'], recurrenceCount: 1,
+      sources: [{
+        findingId: 'as-built:prior:1', attemptId: 'prior', class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: '7' }, summary: 'The old boundary remains absent.',
+        relation: 'new', reason: 'First observed missing boundary.',
+      }],
+    }, {
+      id: 'case-resolved', domain: 'as_built', status: 'resolved', repairTaskIds: ['rem-as-built-t2'], recurrenceCount: 2,
+      sources: [{
+        findingId: 'as-built:prior:2', attemptId: 'prior', class: 'REMEDIABLE',
+        reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 2 }, summary: 'The old ADR boundary was incomplete.',
+        relation: 'recurrence', reason: 'The repaired boundary recurred.', priorCaseId: 'case-original',
+      }],
+    }],
+    suppressions: [], outbox: [],
+  }), 'utf8');
+  await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+    { id: 'rem-as-built-t1', status: 'pending' },
+    { id: 'rem-as-built-t2', status: 'completed' },
+  ] }), 'utf8');
+}
+
 const realisticTaskDoneWhen = [
   'A PRD-audit projection carries every FIXABLE criterion by its engine criterion id with its owning task and judgment summary, those tasks’ titles and Done-when blocks from the active plan, and the accepted dispositions and halt categories rendered from the code constants.',
   'An as-built projection names every REMEDIABLE finding by stamped id with governing reference and summary, plus pending as-built findings and prior remediation laps read from the kickback ledger.',
@@ -160,6 +194,90 @@ async function expectPreparationFault(
 }
 
 describe('remediation projection', () => {
+  // Covers: task:3
+  it('projects prior as-built cases and their repair tasks into an as-built gap plan', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'active.md'), [
+      '# Plan', '',
+      '### Task 7: Repair the typed projection', '', '**Done when:**', '- owner repair', '',
+      '### Task rem-as-built-t1: Repair the old boundary', '', '**Done when:**', '- repair the first case', '',
+      '### Task rem-as-built-t2: Repair the old ADR boundary', '', '**Done when:**', '- repair the second case', '',
+    ].join('\n'));
+    await Promise.all([writeAsBuiltVerdict(root), writeAsBuiltCases(root)]);
+
+    const result = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      projection: {
+        priorAsBuiltCases: [{
+          id: 'case-open', status: 'open', recurrenceCount: 1,
+          sources: [{ summary: 'The old boundary remains absent.', reference: { kind: 'plan-task', taskId: '7' }, relation: 'new', reason: 'First observed missing boundary.' }],
+          repairTasks: [{ id: 'rem-as-built-t1', resolution: 'pending' }],
+        }, {
+          id: 'case-resolved', status: 'resolved', recurrenceCount: 2,
+          sources: [{ summary: 'The old ADR boundary was incomplete.', reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 2 }, relation: 'recurrence', reason: 'The repaired boundary recurred.' }],
+          repairTasks: [{ id: 'rem-as-built-t2', resolution: 'completed' }],
+        }],
+        tasks: expect.arrayContaining([
+          expect.objectContaining({ id: '7' }),
+          { id: 'rem-as-built-t1', title: 'Repair the old boundary', doneWhen: ['repair the first case'] },
+          { id: 'rem-as-built-t2', title: 'Repair the old ADR boundary', doneWhen: ['repair the second case'] },
+        ]),
+      },
+    });
+  });
+
+  // Covers: task:3
+  it('keeps prior as-built context scoped to as-built requests and faults instead of truncating it', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'active.md'), [
+      '# Plan', '',
+      '### Task 7: Repair the typed projection', '', '**Done when:**', '- owner repair', '',
+      '### Task rem-as-built-t1: Repair the old boundary', '', '**Done when:**', '- repair the first case', '',
+      '### Task rem-as-built-t2: Repair the old ADR boundary', '', '**Done when:**', '- repair the second case', '',
+    ].join('\n'));
+    await Promise.all([writeAsBuiltVerdict(root), writeAsBuiltCases(root)]);
+
+    const asBuilt = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    }, { priorAsBuiltCasesBytes: 1 });
+    await expectPreparationFault(asBuilt, {
+      source: 'as-built', dimension: 'prior-as-built-cases', actual: expect.any(Number), limit: 1,
+    });
+    expect(asBuilt).not.toHaveProperty('projection');
+
+    const prdOnly = await buildRemediationProjection(root, {
+      source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
+    });
+    expect(prdOnly).toMatchObject({ ok: true });
+    if (!prdOnly.ok) throw new Error(prdOnly.fault.detail);
+    expect(prdOnly.projection).not.toHaveProperty('priorAsBuiltCases');
+  });
+
+  // Covers: task:3
+  it('fails closed for an undeclared repair task or unreadable as-built case store', async () => {
+    const undeclared = await fixture();
+    await Promise.all([writeAsBuiltVerdict(undeclared), writeAsBuiltCases(undeclared)]);
+    await expectPreparationFault(await buildRemediationProjection(undeclared, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    }), {
+      source: 'active plan', detail: expect.stringContaining('rem-as-built-t1'),
+    });
+
+    const corrupt = await fixture();
+    await writeAsBuiltVerdict(corrupt);
+    await mkdir(join(corrupt, '.pipeline'), { recursive: true });
+    await writeFile(join(corrupt, '.pipeline', 'remediation-cases.json'), '{', 'utf8');
+    await expectPreparationFault(await buildRemediationProjection(corrupt, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    }), {
+      source: 'remediation case store', detail: expect.stringContaining('unreadable'),
+    });
+  });
+
   // Covers: task:8
   it('projects FIXABLE PRD criteria, their plan ownership, and engine vocabulary', async () => {
     const root = await fixture();
@@ -242,6 +360,7 @@ describe('remediation projection', () => {
           reference: { kind: 'plan-task', taskId: '7' }, summary: 'The typed boundary is not reached.',
         }],
         pendingAsBuiltFindings: [{ finding: 'as-built:prior:1', summary: 'An earlier finding remains pending.' }],
+        priorAsBuiltCases: [],
         priorLaps: [{ gate: 'architecture_review_as_built', laps: 1 }],
       },
     });
