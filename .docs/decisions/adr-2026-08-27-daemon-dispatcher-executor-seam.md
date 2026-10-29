@@ -71,6 +71,10 @@ the two sides is process-separable.
 > adapter as a rollback lever. Dispatcher-owned services are brokered over a typed IPC channel.
 > See adr-2026-10-15-per-dispatch-engine-pinned-executor D1, D4 and D5.
 
+> **Amended 2026-10-24 by #3333:** The v1 in-process adapter and the `executor_isolation` key are removed.
+> Every dispatch runs in the child executor. See the 2026-10-24 amendment to
+> adr-2026-10-15-per-dispatch-engine-pinned-executor D1.
+
 **D2 — Serializable WorkOrder with a document manifest.** Dispatch crosses the seam as a
 plain serializable struct: repo identity, feature slug, pinned base SHA, and a document
 manifest — the spec/plan/story artifacts to execute against, as refs plus content hashes.
@@ -181,6 +185,13 @@ central machinery (stamping at one seam, not a slug argument threaded through ca
 per the `adr-2026-08-11-halt-events-ride-the-persisted-spine` central-stamp precedent and
 `adr-2026-07-26-event-sink-registry-exhaustiveness` (any new dispatcher/executor event
 declares its sinks).
+
+> **Amended 2026-10-24 by #3333:** The in-supervisor ownership context that stamped the console tee and
+> the global bus subscriber (`withDaemonLogFeatureOwnership`) is removed. Its only writer was the
+> in-process adapter. With every feature running in a child executor, central attribution of
+> forwarded feature log lines and console output is the per-executor proxy bus and
+> `featureLogFor(slug)` of adr-2026-10-15-per-dispatch-engine-pinned-executor D4. Supervisor-side
+> console and global-subscriber lines are the supervisor's own and stay unprefixed.
 
 **Explicitly out of scope:** multi-process or remote executors, durable/distributed claims,
 any transport, #564's run-state relocation, per-feature attachable tmux sessions, and any
