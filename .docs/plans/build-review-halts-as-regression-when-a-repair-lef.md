@@ -311,3 +311,21 @@ Task 9 (independent)
 **Done when:**
 - [test] S3.4 is satisfied by this task.
 - The repair for task rem-prd-audit-7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R4u: In src/conductor/test/engine/build-review-adjudication-coordinator.test.ts add a coordinator test: a bound act row on applied/resolved case-R with no reRaise returns { ok: true, route: 'build' } and mints open act case N with recurrenceOf exactly ['case-R']. Assert exactly one remediation_case_reconciled event for N carrying reRaiseKind 'undeclared' and boundCaseId 'case-R', and no remediation_semantic_repeat_halt event.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): this is a test-coverage gap only. The coordinator already sets kind 'undeclared' when a bound act row on an applied/resolved case carries no reRaise. In build-review-adjudication-coordinator.test.ts the only 'undeclared' assertion is the at-limit halt (line ~5164); the residual rebind test at ~2695 (task:rem-prd-audit-4) covers only the residual-gap declaration. Approved Task 4's third doneWhen criterion admits the missing below-limit undeclared case, and the architecture is unchanged, so this goes back to BUILD under Task 4.
+**Criterion:** S2.3
+**Parent task:** 4
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R4u is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8b: In src/conductor/test/engine/conductor-build-review-adjudication.test.ts add a build_review step test for the #3348 shape. Seed applied/resolved prior case '26a04ec0' and one remediateJudgements entry that binds a new testQuality source to '26a04ec0' as act, with Task-16-scoped tasks and no reRaise. Assert no .pipeline/HALT is written and the published BUILD work order lists exactly the judgement's tasks.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): this is a test-coverage gap only. A grep for '26a04ec0' finds nothing under src/conductor/test. The only conductor test this branch added (conductor-build-review-adjudication.test.ts:829) covers the malformed-reRaise halts; the reRaised tests at ~1187/1219 predate the branch and use an unbound judgement over a failed-effect case. Approved Task 8's first doneWhen criterion admits the #3348-shape end-to-end test, the production path already exists, and the architecture is unchanged, so this goes back to BUILD under Task 8.
+**Criterion:** S2.4
+**Parent task:** 8
+**Done when:**
+- [test] S2.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R8b is committed and its targeted tests pass.
