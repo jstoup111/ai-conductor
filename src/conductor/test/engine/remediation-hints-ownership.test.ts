@@ -22,8 +22,8 @@ const roots: string[] = [];
 const manifestOwnership: FeatureOwnership = {
   kind: 'manifest',
   manifestPath: '.docs/f/manifest.json' as DocsPath,
-  ownedPaths: ['.docs/plans/f.md' as DocsPath],
-  protectedPaths: ['.docs/plans/f.md' as DocsPath],
+  ownedPaths: ['.docs/plans/foreign-plan.md' as DocsPath],
+  protectedPaths: ['.docs/plans/foreign-plan.md' as DocsPath],
 };
 
 function gap(title: string): RemediationGap {
@@ -73,12 +73,17 @@ afterEach(async () => {
 });
 
 describe('manifest-backed remediation target ownership', () => {
-  it('keeps a listed plan target with its owning feature', () => {
+  it('keeps a manifest-listed plan target even when its stem is foreign', () => {
+    const listedTarget = gap('Amend .docs/plans/foreign-plan.md with the corrected assertion.');
     expect(remediationGapTargetsAnotherFeatureSealedArtifact(
-      gap('Amend .docs/plans/f.md with the corrected assertion.'),
+      listedTarget,
       'f',
       manifestOwnership,
     )).toBeUndefined();
+    expect(remediationGapTargetsAnotherFeatureSealedArtifact(
+      listedTarget,
+      'f',
+    )).toMatchObject({ artifact: '.docs/plans/foreign-plan.md' });
   });
 
   it('redirects an unlisted same-feature story target as foreign', () => {

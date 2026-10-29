@@ -6810,36 +6810,50 @@ export class Conductor {
           ownershipSlug,
           this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
         ));
-    let allow = resolveDocsAllowlist(stepName);
-
-    if (resolvedOwnership.kind === 'manifest' && stepName === 'remediate') {
-      const planPath = await resolveFeaturePlanPath(this.projectRoot, ownershipSlug);
-      if (planPath === undefined) {
-        throw new Error('Manifest-backed remediate marker could not resolve its required plan path.');
+    const allow = resolveDocsAllowlist(stepName);
+    switch (resolvedOwnership.kind) {
+      case 'legacy':
+        return { step: stepName, phase, allow };
+      case 'manifest': {
+        let manifestAllow = allow;
+        if (stepName === 'remediate') {
+          const planPath = await resolveFeaturePlanPath(this.projectRoot, ownershipSlug);
+          if (planPath === undefined) {
+            throw new Error('Manifest-backed remediate marker could not resolve its required plan path.');
+          }
+          const listedPlanPath = relative(this.projectRoot, planPath).replaceAll('\\', '/');
+          manifestAllow = [...allow.filter((path) => path !== '.docs/plans/'), listedPlanPath];
+        }
+        return {
+          step: stepName,
+          phase,
+          allow: manifestAllow,
+          own: resolvedOwnership.ownedPaths,
+          protect: [...resolvedOwnership.protectedPaths, resolvedOwnership.manifestPath],
+        };
       }
-      const listedPlanPath = relative(this.projectRoot, planPath).replaceAll('\\', '/');
-      allow = [
-        ...allow.filter((path) => path !== '.docs/plans/'),
-        listedPlanPath,
-      ];
+      case 'drift':
+      case 'malformed':
+        throw new Error(renderOwnershipRefusal(resolvedOwnership));
+      default: {
+        const exhaustive: never = resolvedOwnership;
+        return exhaustive;
+      }
     }
-
-    return {
-      step: stepName,
-      phase,
-      allow,
-      ...(resolvedOwnership.kind === 'manifest' ? {
-        own: resolvedOwnership.ownedPaths,
-        protect: [...resolvedOwnership.protectedPaths, resolvedOwnership.manifestPath],
-      } : {}),
-    };
   }
 
   private async runRemediateWithPhaseMarker(
     state: ConductState,
     options: StepRunOptions,
   ): Promise<StepRunResult> {
-    writePhaseMarker(this.projectRoot, await this.phaseMarkerOptions('remediate', 'SHIP', state));
+    let markerOptions: WritePhaseMarkerOptions;
+    try {
+      markerOptions = await this.phaseMarkerOptions('remediate', 'SHIP', state);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { success: false, output: reason, refusal: { kind: 'seal', reason } };
+    }
+    writePhaseMarker(this.projectRoot, markerOptions);
     try {
       return await this.stepRunner.run('remediate', state, options);
     } finally {
@@ -11180,7 +11194,7 @@ export class Conductor {
           // session-hook write-guard can distinguish "docs/spec artifacts
           // changed mid-BUILD/SHIP" from DECIDE-phase edits. Independent of
           // written for every BUILD/SHIP step, not just `build`.
-          if (step.phase === 'BUILD' || step.phase === 'SHIP') {
+          if ((step.phase === 'BUILD' || step.phase === 'SHIP') && protectedArtifactIssue === null) {
             writePhaseMarker(
               this.projectRoot,
               await this.phaseMarkerOptions(step.name, step.phase, state, phaseMarkerOwnership),

@@ -114,6 +114,24 @@ describe('manifest-backed protected artifact seals (real local Git)', () => {
     });
   });
 
+  it('verifies a manifest-backed durable seal without a separately supplied ownership result', async () => {
+    const root = await fixture({
+      '.docs/f/manifest.json': manifest([
+        { kind: 'plan', path: '.docs/plans/f.md' },
+        { kind: 'stories', path: '.docs/f/review/stories.md' },
+      ]),
+      '.docs/plans/f.md': 'plan\n',
+      '.docs/f/review/stories.md': 'stories\n',
+    });
+    await createProtectedArtifactSeal({
+      projectRoot: root,
+      baselineCommit: await git(root, ['rev-parse', 'HEAD']),
+      ownership: await ownership(root),
+    });
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: root })).resolves.toMatchObject({ ok: true });
+  });
+
   it('rejects an unlisted same-stem protected artifact instead of reporting it as a self-amendment', async () => {
     const root = await fixture({
       '.docs/f/manifest.json': manifest([{ kind: 'plan', path: '.docs/plans/f.md' }]),

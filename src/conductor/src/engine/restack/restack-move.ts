@@ -12,6 +12,7 @@ import {
   computeFeatureOwnership,
   renderOwnershipRefusal,
   worktreeFeatureOwnershipSource,
+  type FeatureOwnership,
 } from '../feature-ownership.js';
 import { resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
@@ -99,21 +100,18 @@ async function resolveOwnershipBaseRef(git: GitRunner): Promise<string | undefin
   return undefined;
 }
 
-async function ownershipRefusal(
+async function resolveRestackOwnership(
   worktree: string,
   checkedOut: RefName,
   dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBase'>,
-): Promise<string | undefined> {
+): Promise<FeatureOwnership | string | undefined> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const slug = dependencies.featureSlug ?? daemonOwnedSlugOfRef(checkedOut);
   if (slug === undefined) return undefined;
   const baseRef = dependencies.ownershipBase ?? await resolveOwnershipBaseRef(git);
   if (baseRef === undefined) return undefined;
   try {
-    const ownership = await computeFeatureOwnership(worktreeFeatureOwnershipSource(worktree, git), slug, baseRef);
-    return ownership.kind === 'malformed' || ownership.kind === 'drift'
-      ? renderOwnershipRefusal(ownership)
-      : undefined;
+    return await computeFeatureOwnership(worktreeFeatureOwnershipSource(worktree, git), slug, baseRef);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -220,14 +218,16 @@ export async function checkRestackPreMove(
     };
   }
 
-  const drift = await ownershipRefusal(worktree, checkedOut, dependencies);
-  if (drift !== undefined) return { kind: 'seal-refused', detail: drift };
+  const ownership = await resolveRestackOwnership(worktree, checkedOut, dependencies);
+  if (typeof ownership === 'string') return { kind: 'seal-refused', detail: ownership };
+  if (ownership?.kind === 'drift') return { kind: 'seal-refused', detail: renderOwnershipRefusal(ownership) };
 
   try {
     const seal = await verifyProtectedArtifactSeal({
       projectRoot: worktree,
       baselineCommit: checkedOutMove.oldSha,
       toleratesEngineAppendedRemediation: true,
+      ownership: ownership?.kind === 'manifest' || ownership?.kind === 'legacy' ? ownership : undefined,
     });
     return seal.ok ? { kind: 'clear' } : { kind: 'seal-refused', detail: seal.reason };
   } catch (error) {

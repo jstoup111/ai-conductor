@@ -199,6 +199,61 @@ describe('conductor manifest ownership refusal at BUILD and SHIP entry', () => {
     expect(marker).not.toContain('allow: .docs/plans/');
   });
 
+  it('refuses remediate drift before writing a marker or dispatching the provider', async () => {
+    const root = await fixture();
+    await git(root, ['checkout', '-qb', 'feature']);
+    await addManifestFeature(root);
+    await write(root, '.docs/stories/unlisted.md');
+    await commit(root, 'unlisted story');
+    const run = vi.fn();
+    const conductor = new Conductor({
+      stateFilePath: join(root, 'conduct-state.json'),
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      baseBranch: 'main',
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+
+    const result = await (conductor as unknown as {
+      runRemediateWithPhaseMarker(
+        state: { feature_desc: string },
+        options: Record<string, never>,
+      ): Promise<{ success: boolean; output?: string }>;
+    }).runRemediateWithPhaseMarker({ feature_desc: 'f' }, {});
+
+    expect(result).toMatchObject({ success: false, output: expect.stringContaining('.docs/stories/unlisted.md: unlisted') });
+    expect(run).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'phase-active'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a malformed manifest before writing a remediate marker or dispatching the provider', async () => {
+    const root = await fixture();
+    await git(root, ['checkout', '-qb', 'feature']);
+    await write(root, '.docs/f/manifest.json', manifest([{ kind: 'plan', path: '.docs/plans/f.md' }], 'other'));
+    await commit(root, 'malformed manifest');
+    const run = vi.fn();
+    const conductor = new Conductor({
+      stateFilePath: join(root, 'conduct-state.json'),
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      baseBranch: 'main',
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+
+    const result = await (conductor as unknown as {
+      runRemediateWithPhaseMarker(
+        state: { feature_desc: string },
+        options: Record<string, never>,
+      ): Promise<{ success: boolean; output?: string }>;
+    }).runRemediateWithPhaseMarker({ feature_desc: 'f' }, {});
+
+    expect(result).toMatchObject({ success: false, output: expect.stringContaining('Feature artifact manifest is malformed:') });
+    expect(run).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'phase-active'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('refuses BUILD before provider dispatch when an artifact is missing and another is committed but unlisted', async () => {
     const root = await fixture();
     await git(root, ['checkout', '-qb', 'feature']);

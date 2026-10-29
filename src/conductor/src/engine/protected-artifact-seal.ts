@@ -1250,7 +1250,14 @@ async function inspectSeal(
   const ownershipPaths = await Promise.all(ownershipProtectedPaths(ownership).map(async (path) => (
     await readContainedProtectedArtifact(projectRoot, path) === undefined ? [] : [path]
   )));
-  const discoveredPaths = [...new Set([...directoryPaths, ...ownershipPaths.flat()])].sort(comparePaths);
+  // A durable seal is itself a complete protected-path record. Include its
+  // entries in discovery so a manifest-backed seal remains verifiable even
+  // when a caller cannot supply the transient ownership result that created it.
+  const discoveredPaths = [...new Set([
+    ...directoryPaths,
+    ...ownershipPaths.flat(),
+    ...expected.keys(),
+  ])].sort(comparePaths);
   const actualPaths: string[] = [];
   for (const path of discoveredPaths) {
     const classification = classifyMutationTarget({
