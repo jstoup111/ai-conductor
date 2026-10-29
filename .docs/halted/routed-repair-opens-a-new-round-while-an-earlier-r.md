@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-29T11:46:31.034Z
 Slug: routed-repair-opens-a-new-round-while-an-earlier-r
 Class: needs-human
 Halting step: unknown
