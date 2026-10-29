@@ -1,5 +1,5 @@
 // Covers: task:2
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -22,6 +22,7 @@ describe('restack resolution events', () => {
   it('persists recorded and consumed resolution occurrences with operator identity only on recording', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-resolution-events-'));
     const eventsPath = join(root, '.pipeline', 'events.jsonl');
+    await mkdir(join(root, '.pipeline'), { recursive: true });
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(eventsPath, events);
     const child = parseChildId(2)!;
@@ -50,6 +51,7 @@ describe('restack resolution events', () => {
   it('persists restack-resolution-stale refusals with their child and detail', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-resolution-refusal-'));
     const eventsPath = join(root, '.pipeline', 'events.jsonl');
+    await mkdir(join(root, '.pipeline'), { recursive: true });
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(eventsPath, events);
     const child = parseChildId(2)!;
