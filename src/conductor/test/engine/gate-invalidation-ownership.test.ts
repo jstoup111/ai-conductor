@@ -85,6 +85,23 @@ describe('gate invalidation ownership (Task 13)', () => {
     expect(invalidated).toEqual(['architecture_review_as_built', 'prd_audit']);
   });
 
+  it('keeps a manifest that omits review kinds out of legacy same-stem resolution', async () => {
+    await write(manifestPath, JSON.stringify({
+      schemaVersion: 1,
+      slug: 'f',
+      artifacts: [
+        { kind: 'plan', path: '.docs/f/review/plan.md' },
+      ],
+    }));
+    await write('.docs/stories/f.md', '# Legacy stories that this manifest does not own\n');
+
+    const inputs = await resolveReviewInputs(root, ['.docs/stories/f.md']);
+    const invalidated = classifyGateInvalidation(['.docs/stories/f.md'], [], true, inputs).invalidated;
+
+    expect(inputs).toEqual([manifestPath, '.docs/f/review/plan.md']);
+    expect(invalidated).toEqual([]);
+  });
+
   it('invalidates both document surfaces for a listed story or manifest delta', async () => {
     const inputs = await resolveReviewInputs(root, [listedStories]);
     const invalidated = [listedStories, manifestPath].map((path) =>

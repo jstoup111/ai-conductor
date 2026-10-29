@@ -1342,6 +1342,7 @@ async function resolveManifestIdentity(projectRoot: string): Promise<{
   planPath: string | undefined;
   context: Awaited<ReturnType<typeof buildArtifactResolutionContext>>;
   manifestSlug: string | undefined;
+  manifestOrigin: 'manifest' | 'legacy';
 }> {
   const featureDesc = await resolveFeatureDesc(projectRoot);
   const context = await buildArtifactResolutionContext(projectRoot, { featureDesc });
@@ -1354,10 +1355,10 @@ async function resolveManifestIdentity(projectRoot: string): Promise<{
   const manifestSource = worktreeManifestSource(projectRoot);
   for (const candidate of candidates) {
     if (await manifestSource.readFile(featureManifestPath(candidate)) !== null) {
-      return { featureDesc, planPath, context, manifestSlug: candidate };
+      return { featureDesc, planPath, context, manifestSlug: candidate, manifestOrigin: 'manifest' };
     }
   }
-  return { featureDesc, planPath, context, manifestSlug: candidates[0] };
+  return { featureDesc, planPath, context, manifestSlug: candidates[0], manifestOrigin: 'legacy' };
 }
 
 const REVIEW_INPUT_ARTIFACT_KINDS = ['stories', 'prd', 'plan', 'coherence'] as const satisfies readonly FeatureScopedKind[];
@@ -1378,7 +1379,6 @@ async function resolveManifestReviewInputPaths(
     )),
     resolveFeatureDecisionArtifact(manifestSource, manifestSlug, async () => []),
   ]);
-  if (artifacts[0]?.origin !== 'manifest') return undefined;
 
   return [
     featureManifestPath(manifestSlug),
@@ -1446,12 +1446,12 @@ async function assembleReviewInputs(
  * delta; preservation additionally requests the full declared set to bind
  * authority against later input edits. */
 export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
-  const { planPath, context, manifestSlug } = await resolveManifestIdentity(projectRoot);
+  const { planPath, context, manifestSlug, manifestOrigin } = await resolveManifestIdentity(projectRoot);
   const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
   const manifestSource = worktreeManifestSource(projectRoot);
-  const manifestPaths = manifestSlug === undefined
-    ? undefined
-    : await resolveManifestReviewInputPaths(manifestSource, manifestSlug);
+  const manifestPaths = manifestOrigin === 'manifest' && manifestSlug !== undefined
+    ? await resolveManifestReviewInputPaths(manifestSource, manifestSlug)
+    : undefined;
   if (manifestPaths !== undefined) {
     return assembleReviewInputs(projectRoot, manifestPaths, delta, force, repoPath);
   }
