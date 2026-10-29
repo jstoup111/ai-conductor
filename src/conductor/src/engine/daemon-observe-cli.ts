@@ -39,6 +39,7 @@ import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { type ChildId } from './child-context.js';
+import { renderStoriesRefsReport, scanStoriesRefs } from './stories-refs-diagnostic.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
 import { readCascadeCounts } from './restack/cascade-cap.js';
 import { renderCascadeSummary, resolveCascadeAllowanceForWorktree } from './restack/cascade-allowance.js';
@@ -1080,10 +1081,11 @@ function waitForSigint(): Promise<void> {
 
 export type DaemonDispatch =
   | { kind: 'status' }
-  | { kind: 'logs'; repo?: string; follow: boolean; all: boolean; lines?: number };
+  | { kind: 'logs'; repo?: string; follow: boolean; all: boolean; lines?: number }
+  | { kind: 'stories-refs'; repo?: string };
 
 /**
- * Detect a `conduct daemon <status|logs …>` observability sub-subcommand. Returns
+ * Detect a `conduct daemon <status|logs|stories-refs …>` observability sub-subcommand. Returns
  * null for anything else — including the bare `conduct daemon …` *run* command
  * (handled by `detectDaemonCommand` in daemon-command.ts), which has no
  * `status`/`logs` second positional. index.ts checks this BEFORE the run command
@@ -1094,6 +1096,20 @@ export function detectDaemonObserveCommand(argv: string[]): DaemonDispatch | nul
   if (args[0] !== 'daemon') return null;
   const sub = args[1];
   if (sub === 'status') return { kind: 'status' };
+  if (sub === 'stories-refs') {
+    const rest = args.slice(2);
+    let repo: string | undefined;
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i];
+      if (arg === '--repo') {
+        repo = rest[i + 1];
+        i++;
+      } else if (arg.startsWith('--repo=')) {
+        repo = arg.slice('--repo='.length);
+      }
+    }
+    return { kind: 'stories-refs', repo };
+  }
   if (sub === 'logs') {
     const rest = args.slice(2);
     let repo: string | undefined;
@@ -1127,10 +1143,42 @@ export function detectDaemonObserveCommand(argv: string[]): DaemonDispatch | nul
   return null;
 }
 
+export interface DaemonStoriesRefsArgs {
+  /** Target repo path; defaults to cwd. */
+  repo?: string;
+}
+
+export interface DaemonStoriesRefsDeps {
+  cwd?: string;
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+}
+
+/**
+ * `conduct daemon stories-refs [--repo <path>]` — report committed specs whose
+ * Stories references cannot resolve at the daemon's pinned base. This is an
+ * observe-only command: findings are a completed report, not an error.
+ */
+export async function runDaemonStoriesRefs(
+  args: DaemonStoriesRefsArgs,
+  deps: DaemonStoriesRefsDeps = {},
+): Promise<number> {
+  const out = deps.out ?? ((line: string) => console.log(line));
+  const scan = await scanStoriesRefs(args.repo ?? deps.cwd ?? process.cwd());
+  if (scan.kind !== 'ok') return 0;
+
+  for (const line of renderStoriesRefsReport(scan)) out(line);
+  if (scan.broken.length === 0) {
+    out('stories-refs: clean — no spec has an unresolvable Stories reference');
+  }
+  return 0;
+}
+
 export async function dispatchDaemonObserve(d: DaemonDispatch): Promise<number> {
   if (d.kind === 'status') {
     const { code } = await runDaemonStatus();
     return code;
   }
+  if (d.kind === 'stories-refs') return runDaemonStoriesRefs({ repo: d.repo });
   return runDaemonLogs({ repo: d.repo, follow: d.follow, all: d.all, lines: d.lines });
 }

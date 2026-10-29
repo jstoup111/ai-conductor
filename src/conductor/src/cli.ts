@@ -992,7 +992,7 @@ export function createProgram(): Command {
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
-  // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
+  // daemon (detectDaemonCommand); `daemon status` / `daemon logs` / `daemon stories-refs` are read-only
   // observability sub-subcommands (detectDaemonObserveCommand). Declared here so
   // `--help` lists them and their options alongside the other subcommands.
   const daemon = program
@@ -1019,6 +1019,10 @@ export function createProgram(): Command {
     .option('-f, --follow', 'Stream new log lines (tail -f); single repo only')
     .option('-n, --lines <n>', 'Show the last n log lines')
     .option('--all', 'Show logs for every registered repo');
+  daemon
+    .command('stories-refs')
+    .description('Report committed plans whose Stories references cannot resolve')
+    .option('--repo <path>', 'Target repo (default: current directory; also accepts --repo=<path>)');
   // Filesystem-direct, pre-boot park/unpark verbs (detectDaemonParkCommand) —
   // no daemon/supervisor startup required. Declared here ONLY so `--help`
   // documents them; commander never actually dispatches them (index.ts checks
