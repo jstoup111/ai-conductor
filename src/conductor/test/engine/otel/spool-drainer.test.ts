@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { SpoolDrainer } from '../../../src/engine/otel/spool-drainer.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { CredentialUnavailableError } from '../../../src/engine/otel/otel-header-provider.js';
 
 const directories: string[] = [];
 const servers: Server[] = [];
@@ -73,6 +74,30 @@ afterEach(async () => {
 });
 
 describe('SpoolDrainer', () => {
+  it('keeps a batch and reports a credential failure once without sending credential output', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('credential-protected'));
+    const events = new ConductorEventEmitter();
+    const errors: string[] = [];
+    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') errors.push(event.error); });
+    const fetch = async () => {
+      throw new Error('a credential failure must prevent the POST');
+    };
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test', events, fetch,
+      headers: async () => { throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.'); },
+      sleep: async () => new Promise<void>(() => {}),
+    });
+    const draining = drainer.drainUntilStopped();
+    await waitFor(() => errors.length === 1, 'credential failure was not reported');
+    expect(await store.list('traces')).toHaveLength(1);
+    expect(errors).toEqual([expect.stringMatching(/authorization.*credential.*exit code 3/i)]);
+    expect(errors.join('\n')).not.toContain('SENTINEL-OUT');
+    expect(errors.join('\n')).not.toContain('SENTINEL-ERR');
+    await drainer.stop();
+    await draining;
+  });
+
   it('retries a transient spool list failure without delaying the other signal', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('retry-trace'));
