@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:4
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -262,5 +262,92 @@ describe('stale rebase verdict reconciliation', () => {
     expect(await advanceTail(conductor, state)).toBe('halt');
     expect(loopHalts).toEqual(['rebase conflict — parked for human resolution: conflict in src/a.ts']);
     expect(loopHalts.some((reason) => reason.includes('was not refreshed'))).toBe(false);
+  });
+
+  it('reopens rebase for a fresh kickback verdict without healing or halting', async () => {
+    const { conductor, state } = await staleFixture();
+
+    await runRebaseStep(conductor, state);
+    await writeVerdict(dir, 'rebase', {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
+      kickback: { from: 'finish', evidence: 'leaf returned' },
+    });
+    const written = await readFile(join(dir, '.pipeline', 'gates', 'rebase.json'), 'utf8');
+
+    expect(await advanceTail(conductor, state)).toBe(
+      ALL_STEPS.findIndex((step) => step.name === 'rebase'),
+    );
+    expect(state.rebase).toBe('pending');
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(applyRebaseVerdicts).toHaveBeenCalledTimes(1);
+    await expect(readFile(join(dir, '.pipeline', 'gates', 'rebase.json'), 'utf8')).resolves.toBe(written);
+  });
+
+  it('leaves a satisfied verdict older than the dispatch unchanged', async () => {
+    const { conductor, state } = await staleFixture();
+    await writeVerdict(dir, 'rebase', {
+      satisfied: true,
+      reason: 'branch already current with base',
+      checkedAt: 1,
+    });
+    const seeded = await readFile(join(dir, '.pipeline', 'gates', 'rebase.json'), 'utf8');
+    vi.mocked(applyRebaseVerdicts).mockImplementationOnce(async () => ({
+      satisfied: true,
+      kickedBack: [],
+      reverified: [],
+    }));
+
+    await runRebaseStep(conductor, state);
+
+    expect(await advanceTail(conductor, state)).toBe(
+      ALL_STEPS.findIndex((step) => step.name === 'finish'),
+    );
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(applyRebaseVerdicts).toHaveBeenCalledTimes(1);
+    await expect(readFile(join(dir, '.pipeline', 'gates', 'rebase.json'), 'utf8')).resolves.toBe(seeded);
+  });
+
+  it('keeps the selection cap for a gate that genuinely re-fails', async () => {
+    const state = seedDoneThrough('finish') as ConductState;
+    state.build = 'failed';
+    await writeState(statePath, state);
+    for (const step of ALL_STEPS.filter((candidate) => candidate.loopGate && candidate.name !== 'build')) {
+      await writeVerdict(dir, step.name, { satisfied: true, checkedAt: 1 });
+    }
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner(),
+      events,
+      verifyArtifacts: true,
+    });
+    const finish = ALL_STEPS.find((step) => step.name === 'finish')!;
+    const stuckGate = new Map<StepName, number>();
+    const indexOf = (name: StepName) => ALL_STEPS.findIndex((step) => step.name === name);
+
+    for (let selection = 1; selection <= 7; selection += 1) {
+      await writeVerdict(dir, 'build', {
+        satisfied: false,
+        reason: 'build evidence missing for task 3',
+        checkedAt: Date.now(),
+      });
+      const result = await (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          current: ConductState,
+          selections: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          findIndex: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail(finish, state, stuckGate, ALL_STEPS, indexOf);
+      expect(result).toBe(selection < 7 ? indexOf('build') : 'halt');
+    }
+
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      "gate 'build' selected 7 times without satisfying: build evidence missing for task 3\n",
+    );
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 });
