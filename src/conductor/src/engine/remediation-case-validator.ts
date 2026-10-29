@@ -58,6 +58,8 @@ export interface RemediationCaseValidationReferences {
   readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   /** Engine-selected exact owners and repair provenance candidates for each proposed row. */
   readonly allowedDistinctFromCaseIdsByCaseRef?: Readonly<Record<string, readonly string[]>>;
+  /** Resolved action cases with an applied action effect that may receive a re-raise declaration. */
+  readonly reRaiseEligibleCaseIds?: readonly string[];
   /** Engine-owned disposition sets for bindings to each supplied prior case. */
   readonly bindableDispositionsByCaseId?: Readonly<Record<string, readonly Exclude<RemediationCaseRow['disposition'], 'escalate'>[]>>;
 }
@@ -122,6 +124,15 @@ function hasValidDistinctFrom(caseRow: RemediationCaseRow): boolean {
     });
 }
 
+function hasValidReRaise(caseRow: RemediationCaseRow): boolean {
+  if (caseRow.reRaise === undefined) return true;
+  const reRaise = caseRow.reRaise as unknown as Record<string, unknown>;
+  return typeof reRaise === 'object' && reRaise !== null && !Array.isArray(reRaise) &&
+    Object.keys(reRaise).length === 2 && Object.hasOwn(reRaise, 'kind') && Object.hasOwn(reRaise, 'reason') &&
+    (reRaise.kind === 'residual-gap' || reRaise.kind === 'repeat') &&
+    typeof reRaise.reason === 'string' && reRaise.reason.length > 0 && reRaise.reason.length <= 8_000;
+}
+
 function retainAllowedDistinctFrom(
   caseRow: RemediationCaseRow,
   references: RemediationCaseValidationReferences,
@@ -133,6 +144,18 @@ function retainAllowedDistinctFrom(
   if (distinctFrom.length > 0) return { ...caseRow, distinctFrom };
   const { distinctFrom: _distinctFrom, ...withoutDistinctFrom } = caseRow;
   return withoutDistinctFrom;
+}
+
+function retainEligibleReRaise(
+  caseRow: RemediationCaseRow,
+  references: RemediationCaseValidationReferences,
+): RemediationCaseRow {
+  if (caseRow.reRaise === undefined) return caseRow;
+  const eligibleCaseIds = new Set(references.reRaiseEligibleCaseIds);
+  if (caseRow.disposition === 'act' && caseRow.existingCaseId !== undefined &&
+    eligibleCaseIds.has(caseRow.existingCaseId)) return caseRow;
+  const { reRaise: _reRaise, ...withoutReRaise } = caseRow;
+  return withoutReRaise;
 }
 
 function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
@@ -327,6 +350,7 @@ export function validateRemediationCaseGraph(
   const casesByRef = new Map<string, RemediationCaseRow>();
   for (const caseRow of judgement.cases) {
     if (!hasValidDistinctFrom(caseRow)) return { ok: false, reason: 'invalid-case-keys' };
+    if (!hasValidReRaise(caseRow)) return { ok: false, reason: 'invalid-case-keys' };
     if (hasProviderDurableId(caseRow)) return { ok: false, reason: 'provider-durable-id' };
     const operatorState = providerOperatorOwnedState(caseRow);
     if (operatorState) return { ok: false, reason: operatorState };
@@ -410,7 +434,7 @@ export function validateRemediationCaseGraph(
     graph: {
       sourceOutcomes: judgement.sourceOutcomes,
       cases: judgement.cases.map((caseRow) => ({
-        case: retainAllowedDistinctFrom(caseRow, references),
+        case: retainEligibleReRaise(retainAllowedDistinctFrom(caseRow, references), references),
         sources: sourcesByCase.get(caseRow.caseRef)!,
       })),
     },
