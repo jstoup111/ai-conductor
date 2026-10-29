@@ -1221,6 +1221,19 @@ The slug is bounded to 24 display characters: a longer one is cut to 23 and clos
 multi-line message is split first, so every physical line gets its own prefix, tag, and timestamp
 rather than only the first.
 
+The message body after the prefix and tag has one shape:
+
+| Part | Shape |
+| --- | --- |
+| First line | Leading whitespace stripped; a rendered loop event adds its depth marker first |
+| Depth marker | Depth 0: none. Depth 1: `· `. Depth 2: `·   ` |
+| Continuation line | Same depth marker, then `│ ` and the original content unchanged; a blank line becomes `│` |
+| Trailing newline | Dropped |
+
+Each rendered event type has one fixed depth, declared in `DAEMON_EVENT_DEPTH`
+(`src/conductor/src/engine/daemon-line-shape.ts`). Daemon lines, feature lines, and the
+`[warn]`/`[error]` console tee use depth 0.
+
 Feature-owned tagging is attribution, not routing — both shapes land in the same file and on the same
 console. Untagged lines are the ones emitted directly on the daemon-wide bus; an event forwarded from a
 feature's own bus renders once, tagged.
