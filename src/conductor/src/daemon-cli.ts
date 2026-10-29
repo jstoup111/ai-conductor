@@ -1459,7 +1459,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const teeConsoleLine = (level: string, args: unknown[]): void => {
     try {
       const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
-      logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, stripAnsi(line))));
+      for (const body of composeDaemonLineBodies(stripAnsi(line), 0)) {
+        logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, body)));
+      }
     } catch {
       // Best-effort: the tee must never disrupt the warning path itself.
     }
