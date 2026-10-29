@@ -3,12 +3,17 @@ import {
   listBacklogCandidates,
   resolveCandidateStories,
 } from './daemon-backlog.js';
-import { resolveDaemonBaseSha } from './daemon-deps.js';
+import { isProcessed, resolveDaemonBaseSha } from './daemon-deps.js';
+import { DONE_MARKER } from './daemon-dashboard.js';
+import { HALT_MARKER } from './halt-marker.js';
 import { readPlanStoriesReferenceText } from './plan-stories-reference.js';
-import { resolveMainRepoRootStrict } from './park-marker.js';
+import { isOperatorParked, resolveMainRepoRootStrict } from './park-marker.js';
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
+import { listShippedRecords } from './shipped-record.js';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 
-export type StoriesRefState = 'actionable';
+export type StoriesRefState = 'processed' | 'shipped' | 'parked' | 'halted' | 'actionable';
 
 export interface BrokenStoriesRef {
   slug: string;
@@ -29,6 +34,33 @@ export type StoriesRefsScan =
   }
   | { kind: 'failed'; reason: string };
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function classifyStoriesRefState(
+  root: string,
+  slug: string,
+  shippedStems: ReadonlySet<string>,
+): Promise<StoriesRefState> {
+  if (await isProcessed(root, slug)) return 'processed';
+  if (shippedStems.has(slug)) return 'shipped';
+  if (await isOperatorParked(root, slug)) return 'parked';
+
+  const worktree = join(root, '.worktrees', slug);
+  if (
+    await pathExists(join(worktree, HALT_MARKER)) &&
+    !await pathExists(join(worktree, DONE_MARKER))
+  ) return 'halted';
+
+  return 'actionable';
+}
+
 export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan> {
   const root = await resolveMainRepoRootStrict(repoPath);
   if (root === null) return { kind: 'failed', reason: 'not inside a Git repository' };
@@ -42,6 +74,7 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
   try {
     const tree = gitTreeSource(root, baseSha);
     const candidates = await listBacklogCandidates(tree);
+    const shippedStems = new Set((await listShippedRecords(tree)).map(({ stem }) => stem));
     const broken: BrokenStoriesRef[] = [];
 
     for (const candidate of candidates) {
@@ -55,7 +88,7 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
           reference: readPlanStoriesReferenceText(resolution.planContent),
           attempted: [],
           kind: 'unresolvable',
-          state: 'actionable',
+          state: await classifyStoriesRefState(root, candidate.slug, shippedStems),
         });
         continue;
       }
@@ -69,7 +102,7 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
             : `manifest ${resolution.manifestPath}`,
           attempted: resolution.source === 'plan-line' ? [resolution.path] : resolution.listed,
           kind: 'missing',
-          state: 'actionable',
+          state: await classifyStoriesRefState(root, candidate.slug, shippedStems),
         });
         continue;
       }
@@ -80,7 +113,7 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
         reference: `manifest ${resolution.manifestPath}: ${resolution.message}`,
         attempted: [],
         kind: 'malformed-manifest',
-        state: 'actionable',
+        state: await classifyStoriesRefState(root, candidate.slug, shippedStems),
       });
     }
 
@@ -92,10 +125,22 @@ export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan
 
 export function renderStoriesRefsReport(scan: StoriesRefsScan): string[] {
   if (scan.kind === 'failed') return [];
-  return scan.broken.map((finding) => {
+  const lines = scan.broken.map((finding) => {
     const plan = finding.plan ?? '(unresolved plan)';
     const reference = finding.reference ?? '(no Stories line; same-stem fallback)';
     const attempted = finding.attempted.length === 0 ? 'none' : finding.attempted.join(', ');
     return `  • ${plan} — ${finding.state} — ${finding.kind} — reference: ${reference} — attempted: ${attempted}`;
   });
+  if (scan.broken.length === 0) return lines;
+
+  const counts = Object.fromEntries(
+    (['actionable', 'halted', 'parked', 'shipped', 'processed'] as const).map((state) => [
+      state,
+      scan.broken.filter((finding) => finding.state === state).length,
+    ]),
+  ) as Record<StoriesRefState, number>;
+  lines.push(
+    `stories-refs: ${scan.broken.length} broken (actionable ${counts.actionable}, halted ${counts.halted}, parked ${counts.parked}, shipped ${counts.shipped}, processed ${counts.processed})`,
+  );
+  return lines;
 }

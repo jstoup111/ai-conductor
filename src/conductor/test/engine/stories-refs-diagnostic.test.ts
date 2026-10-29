@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -172,5 +172,75 @@ describe('engine/stories-refs-diagnostic', () => {
     const scan = await scanStoriesRefs(root);
     expect(scan).toMatchObject({ kind: 'ok', specCount: 4, broken: [] });
     expect(renderStoriesRefsReport(scan)).toEqual([]);
+  });
+
+  it('labels broken plans by lifecycle state and summarizes every state', async () => {
+    const root = await createFixture({
+      '.docs/plans/processed.md': plan('.docs/stories/processed.md'),
+      '.docs/plans/shipped.md': plan('.docs/stories/shipped.md'),
+      '.docs/plans/parked.md': plan('.docs/stories/parked.md'),
+      '.docs/plans/halted.md': plan('.docs/stories/halted.md'),
+      '.docs/plans/actionable.md': plan('.docs/stories/actionable.md'),
+      '.docs/shipped/shipped.md': '# Shipped\n',
+    });
+    await writeFixture(root, {
+      '.daemon/processed/processed': '',
+      '.daemon/parked/parked': '',
+      '.worktrees/halted/.pipeline/HALT': '',
+    });
+
+    const scan = await scanStoriesRefs(root);
+    expect(finding(scan, 'processed').state).toBe('processed');
+    expect(finding(scan, 'shipped').state).toBe('shipped');
+    expect(finding(scan, 'parked').state).toBe('parked');
+    expect(finding(scan, 'halted').state).toBe('halted');
+    expect(finding(scan, 'actionable').state).toBe('actionable');
+    expect(renderStoriesRefsReport(scan)).toContain(
+      'stories-refs: 5 broken (actionable 1, halted 1, parked 1, shipped 1, processed 1)',
+    );
+  });
+
+  it('uses lifecycle ordering and does not treat a completed halt as halted', async () => {
+    const root = await createFixture({
+      '.docs/plans/processed-and-parked.md': plan('.docs/stories/processed-and-parked.md'),
+      '.docs/plans/shipped-parked-halted.md': plan('.docs/stories/shipped-parked-halted.md'),
+      '.docs/plans/parked-halted.md': plan('.docs/stories/parked-halted.md'),
+      '.docs/plans/done-halt.md': plan('.docs/stories/done-halt.md'),
+      '.docs/shipped/shipped-parked-halted.md': '# Shipped\n',
+    });
+    await writeFixture(root, {
+      '.daemon/processed/processed-and-parked': '',
+      '.daemon/parked/processed-and-parked': '',
+      '.daemon/parked/shipped-parked-halted': '',
+      '.daemon/parked/parked-halted': '',
+      '.worktrees/shipped-parked-halted/.pipeline/HALT': '',
+      '.worktrees/parked-halted/.pipeline/HALT': '',
+      '.worktrees/done-halt/.pipeline/HALT': '',
+      '.worktrees/done-halt/.pipeline/DONE': '',
+    });
+
+    const scan = await scanStoriesRefs(root);
+    expect(finding(scan, 'processed-and-parked').state).toBe('processed');
+    expect(finding(scan, 'shipped-parked-halted').state).toBe('shipped');
+    expect(finding(scan, 'parked-halted').state).toBe('parked');
+    expect(finding(scan, 'done-halt').state).toBe('actionable');
+  });
+
+  it('resolves processed and parked markers from the main root when scanning a linked worktree', async () => {
+    const root = await createFixture({
+      '.docs/plans/processed.md': plan('.docs/stories/processed.md'),
+      '.docs/plans/parked.md': plan('.docs/stories/parked.md'),
+    });
+    const worktree = join(root, '.worktrees', 'linked');
+    await mkdir(dirname(worktree), { recursive: true });
+    await execFile('git', ['worktree', 'add', '--quiet', '-b', 'linked', worktree, 'main'], { cwd: root });
+    await writeFixture(root, {
+      '.daemon/processed/processed': '',
+      '.daemon/parked/parked': '',
+    });
+
+    const scan = await scanStoriesRefs(worktree);
+    expect(finding(scan, 'processed').state).toBe('processed');
+    expect(finding(scan, 'parked').state).toBe('parked');
   });
 });
