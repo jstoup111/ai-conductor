@@ -251,16 +251,17 @@ export async function validateRegistration(
     return refusal('second plan entry');
   }
 
-  return {
-    kind: 'rendered',
-    manifest: renderFeatureManifest({
-      ...parsed.manifest,
-      artifacts: [
-        ...parsed.manifest.artifacts,
-        { kind: command.artifactKind, path: command.path as DocsPath },
-      ],
-    }),
-  };
+  const rendered = renderFeatureManifest({
+    ...parsed.manifest,
+    artifacts: [
+      ...parsed.manifest.artifacts,
+      { kind: command.artifactKind, path: command.path as DocsPath },
+    ],
+  });
+  const validated = parseFeatureManifest(rendered, manifestPath, command.slug);
+  if (validated.kind === 'malformed') return refusal(validated.reason);
+
+  return { kind: 'rendered', manifest: rendered };
 }
 
 /** Validate, persist, and commit an operator registration request. */

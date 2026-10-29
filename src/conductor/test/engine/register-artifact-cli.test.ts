@@ -128,6 +128,22 @@ describe('register-artifact validation', () => {
     await expect(readFile(manifestPath, 'utf8')).resolves.toBe(before);
   });
 
+  it('refuses a decision registered outside the decision directory without changing the manifest', async () => {
+    const { root, manifestPath } = await fixture({
+      files: { '.docs/f/extra.md': '# Not a decision record\n' },
+    });
+    const before = await readFile(manifestPath, 'utf8');
+
+    await expect(dispatch(root, request({
+      artifactKind: 'decision',
+      path: '.docs/f/extra.md',
+    }))).resolves.toEqual({
+      code: 1,
+      errors: ['register-artifact: .docs/f/manifest.json decision path ".docs/f/extra.md" is outside .docs/decisions/.'],
+    });
+    await expect(readFile(manifestPath, 'utf8')).resolves.toBe(before);
+  });
+
   it.each([
     '.docs/shipped/f.md',
     '.docs/halted/f.md',
