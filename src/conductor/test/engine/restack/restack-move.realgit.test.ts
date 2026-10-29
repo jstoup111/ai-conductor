@@ -222,10 +222,36 @@ describe('journaled restack move (real local Git)', () => {
       const subject = await withConsumedResolution(await createFixture());
       const expected = subject.consumed[oldValue];
       await subject.git(['update-ref', refName, subject.newC1, expected]);
-      const result = await applyRestackMove(subject.repo, subject.stored, subject.moves);
+      const consumedRefs = [
+        [resolutionRefFor('demo', subject.consumed.child), subject.consumed.tip],
+        [conflictRecordRefFor('demo'), subject.consumed.record],
+        [conflictParentRefFor('demo'), subject.consumed.parent],
+      ] as const;
+      const beforeAbort = await Promise.all(consumedRefs.map(async ([name]) => [
+        name,
+        (await subject.git(['rev-parse', name])).stdout.trim(),
+      ] as const));
+      const transactions: string[] = [];
+      const rawGit = makeGitRunner(subject.repo);
+      const result = await applyRestackMove(subject.repo, subject.stored, subject.moves, {
+        git: async (args, options) => {
+          if (args[0] === 'update-ref' && args[1] === '--stdin') transactions.push(options?.input ?? '');
+          return rawGit(args, options);
+        },
+      });
       expect(result).toMatchObject({ kind: 'refused', reason: 'stack-ref-changed', detail: refName });
       expect((await journal(subject.repo)).journal.state).toBe('aborted');
-      for (const move of subject.moves) {
+      // The failed compare-and-swap occurs before any move.  Its transaction
+      // carries the recorded verify expectation, and all consumed refs retain
+      // their exact pre-attempt objects through the abort.
+      expect(transactions[0]).toContain(`verify ${refName} ${expected}`);
+      for (const [name, value] of beforeAbort) {
+        expect((await subject.git(['rev-parse', name])).stdout.trim()).toBe(value);
+      }
+      for (const move of subject.moves.filter((move) => move.ref.startsWith('refs/heads/'))) {
+        expect((await subject.git(['rev-parse', move.ref])).stdout.trim()).toBe(move.oldSha);
+      }
+      for (const move of subject.moves.filter((move) => move.ref.startsWith('refs/conductor/demo/closed/'))) {
         expect((await subject.git(['rev-parse', move.ref])).stdout.trim()).toBe(move.oldSha);
       }
     }

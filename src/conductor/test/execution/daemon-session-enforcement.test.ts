@@ -152,15 +152,21 @@ describe('guardDaemonSessionInvocation', () => {
     expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
   });
 
-  it('refuses operator-recorded restack resolution before command dispatch', () => {
+  it('refuses operator-recorded restack resolution before command dispatch', async () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).not.toContain('stack');
-    expect(guardDaemonSessionInvocation(
-      argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--tip', 'a'.repeat(40)),
-      markedEnv(),
-    )).toMatchObject({
-      allowed: false,
-      message: expect.stringContaining('daemon-managed session'),
+    const readFeaturePath = vi.fn();
+    const dispatch = vi.fn(async () => {
+      readFeaturePath('/project/.worktrees/demo');
+      return 0;
     });
+    await expect(dispatchCliEntry({
+      argv: argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--tip', 'a'.repeat(40)),
+      environment: markedEnv(),
+      dispatch,
+      diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(readFeaturePath).not.toHaveBeenCalled();
   });
 
   it('never grants build-review operator authority to a daemon session', () => {
