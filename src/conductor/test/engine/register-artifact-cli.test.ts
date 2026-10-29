@@ -14,7 +14,8 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { prepareProtectedArtifactReseal } from '../../src/engine/protected-artifact-seal.js';
-import type { DocsPath } from '../../src/engine/feature-manifest.js';
+import { renderFeatureManifest } from '../../src/engine/feature-manifest.js';
+import type { DocsPath, FeatureManifest, FeatureSlug } from '../../src/engine/feature-manifest.js';
 
 const cleanupRoots: string[] = [];
 
@@ -85,10 +86,19 @@ async function dispatch(
 describe('register-artifact validation', () => {
   it('renders a validated manifest through the canonical renderer', async () => {
     const { worktree } = await fixture();
+    const expectedManifest: FeatureManifest = {
+      schemaVersion: 1,
+      slug: 'f' as FeatureSlug,
+      artifacts: [
+        { kind: 'plan', path: '.docs/plans/f.md' as DocsPath },
+        { kind: 'stories', path: '.docs/stories/extra.md' as DocsPath },
+        { kind: 'stories', path: '.docs/stories/f.md' as DocsPath },
+      ],
+    };
 
-    await expect(validateRegistration(request(), { worktree })).resolves.toMatchObject({
+    await expect(validateRegistration(request(), { worktree })).resolves.toEqual({
       kind: 'rendered',
-      manifest: expect.stringContaining('".docs/stories/extra.md"'),
+      manifest: renderFeatureManifest(expectedManifest),
     });
   });
 

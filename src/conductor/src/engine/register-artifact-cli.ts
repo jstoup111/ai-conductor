@@ -11,6 +11,7 @@ import {
   ARTIFACT_KINDS,
   MANIFEST_KIND_LOCATIONS,
   featureManifestPath,
+  isExcludedManifestPath,
   parseFeatureManifest,
   renderFeatureManifest,
   type ArtifactKind,
@@ -164,13 +165,7 @@ function legacyLocationKind(path: string): ArtifactKind | undefined {
 
 function isRegistrablePath(path: string, slug: string): boolean {
   if (!path.startsWith('.docs/') || path.split('/').includes('..')) return false;
-  if (path === featureManifestPath(slug)) return false;
-  return ![
-    '.docs/shipped/',
-    '.docs/halted/',
-    '.docs/plan-review/',
-    '.docs/release-waivers/',
-  ].some((excluded) => path.startsWith(excluded));
+  return !isExcludedManifestPath(path, featureManifestPath(slug));
 }
 
 /** Detect only the fully bound, operator-only registration grammar. */
