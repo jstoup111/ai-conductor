@@ -1,4 +1,5 @@
 import type { CredentialReference } from './credential-reference.js';
+import { resolveCommandCredential, type CommandRunner } from './command-source.js';
 
 export type CredentialResult =
   | { readonly kind: 'value'; readonly value: string }
@@ -17,6 +18,7 @@ function assertNever(reference: never): never {
 async function resolveReference(
   reference: CredentialReference,
   environment: CredentialEnvironment,
+  commandRunner: CommandRunner | undefined,
 ): Promise<CredentialResult> {
   switch (reference.kind) {
     case 'env': {
@@ -26,10 +28,7 @@ async function resolveReference(
         : { kind: 'value', value };
     }
     case 'command':
-      return {
-        kind: 'unavailable',
-        reason: `Command credential source ${reference.argv.join(' ')} is unavailable.`,
-      };
+      return resolveCommandCredential(reference, commandRunner, environment);
     default:
       return assertNever(reference);
   }
@@ -38,8 +37,9 @@ async function resolveReference(
 export function createCredentialResolver(
   reference: CredentialReference,
   environment: CredentialEnvironment = process.env,
+  dependencies: { readonly commandRunner?: CommandRunner } = {},
 ): CredentialResolver {
   return {
-    resolve: async () => resolveReference(reference, environment),
+    resolve: async () => resolveReference(reference, environment, dependencies.commandRunner),
   };
 }
