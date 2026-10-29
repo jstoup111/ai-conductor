@@ -1,5 +1,5 @@
 /**
- * Covers: task:6
+ * Covers: task:2, task:6
  *
  * Wiring tests for the gated rebase-conflict resolution sub-loop in the
  * conductor's engine-native `rebase` step (Tasks 3, 10–13 of the
@@ -35,6 +35,7 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt, RebaseOutcome } from '../../src/engine/rebase.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
@@ -324,6 +325,11 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
       fromStep: 'rebase',
       config: { rebase_resolution_attempts: 0 },
     });
+    await writeVerdict(repo, 'rebase', {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation for child 3',
+      checkedAt: 1,
+    });
 
     await conductor.run();
 
@@ -333,6 +339,9 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     // HALT file written (same as pre-resolution behavior)
     const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
     expect(haltExists).toBe(true);
+    const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain('rebase conflict — parked for human resolution');
+    expect(halt).not.toContain('was not refreshed');
   });
 
   it('finish-time collision retry preserves the paused-rebase recovery note', async () => {

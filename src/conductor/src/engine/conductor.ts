@@ -16329,7 +16329,7 @@ export class Conductor {
         await this.emitLoopHalt(reason);
         return 'halt';
       }
-      await this.reconcileStaleRebaseVerdict(state);
+      if (await this.reconcileStaleRebaseVerdict(state) === 'halt') return 'halt';
       // A durable completed replay already applied its explicitly named state
       // mutation through applyRebaseTransition. Older/recovery rebase verdicts
       // have no such operation, so consume the rebase-origin kickbacks
@@ -17038,7 +17038,14 @@ export class Conductor {
     }
 
     const outcome = this.lastRebaseOutcome;
-    if (outcome?.kind !== 'noop' && outcome?.kind !== 'mergeable_skip') return 'fresh';
+    if (outcome?.kind !== 'noop' && outcome?.kind !== 'mergeable_skip') {
+      const reason = `step 'rebase' completed but its gate verdict was not refreshed ` +
+        `(stale verdict: ${verdict.reason ?? 'no reason recorded'})`;
+      await this.writeHaltMarker(reason + '\n', 'needs-human');
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.emitLoopHalt(reason, prUrl);
+      return 'halt';
+    }
 
     const healed = await applyRebaseVerdicts(
       this.projectRoot,

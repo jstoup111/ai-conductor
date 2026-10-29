@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -195,5 +195,72 @@ describe('stale rebase verdict reconciliation', () => {
 
     await expect(readFile(join(dir, '.pipeline', 'gates', 'rebase.json'), 'utf8')).resolves.toBe(written);
     expect(applyRebaseVerdicts).toHaveBeenCalledTimes(1);
+  });
+
+  it('halts when a changed rebase dispatch leaves its verdict stale', async () => {
+    const { conductor, state } = await staleFixture();
+    vi.mocked(applyRebaseVerdicts).mockImplementationOnce(async () => ({
+      satisfied: true,
+      kickedBack: [],
+      reverified: [],
+    }));
+    const loopHalts: string[] = [];
+    const kickbacks: unknown[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    const gates = join(dir, '.pipeline', 'gates');
+    const otherGateBytes = new Map(await Promise.all(
+      (await readdir(gates))
+        .filter((name) => name !== 'rebase.json')
+        .map(async (name) => [name, await readFile(join(gates, name), 'utf8')] as const),
+    ));
+
+    await runRebaseStep(conductor, state);
+    (conductor as unknown as { lastRebaseOutcome: unknown }).lastRebaseOutcome = {
+      kind: 'changed',
+      baseSha: 'abc',
+      changedCodePaths: ['src/a.ts'],
+      allChangedPaths: ['src/a.ts'],
+    };
+
+    expect(await advanceTail(conductor, state)).toBe('halt');
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    const reason = "step 'rebase' completed but its gate verdict was not refreshed " +
+      '(stale verdict: routed leaf return requires fresh whole-feature validation for child 3)';
+    expect(halt).toContain(reason);
+    expect(halt).not.toContain('selected');
+    expect(halt).not.toContain('times without satisfying');
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(loopHalts).toEqual([reason]);
+    expect(kickbacks).toEqual([]);
+    for (const [name, bytes] of otherGateBytes) {
+      await expect(readFile(join(gates, name), 'utf8')).resolves.toBe(bytes);
+    }
+  });
+
+  it('uses the existing conflict halt instead of the stale-verdict halt', async () => {
+    const { conductor, state } = await staleFixture();
+    vi.mocked(applyRebaseVerdicts).mockImplementationOnce(async () => ({
+      satisfied: true,
+      kickedBack: [],
+      reverified: [],
+    }));
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+
+    await runRebaseStep(conductor, state);
+    (conductor as unknown as { lastRebaseOutcome: unknown }).lastRebaseOutcome = {
+      kind: 'conflict_halt', reason: 'conflict in src/a.ts', conflicts: [],
+    };
+
+    expect(await advanceTail(conductor, state)).toBe('halt');
+    expect(loopHalts).toEqual(['rebase conflict — parked for human resolution: conflict in src/a.ts']);
+    expect(loopHalts.some((reason) => reason.includes('was not refreshed'))).toBe(false);
   });
 });
