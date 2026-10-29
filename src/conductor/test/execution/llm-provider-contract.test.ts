@@ -1,6 +1,6 @@
 import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type {
   AuthenticationReadiness,
@@ -70,6 +70,26 @@ async function executeCodexCandidate(
 }
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('admits Pi cached-login authentication records while rejecting Claude', () => {
+    const piCachedLogin: NonNullable<InvokeResult['authentication']> = {
+      provider: 'pi',
+      source: 'cached-login',
+      state: 'unusable',
+    } as const;
+
+    expectTypeOf<typeof piCachedLogin>().toMatchTypeOf<
+      NonNullable<InvokeResult['authentication']>
+    >();
+
+    // @ts-expect-error cached-login authentication is exclusive to Pi.
+    const claudeCachedLogin: NonNullable<InvokeResult['authentication']> = {
+      provider: 'claude',
+      source: 'cached-login',
+      state: 'unusable',
+    };
+    void claudeCachedLogin;
+  });
+
   it('declares provider system-prompt delivery and its refusal marker', () => {
     expectTypeOf<LLMProvider['systemPromptCapability']>().toEqualTypeOf<
       ProviderSystemPromptCapability | undefined

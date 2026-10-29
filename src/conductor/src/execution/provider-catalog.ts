@@ -41,7 +41,8 @@ export type ProviderCapability =
   | 'supportsSessionResume'
   | 'costSelfReporting'
   | 'writeFence'
-  | 'nativeSchema';
+  | 'nativeSchema'
+  | 'credentialFileRecovery';
 
 export type ProviderCapabilityFlags = Readonly<Partial<Record<ProviderCapability, boolean>>>;
 
@@ -137,6 +138,8 @@ interface BuiltInProviderDescriptorBase {
   readonly diagnosticEnvelopes: readonly ProviderDiagnosticEnvelope[];
   /** Registered discovery mechanism for installed build-review policies. */
   readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
+  /** Provider-managed credential file relative to its live home. */
+  readonly credentialRecoveryFile?: string;
 }
 
 /** A provider declaring self-host support must declare its isolation shape. */
@@ -311,7 +314,9 @@ export const BUILT_IN_PROVIDERS = [
       readOnlyReview: true,
       costSelfReporting: true,
       nativeSchema: true,
+      credentialFileRecovery: true,
     } as const satisfies ProviderCapabilityFlags,
+    credentialRecoveryFile: 'auth.json',
     selfHostShape: {
       isolation: 'provider-home',
       selectedAuthPath: 'auth.json',

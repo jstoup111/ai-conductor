@@ -77,6 +77,27 @@ describe('built-in provider catalog', () => {
     expect(DEFAULT_PROVIDER).toBe('claude');
   });
 
+  it('declares credential-file recovery exclusively for Pi', () => {
+    const recoveryDeclaration = (provider: (typeof BUILT_IN_PROVIDERS)[number]) => {
+      const descriptor = provider as typeof provider & {
+        capabilities: { credentialFileRecovery?: boolean };
+        credentialRecoveryFile?: string;
+      };
+      return {
+        credentialFileRecovery: descriptor.capabilities.credentialFileRecovery,
+        credentialRecoveryFile: descriptor.credentialRecoveryFile,
+      };
+    };
+
+    expect(Object.fromEntries(
+      BUILT_IN_PROVIDERS.map((provider) => [provider.id, recoveryDeclaration(provider)]),
+    )).toEqual({
+      claude: { credentialFileRecovery: undefined, credentialRecoveryFile: undefined },
+      codex: { credentialFileRecovery: undefined, credentialRecoveryFile: undefined },
+      pi: { credentialFileRecovery: true, credentialRecoveryFile: 'auth.json' },
+    });
+  });
+
   it('requires configured Pi models while built-in policies retain their model defaults', () => {
     const policies = BUILT_IN_PROVIDERS.map((provider) => provider.modelPolicy);
     const piPolicy = policies[2]!;
