@@ -2396,17 +2396,16 @@ export async function resolveRebaseConflicts(
   cap: number,
   opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'> & { supersessionJudgement?: boolean },
 ): Promise<RebaseOutcome> {
-  const manifestConflicts = conflictOutcome.kind === 'conflict_halt'
-    ? conflictOutcome.conflicts.filter(isFeatureManifestConflict)
-    : [];
-  if (manifestConflicts.length > 0) {
-    return {
-      kind: 'conflict_halt',
-      conflicts: conflictOutcome.conflicts,
-      reason:
-        `feature manifest conflict requires human resolution: ${manifestConflicts.join(', ')}. ` +
-        "Recovery: take the base branch's manifest, then re-run ai-conductor register-artifact for each feature artifact entry.",
-    };
+  if (conflictOutcome.kind === 'conflict_halt') {
+    const manifestConflicts = conflictOutcome.conflicts.filter(isFeatureManifestConflict);
+    if (manifestConflicts.length > 0) {
+      return {
+        ...conflictOutcome,
+        reason:
+          `feature manifest conflict requires human resolution: ${manifestConflicts.join(', ')}. ` +
+          "Recovery: take the base branch's manifest, then re-run ai-conductor register-artifact for each feature artifact entry.",
+      };
+    }
   }
   const resolved = await resolveRebaseConflictsInner(
     git,
