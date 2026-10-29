@@ -12,15 +12,32 @@ import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, readRepairMarker } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, drainRoutingOutboxes, readRepairMarker } from '../../../src/engine/routing/route-record-store.js';
 import { revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { reconcileReceiptLedger } from '../../../src/engine/routing/round-receipt.js';
+import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-queue.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 vi.mock('../../../src/engine/restack/restack-executor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-executor.js')>();
   return { ...actual, runRestack: vi.fn(actual.runRestack) };
+});
+
+vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
+  return { ...actual, reconcileReceiptLedger: vi.fn(actual.reconcileReceiptLedger) };
+});
+
+vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/route-record-store.js')>();
+  return { ...actual, drainRoutingOutboxes: vi.fn(actual.drainRoutingOutboxes) };
+});
+
+vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/revalidation-queue.js')>();
+  return { ...actual, consumeLowestQueued: vi.fn(actual.consumeLowestQueued) };
 });
 
 const execFile = promisify(execFileCallback);
@@ -69,6 +86,12 @@ async function fixture() {
 
 async function refNames(repo: string): Promise<string> {
   return (await execFile('git', ['for-each-ref', '--format=%(refname)'], { cwd: repo })).stdout;
+}
+
+async function writeGitBlob(subject: Awaited<ReturnType<typeof fixture>>, contents: string): Promise<string> {
+  const path = join(subject.repo, '.route-test-blob.json');
+  await writeFile(path, contents);
+  return (await subject.git(['hash-object', '-w', path])).stdout.trim();
 }
 
 describe('stack preflight routing', () => {
@@ -346,6 +369,7 @@ describe('stack preflight routing', () => {
     }
   });
 
+  // Covers: task:8, task:rem-prd-audit-rem-prd-S1.8
   it('records an unreadable round mechanically when an applied exit cannot reread its restacked route record', async () => {
     const subject = await fixture();
     const child = parseChildId(1)!;
@@ -383,28 +407,49 @@ describe('stack preflight routing', () => {
     }
   });
 
-  it('does not restack through the pre-exit cursor when a deferred round leaves the queue fence busy', async () => {
+  // Covers: task:6, task:rem-prd-audit-rem-prd-S1.9
+  it('does not restack through the pre-exit cursor when a later open round makes the deferred queue fence busy', async () => {
     const subject = await fixture();
     const child = parseChildId(1)!;
-    const roundId = parseRoundId('r1')!;
-    const created = await createRouteRecord(subject.repo, 'demo', {
-      roundId,
+    const leaf = parseChildId(2)!;
+    const firstRoundId = parseRoundId('r1')!;
+    const secondRoundId = parseRoundId('r2')!;
+    const first = await createRouteRecord(subject.repo, 'demo', {
+      roundId: firstRoundId,
       sealedAuthored: 1,
       kind: 'audit',
-      items: [{ findingId: 'pending', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
-      allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
+      items: [{ findingId: 'pending', kind: 'audit', owner: leaf, host: leaf, reason: 'task-slice', fallback: [] }],
+      allocation: {
+        [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] },
+        [leaf]: { remTaskIds: ['rem-prd-audit-T2'], blockBodies: ['### Task rem-prd-audit-T2\n'] },
+      },
     });
-    if (created.kind !== 'created') throw new Error(created.kind);
-    const open = { ...created.record, phase: 'open' as const, outbox: [] };
-    const recordBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(open) })).stdout.trim();
-    await subject.git(['update-ref', routeRecordRefFor('demo', roundId), recordBlob]);
+    const second = await createRouteRecord(subject.repo, 'demo', {
+      roundId: secondRoundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [{ findingId: 'later-pending', kind: 'audit', owner: leaf, host: leaf, reason: 'task-slice', fallback: [] }],
+      allocation: {
+        [child]: { remTaskIds: ['rem-prd-audit-T3'], blockBodies: ['### Task rem-prd-audit-T3\n'] },
+        [leaf]: { remTaskIds: ['rem-prd-audit-T4'], blockBodies: ['### Task rem-prd-audit-T4\n'] },
+      },
+    });
+    if (first.kind !== 'created' || second.kind !== 'created') throw new Error('route creation failed');
+    for (const record of [first.record, second.record]) {
+      const open = { ...record, phase: 'open' as const, hosts: { [child]: 'restacked' as const, [leaf]: 'pending' as const }, outbox: [] };
+      const blob = await writeGitBlob(subject, JSON.stringify(open));
+      await subject.git(['update-ref', routeRecordRefFor('demo', record.roundId), blob]);
+    }
     const closureSha = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
-    const queueBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({
+    const queueBlob = await writeGitBlob(subject, JSON.stringify({
       generation: 1,
       entries: [{ child, position: child, closureSha, gates: ['test_suite'], replay: { oldParent: closureSha, newParent: closureSha }, state: 'queued' }],
       outbox: [],
-    }) })).stdout.trim();
+    }));
     await subject.git(['update-ref', revalidationQueueRefFor('demo'), queueBlob]);
+    vi.mocked(reconcileReceiptLedger).mockResolvedValueOnce();
+    vi.mocked(drainRoutingOutboxes).mockResolvedValueOnce({ kind: 'drained' });
+    vi.mocked(consumeLowestQueued).mockResolvedValueOnce({ kind: 'busy', detail: `routing round ${secondRoundId} has a pending host` });
 
     await expect(runStackPreflight({
       worktree: subject.repo,
@@ -415,6 +460,7 @@ describe('stack preflight routing', () => {
 
     expect(runRestack).not.toHaveBeenCalled();
     await expect(readRepairMarker(subject.repo, 'demo')).resolves.toEqual({ kind: 'absent' });
+    await expect(refNames(subject.repo)).resolves.toContain(routeRecordRefFor('demo', secondRoundId));
     await expect(readFile(join(subject.repo, '.git', 'HEAD'), 'utf8')).resolves.toContain('ref: refs/heads/feat/daemon-demo');
   });
 
