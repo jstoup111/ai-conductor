@@ -2641,7 +2641,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const events: RemediationCaseLifecycleEvent[] = [];
     const repeated: RemediationCaseJudgement = {
       ...actionJudgement(),
-      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable' }],
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable', reRaise: { kind: 'repeat', reason: 'The same defect returned.' } }],
     };
 
     const result = await coordinateBuildReviewAdjudication({
@@ -2651,7 +2651,7 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      detail: `semantic remediation case regression case-durable; accept with ai-conductor build-review accept --feature feature --lap lap-1 --finding ${findingId} --rationale "<why>", or fix the finding in the feature worktree`,
+      detail: `semantic remediation case regression case-durable; declared repeat; lineage case-durable has 1 applied attempts; accept with ai-conductor build-review accept --feature feature --lap lap-1 --finding ${findingId} --rationale "<why>", or fix the finding in the feature worktree`,
     });
     // The halt precedes reconciliation, so nothing is reconciled or reserved.
     expect(events.map((event) => event.type)).toEqual([
@@ -2677,14 +2677,14 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
     const repeated: RemediationCaseJudgement = {
       ...actionJudgement(),
-      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable' }],
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-durable', reRaise: { kind: 'repeat', reason: 'The same defect returned.' } }],
     };
 
     const result = await coordinateBuildReviewAdjudication({ ...input(root, async () => repeated), child });
 
     expect(result).toMatchObject({
       ok: false,
-      detail: 'semantic remediation case regression case-durable; fix the finding on child 2 (build-review accept has no --child yet)',
+      detail: 'semantic remediation case regression case-durable; declared repeat; lineage case-durable has 1 applied attempts; fix the finding on child 2 (build-review accept has no --child yet)',
     });
   });
 
@@ -2754,7 +2754,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const events: RemediationCaseLifecycleEvent[] = [];
     const repeated: RemediationCaseJudgement = {
       ...actionJudgement(),
-      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-prior-lap' }],
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-prior-lap', reRaise: { kind: 'repeat', reason: 'The same defect returned.' } }],
     };
 
     const result = await coordinateBuildReviewAdjudication({
@@ -2995,7 +2995,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
     const regression = await coordinateBuildReviewAdjudication({
       ...input(regressionRoot, async () => ({
-        ...actionJudgement(), cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'R' }],
+        ...actionJudgement(), cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'R', reRaise: { kind: 'repeat', reason: 'The same defect returned.' } }],
       })), generateId: sequentialIds('must-not-reserve'),
     });
     expect(regression).toEqual({ ok: false, detail: expect.stringMatching(/^semantic remediation case regression R;/) });
@@ -3062,7 +3062,7 @@ describe('coordinateBuildReviewAdjudication', () => {
         { sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'acted' as const, caseRef: 'case-sibling' },
       ],
       cases: [{
-        caseRef: 'case-again', existingCaseId: 'case-regressed', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+        caseRef: 'case-again', existingCaseId: 'case-regressed', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const, reRaise: { kind: 'repeat' as const, reason: 'The same defect returned.' },
         rationale: 'The first test still lacks the assertion.',
         effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the first test' }] },
       }, {
@@ -3136,7 +3136,7 @@ describe('coordinateBuildReviewAdjudication', () => {
         mode: 'case-v1' as const, domain: 'build_review' as const,
         sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-live' }],
         cases: [{
-          caseRef: 'case-live', existingCaseId: 'case-mixed-outcomes', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+          caseRef: 'case-live', existingCaseId: 'case-mixed-outcomes', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const, reRaise: { kind: 'repeat' as const, reason: 'The same defect returned.' },
           rationale: 'The unmerged sibling still needs a focused assertion.',
           effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the second test' }] },
         }],

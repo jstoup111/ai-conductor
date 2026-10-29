@@ -30,6 +30,8 @@ export interface ReconcileRemediationCasesInput {
   readonly liveSourceIds?: ReadonlySet<string>;
   /** Preserve the established absence settlement for completed non-action history. */
   readonly resolveAbsentOpenNonActionCases?: boolean;
+  /** Explicit resolved-action owner for an unbound recurrence minted by the coordinator. */
+  readonly recurrenceOwnersByCaseRef?: ReadonlyMap<string, string>;
   /** An attempted applied effect may settle on a normal adjudication lap, never a missing-order PASS. */
   readonly allowAppliedByAbsence?: boolean;
   /** The occurrence lap for any absence retirement performed in this mutation. */
@@ -312,7 +314,8 @@ function reconcileState(
       const exactRecurrence = caseRow.disposition === 'act'
         ? classifyBuildReviewRecurrence(state.cases, sources.map((source) => source.sourceId), caseRow.distinctFrom ?? [])
         : undefined;
-      const provenance = exactRecurrence !== undefined && exactRecurrence.recurrenceOf.length === 0 && exactRecurrence.distinctFrom.length === 0
+      const explicitOwner = input.recurrenceOwnersByCaseRef?.get(caseRow.caseRef);
+      const provenance = explicitOwner === undefined && exactRecurrence !== undefined && exactRecurrence.recurrenceOf.length === 0 && exactRecurrence.distinctFrom.length === 0
         ? input.provenanceByCaseRef?.get(caseRow.caseRef)
         : undefined;
       const provenanceDistinctFrom = provenance === undefined
@@ -322,8 +325,10 @@ function reconcileState(
         provenanceDistinctFrom.some((entry) => entry.caseId === provenance.selectedCaseId);
       const recurrenceOf = exactRecurrence === undefined
         ? []
-        : exactRecurrence.recurrenceOf.length > 0
-          ? exactRecurrence.recurrenceOf
+        : explicitOwner !== undefined
+          ? [...new Set([...exactRecurrence.recurrenceOf, explicitOwner])]
+          : exactRecurrence.recurrenceOf.length > 0
+            ? exactRecurrence.recurrenceOf
           : provenance !== undefined && !selectedProvenanceIsDistinct
             ? [provenance.selectedCaseId]
             : [];

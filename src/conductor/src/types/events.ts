@@ -1002,6 +1002,8 @@ type ConductorEventBody =
       resolution: 'open' | 'resolved';
       recurrenceOf?: readonly string[];
       distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
+      reRaiseKind?: 'residual-gap' | 'undeclared';
+      boundCaseId?: string;
     }
   | {
       /** One attempted remediation case was refuted against the current lap. */
@@ -1057,6 +1059,8 @@ type ConductorEventBody =
       effectId?: string;
       reason: 'already-attempted' | 'regressed' | 'recurrence-limit';
       lineageCaseIds?: readonly string[];
+      reRaiseKind?: 'residual-gap' | 'repeat';
+      appliedAttempts?: number;
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | {

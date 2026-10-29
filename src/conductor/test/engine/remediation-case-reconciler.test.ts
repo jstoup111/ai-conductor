@@ -108,6 +108,31 @@ afterEach(async () => {
 });
 
 describe('remediation case reconciler', () => {
+  it('stamps an explicit recurrence owner on a minted unbound action case', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: {
+      ...state, cases: [resolvedActionOwner('case-R', 'source-prior')],
+    } }));
+    const first = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'case-N' }, [{ sourceId: 'testQuality:F2', outcome: 'acted', caseRef: 'case-N' }]),
+      recordedAt: RECORDED_AT, generateId: generatedIds('case-N', 'effect-N'),
+      recurrenceOwnersByCaseRef: new Map([['case-N', 'case-R']]),
+    });
+    expect(first).toMatchObject({ ok: true });
+    if (!first.ok) throw new Error(first.reason);
+    expect(first.state.cases.find((record) => record.id === 'case-N')).toMatchObject({
+      recurrenceOf: ['case-R'], effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
+    });
+    const replay = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'case-N' }, [{ sourceId: 'testQuality:F2', outcome: 'acted', caseRef: 'case-N' }]),
+      recordedAt: RECORDED_AT, generateId: generatedIds('unexpected-case', 'unexpected-effect'),
+      recurrenceOwnersByCaseRef: new Map([['case-N', 'case-R']]),
+    });
+    expect(replay).toMatchObject({ ok: true, caseIdsByRef: new Map([['case-N', 'case-N']]) });
+    if (!replay.ok) throw new Error(replay.reason);
+    expect(replay.state.cases).toHaveLength(2);
+  });
   it('carries a rejected source-link transition and leaves the valid store bytes unchanged', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);

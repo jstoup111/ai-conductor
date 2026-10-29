@@ -1044,6 +1044,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       )),
       declaredSeverityThresholds: input.declaredSeverityThresholds,
       allowedDistinctFromCaseIdsByCaseRef,
+      reRaiseEligibleCaseIds: prior.state.cases.filter((record) =>
+        record.disposition === 'act' && record.resolution === 'resolved' &&
+        record.effect.kind === 'action' && record.effect.status === 'applied',
+      ).map((record) => record.id),
       bindableDispositionsByCaseId: Object.fromEntries(prior.state.cases.map((record) => [
         record.id,
         bindableDispositions(record, attempted, carryInput),
@@ -1164,14 +1168,38 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const admitted = liveProposals.filter((proposed) =>
     carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef),
   );
+  // A resolved, successfully applied action case can be explicitly re-raised.
+  // `repeat` is a regression; a residual declaration (or no declaration) is a
+  // fresh unbound recurrence whose durable predecessor remains explicit.
+  const recurrenceOwnersByCaseRef = new Map<string, string>();
+  const reRaiseMetadataByCaseRef = new Map<string, { kind: 'residual-gap' | 'undeclared'; boundCaseId: string }>();
+  const residualRebindRefs = new Set<string>();
+  for (const proposed of admitted) {
+    const boundId = proposed.case.existingCaseId;
+    const bound = boundId === undefined ? undefined : priorCasesBeforeReconcile.get(boundId);
+    if (proposed.case.disposition !== 'act' || !bound ||
+      classifyRemediationCaseReuse(bound, attempted, carryInput) !== 'halt-regression' ||
+      bound.effect.kind !== 'action' || bound.effect.status !== 'applied' ||
+      proposed.case.reRaise?.kind === 'repeat') continue;
+    residualRebindRefs.add(proposed.case.caseRef);
+    recurrenceOwnersByCaseRef.set(proposed.case.caseRef, bound.id);
+    reRaiseMetadataByCaseRef.set(proposed.case.caseRef, {
+      kind: proposed.case.reRaise?.kind === 'residual-gap' ? 'residual-gap' : 'undeclared',
+      boundCaseId: bound.id,
+    });
+  }
+  const recurrenceProposal = (proposed: typeof admitted[number]): typeof admitted[number] => residualRebindRefs.has(proposed.case.caseRef)
+    ? { ...proposed, case: (() => { const { existingCaseId: _bound, ...unbound } = proposed.case; return unbound as typeof proposed.case; })() }
+    : proposed;
+  const recurrenceAdmitted = admitted.map(recurrenceProposal);
   for (const proposed of admitted) {
     if (carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'refute') continue;
     const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
     if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
   }
-  const ordinaryCases = admitted.filter((proposed) =>
+  const ordinaryCases = recurrenceAdmitted.filter((proposed) =>
     proposed.case.disposition !== 'escalate' || carriedCaseRefs.has(proposed.case.caseRef));
-  const escalationCases = admitted.filter((proposed) =>
+  const escalationCases = recurrenceAdmitted.filter((proposed) =>
     proposed.case.disposition === 'escalate' && !carriedCaseRefs.has(proposed.case.caseRef));
   // A reuse halt is still durable evidence: the newly bound source must be
   // attached to the named case so an operator can accept that precise halt and
@@ -1198,7 +1226,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // however, still owns the finite number of BUILD attempts. Bind the source
   // back to its authoritative owner before reporting the halt so a later
   // operator acceptance can address this exact occurrence.
-  for (const proposed of admitted) {
+  for (const proposed of recurrenceAdmitted) {
     if (proposed.case.existingCaseId !== undefined || proposed.case.disposition !== 'act') continue;
     if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
     const exactRecurrence = classifyBuildReviewRecurrence(
@@ -1215,7 +1243,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       : undefined;
     const declaredDistinctFromProvenance = provenance !== undefined &&
       proposed.case.distinctFrom?.some((entry) => entry.caseId === provenance.selectedCaseId) === true;
-    const recurrenceOf = exactRecurrence.recurrenceOf.length > 0
+    const explicitOwner = recurrenceOwnersByCaseRef.get(proposed.case.caseRef);
+    const recurrenceOf = explicitOwner !== undefined
+      ? [...new Set([...exactRecurrence.recurrenceOf, explicitOwner])]
+      : exactRecurrence.recurrenceOf.length > 0
       ? exactRecurrence.recurrenceOf
       : provenance !== undefined && !declaredDistinctFromProvenance
         ? [provenance.selectedCaseId]
@@ -1234,6 +1265,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
       caseId, ...(owner.effect.kind === 'none' ? {} : { effectId: owner.effect.id }),
       reason: 'recurrence-limit', lineageCaseIds: [...lineage.caseIds],
+      ...(reRaiseMetadataByCaseRef.get(proposed.case.caseRef)?.kind === 'residual-gap' ? { reRaiseKind: 'residual-gap' as const } : {}),
     });
     return failUnlessAccepted(
       `semantic remediation case recurrence limit ${caseId}: lineage ${lineage.caseIds.join(', ')} has ${lineage.appliedAttempts} applied attempts (limit ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT})`,
@@ -1260,7 +1292,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // to reach a regression; a converged repeat is still caught after reconciling.
   // Only an `act` proposal repeats an action: any other disposition transforms
   // the reused case (a refutation settles it) and reconciliation owns that.
-  for (const proposed of admitted) {
+  for (const proposed of recurrenceAdmitted) {
     if (proposed.case.disposition !== 'act') continue;
     if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
     const record = proposed.case.existingCaseId ? priorCasesBeforeReconcile.get(proposed.case.existingCaseId) : undefined;
@@ -1273,8 +1305,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: record.id, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
         reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
+        ...(reuse === 'halt-regression' && proposed.case.reRaise?.kind === 'repeat'
+          ? (() => { const lineage = buildReviewRecurrenceLineage(prior.state.cases, [record.id]); return { reRaiseKind: 'repeat' as const, lineageCaseIds: [...lineage.caseIds], appliedAttempts: lineage.appliedAttempts }; })()
+          : {}),
       });
-      return failUnlessAccepted(semanticReuseHaltDetail(reuse, record.id, proposed.sources.map((source) => source.sourceId)), {
+      const semanticDetail = semanticReuseHaltDetail(reuse, record.id, proposed.sources.map((source) => source.sourceId));
+      const repeatDetail = reuse === 'halt-regression' && proposed.case.reRaise?.kind === 'repeat'
+        ? (() => { const lineage = buildReviewRecurrenceLineage(prior.state.cases, [record.id]); return `; declared repeat; lineage ${lineage.caseIds.join(', ')} has ${lineage.appliedAttempts} applied attempts`; })()
+        : '';
+      return failUnlessAccepted(repeatDetail === '' ? semanticDetail : semanticDetail.replace(';', `${repeatDetail};`), {
           settleAbsentAttempted: false,
           // A reused case's own sources belong to the lap that resolved it and
           // are not live now, so only the reusing proposal's sources can show
@@ -1288,6 +1327,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: ordinaryCases }, recordedAt, generateId,
     ...(provenanceByCaseRef.size === 0 ? {} : { provenanceByCaseRef }),
+    ...(recurrenceOwnersByCaseRef.size === 0 ? {} : { recurrenceOwnersByCaseRef }),
     attemptedCaseIds,
     lapId: input.aggregate.lapId,
     ...(carriedCaseRefs.size === 0 ? {} : { carry: { caseRefs: [...carriedCaseRefs], lapId: input.aggregate.lapId } }),
@@ -1364,7 +1404,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // Reconciler retirement entries are appended in its mutation and delivered
   // by the drain above.  Do not emit a second, non-idempotent lifecycle event
   // from this read-side projection.
-  for (const caseId of caseIdsByRef.values()) {
+  for (const [caseRef, caseId] of caseIdsByRef) {
     const record = reconciledCasesById.get(caseId);
     if (!record) return fail(`reconciled case ${caseId} is unavailable`);
     // Opening a case is the coordinator's existing lifecycle signal. Resolved
@@ -1375,6 +1415,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       caseId, resolution: 'open',
       ...(record.recurrenceOf === undefined ? {} : { recurrenceOf: record.recurrenceOf }),
       ...(record.distinctFrom === undefined ? {} : { distinctFrom: record.distinctFrom }),
+      ...(reRaiseMetadataByCaseRef.get(caseRef) === undefined ? {} : { reRaiseKind: reRaiseMetadataByCaseRef.get(caseRef)!.kind, boundCaseId: reRaiseMetadataByCaseRef.get(caseRef)!.boundCaseId }),
     });
     const priorEffect = priorCasesById.get(caseId)?.effect;
     const wasReserved = priorEffect?.kind !== 'none' && priorEffect?.status === 'reserved';
