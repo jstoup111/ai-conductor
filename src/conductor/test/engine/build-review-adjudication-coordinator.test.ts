@@ -2743,7 +2743,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   });
 
   // Covers: S2.3, task:4, task:rem-prd-audit-R4u
-  it('routes an undeclared bound rebind to BUILD and records its provenance', async () => {
+  it('mints an undeclared bound rebind as fresh BUILD work and records its provenance', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await seedCases(store, { version: 'v1', feature, cases: [{
@@ -2767,9 +2767,11 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
     const state = await store.read();
     if (!state.ok) throw new Error(state.reason);
-    expect(state.state.cases.find((record) => record.id === 'N')).toMatchObject({
+    const minted = state.state.cases.find((record) => record.id === 'N');
+    expect(minted).toMatchObject({
       disposition: 'act', resolution: 'open', recurrenceOf: ['case-R'],
     });
+    expect(minted?.recurrenceOf).toEqual(['case-R']);
     expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([
       expect.objectContaining({ caseId: 'N', recurrenceOf: ['case-R'], reRaiseKind: 'undeclared', boundCaseId: 'case-R' }),
     ]);

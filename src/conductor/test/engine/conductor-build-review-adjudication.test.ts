@@ -872,19 +872,21 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: S2.4, task:8, task:rem-prd-audit-R8b
   it('routes the #3348 undeclared rebind through build_review to the Task 16 work order', async () => {
     const tasks = [{ title: 'Task 16 — add the focused regression assertion.' }];
+    const judgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'case-N' }],
+      cases: [{
+        caseRef: 'case-N', existingCaseId: '26a04ec0', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The new testQuality finding needs the Task 16 repair.',
+        effect: { kind: 'action', route: 'build', tasks },
+      }],
+    };
     let publishedTasks: unknown;
     await fixture({
       planText: '# Plan\n\n### Task 16: Regression repair\n**Files:** test/example.test.ts\n',
-      remediateJudgements: [{
-        mode: 'case-v1', domain: 'build_review',
-        sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'case-N' }],
-        cases: [{
-          caseRef: 'case-N', existingCaseId: '26a04ec0', disposition: 'act', priority: 'high', confidence: 'high',
-          rationale: 'The new testQuality finding needs the Task 16 repair.',
-          effect: { kind: 'action', route: 'build', tasks },
-        }],
-      }],
+      remediateJudgements: [judgement],
       seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '16', status: 'in_progress' }] }), 'utf8');
         await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
           version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
           cases: [{
