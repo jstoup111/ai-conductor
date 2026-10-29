@@ -7,6 +7,7 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { buildExporters } from '../../src/engine/otel/transport.js';
+import { vi } from 'vitest';
 
 const HEADER_ENV = 'OTEL_AUTHENTICATED_EXPORT_TEST_TOKEN';
 const previousHeaderValue = process.env[HEADER_ENV];
@@ -65,6 +66,42 @@ describe('authenticated OTLP HTTP export', () => {
 
       expect(receivedPath).toBe('/v1/traces');
       expect(receivedHeaders?.authorization).toBe('Bearer integration-token');
+      await exporters.spanExporter.shutdown();
+    } finally {
+      server.close();
+      await once(server, 'close');
+    }
+  });
+
+  it('resolves a command header at export time without exposing a failed command to the receiver', async () => {
+    const received: IncomingHttpHeaders[] = [];
+    const server = createServer((request, response) => {
+      received.push(request.headers);
+      request.resume();
+      response.writeHead(200).end();
+    });
+    try {
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('loopback listener has no TCP address');
+      const resolved = resolveOtelConfig({ otel: {
+        exporter: 'otlp', endpoint: `http://127.0.0.1:${address.port}`,
+        headers: { authorization: { command: ['credential-command'], prefix: 'Bearer ' } }, spool: { enabled: false },
+      } }, '/tmp/otel-authenticated-export');
+      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>, {
+        env: { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined },
+        commandRunner: vi.fn().mockResolvedValue({ stdout: 'tok-123\n' }),
+      });
+      const provider = new BasicTracerProvider();
+      const span = provider.getTracer('otel-authenticated-export-test').startSpan('command-authenticated-export');
+      span.end();
+      await new Promise<void>((resolve, reject) => exporters.spanExporter.export([span as unknown as ReadableSpan], (result) => {
+        if (result.code === ExportResultCode.SUCCESS) resolve();
+        else reject(new Error(result.error?.message ?? 'OTLP export failed'));
+      }));
+      expect(received).toHaveLength(1);
+      expect(received[0]?.authorization).toBe('Bearer tok-123');
       await exporters.spanExporter.shutdown();
     } finally {
       server.close();

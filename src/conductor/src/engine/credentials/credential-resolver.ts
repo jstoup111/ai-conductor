@@ -37,9 +37,27 @@ async function resolveReference(
 export function createCredentialResolver(
   reference: CredentialReference,
   environment: CredentialEnvironment = process.env,
-  dependencies: { readonly commandRunner?: CommandRunner } = {},
+  dependencies: { readonly commandRunner?: CommandRunner; readonly now?: () => number } = {},
 ): CredentialResolver {
+  // Environment values deliberately remain live. Command values are cached per
+  // header provider so rotating environment credentials take effect immediately.
+  if (reference.kind === 'env') {
+    return { resolve: async () => resolveReference(reference, environment, dependencies.commandRunner) };
+  }
+
+  const now = dependencies.now ?? Date.now;
+  const cacheDurationMs = (reference.cacheSeconds ?? 300) * 1_000;
+  let cached: { value: string; expiresAt: number } | undefined;
+  let inFlight: Promise<CredentialResult> | undefined;
   return {
-    resolve: async () => resolveReference(reference, environment, dependencies.commandRunner),
+    resolve: async () => {
+      if (cached && now() < cached.expiresAt) return { kind: 'value', value: cached.value };
+      if (inFlight) return inFlight;
+      inFlight = resolveReference(reference, environment, dependencies.commandRunner).then((result) => {
+        if (result.kind === 'value') cached = { value: result.value, expiresAt: now() + cacheDurationMs };
+        return result;
+      }).finally(() => { inFlight = undefined; });
+      return inFlight;
+    },
   };
 }

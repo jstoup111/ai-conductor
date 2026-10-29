@@ -7,6 +7,7 @@ import type { ResolvedOtelConfig } from './otel-config.js';
 import { SpoolDrainer } from './spool-drainer.js';
 import { SpoolLease } from './spool-lease.js';
 import { SpoolStore } from './spool-store.js';
+import { createOtelHeaderProvider } from './otel-header-provider.js';
 
 export interface SpoolRuntime {
   store: SpoolStore;
@@ -63,13 +64,7 @@ export function createSpoolRuntime(
   drainer = new SpoolDrainer(store, {
       endpoint: config.endpoint,
       // Resolve references per POST. Credentials never enter the spool.
-      headers: () => config.headerReferences
-        ? Object.fromEntries(Object.entries(config.headerReferences)
-          .flatMap(([name, reference]) => {
-            if ('env' in reference) return [[name, process.env[reference.env] ?? '']];
-            return reference.kind === 'env' ? [[name, process.env[reference.variable] ?? '']] : [];
-          }))
-        : config.headers ?? {},
+      headers: createOtelHeaderProvider(config.headerReferences, config.headers),
       events,
     });
   return { store, lease, drainer };
