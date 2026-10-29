@@ -451,7 +451,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     });
 
     expect(line).toBe(
-      `· Codex cached-login credentials: probe-failed (probe-failure: unparseable-output${expectedReason === undefined ? '' : `, parser-rejection: ${expectedReason}`}); waiting 3s, next disposition: trial-required`,
+      `Codex cached-login credentials: probe-failed (probe-failure: unparseable-output${expectedReason === undefined ? '' : `, parser-rejection: ${expectedReason}`}); waiting 3s, next disposition: trial-required`,
     );
     expect(line).not.toContain(rawDoctorDiagnostic);
     },

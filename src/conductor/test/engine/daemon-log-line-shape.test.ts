@@ -135,6 +135,21 @@ describe('daemon logger line shape', () => {
     }
   });
 
+  it('persists kickback as a prefix-free prominent line', async () => {
+    chalk.level = 0;
+    const { persisted, baseLog } = buildLoggers();
+    const events = new ConductorEventEmitter();
+    const detach = attachFeatureEventRenderer(events, createFeatureDaemonLogger('feature-a', baseLog));
+
+    await events.emit({ type: 'kickback', from: 'build', to: 'plan', count: 1 });
+    detach();
+
+    expect(DAEMON_EVENT_DEPTH.kickback).toBe(0);
+    expect(persisted).toEqual([
+      '2026-10-29T00:00:00.000Z [daemon][feature-a] ↩ KICKBACK: build re-opened plan (×1)',
+    ]);
+  });
+
   it('uses one depth for provider lifecycle and every outer-review line', () => {
     chalk.level = 0;
     const output: string[] = [];
