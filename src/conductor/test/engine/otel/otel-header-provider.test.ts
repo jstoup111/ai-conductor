@@ -17,6 +17,30 @@ describe('OTel header provider', () => {
     await expect(provider()).rejects.not.toThrow(/SENTINEL/);
   });
 
+  it.each([
+    ['an empty command result', vi.fn().mockResolvedValue({ stdout: ' \n\t' }), /empty output/i],
+    ['a command timeout', vi.fn().mockRejectedValue(Object.assign(new Error('timeout'), { killed: true })), /10 seconds/i],
+  ])('names the header and argv for %s', async (_case, commandRunner, expected) => {
+    const provider = createOtelHeaderProvider(
+      { authorization: { kind: 'command', argv: ['credential', '--token'] } },
+      undefined,
+      { commandRunner },
+    );
+
+    await expect(provider()).rejects.toThrow(CredentialUnavailableError);
+    await expect(provider()).rejects.toThrow(new RegExp(`authorization.*credential --token.*${expected.source}`, 'i'));
+  });
+
+  it('names the header and argv when the real-execution kill switch blocks a command', async () => {
+    const provider = createOtelHeaderProvider(
+      { authorization: { kind: 'command', argv: ['credential', '--token'] } },
+      undefined,
+      { environment: { AI_CONDUCTOR_NO_REAL_EXEC: '1' } },
+    );
+
+    await expect(provider()).rejects.toThrow(/authorization.*credential --token.*AI_CONDUCTOR_NO_REAL_EXEC/i);
+  });
+
   it('reads environment credentials afresh for each delivery', async () => {
     const environment: NodeJS.ProcessEnv = { OTLP_TOKEN: 'first' };
     const provider = createOtelHeaderProvider({ authorization: { kind: 'env', variable: 'OTLP_TOKEN' } }, undefined, { environment });

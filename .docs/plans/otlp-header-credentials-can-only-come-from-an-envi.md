@@ -203,8 +203,8 @@ both spooled and direct OTLP/HTTP export. 10 tasks.
 4. Verify GREEN and commit.
 
 **Done when:**
-- [test] `spool-drainer.test.ts` asserts a batch delivered by the drainer from `createSpoolRuntime` reaches the loopback test double with `authorization: Bearer tok-123` from the fake command runner.
-- [test] The same file asserts that after the referenced environment variable changes, the next POST from that drainer carries the new value.
+- [test] `spool-wiring.test.ts` asserts a batch delivered by the drainer from `createSpoolRuntime` reaches the loopback test double with `authorization: Bearer tok-123` from the fake command runner.
+- [test] The same file asserts that after the referenced environment variable changes, the next POST from that runtime's drainer carries the new value.
 
 **Files likely touched:**
 - `src/conductor/src/engine/otel/otel-header-provider.ts` — new async header provider
@@ -272,9 +272,9 @@ both spooled and direct OTLP/HTTP export. 10 tasks.
 4. Verify GREEN and commit.
 
 **Done when:**
-- [test] `spool-drainer.test.ts` asserts `SENTINEL-VALUE` appears in no spool-directory file and no captured event after a successful spooled export.
+- [test] `spool-wiring.test.ts` asserts `SENTINEL-VALUE` appears in no spool-directory file and no captured event after a successful spooled export.
 - [test] The same file asserts neither `SENTINEL-OUT` nor `SENTINEL-ERR` appears in the credential `renderer_error`.
-- [test] `otel-config.test.ts` asserts no Story 2 error string contains `SENTINEL-VALUE` while the injected fake runner is configured to print it.
+- [test] `otel-config.test.ts` asserts no Story 2 error string contains `SENTINEL-VALUE` while a command reference is configured to contain it.
 
 **Files likely touched:**
 - `src/conductor/test/engine/otel/spool-drainer.test.ts` — spool and event sweep

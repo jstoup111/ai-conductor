@@ -611,6 +611,23 @@ describe('resolveOtelConfig', () => {
         else process.env.OTEL_TEST_AUTHORIZATION = previous;
       }
     });
+
+    it('never includes a configured command sentinel in Story 2 header errors', () => {
+      const sentinel = 'SENTINEL-VALUE';
+      const cases = [
+        { Authorization: { command: ['credential', sentinel], prefix: 1 } },
+        { Authorization: { command: ['credential', sentinel], cache_seconds: 0 } },
+        { Authorization: { command: ['credential', sentinel], extra: true } },
+      ];
+
+      for (const headers of cases) {
+        const result = resolveOtelConfig({ otel: {
+          exporter: 'otlp', endpoint: 'http://localhost:4318', headers,
+        } as never }, PIPELINE_DIR);
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error ?? '').not.toContain(sentinel);
+      }
+    });
   });
 
   describe('project_name', () => {

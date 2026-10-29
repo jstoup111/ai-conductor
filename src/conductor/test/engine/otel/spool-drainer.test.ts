@@ -1,5 +1,5 @@
 // Covers: task:7, task:8, task:10, task:11, task:12, task:13, task:14
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -78,11 +78,11 @@ describe('SpoolDrainer', () => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('credential-protected'));
     const events = new ConductorEventEmitter();
-    const errors: string[] = [];
-    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') errors.push(event.error); });
-    const fetch = async () => {
+    const errors: Array<{ rendererName: string; error: string }> = [];
+    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') errors.push(event); });
+    const fetch = vi.fn(async () => {
       throw new Error('a credential failure must prevent the POST');
-    };
+    });
     const drainer = new SpoolDrainer(store, {
       endpoint: 'http://collector.test', events, fetch,
       headers: async () => { throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.'); },
@@ -91,11 +91,73 @@ describe('SpoolDrainer', () => {
     const draining = drainer.drainUntilStopped();
     await waitFor(() => errors.length === 1, 'credential failure was not reported');
     expect(await store.list('traces')).toHaveLength(1);
-    expect(errors).toEqual([expect.stringMatching(/authorization.*credential.*exit code 3/i)]);
-    expect(errors.join('\n')).not.toContain('SENTINEL-OUT');
-    expect(errors.join('\n')).not.toContain('SENTINEL-ERR');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(errors).toEqual([expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/authorization.*credential.*exit code 3/i) })]);
+    expect(JSON.stringify(errors)).not.toContain('SENTINEL-OUT');
+    expect(JSON.stringify(errors)).not.toContain('SENTINEL-ERR');
     await drainer.stop();
     await draining;
+  });
+
+  it('delivers a retained batch after credential recovery and reports recovery once', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('credential-protected'));
+    const events = new ConductorEventEmitter();
+    const errors: string[] = [];
+    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') errors.push(event.error); });
+    let calls = 0;
+    const received: Array<{ authorization: string | undefined }> = [];
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test', events,
+      headers: async () => {
+        if (calls++ === 0) throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.');
+        return { authorization: 'Bearer recovered-token' };
+      },
+      fetch: async (_url, init) => {
+        received.push({ authorization: (init?.headers as Record<string, string>).authorization });
+        return new Response(undefined, { status: 200 });
+      },
+      sleep: async () => new Promise<void>((resolve) => setImmediate(resolve)),
+    });
+
+    await drainUntilEmpty(drainer, store);
+
+    expect({ received, errors: errors.filter((error) => /credential|recover/i.test(error)) }).toEqual({
+      received: [{ authorization: 'Bearer recovered-token' }],
+      errors: [expect.stringMatching(/authorization.*credential/i), expect.stringMatching(/delivery recovered/i)],
+    });
+  });
+
+  it('reports one credential error across ten attempts while retaining the normal backoff sequence', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('credential-protected'));
+    const events = new ConductorEventEmitter();
+    const errors: unknown[] = [];
+    events.on('renderer_error', (event) => { errors.push(event); });
+    const delays: number[] = [];
+    let attempts = 0;
+    let release!: () => void;
+    const tenthAttempt = new Promise<void>((resolve) => { release = resolve; });
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test', events,
+      headers: async () => {
+        attempts += 1;
+        if (attempts === 10) release();
+        throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.');
+      },
+      fetch: async () => { throw new Error('credential failure must not POST'); },
+      sleep: async (delay) => { delays.push(delay); }, random: () => 0,
+    });
+    const draining = drainer.drainUntilStopped();
+    await tenthAttempt;
+    await drainer.stop();
+    await draining;
+
+    expect({ attempts, credentialErrors: errors.filter((event) => JSON.stringify(event).includes('credential')), delays }).toEqual({
+      attempts: 10,
+      credentialErrors: [expect.objectContaining({ rendererName: 'otel' })],
+      delays: expect.arrayContaining([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000]),
+    });
   });
 
   it('retries a transient spool list failure without delaying the other signal', async () => {

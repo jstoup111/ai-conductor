@@ -63,6 +63,24 @@ describe('createCredentialResolver', () => {
     expect(runner).toHaveBeenCalledTimes(2);
   });
 
+  it('honours a configured 60-second cache boundary', async () => {
+    let now = 0;
+    const runner = vi.fn()
+      .mockResolvedValueOnce({ stdout: 'tok-1\n' })
+      .mockResolvedValueOnce({ stdout: 'tok-2\n' });
+    const resolver = createCredentialResolver(
+      { kind: 'command', argv: ['credential'], cacheSeconds: 60 }, {},
+      { commandRunner: runner, now: () => now },
+    );
+
+    await expect(resolver.resolve()).resolves.toEqual({ kind: 'value', value: 'tok-1' });
+    now = 59_000;
+    await expect(resolver.resolve()).resolves.toEqual({ kind: 'value', value: 'tok-1' });
+    now = 61_000;
+    await expect(resolver.resolve()).resolves.toEqual({ kind: 'value', value: 'tok-2' });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
   it('does not cache unavailable command results', async () => {
     const runner = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error('failed'), { code: 1 }))

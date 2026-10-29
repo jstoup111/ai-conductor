@@ -8,11 +8,19 @@ import { SpoolDrainer } from './spool-drainer.js';
 import { SpoolLease } from './spool-lease.js';
 import { SpoolStore } from './spool-store.js';
 import { createOtelHeaderProvider } from './otel-header-provider.js';
+import type { CommandRunner } from '../credentials/command-source.js';
 
 export interface SpoolRuntime {
   store: SpoolStore;
   lease: SpoolLease;
   drainer: SpoolDrainer;
+}
+
+/** Injectable credential seams for the locally-owned spool runtime. */
+export interface SpoolRuntimeOptions {
+  environment?: NodeJS.ProcessEnv;
+  commandRunner?: CommandRunner;
+  now?: () => number;
 }
 
 const warnedStarts = new Set<string>();
@@ -57,6 +65,7 @@ export function createSpoolRuntime(
   directory: string,
   config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>,
   events?: ConductorEventEmitter,
+  options: SpoolRuntimeOptions = {},
 ): SpoolRuntime {
   const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes });
   let drainer: SpoolDrainer | undefined;
@@ -64,7 +73,7 @@ export function createSpoolRuntime(
   drainer = new SpoolDrainer(store, {
       endpoint: config.endpoint,
       // Resolve references per POST. Credentials never enter the spool.
-      headers: createOtelHeaderProvider(config.headerReferences, config.headers),
+      headers: createOtelHeaderProvider(config.headerReferences, config.headers, options),
       events,
     });
   return { store, lease, drainer };
