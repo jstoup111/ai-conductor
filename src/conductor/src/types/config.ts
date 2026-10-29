@@ -270,6 +270,15 @@ export interface OtelHeaderEnvironmentReference {
   env: string;
 }
 
+/** Command reference for an OTLP HTTP header value, resolved when telemetry is sent. */
+export interface OtelHeaderCommandReference {
+  command: string[];
+  prefix?: string;
+  cache_seconds?: number;
+}
+
+export type OtelHeaderReference = OtelHeaderEnvironmentReference | OtelHeaderCommandReference;
+
 /** Toggles for provenance fields exported with OpenTelemetry traces. */
 export interface OtelProvenanceConfig {
   commit?: boolean;
@@ -300,8 +309,8 @@ export interface OtelConfig {
   file?: string;
   /** OTLP wire protocol. Defaults to 'http/protobuf' (port 4318). */
   protocol?: 'http/protobuf' | 'grpc';
-  /** OTLP HTTP headers whose values are read from the process environment. */
-  headers?: Record<string, OtelHeaderEnvironmentReference>;
+  /** OTLP HTTP headers whose values are resolved from an environment variable or command. */
+  headers?: Record<string, OtelHeaderReference>;
   /** Optional metric project identity. Defaults to the project root basename. */
   project_name?: string;
   /** Stable worker identity for daemon-scoped metric Resources. */

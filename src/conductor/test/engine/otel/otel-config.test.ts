@@ -1,4 +1,4 @@
-// Covers: task:2, task:1, task:6, task:11
+// Covers: task:2, task:1, task:6, task:10, task:11
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -378,13 +378,72 @@ describe('resolveOtelConfig', () => {
           endpoint: 'http://localhost:4318',
           headers: { Authorization: 'valid-token' },
           provenance: DEFAULT_PROVENANCE,
-          headerReferences: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION' } },
+          headerReferences: { Authorization: { kind: 'env', variable: 'OTEL_TEST_AUTHORIZATION' } },
           spool: { enabled: true, maxBytes: 536_870_912 },
         });
         expect((result as { error?: string }).error).toBeUndefined();
       } finally {
         if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
         else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
+    it('retains a valid command header reference without resolving a credential value', () => {
+      const result = resolveOtelConfig(
+        {
+          otel: {
+            exporter: 'otlp',
+            endpoint: 'http://localhost:4318',
+            headers: {
+              Authorization: {
+                command: ['security', 'find-generic-password'],
+                prefix: 'Bearer ',
+                cache_seconds: 60,
+              },
+            },
+          },
+        } as never,
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        headerReferences: {
+          Authorization: {
+            kind: 'command',
+            argv: ['security', 'find-generic-password'],
+            prefix: 'Bearer ',
+            cacheSeconds: 60,
+          },
+        },
+      });
+      expect((result as { headers?: Record<string, string>; error?: string; spoolWarnings?: string[] }).headers).toBeUndefined();
+      expect((result as { error?: string }).error).toBeUndefined();
+      expect((result as { spoolWarnings?: string[] }).spoolWarnings).toBeUndefined();
+    });
+
+    it('disables every malformed command or reference shape naming the header and requirement', () => {
+      for (const [_caseName, reference, requirement] of [
+      ['a string command', { command: 'security' }, /command.*non-empty.*(array|list).*strings/i],
+      ['an empty command', { command: [] }, /command.*non-empty.*(array|list).*strings/i],
+      ['a non-string command argument', { command: ['security', 1] }, /command.*non-empty.*(array|list).*strings/i],
+      ['an empty command argument', { command: ['security', ''] }, /command.*non-empty.*(array|list).*strings/i],
+      ['a non-string prefix', { command: ['security'], prefix: 1 }, /prefix.*string/i],
+      ['a zero cache duration', { command: ['security'], cache_seconds: 0 }, /cache_seconds.*positive integer/i],
+      ['a negative cache duration', { command: ['security'], cache_seconds: -1 }, /cache_seconds.*positive integer/i],
+      ['a fractional cache duration', { command: ['security'], cache_seconds: 0.5 }, /cache_seconds.*positive integer/i],
+      ['a non-numeric cache duration', { command: ['security'], cache_seconds: '60' }, /cache_seconds.*positive integer/i],
+      ['a mixed env and command reference', { env: 'OTEL_TEST_AUTHORIZATION', command: ['security'] }, /\{ env:.*\}.*\{ command:/i],
+      ['an unknown command-reference key', { command: ['security'], other: true }, /\{ env:.*\}.*\{ command:/i],
+      ] as const) {
+        const result = resolveOtelConfig({
+          otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', headers: { Authorization: reference } },
+        } as never, PIPELINE_DIR);
+
+        expect(result).toMatchObject({ enabled: false });
+        const error = (result as { error?: string }).error ?? '';
+        expect(error).toContain('Authorization');
+        expect(error).toMatch(requirement);
       }
     });
 
@@ -418,7 +477,7 @@ describe('resolveOtelConfig', () => {
     });
 
     it.each([
-      ['a literal credential', { Authorization: 'literal-credential' }, /Authorization.*literal credential/i],
+      ['a literal credential', { Authorization: 'literal-credential' }, /Authorization.*literal credential.*\{ command:/i],
       ['an unknown reference key', { Authorization: { env: 'OTEL_TEST_AUTHORIZATION', secret: true } }, /Authorization.*\{ env:/i],
       ['an absent reference key', { Authorization: {} }, /Authorization.*\{ env:/i],
       ['a non-string environment variable name', { Authorization: { env: 42 } }, /Authorization.*\{ env:/i],
@@ -473,6 +532,39 @@ describe('resolveOtelConfig', () => {
       }
     });
 
+    it('rejects command headers with grpc and file exporter naming the header', () => {
+      for (const otel of [
+        { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: { Authorization: { command: ['security'] } } },
+        { exporter: 'file', headers: { Authorization: { command: ['security'] } } },
+      ]) {
+        const result = resolveOtelConfig({ otel } as never, PIPELINE_DIR);
+
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error).toContain('Authorization');
+      }
+    });
+
+    it('retains the sibling unset-env error and does not run the command', () => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      try {
+        delete process.env.OTEL_TEST_AUTHORIZATION;
+        const result = resolveOtelConfig({
+          otel: {
+            exporter: 'otlp', endpoint: 'http://localhost:4318', headers: {
+              Authorization: { env: 'OTEL_TEST_AUTHORIZATION' },
+              'X-Command': { command: ['security'] },
+            },
+          },
+        } as never, PIPELINE_DIR);
+
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error).toContain('OTEL_TEST_AUTHORIZATION');
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
     it.each([
       ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: headerConfig.otel.headers }],
       ['file exporter', { exporter: 'file', headers: headerConfig.otel.headers }],
@@ -517,6 +609,23 @@ describe('resolveOtelConfig', () => {
       } finally {
         if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
         else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
+    it('never includes a configured command sentinel in Story 2 header errors', () => {
+      const sentinel = 'SENTINEL-VALUE';
+      const cases = [
+        { Authorization: { command: ['credential', sentinel], prefix: 1 } },
+        { Authorization: { command: ['credential', sentinel], cache_seconds: 0 } },
+        { Authorization: { command: ['credential', sentinel], extra: true } },
+      ];
+
+      for (const headers of cases) {
+        const result = resolveOtelConfig({ otel: {
+          exporter: 'otlp', endpoint: 'http://localhost:4318', headers,
+        } as never }, PIPELINE_DIR);
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error ?? '').not.toContain(sentinel);
       }
     });
   });

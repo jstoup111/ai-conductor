@@ -167,6 +167,10 @@ jobs:
         working-directory: src/conductor
       - run: npm run lint
         working-directory: src/conductor
+        env:
+          # Type-aware ESLint loads the complete source-and-test TypeScript
+          # project, which exceeds Node's default ~4 GiB V8 heap in CI.
+          NODE_OPTIONS: --max-old-space-size=5632
       # Each plugins/<name>/ is its own TypeScript tree with its own
       # eslint.config.mjs sharing the engine's rules; lint it with the engine's
       # ESLint install (#1992). A plugin without a config fails here by design.

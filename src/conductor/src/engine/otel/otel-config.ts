@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import type { HarnessConfig } from '../../types/config.js';
+import { parseCredentialReference, type CredentialReference } from '../credentials/credential-reference.js';
 
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
 const VALID_OTLP_PROTOCOLS = ['http/protobuf', 'grpc'] as const;
@@ -15,6 +16,8 @@ export interface ResolvedOtelProvenance {
   issue: boolean;
   feature: boolean;
 }
+
+type ResolvedOtelHeaderReference = CredentialReference;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false;
@@ -126,7 +129,7 @@ export type ResolvedOtelConfig =
       spoolWarnings?: string[];
       headers?: Record<string, string>;
       /** Validated references retained so the drainer resolves credentials at send time. */
-      headerReferences?: Record<string, { env: string }>;
+      headerReferences?: Record<string, ResolvedOtelHeaderReference>;
       projectName?: string;
       workerName?: string;
       attributes?: Record<string, string>;
@@ -199,7 +202,7 @@ export function resolveOtelConfig(
     if (headers !== undefined && !isPlainObject(headers)) {
       return {
         enabled: false,
-        error: 'otel headers must be a mapping from header names to { env: <variable name> } references.',
+        error: 'otel headers must be a mapping from header names to credential references.',
       };
     }
     const maxBytes = spool?.max_bytes ?? DEFAULT_SPOOL_MAX_BYTES;
@@ -227,7 +230,7 @@ export function resolveOtelConfig(
     }
 
     const resolvedHeaders: Record<string, string> = Object.create(null);
-    const headerReferences: Record<string, { env: string }> = Object.create(null);
+    const headerReferences: Record<string, ResolvedOtelHeaderReference> = Object.create(null);
     if (headers && hasHeaderEntries(headers)) {
       for (const [header, reference] of Object.entries(headers)) {
         const headerName = renderedHeaderName(header);
@@ -236,6 +239,7 @@ export function resolveOtelConfig(
         // malformed. Parse the reference before validating the name so the
         // variable is available to name here; the value itself is still never
         // read on this path.
+        const parsedReference = parseCredentialReference(reference);
         const environmentVariable = isPlainObject(reference) && typeof reference.env === 'string'
           ? reference.env
           : undefined;
@@ -251,24 +255,28 @@ export function resolveOtelConfig(
         if (typeof reference === 'string') {
           return {
             enabled: false,
-            error: `otel header ${headerName} refuses a literal credential in configuration; use { env: <variable name> }.`,
+            error: `otel header ${headerName} refuses a literal credential in configuration; use { env: <variable name> } or { command: [...] }.`,
           };
         }
-        if (!isPlainObject(reference) || Object.keys(reference).length !== 1 || !('env' in reference) || environmentVariable === undefined || environmentVariable === '') {
+        if (!parsedReference.ok) {
           return {
             enabled: false,
-            error: `otel header ${headerName}${environmentVariable ? ` references environment variable '${environmentVariable}',` : ''} must use the supported reference form { env: <variable name> }.`,
+            error: `otel header ${headerName}${environmentVariable ? ` references environment variable '${environmentVariable}',` : ''} is invalid: ${parsedReference.error} Use { env: <variable name> } or { command: [...] }.`,
           };
         }
-        const value = process.env[environmentVariable];
+        if (parsedReference.reference.kind === 'command') {
+          headerReferences[header] = parsedReference.reference;
+          continue;
+        }
+        const value = process.env[parsedReference.reference.variable];
         if (!value) {
           return {
             enabled: false,
-            error: `otel header ${headerName} references environment variable '${environmentVariable}', which is unset or empty.`,
+            error: `otel header ${headerName} references environment variable '${parsedReference.reference.variable}', which is unset or empty.`,
           };
         }
         resolvedHeaders[header] = value;
-        headerReferences[header] = { env: environmentVariable };
+        headerReferences[header] = parsedReference.reference;
       }
     }
 
@@ -279,7 +287,7 @@ export function resolveOtelConfig(
       spool: { enabled: spoolIsInactiveForGrpc ? false : spool?.enabled ?? true, maxBytes },
       ...(spoolIsInactiveForGrpc ? { spoolWarnings: ['otel spool is inactive for grpc protocol; use protocol: http/protobuf to enable it.'] } : {}),
       ...(protocol ? { protocol } : {}),
-      ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
+      ...(Object.keys(resolvedHeaders).length > 0 ? { headers: resolvedHeaders } : {}),
       ...(hasHeaderEntries(headers) ? { headerReferences } : {}),
       ...(projectName ? { projectName } : {}),
       ...(workerName ? { workerName } : {}),
