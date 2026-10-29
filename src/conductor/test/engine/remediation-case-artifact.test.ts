@@ -184,18 +184,29 @@ describe('remediation case artifact', () => {
     });
   });
 
-  it.each([
-    ['an unknown kind', { kind: 'maybe', reason: 'the repair left a narrower gap' }],
-    ['an empty reason', { kind: 'residual-gap', reason: '' }],
-    ['an over-bound reason', { kind: 'residual-gap', reason: 'r'.repeat(8_001) }],
-    ['an extra key', { kind: 'residual-gap', reason: 'the repair left a narrower gap', note: 'unexpected' }],
-  ])('rejects reRaise with %s as a malformed case row', async (_name, reRaise) => {
+  async function expectMalformedReRaise(reRaise: unknown) {
     const judgement = {
       ...CASE_V1,
       cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
     };
 
     await expect(read(judgement)).resolves.toEqual({ ok: false, reason: 'invalid-case-keys' });
+  }
+
+  it('rejects reRaise with an unknown kind as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'maybe', reason: 'the repair left a narrower gap' });
+  });
+
+  it('rejects reRaise with an empty reason as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'residual-gap', reason: '' });
+  });
+
+  it('rejects reRaise with an 8,001 character reason as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'residual-gap', reason: 'r'.repeat(8_001) });
+  });
+
+  it('rejects reRaise with an extra note as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'residual-gap', reason: 'the repair left a narrower gap', note: 'unexpected' });
   });
 
   it.each([
