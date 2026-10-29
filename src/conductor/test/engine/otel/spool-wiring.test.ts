@@ -1,4 +1,4 @@
-// Covers: task:15, task:19
+// Covers: task:7, task:10, task:15, task:19
 import { execFile as execFileCallback } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
