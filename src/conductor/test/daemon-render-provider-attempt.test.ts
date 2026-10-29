@@ -112,7 +112,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
     ],
     [
       { phase: 'exhausted', attemptId: 'attempt-4', recoveryCount: 1, reason: 'preparation-timeout-exhausted' },
-      '· ✋ build provider halted (attempt attempt-4, recovery 1 — preparation-timeout-exhausted)',
+      '·   ✋ build provider halted (attempt attempt-4, recovery 1 — preparation-timeout-exhausted)',
     ],
   ] as const)('renders lifecycle diagnostics for %s', (lifecycle, expected) => {
     expect(lines({

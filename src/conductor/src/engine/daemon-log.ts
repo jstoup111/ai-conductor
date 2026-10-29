@@ -16,6 +16,7 @@ import { mkdir, stat, rename, readFile, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { daemonDir } from './daemon-lock.js';
+import { composeDaemonLineBodies } from './daemon-line-shape.js';
 
 const DAEMON_LOG_NAME = 'daemon.log';
 const ROTATED_LOG_NAME = 'daemon.log.1';
@@ -102,8 +103,8 @@ export function createDaemonModeLogger(sinks: {
     // Subprocess output is commonly a single captured string containing many
     // lines. Attribute and persist each physical line independently: otherwise
     // only the first one receives the daemon/feature prefix and timestamp.
-    const lines = msg.split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
+    const lines = featureOwned ? msg.split(/\r?\n/) : composeDaemonLineBodies(msg, 0);
+    if (featureOwned && lines.at(-1) === '') lines.pop();
     for (const lineMessage of lines) {
       writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
     }
@@ -167,9 +168,9 @@ export function createFeatureDaemonLogger(
   featureTag = formatDaemonFeatureTag(featureSlug),
 ): (message: string) => void {
   return (message) => {
-    const lines = message.split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
-    for (const line of lines) baseLog(`${featureTag} ${line}`, true);
+    for (const body of composeDaemonLineBodies(message, 0)) {
+      baseLog(`${featureTag} ${body}`, true);
+    }
   };
 }
 

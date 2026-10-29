@@ -109,7 +109,9 @@ import {
   formatSessionOccurrence,
   renderedEventTypes,
   renderedSessionOccurrenceTypes,
+  type RenderedEventType,
 } from './engine/event-sinks.js';
+import { composeDaemonLineBodies, DAEMON_EVENT_DEPTH } from './engine/daemon-line-shape.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from './engine/github-operations.js';
 import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
@@ -1457,7 +1459,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const teeConsoleLine = (level: string, args: unknown[]): void => {
     try {
       const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
-      logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, stripAnsi(line))));
+      for (const body of composeDaemonLineBodies(stripAnsi(line), 0)) {
+        logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, body)));
+      }
     } catch {
       // Best-effort: the tee must never disrupt the warning path itself.
     }
@@ -3548,7 +3552,9 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // (e.g. from a future event kind whose formatter assumes a field that
   // isn't there) degrades to a dropped line, not a process crash.
   try {
-    renderDaemonEventUnsafe(event, log);
+    renderDaemonEventUnsafe(event, (message) => {
+      for (const body of composeDaemonLineBodies(message, DAEMON_EVENT_DEPTH[event.type as RenderedEventType])) log(body);
+    });
   } catch {
     // Best-effort: rendering a daemon.log line must never disrupt the run.
   }
@@ -3571,7 +3577,10 @@ function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): st
 }
 
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
-  const dot = chalk.dim('·');
+  // Depth and its marker belong to renderDaemonEvent.  Keeping this empty
+  // lets the legacy arm strings retain their content while the composer
+  // removes their former leading spacing.
+  const dot = '';
   switch (event.type) {
     case 'executor_protocol_mismatch':
       log(`${dot} executor ${event.slug} protocol mismatch: ${event.reason}${event.restartRequested ? ' (restart requested)' : ''}`);
