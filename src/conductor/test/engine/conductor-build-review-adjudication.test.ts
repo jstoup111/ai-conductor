@@ -826,28 +826,41 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(halt).not.toContain('processErrorCode=E2BIG');
   });
 
-  // Covers: task:8 — parse failure must precede every durable remediation write.
+  // Covers: task:8, task:rem-prd-audit-8
+  // Parse failure must precede every durable remediation write.
   it.each([
     { kind: 'maybe', reason: 'A bounded reason.' },
     { kind: 'residual-gap', reason: '' },
     { kind: 'residual-gap', reason: 'x'.repeat(8_001) },
     { kind: 'residual-gap', reason: 'A bounded reason.', note: 'unexpected' },
   ])('halts malformed reRaise judgement without changing durable remediation state: %o', async (reRaise) => {
+    let caseStoreBytes = '';
+    const ledgerBytes = '{"version":1,"gates":{}}';
+    const baseJudgement = actionJudgement() as {
+      readonly [key: string]: unknown;
+      readonly cases: readonly [Record<string, unknown>];
+    };
     const run = await fixture({
       judgement: {
-        ...actionJudgement(),
-        cases: [{ ...actionJudgement().cases[0]!, reRaise }],
+        ...baseJudgement,
+        cases: [{ ...baseJudgement.cases[0], reRaise }],
       },
       seedPipeline: async (root) => {
-        await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify({ version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' }, cases: [] }), 'utf8');
-        await writeFile(join(root, '.pipeline/kickback-ledger.json'), '{"version":1,"gates":{}}', 'utf8');
+        // These are deliberately inert bytes: malformed parsing must halt before
+        // any durable remediation reader or writer can normalize them.
+        caseStoreBytes = JSON.stringify({ version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' }, cases: [] });
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), caseStoreBytes, 'utf8');
+        await writeFile(join(root, '.pipeline/kickback-ledger.json'), ledgerBytes, 'utf8');
       },
     });
-    const paths = ['remediation-cases.json', 'kickback-ledger.json'];
-    const bytes = await Promise.all(paths.map((path) => readFile(join(run.projectRoot, '.pipeline', path), 'utf8')));
 
     expect(await run.haltMarker()).toContain('remediate judgement failed: invalid-case-keys');
-    await expect(Promise.all(paths.map((path) => readFile(join(run.projectRoot, '.pipeline', path), 'utf8')))).resolves.toEqual(bytes);
+    await expect(Promise.all([
+      readFile(join(run.projectRoot, '.pipeline/remediation-cases.json'), 'utf8'),
+      readFile(join(run.projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'),
+    ])).resolves.toEqual([caseStoreBytes, ledgerBytes]);
+    // A missing pre-lap work order is durable state too: parsing must not
+    // materialize one while rejecting the malformed declaration.
     await expect(readFile(join(run.projectRoot, '.pipeline/build-review-work-order.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
