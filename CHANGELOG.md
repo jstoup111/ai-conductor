@@ -214,6 +214,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked feature runs continue after successful restacks instead of halting on stale state. ([implementation PR #3515](https://github.com/jstoup111/ai-conductor/pull/3515)).
 - Build review now routes narrower residual repair gaps back to BUILD and clearly halts declared repeat repairs as regressions. ([implementation PR #3527](https://github.com/jstoup111/ai-conductor/pull/3527)).
 - Operators receive accurate routed-round growth-cap diagnostics and recovery guidance. ([implementation PR #3524](https://github.com/jstoup111/ai-conductor/pull/3524)).
+- Routed repair rounds now drain correctly and halt safely when reconciliation cannot advance. ([implementation PR #3521](https://github.com/jstoup111/ai-conductor/pull/3521)).
 
 ## Migration
 
