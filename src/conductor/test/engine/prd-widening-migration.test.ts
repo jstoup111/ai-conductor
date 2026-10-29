@@ -207,7 +207,7 @@ describe('legacy PRD widening decision migration', () => {
       { criterion: 'NC.4', originalSource: { snapshot: 'A reviewer found a visible workflow outside the original PRD.' }, revision: 2 },
     ] } });
     const caseState = await new RemediationCaseStore(projectRoot, CASE_FEATURE).read();
-    expect(caseState).toMatchObject({ ok: true, state: { version: 'v3', prdWideningCases: [
+    expect(caseState).toMatchObject({ ok: true, state: { version: 'v4', prdWideningCases: [
       { originalSources: [{ snapshot: 'The endpoint needs a documented response shape.' }] },
       { originalSources: [{ snapshot: 'A reviewer found a visible workflow outside the original PRD.' }] },
     ] } });

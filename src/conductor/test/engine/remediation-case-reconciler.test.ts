@@ -301,11 +301,12 @@ describe('remediation case reconciler', () => {
       // Nothing prior was absent, so no unreferenced case transitioned.
       resolvedAbsentCaseIds: [],
       state: {
-        version: 'v3',
+        version: 'v4',
         feature: FEATURE,
         suppressions: [],
         outbox: [],
         prdWideningCases: [],
+        asBuiltCases: [],
         cases: [{
           id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high',
           rationale: ACTION_CASE.rationale, confidence: 'high', resolution: 'open',

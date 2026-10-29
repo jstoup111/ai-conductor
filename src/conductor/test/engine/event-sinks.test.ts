@@ -387,6 +387,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
   'remediation_case_refuted',
   'prd_widening_reconciled',
+  'as_built_finding_reconciled',
   'build_review_scope_summary',
   'build_review_review_scope',
   'build_review_scope_incomplete',
