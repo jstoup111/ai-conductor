@@ -61,6 +61,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex dispatches automatically use the newest available model in each configured capability tier. ([implementation PR #3512](https://github.com/jstoup111/ai-conductor/pull/3512)).
 - Stacked feature operators gain tier-aware restack cascade allowances and cascade status reporting. ([implementation PR #3523](https://github.com/jstoup111/ai-conductor/pull/3523)).
 - Configure OTLP header credentials from a command when environment variables are not suitable. ([implementation PR #3531](https://github.com/jstoup111/ai-conductor/pull/3531)).
+- Operators can identify committed plans with unresolved Stories references through a read-only daemon diagnostic. ([implementation PR #3534](https://github.com/jstoup111/ai-conductor/pull/3534)).
 
 ### Changed
 
