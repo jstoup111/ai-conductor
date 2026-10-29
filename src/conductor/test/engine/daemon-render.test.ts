@@ -89,7 +89,8 @@ describe('renderDaemonEvent', () => {
       '· ✗ build failed (try 2): boom',
     ]);
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom\nat frame', retryCount: 2 })).toEqual([
-      '· ✗ build failed (try 2): boom\nat frame',
+      '· ✗ build failed (try 2): boom',
+      '· │ at frame',
     ]);
     expect(lines({
       type: 'step_refused',
@@ -154,8 +155,8 @@ describe('renderDaemonEvent', () => {
         { rubric: 'testQuality', findingId: 'sha256:two', confidence: 40, floor: 50 },
       ],
     })).toEqual([
-      '· build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
-      '· build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
+      '·   build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
+      '·   build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
       '·   build_review [lap-current] outer verdict: PASS (raw: FAIL)',
     ]);
   });
@@ -268,25 +269,25 @@ describe('renderDaemonEvent', () => {
   it('renders kickback with the ×N counter', () => {
     expect(
       lines({ type: 'kickback', from: 'build', to: 'plan', evidence: 'AC missing', count: 1 }),
-    ).toEqual(['↩ KICKBACK: build re-opened plan — AC missing (×1)']);
+    ).toEqual(['· ↩ KICKBACK: build re-opened plan — AC missing (×1)']);
   });
 
   it('renders kickback with a ×N counter greater than one', () => {
     expect(
       lines({ type: 'kickback', from: 'build', to: 'plan', evidence: 'AC missing', count: 2 }),
-    ).toEqual(['↩ KICKBACK: build re-opened plan — AC missing (×2)']);
+    ).toEqual(['· ↩ KICKBACK: build re-opened plan — AC missing (×2)']);
   });
 
   it('renders kickback without a dangling separator when evidence is missing', () => {
     expect(
       lines({ type: 'kickback', from: 'build', to: 'plan', evidence: undefined, count: 1 }),
-    ).toEqual(['↩ KICKBACK: build re-opened plan (×1)']);
+    ).toEqual(['· ↩ KICKBACK: build re-opened plan (×1)']);
   });
 
   it('renders navigation_back as an operator BACK line', () => {
     expect(
       lines({ type: 'navigation_back', from: 'manual_test', to: 'build' }),
-    ).toEqual(['↰ BACK: manual_test → build (operator)']);
+    ).toEqual(['· ↰ BACK: manual_test → build (operator)']);
   });
 
   it('renders an operator rewind with its target and demoted steps', () => {
@@ -295,7 +296,7 @@ describe('renderDaemonEvent', () => {
       operator: 'james',
       target: 'build',
       demoted: ['build', 'test_suite', 'build_review'],
-    })).toEqual(['↶ REWIND: build (operator; demoted build, test_suite, build_review)']);
+    })).toEqual(['· ↶ REWIND: build (operator; demoted build, test_suite, build_review)']);
   });
 
   it.each([
@@ -365,7 +366,7 @@ describe('renderDaemonEvent', () => {
   it('renders closed FINISH publication progress and dispositions without raw evidence', () => {
     expect(lines({
       type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record',
-    } as ConductorEvent)).toEqual(['· ▶ FINISH publication: write_shipped_record']);
+    } as ConductorEvent)).toEqual(['·   ▶ FINISH publication: write_shipped_record']);
     expect(lines({
       type: 'finish_publication_blocked', condition: 'release_readiness_missing',
     } as ConductorEvent)).toEqual(['· ✋ FINISH publication blocked: release_readiness_missing']);
@@ -632,7 +633,7 @@ describe('renderDaemonEvent coloring', () => {
     });
     expect(line).toMatch(ANSI);
     // eslint-disable-next-line no-control-regex
-    expect(line.replace(/\[[0-9;]*m/g, '')).toBe('↩ KICKBACK: build re-opened plan — AC missing (×1)');
+    expect(line.replace(/\[[0-9;]*m/g, '')).toBe('· ↩ KICKBACK: build re-opened plan — AC missing (×1)');
   });
 
   it('emits ANSI color for navigation_back lines with text preserved underneath', () => {
@@ -640,7 +641,7 @@ describe('renderDaemonEvent coloring', () => {
     const [line] = lines({ type: 'navigation_back', from: 'manual_test', to: 'build' });
     expect(line).toMatch(ANSI);
     // eslint-disable-next-line no-control-regex
-    expect(line.replace(/\x1b\[[0-9;]*m/g, '')).toBe('↰ BACK: manual_test → build (operator)');
+    expect(line.replace(/\x1b\[[0-9;]*m/g, '')).toBe('· ↰ BACK: manual_test → build (operator)');
   });
 });
 

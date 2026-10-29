@@ -272,6 +272,11 @@ export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
 
+/** Event types which have a daemon renderer declared by the canonical sink registry. */
+export type RenderedEventType = {
+  [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['render'] extends true ? Type : never;
+}[keyof typeof EVENT_SINKS];
+
 export type OtelTracedEventType = {
   [Type in OtelEventType]: (typeof EVENT_SINKS)[Type] extends { readonly otelTrace: false }
     ? never : Type;

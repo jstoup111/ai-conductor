@@ -1,10 +1,17 @@
-// Covers: task:1
-import { describe, expect, it } from 'vitest';
+// Covers: task:1, task:2
+import { describe, expect, it, vi } from 'vitest';
+import chalk from 'chalk';
 import {
   createDaemonModeLogger,
   createFeatureDaemonLogger,
   formatDaemonLogLine,
 } from '../../src/engine/daemon-log.js';
+import { DAEMON_EVENT_DEPTH } from '../../src/engine/daemon-line-shape.js';
+import { attachFeatureEventRenderer, renderDaemonEvent } from '../../src/daemon-cli.js';
+import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+
+vi.mock('execa', () => ({ execa: vi.fn() }));
 
 const at = new Date('2026-10-29T00:00:00.000Z');
 
@@ -71,5 +78,46 @@ describe('daemon logger line shape', () => {
     expect(persisted).toEqual([
       '2026-10-29T00:00:00.000Z [daemon][feature-a] ▶ start feature-a',
     ]);
+  });
+
+  it('applies the declared depth through the real event emitter and both logger instances', async () => {
+    chalk.level = 0;
+    expect(new Set(Object.keys(DAEMON_EVENT_DEPTH))).toEqual(new Set(renderedEventTypes()));
+
+    const event = {
+      type: 'halt_record_push_failed' as const,
+      path: '.pipeline/halt-record.md',
+      reason: 'first rejection\n ! [rejected] HEAD -> feat/x\nthird diagnostic',
+    };
+    const one = buildLoggers();
+    const two = buildLoggers();
+    const events = new ConductorEventEmitter();
+    const detach = attachFeatureEventRenderer(events, createFeatureDaemonLogger('feature-a', one.baseLog));
+    await events.emit(event);
+    detach();
+    renderDaemonEvent(event, createFeatureDaemonLogger('feature-a', two.baseLog));
+
+    const first = one.persisted.map((line) => line.replace(/^.*? \[daemon\]\[feature-a\] /, ''));
+    const second = two.persisted.map((line) => line.replace(/^.*? \[daemon\]\[feature-a\] /, ''));
+    expect(first).toEqual(second);
+    expect(first).toEqual([
+      '· ⚠ halt record push failed: .pipeline/halt-record.md — first rejection',
+      '· │  ! [rejected] HEAD -> feat/x',
+      '· │ third diagnostic',
+    ]);
+  });
+
+  it('uses one depth for provider lifecycle and every outer-review line', () => {
+    chalk.level = 0;
+    const output: string[] = [];
+    renderDaemonEvent({ type: 'provider_attempt', step: 'build', provider: 'codex', outcome: 'success', invoked: false,
+      lifecycle: { phase: 'preparing', attemptId: 'one', recoveryCount: 0 } }, (line) => output.push(line));
+    renderDaemonEvent({ type: 'provider_attempt', step: 'build', provider: 'codex', outcome: 'success', invoked: false,
+      lifecycle: { phase: 'exhausted', attemptId: 'two', recoveryCount: 1 } }, (line) => output.push(line));
+    renderDaemonEvent({ type: 'build_review_outer_verdict', lapId: 'lap', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
+      suppressedFindings: [{ rubric: 'testQuality', findingId: 'one', confidence: 1, floor: 2 }],
+      advisoryFindings: [{ rubric: 'security', findingId: 'two', severity: 'minor', threshold: 'major' }] }, (line) => output.push(line));
+    expect(output).toHaveLength(5);
+    expect(output.every((line) => line.startsWith('·   '))).toBe(true);
   });
 });
