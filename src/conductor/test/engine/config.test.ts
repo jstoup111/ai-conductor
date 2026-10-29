@@ -3298,6 +3298,64 @@ steps:
     });
   });
 
+  describe('stacked_prs.max_restack_cascades', () => {
+    it.each([5, {}, { L: 10 }])('accepts an integer or S/M/L map %#', (max_restack_cascades) => {
+      expect(validateConfig({ stacked_prs: { max_restack_cascades } })).toMatchObject({
+        ok: true,
+        config: { stacked_prs: { max_restack_cascades } },
+      });
+    });
+
+    it.each([
+      [
+        'zero',
+        'stacked_prs:\n  max_restack_cascades: 0\n',
+        'stacked_prs.max_restack_cascades must be a positive integer or a map of S, M, L to positive integers',
+      ],
+      [
+        'a numeric string without coercion',
+        'stacked_prs:\n  max_restack_cascades: "8"\n',
+        'stacked_prs.max_restack_cascades must be a positive integer or a map of S, M, L to positive integers',
+      ],
+      [
+        'an unknown tier',
+        'stacked_prs:\n  max_restack_cascades:\n    XL: 9\n',
+        'stacked_prs.max_restack_cascades.XL is an unknown tier',
+      ],
+      [
+        'a fractional tier allowance',
+        'stacked_prs:\n  max_restack_cascades:\n    L: 7.5\n',
+        'stacked_prs.max_restack_cascades.L must be a positive integer',
+      ],
+    ])('rejects %s through config loading', async (_name, yaml, message) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
+      });
+    });
+
+    it('does not materialize a cascade cap with the other stacked PR defaults', () => {
+      const result = validateConfig({ stacked_prs: { enabled: true, max_slices: 5 } });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          stacked_prs: {
+            enabled: true,
+            max_slices: 5,
+            route_whole_feature_fixes: true,
+          },
+        },
+      });
+      if (!result.ok) return;
+      expect(result.config.stacked_prs).not.toHaveProperty('max_restack_cascades');
+    });
+  });
+
   describe('build_review config field', () => {
     it('resolves per-rubric min_severity for built-in and custom rubrics without defaulting it', () => {
       const resolved = resolveBuildReviewConfig({

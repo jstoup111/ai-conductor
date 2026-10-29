@@ -43,6 +43,7 @@ import {
   cascadeUpdateLines,
   checkCascadeCap,
 } from './cascade-cap.js';
+import { formatCascadeAllowance, resolveCascadeAllowanceForWorktree } from './cascade-allowance.js';
 import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
@@ -564,7 +565,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
 
     if (options.cause === 'feature-repair') {
-      const cap = await checkCascadeCap(options.worktree, options.slug, originating, { git });
+      const allowance = await resolveCascadeAllowanceForWorktree(options.worktree);
+      const cap = await checkCascadeCap(options.worktree, options.slug, originating, allowance.limit, { git });
       if (cap.kind === 'exhausted') {
         const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
           consumed: cap.count,
@@ -573,9 +575,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           allowance: 'restacks',
         }, active.child);
         const rendered = renderKickbackBudgetView(entry, 'restack', cap.limit, undefined, undefined, active.child);
+        const capDetail = cap.detail ??
+          `originating child ${cap.child} reached ${cap.count}/${cap.limit} cascades — ${formatCascadeAllowance(allowance)}` +
+          `${cap.raised ? `; raised to ${cap.limit}` : ''}`;
         await haltRestack(options.worktree, 'cascade-cap', options.events, {
           child: cap.child,
-          detail: `${cap.detail ?? `originating child ${cap.child} reached ${cap.count}/${cap.limit} cascades`}` +
+          detail: capDetail +
             `${options.routed === undefined ? '' : '\nRunbook: Routed repair halted on the cascade cap'}` +
             `\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
         });

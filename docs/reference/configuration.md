@@ -1499,6 +1499,7 @@ to the owning child, carries them up the stack, and re-validates the closed chil
 | `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
 | `stacked_prs.max_slices` | integer | Integer from 1 through 9, else hard error; a value above 5 loads with a review-size warning | `1` |
 | `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `true` |
+| `stacked_prs.max_restack_cascades` | integer or tier map | Positive integer, or an object with only `S`, `M`, `L` keys and positive-integer values, else hard error | Tier default: `S` 3, `M` 3, `L` 8 |
 
 `stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
 block is present, an omitted `enabled` resolves to `false` and an omitted `max_slices` resolves to
@@ -1740,7 +1741,11 @@ rebase resolver within the rebase resolution attempt budget; an unresolved confl
 `restack refused (<reason>)`. Gate verdicts invalidated by the moved history are re-judged; a
 feature repair's invalidation earns no `build_review` refund.
 
-Each originating child may cause at most 3 applied feature repairs. The next repair halts
+Each originating child may cause a bounded number of applied feature repairs. The allowance is
+`stacked_prs.max_restack_cascades` when it is an integer; for a tier map, the entry for the
+feature's complexity tier; otherwise the tier default (`S` 3, `M` 3, `L` 8). A tier missing from the
+map uses its default, and a feature with no recorded tier is treated as `M`. A child's raised limit
+takes precedence over the allowance. The repair after the limit halts
 `needs-human` with `restack refused (cascade-cap)`; recover with
 [`kickback-budget --gate restack`](cli.md#ai-conductor-kickback-budget). Restack refs are listed in
 [branch naming](artifacts.md#worktree-and-branch-names); recovery is in

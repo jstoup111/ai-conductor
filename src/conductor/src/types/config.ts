@@ -848,6 +848,8 @@ export interface StackedPrsConfig {
   enabled?: boolean;
   /** Maximum number of stacked plan slices. Default: 1 when configured. */
   max_slices?: number;
+  /** Optional cap on feature-repair restack cascades, globally or by complexity tier. */
+  max_restack_cascades?: number | Partial<Record<'S' | 'M' | 'L', number>>;
   /** Opt in to routed whole-feature remediation; absent remains dark. */
   route_whole_feature_fixes?: boolean;
 }

@@ -96,7 +96,7 @@ ai-conductor kickback-budget inspect --feature <slug> --child <k>
 
 ```text
 restack refused (cascade-cap) child 1
-originating child 1 reached 3/3 cascades
+originating child 1 reached 3/3 cascades — tier M allowance 3 (default)
 Runbook: Routed repair halted on the cascade cap
 Child: 2
 Kickback budget (restack): 3/3 consumed; 0 remaining
@@ -106,11 +106,13 @@ Kickback halt generation: <generation>
 
 **Diagnosis.** Two child ids appear. `restack refused (cascade-cap) child <origin>` names the
 **originating** child whose cascades ran out. `Child: <active>` names the **active** child, which
-is where the ledger evidence is recorded. Inspect the active child to see the exhausted budget:
+is where the ledger evidence is recorded. The detail line names the resolved
+[allowance](../reference/configuration.md#restack) and ends `; raised to <n>` when the child's limit
+was already raised. Inspect the active child to see the exhausted budget:
 
 ```bash
-ai-conductor kickback-budget inspect --feature <slug> --child <active>   # shows restack 3/3
-ai-conductor kickback-budget inspect --feature <slug> --child <origin>   # may show 0/3
+ai-conductor kickback-budget inspect --feature <slug> --child <active>   # shows restack 3/3 and the cascade summary
+ai-conductor kickback-budget inspect --feature <slug> --child <origin>   # its own restack gate may show 0/3
 ```
 
 **Recovery.**

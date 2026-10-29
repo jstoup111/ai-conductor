@@ -1,6 +1,7 @@
 // Covers: task:rem-prd-audit-R20
 // Covers: task:8, task:9, task:11, task:27, task:28, task:31.2, task:33
 // Covers: task:1, task:2, task:3, task:4
+// Covers: task:7
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -183,6 +184,7 @@ describe('kickback-budget inspect --child', () => {
     child: string | undefined,
     format: 'human' | 'json' = 'human',
   ): Promise<{ code: number; output: string }> {
+    if (child !== undefined) await execFileP('git', ['init', '-q'], { cwd: fixture.root });
     const lines: string[] = [];
     const code = await dispatchKickbackBudgetCommand(
       {
@@ -205,6 +207,22 @@ describe('kickback-budget inspect --child', () => {
     return fixture;
   }
 
+  async function writeCascadeFixture(
+    fixture: { root: string; worktree: string },
+    counts: unknown,
+    tier: 'L' | undefined,
+  ): Promise<void> {
+    await execFileP('git', ['init', '-q'], { cwd: fixture.root });
+    await mkdir(join(fixture.root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(fixture.root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n');
+    if (tier !== undefined) {
+      await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: tier }));
+    }
+    const git = makeGitRunner(fixture.worktree);
+    const written = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(counts) });
+    await git(['update-ref', 'refs/conductor/feature/cascades', written.stdout.trim()]);
+  }
+
   it.each(['0', '10', 'two'])('rejects invalid child %s before reconciliation or ledger reads', async (child) => {
     const fixture = await makeFeature('{corrupt');
     try {
@@ -223,6 +241,77 @@ describe('kickback-budget inspect --child', () => {
         code: 1, output: 'kickback-budget: child 3 has no child state.',
       });
       expect(await readFile(flat)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('renders all originating-child cascades and the tier allowance in human and JSON views', async () => {
+    const fixture = await makeChildFeature(childLedger);
+    try {
+      await writeCascadeFixture(fixture, { version: 1, counts: { 1: 4, 2: 3 } }, 'L');
+
+      const human = await inspect(fixture, '2');
+      expect(human.code).toBe(0);
+      expect(human.output).toContain('Restack cascades — tier L allowance 8 (default)\nchild 1: 4/8 consumed; 4 remaining\nchild 2: 3/8 consumed; 5 remaining');
+
+      const json = await inspect(fixture, '2', 'json');
+      expect(json.code).toBe(0);
+      expect(JSON.parse(json.output).restackCascades).toEqual({
+        tier: 'L', allowance: 8, source: 'default',
+        children: [
+          { child: 1, consumed: 4, limit: 8, remaining: 4, raised: false },
+          { child: 2, consumed: 3, limit: 8, remaining: 5, raised: false },
+        ],
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('renders raised, absent, and unrecorded cascade state', async () => {
+    const fixture = await makeChildFeature(childLedger);
+    try {
+      await writeCascadeFixture(fixture, { version: 1, counts: { 2: 3 }, limits: { 2: 10 } }, 'L');
+      expect((await inspect(fixture, '2')).output).toContain('child 2: 3/10 consumed; 7 remaining (raised)');
+
+      const absent = await makeChildFeature(childLedger);
+      try {
+        await execFileP('git', ['init', '-q'], { cwd: absent.root });
+        await mkdir(join(absent.root, '.ai-conductor'), { recursive: true });
+        await writeFile(join(absent.root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n');
+        await writeFile(join(absent.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: 'L' }));
+        expect((await inspect(absent, '2')).output).toContain('Restack cascades — tier L allowance 8 (default)\nnone charged');
+      } finally { await rm(absent.root, { recursive: true, force: true }); }
+
+      const unrecorded = await makeChildFeature(childLedger);
+      try {
+        await writeCascadeFixture(unrecorded, { version: 1, counts: {} }, undefined);
+        const human = await inspect(unrecorded, '2');
+        expect(human.output).toContain('Restack cascades — tier unrecorded, treated as M; allowance 3 (default)');
+        expect(JSON.parse((await inspect(unrecorded, '2', 'json')).output).restackCascades.tier).toBeNull();
+      } finally { await rm(unrecorded.root, { recursive: true, force: true }); }
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('reports malformed cascade state without hiding other budget blocks', async () => {
+    const fixture = await makeChildFeature(childLedger);
+    try {
+      await writeCascadeFixture(fixture, { malformed: true }, 'L');
+      const result = await inspect(fixture, '2');
+      expect(result.code).toBe(1);
+      expect(result.output).toContain('Kickback budget (build_review):');
+      expect(result.output).toMatch(/Restack cascades: unavailable \(refs\/conductor\/feature\/cascades contains malformed cascade counts\)/);
+      const json = await inspect(fixture, '2', 'json');
+      expect(json.code).toBe(1);
+      expect(JSON.parse(json.output).restackCascades).toEqual({ unavailable: 'refs/conductor/feature/cascades contains malformed cascade counts' });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('leaves non-stacked inspect output unchanged', async () => {
+    const fixture = await makeFeature({ version: 1, gates: { build_review: baseEntry } });
+    try {
+      const human = await inspect(fixture, undefined);
+      expect(human.code).toBe(0);
+      expect(human.output).not.toContain('Restack cascades');
+      const json = JSON.parse((await inspect(fixture, undefined, 'json')).output);
+      expect(json).not.toHaveProperty('restackCascades');
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 

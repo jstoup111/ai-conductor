@@ -6,7 +6,6 @@ import { childBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import { ConductorEventEmitter } from '../conductor-event-emitter.js';
-import { checkCascadeCap } from './cascade-cap.js';
 import { defaultTip, runRestack } from './restack-executor.js';
 import type { RestackResolver } from './restack-resolver.js';
 import { emitRestackRefused } from './restack-events.js';
@@ -298,12 +297,6 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   // routing must never silently replay it into a routed feature repair.
   if (marker?.kind === 'absent' && config.ok && routingEligible(cursor, config.config)) {
     return { kind: 'halted', detail: unlandedClosedChildCommitsHalt(options.slug, cursor.repairChildren).trimEnd() };
-  }
-
-  // Check every origin before creating a journal. runRestack repeats the
-  // check with the active child's configured allowance and owns cap evidence.
-  for (const child of cursor.repairChildren) {
-    await checkCascadeCap(options.worktree, options.slug, [child], { git: options.git });
   }
 
   // A re-kick asks for a base refresh, but when the default is already inside

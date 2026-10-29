@@ -40,6 +40,8 @@ import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { type ChildId } from './child-context.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
+import { readCascadeCounts } from './restack/cascade-cap.js';
+import { renderCascadeSummary, resolveCascadeAllowanceForWorktree } from './restack/cascade-allowance.js';
 import {
   readDaemonTimeline,
   type DaemonExitRecord,
@@ -782,6 +784,22 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         `  PLAN GROWTH [${feature.slug}${childStatus}]: unavailable (` +
         `${error instanceof Error ? error.message : String(error)})`,
       );
+    }
+    if (activeChild) {
+      try {
+        const cascades = await readCascadeCounts(featureRoot, feature.slug);
+        if (cascades.kind === 'unreadable') {
+          out(`  RESTACK CASCADES [${feature.slug}]: unavailable (${cascades.detail})`);
+        } else {
+          const allowance = await resolveCascadeAllowanceForWorktree(featureRoot);
+          out(`  RESTACK CASCADES [${feature.slug}]: ${renderCascadeSummary(cascades.counts, allowance).statusFragment}`);
+        }
+      } catch (error) {
+        out(
+          `  RESTACK CASCADES [${feature.slug}]: unavailable (` +
+          `${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
     }
     const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
     const state = await readState(join(featureRoot, '.pipeline', 'conduct-state.json'));

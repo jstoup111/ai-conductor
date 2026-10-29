@@ -243,7 +243,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
       else await subject.git(['update-ref', cascadesRefFor('demo'), await subject.git(['rev-parse', 'HEAD'])]);
       await subject.repair(1, `${corrupt}.txt`);
 
-      await expect(checkCascadeCap(subject.repo, 'demo', [child(1)])).resolves.toMatchObject({ kind: 'exhausted', child: 1 });
+      await expect(checkCascadeCap(subject.repo, 'demo', [child(1)], 3)).resolves.toMatchObject({ kind: 'exhausted', child: 1 });
       await expect(repairOnce(subject.repo)).resolves.toEqual({ kind: 'halted' });
       await expect(subject.git(['rev-parse', '--verify', JOURNAL_REF])).rejects.toBeDefined();
       expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
