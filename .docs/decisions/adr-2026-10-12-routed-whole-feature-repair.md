@@ -238,6 +238,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
 
    > **Amended 2026-10-26 by #3445:** The `restacked` and `done` recovery rows hold on every path that settles a host, not only the in-loop exit. The resume preflight's exit of a `built` host now reconciles before it returns, and navigates to whatever the record selects next. Previously it returned `repaired`, and resume continued on the plain stack cursor with no marker. The round's next host was then never admitted, and a later audit opened a second round while this one was still open. That happened in `build-review-re-raises-already-decided-findings-ev` rounds r1→r2, r2→r3, r3→r4 and r4→r5. The `closed` row gains a continuation: closing one round while another stays open does not hand control to the plain cursor. Reconciliation continues to the next non-closed round in the same call (decision 7).
 
+   > **Amended 2026-10-29 by #3459:** The `closed` row gains one operator writer. `ai-conductor stack rounds --close <rN> --reason <text>` supersedes an `open` `audit` round that has no `admitted`, `repairing`, `built`, `reroute-moved`, `abandoning` or `abandoned` host and no in-progress reroute, and that the marker does not name, while at least one other round stays non-closed. In one compare-and-swap it writes each `pending` host `done` and the round `closed`. `done` is used, not `abandoned`, because reconciliation treats `abandoned` on a non-operator round as unavailable. The surviving round's own exit performs the leaf return, so closing never skips whole-feature re-validation. The sole non-closed round, and any `revalidate` or `operator` round, is never closed this way: a revalidate round's queue entry was consumed at admission, and an operator round has its own abandon. Settled receipt charges stay in the ledger. Unsettled charges were never applied.
+
 7. **Admission is marker-first, and reconciliation runs after journal recovery.**
    - **Order:**
      - the route record is created in phase `prepared`;
@@ -274,6 +276,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    > - **No progress is a bounded mechanical stop.** When reconciliation can make no progress, the preflight stops through #3446's stop path with a `mechanical` HALT whose first line names every non-closed round. This happens when a compare-and-swap is contested, or when two rounds each need the marker and neither can be advanced. The daemon re-kicks a mechanical HALT on its own. After 3 consecutive identical stops with no intervening routing progress, the HALT is written `needs-human` instead.
 
    > **Amended 2026-10-28 by #3455:** The gate loop never ends silently because routed parking left nothing runnable. When selection finds no runnable gate while a marker or a non-empty re-validation queue parks the loop (parking kind `child`, `leaf-host` or `queue`), or when completion is refused because routed work is outstanding, the run records the stop through the same bounded stall as reconciliation (#3445's `routing_rounds_stalled`). It writes a HALT whose first line names the executing or queued round, the parking kind and the reason. Attempts 1 and 2 are `mechanical`, and the daemon's re-kick lets the next preflight admit, resume or exit the round. The third consecutive identical stall with no intervening routing progress is written `needs-human`. The daemon no longer records "loop ended without DONE or HALT marker" for this path.
+
+   > **Amended 2026-10-29 by #3459:** The decision 6 supersession is an operator CLI writer, as #3203's operator round is. It runs under the feature dispatch lease with an approved operator identity, and its refusal predicate runs before the lease and before any write. A read-only `ai-conductor stack rounds --slug <slug>` lists every round, the marker and receipt settlement state, writing nothing. Neither command reconciles, admits, or clears a HALT. The next dispatch's reconciliation continues from the surviving round.
 
 8. **The cursor gains fields, not kinds, and one execution-child resolver serves every consumer.**
    - **Cursor.** After the `no-child` return, `resolveActiveChild` reads the marker and the queue.
@@ -563,6 +567,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       `eventId`.
     - The refs are durable snapshots, never a second telemetry channel. Every consumer reads the
       spine.
+
+    > **Amended 2026-10-29 by #3459:** A new member, `routing_round_superseded {roundId, child, supersededBy, droppedHosts, findingIds, reason, operator}`, records an operator supersession (decision 6). It is written to the superseded round's outbox in the same compare-and-swap that closes the round. It is drained like the others, and joins the canonical persister's dedup by `eventId`.
 
 17. **N=1 parity is structural and proven by the golden suite.**
     - With `no-child`, none of these is read or written:

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "operator-command-to-inspect-and-recover-wedged-rou",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-29-operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/operator-command-to-inspect-and-recover-wedged-rou.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/operator-command-to-inspect-and-recover-wedged-rou.md"
+    }
+  ]
+}
