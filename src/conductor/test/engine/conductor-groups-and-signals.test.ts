@@ -6828,4 +6828,120 @@ describe('engine/conductor', () => {
       expect(failedEvents.length).toBe(0);
     });
   });
+
+  describe('prior as-built case projection faults (Task 14)', () => {
+    const FEATURE = 'prior-case-projection-fault';
+
+    async function seedSerialAsBuiltRoute(): Promise<void> {
+      await rm(join(dir, '.pipeline'), { recursive: true, force: true });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), [
+        '### Task 1: Existing task',
+        '',
+        'Done when: the existing task is complete.',
+        '',
+        '### Task rem-as-built-t1: Prior as-built repair',
+        '',
+        'Done when: the prior repair is complete.',
+      ].join('\n'));
+      await writeState(statePath, {
+        ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+        feature_desc: FEATURE,
+        complexity_tier: 'M',
+        architecture_review_as_built: 'pending',
+      } as ConductState);
+    }
+
+    async function writeCaseStore(repairTaskIds: readonly string[] = ['rem-as-built-t1']): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+        version: 'v4',
+        feature: { version: 'v1', repository: 'fixture/conductor', feature: FEATURE },
+        cases: [], prdWideningCases: [], suppressions: [], outbox: [],
+        asBuiltCases: [{
+          id: 'as-built-case-1', domain: 'as_built', status: 'open', recurrenceCount: 0,
+          repairTaskIds,
+          sources: [{
+            findingId: 'as-built:prior:1', attemptId: 'prior', class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '1' }, summary: 'Prior repair context.',
+            relation: 'new', reason: 'First observation.',
+          }],
+        }],
+      }), 'utf8');
+    }
+
+    async function runBlockedAsBuilt(
+      configure?: () => Promise<void>,
+      remediationProjectionLimitOverrides?: { priorAsBuiltCasesBytes: number },
+    ): Promise<{ remediateRequests: StepRunOptions[]; halt: string; haltClass: string }> {
+      await seedSerialAsBuiltRoute();
+      await configure?.();
+      const remediateRequests: StepRunOptions[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+          } else if (step === 'remediate' && options !== undefined) {
+            remediateRequests.push(options);
+          }
+          return { success: true };
+        }),
+      };
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'architecture_review_as_built',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        remediationProjectionLimitOverrides,
+      }).run();
+      return {
+        remediateRequests,
+        halt: await readFile(join(dir, '.pipeline', 'HALT'), 'utf8'),
+        haltClass: await readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8'),
+      };
+    }
+
+    it('dispatches an empty prior-case list, but halts needs-human before dispatch for every prior-case preparation fault', async () => {
+      const empty = await runBlockedAsBuilt();
+      expect(empty.remediateRequests).toHaveLength(1);
+      expect(empty.remediateRequests[0]?.remediationRequest).toMatchObject({
+        mode: 'gap-plan', projection: { priorAsBuiltCases: [] },
+      });
+
+      const oversize = await runBlockedAsBuilt(
+        () => writeCaseStore(),
+        { priorAsBuiltCasesBytes: 1 },
+      );
+      expect(oversize.remediateRequests).toEqual([]);
+      expect(oversize.haltClass).toBe('needs-human');
+      expect(oversize.halt).toMatch(/prior-as-built-cases.*actual \d+, limit 1/);
+
+      const undeclaredRepair = await runBlockedAsBuilt(
+        () => writeCaseStore(['rem-as-built-missing']),
+      );
+      expect(undeclaredRepair.remediateRequests).toEqual([]);
+      expect(undeclaredRepair.haltClass).toBe('needs-human');
+      expect(undeclaredRepair.halt).toContain('rem-as-built-missing');
+
+      const unreadable = await runBlockedAsBuilt(async () => {
+        await mkdir(join(dir, '.pipeline', 'remediation-cases.json'), { recursive: true });
+      });
+      expect(unreadable.remediateRequests).toEqual([]);
+      expect(unreadable.haltClass).toBe('needs-human');
+      expect(unreadable.halt).toMatch(/remediation case store is unreadable/);
+
+      const malformed = await runBlockedAsBuilt(async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), '{ not json', 'utf8');
+      });
+      expect(malformed.remediateRequests).toEqual([]);
+      expect(malformed.haltClass).toBe('needs-human');
+      expect(malformed.halt).toMatch(/remediation case store is unreadable/);
+    });
+  });
 });

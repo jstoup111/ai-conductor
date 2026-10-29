@@ -401,7 +401,7 @@ export interface RemediationCaseStoreV2State {
 }
 
 type RemediationCaseOutboxEvent = Extract<ConductorEvent, {
-  type: 'build_review_acceptance_carried' | 'remediation_case_operator_resolved' | 'remediation_case_reconciled';
+  type: 'build_review_acceptance_carried' | 'remediation_case_operator_resolved' | 'remediation_case_reconciled' | 'as_built_finding_reconciled';
 }>;
 
 /** Durable event handoff paired atomically with version-three case state. */
@@ -942,6 +942,20 @@ function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefine
       lapId: value.lapId,
       caseId: value.caseId,
       resolution: value.resolution,
+    };
+  }
+  if (value.type === 'as_built_finding_reconciled' &&
+    exactKeys(value, value.priorCaseId === undefined
+      ? ['type', 'eventId', 'findingId', 'caseId', 'attemptId', 'outcome', 'reason']
+      : ['type', 'eventId', 'findingId', 'caseId', 'attemptId', 'outcome', 'priorCaseId', 'reason']) &&
+    boundedString(value.findingId, MAX_REFERENCE_LENGTH) && boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.attemptId, MAX_REFERENCE_LENGTH) && boundedString(value.reason) &&
+    oneOf(value.outcome, ['same', 'recurrence', 'materially-changed', 'new', 'needs-human'] as const) &&
+    (value.priorCaseId === undefined || boundedString(value.priorCaseId, MAX_REFERENCE_LENGTH))) {
+    return {
+      type: value.type, eventId: value.eventId, findingId: value.findingId, caseId: value.caseId,
+      attemptId: value.attemptId, outcome: value.outcome,
+      ...(value.priorCaseId === undefined ? {} : { priorCaseId: value.priorCaseId }), reason: value.reason,
     };
   }
   return undefined;

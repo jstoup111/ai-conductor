@@ -1006,6 +1006,17 @@ type ConductorEventBody =
       boundCaseId?: string;
     }
   | {
+      /** One as-built finding was durably reconciled with its case history. */
+      type: 'as_built_finding_reconciled';
+      eventId: string;
+      findingId: string;
+      caseId: string;
+      attemptId: string;
+      outcome: 'same' | 'recurrence' | 'materially-changed' | 'new' | 'needs-human';
+      priorCaseId?: string;
+      reason: string;
+    }
+  | {
       /** One attempted remediation case was refuted against the current lap. */
       type: 'remediation_case_refuted';
       domain: 'build_review';
