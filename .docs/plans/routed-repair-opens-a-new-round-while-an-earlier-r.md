@@ -386,3 +386,21 @@ Task 3 ──► Task 5 ──► Task 6 ──► Task 9
 **Done when:**
 - adr-2026-10-12-routed-whole-feature-repair decision 13 is satisfied by this task.
 - The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-S1.8: stack-preflight.ts resume-exit: route exit-halted from an unreadable restacked route record through recordRoundStall (or a haltClass 'mechanical' detail naming the round id) instead of needs-human; add task 8 test for the unreadable reread after restack
+**Gate:** prd-audit
+**Rationale:** Verified (95%, read stack-preflight.ts:269): the resume-exit branch maps exitRoutedHostAndReconcile's `exit-halted` to `{kind:'halted', detail}` with no haltClass, so line 464 writes `needs-human`, and the detail names only the host. Task 8's done-when needs an unreadable reread of the restacked route record to stop with HALT.class `mechanical`, with a first line that names the unreadable round. The approved architecture already covers this; the code does not conform. It is BUILD work under task 8 and needs no architecture or product decision. Fix: when the exit continuation halts because the route record is unreadable (a reread after restack, or a failed drain), reconcile to the stalled round set and send it through recordRoundStall, as the failed-drain path at stack-preflight.ts:233-241 already does. If that reconcile is not `stalled`, return `haltClass:'mechanical'` with a detail that names the round id. Keep refused or rolled-back exit restacks on their existing stop semantics, which task 8's last done-when covers. Add the task 8 test: after restack the reread fails, no host is admitted, no route record is created, and HALT.class is `mechanical` with a first line that names the round.
+**Criterion:** S1.8
+**Parent task:** 8
+**Done when:**
+- [test] S1.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-S1.8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-S1.9: stack-preflight.ts: never reach the pre-exit receiptCursor feature-repair path after routed reconciliation yields deferred/busy with an open round (stop instead); round-admission.ts reconcileRounds checks all open rounds before returning deferred; add task 6 test for the deferred+busy fence
+**Gate:** prd-audit
+**Rationale:** Verified (90%, read stack-preflight.ts:279-322 and round-admission.ts:316-353): when reconciled is `deferred` (another open round still has a pending host) and consumeLowestQueued returns `busy`, preflight falls through to the plain-cursor path through the pre-exit receiptCursor. That path can run a feature-repair restack and return `repaired`. This breaks task 6's done-when, which says preflight never returns `repaired` while a round holds a `pending` host. Earlier remediation rem-as-built-R1 guarded only `leaf-returned`; this is the same defect class on its `deferred`/`busy` sibling. Approved architecture (ADR D13) already requires every exit caller to consume the returned next step, so this is conforming BUILD work under task 6. Fix: once the routed block has run (a resume-exit continuation, or any non-terminal reconcile with open rounds), never fall through to the receiptCursor/feature-repair path. When the result is deferred or busy with an open round, return a stop (`unavailable` or a mechanical halt naming the blocking round), not a restack. Also make reconcileRounds scan every open round before it returns `deferred`, so a later round's actionable state is not hidden. Keep the existing leaf-returned terminal fast path. Add the task 6 test: two open rounds, the second holds a pending child host, so the queue fence returns busy, and runStackPreflight does not return `repaired` or run a restack.
+**Criterion:** S1.9
+**Parent task:** 6
+**Done when:**
+- [test] S1.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-S1.9 is committed and its targeted tests pass.
