@@ -2,7 +2,7 @@ import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
 // Covers: task:10, task:19
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
@@ -95,6 +95,33 @@ describe.each(['pi', 'codex'] as const)('provider fallback from %s', (firstProvi
     });
     expect(first.invoke).toHaveBeenCalledOnce();
     expect(claude.invoke).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Pi classified failures hold the provider walk', () => {
+  const environment = {
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
+    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+  };
+
+  it.each([
+    ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', 'authFailure'],
+    ['pi-1.0.0-e6-rate-limit.jsonl', 'rateLimited'],
+  ] as const)('does not advance to Claude after %s', async (fixture, recovery) => {
+    const stdout = await readFile(new URL(`../fixtures/pi/${fixture}`, import.meta.url), 'utf8');
+    const spawn = vi.fn(async () => ({ stdout, stderr: '', exitCode: 0 }));
+    const pi = new PiProvider(dispatchGitGuard, 'pi', spawn as never, environment);
+    const claude = fakeProvider({ success: true, output: 'must not run', exitCode: 0 });
+
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['pi', 'claude'], preferredProvider: ['pi', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'Build.', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ actualProvider: 'pi', [recovery]: true });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(claude.invoke).not.toHaveBeenCalled();
   });
 });
 

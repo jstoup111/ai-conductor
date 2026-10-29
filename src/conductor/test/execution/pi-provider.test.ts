@@ -1109,6 +1109,7 @@ describe('PiProvider captured failure classification', () => {
   const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment());
   const invoke = () => provider.invoke(invokeOptions);
   const errorStream = (message: string) => JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: '', stopReason: 'error', errorMessage: message } });
+  const textStream = (text: string) => JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: text, stopReason: 'stop' } });
 
   beforeEach(() => vi.clearAllMocks());
 
@@ -1118,14 +1119,77 @@ describe('PiProvider captured failure classification', () => {
     ['pi-1.0.0-e7-usage-exhausted.jsonl', { rateLimited: true, usageExhausted: true, waitSeconds: 3600 }],
   ])('classifies terminal %s safely', async (name, expected) => {
     spawn.mockResolvedValue({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
-    await expect(invoke()).resolves.toMatchObject({ success: false, ...expected });
+    const result = await invoke();
+    expect(result).toMatchObject({ success: false, ...expected });
+    if (name !== 'pi-1.0.0-e7-usage-exhausted.jsonl') {
+      for (const property of ['usageExhausted', 'authFailure', 'modelUnavailable', 'waitSeconds']) expect(result).not.toHaveProperty(property);
+    }
+  });
+
+  it('uses a sanitized rate-limit result and classifies only terminal error stops', async () => {
+    spawn.mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e9-server-error.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('upstream said 429: busy'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: textStream('HTTP 429: rate limit reached'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: textStream('completed after earlier errors'), stderr: '', exitCode: 0 } as ExecaResult);
+    const rateLimited = await invoke();
+    expect(rateLimited.output).toBe('Pi request was rate-limited by its upstream provider.');
+    for (const forbidden of ['Rate limit reached for requests', 'rate_limit_exceeded', '{"message"']) expect(rateLimited.output).not.toContain(forbidden);
+    for (const result of [await invoke(), await invoke()]) {
+      expect(result).not.toHaveProperty('rateLimited');
+      expect(result).not.toHaveProperty('usageExhausted');
+      expect(result).not.toHaveProperty('authFailure');
+    }
+    for (const result of [await invoke(), await invoke()]) {
+      expect(result).toMatchObject({ success: true });
+      expect(result).not.toHaveProperty('rateLimited');
+    }
+  });
+
+  it('requires an anchored 429 and quota vocabulary for usage exhaustion', async () => {
+    spawn.mockResolvedValueOnce({ stdout: errorStream('429: Monthly usage limit reached'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('500: insufficient_quota'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('402: Insufficient Balance'), stderr: '', exitCode: 0 } as ExecaResult);
+    const exhausted = await invoke();
+    expect(exhausted).toMatchObject({ usageExhausted: true, rateLimited: true, waitSeconds: 3600, output: 'Pi upstream provider usage is exhausted.' });
+    for (const forbidden of ['insufficient_quota', 'billing details']) expect(exhausted.output).not.toContain(forbidden);
+    for (const result of [await invoke(), await invoke()]) {
+      expect(result).not.toHaveProperty('usageExhausted');
+      expect(result).not.toHaveProperty('rateLimited');
+    }
   });
 
   it('classifies Pi authentication from stderr and an error stop', async () => {
-    spawn.mockResolvedValueOnce({ stdout: '', stderr: await readFixture('pi-1.0.0-e1-no-api-key.stderr.txt'), exitCode: 1 } as ExecaResult)
+    const stderr = await readFixture('pi-1.0.0-e1-no-api-key.stderr.txt');
+    spawn.mockResolvedValueOnce({ stdout: '', stderr, exitCode: 1 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: '', stderr: `Warning: Model "x" not found for provider "deepseek". Using custom model id.\n${stderr}`, exitCode: 1 } as ExecaResult)
       .mockResolvedValueOnce({ stdout: errorStream('No API key for provider: cline'), stderr: '', exitCode: 0 } as ExecaResult);
-    await expect(invoke()).resolves.toMatchObject({ authFailure: true, authentication: { provider: 'pi', state: 'missing' } });
-    await expect(invoke()).resolves.toMatchObject({ authFailure: true, authentication: { provider: 'pi', state: 'missing' } });
+    const expected = { provider: 'pi', source: 'cached-login', state: 'missing' };
+    for (const result of [await invoke(), await invoke(), await invoke()]) {
+      expect(result.authFailure).toBe(true);
+      expect(result.authentication).toEqual(expected);
+    }
+  });
+
+  it('classifies each captured rejected credential without leaking its diagnostic', async () => {
+    const authFixtures = ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', 'pi-1.0.0-e3-invalid-key-openrouter.jsonl', 'pi-1.0.0-e4-invalid-key-anthropic.jsonl', 'pi-1.0.0-e5-oauth-refresh-failed.jsonl'];
+    for (const name of authFixtures) spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
+    spawn.mockResolvedValueOnce({ stdout: '', stderr: 'Authentication failed for "anthropic". Credentials may have expired', exitCode: 1 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: textStream('401: Unauthorized'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('403: Forbidden'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Error: Model "nonexistent-model-xyz" not found. Use --list-models to see available models.', exitCode: 1 } as ExecaResult);
+    const results = await Promise.all(authFixtures.map(() => invoke()));
+    for (const result of results) expect(result).toMatchObject({ authFailure: true, authentication: { provider: 'pi', source: 'cached-login', state: 'unusable' } });
+    expect(results[0]?.output).toBe('Pi authentication failed: the upstream provider credential is missing or was rejected.');
+    for (const forbidden of ['****0000', 'request_id', 'Authentication Fails', '{"message"', 'invalid_grant', 'platform.claude.com', 'stack=']) expect(results.flatMap((result) => [result.output]).join('\n')).not.toContain(forbidden);
+    expect(await invoke()).toMatchObject({ authFailure: true, authentication: { state: 'unusable' } });
+    for (const result of [await invoke(), await invoke()]) {
+      expect(result).toMatchObject({ success: result.output === '401: Unauthorized' });
+      expect(result).not.toHaveProperty('authFailure');
+    }
+    const unavailable = await invoke();
+    expect(unavailable).toMatchObject({ modelUnavailable: true });
+    expect(unavailable).not.toHaveProperty('authFailure');
   });
 
   it('leaves unanchored failures ordinary', async () => {
@@ -1133,6 +1197,19 @@ describe('PiProvider captured failure classification', () => {
     const result = await invoke();
     expect(result).not.toHaveProperty('rateLimited');
     expect(result).not.toHaveProperty('authFailure');
+  });
+
+  it('keeps unmatched stderr and warning-prefixed error stops as ordinary failures', async () => {
+    spawn.mockResolvedValueOnce({ stdout: '', stderr: 'boom: tool crashed', exitCode: 1 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: await readFixture('error-stop-live-capture.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('Warning: 429 retries scheduled'), stderr: '', exitCode: 0 } as ExecaResult);
+    const crashed = await invoke();
+    expect(crashed.exitFacts).toBeDefined();
+    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable']) expect(crashed).not.toHaveProperty(property);
+    const captured = await invoke();
+    expect(captured).toMatchObject({ success: false, output: 'Free tier request failed.' });
+    expect(captured).not.toHaveProperty('authFailure');
+    expect((await invoke())).not.toHaveProperty('rateLimited');
   });
 });
 
@@ -1238,6 +1315,15 @@ describe('PiProvider native output schema', () => {
     expect(args).not.toContain('-e');
     expect(args.join(' ')).not.toContain('submit_result');
     expect(materializeExtension).not.toHaveBeenCalled();
+  });
+
+  it('reports a terminal E6 rate limit before checking for a structured result', async () => {
+    spawn.mockResolvedValue({ stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'), stderr: '', exitCode: 0 } as ExecaResult);
+
+    const result = await schemaInvoke();
+
+    expect(result).toMatchObject({ success: false, rateLimited: true });
+    expect(result.output).not.toContain('missing structured result');
   });
 
   // Covers: task:8
