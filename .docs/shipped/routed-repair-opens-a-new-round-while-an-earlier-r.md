@@ -4,6 +4,13 @@ spec_hash: bfa1dda1d700f04e1e3d50c5569d32ad7e41cef615114092937dcd0214dc2180
 pr: https://github.com/jstoup111/ai-conductor/pull/3521
 shipped: 2026-10-29
 engine_version: 20261029T135834Z-54bb2b838304
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "No story, plan task or remediation task covers ClaudeProvider tests; the change is unrelated to routed-round admission and drain. It weakens environment isolation in an unrelated test and adds no feature behavior."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
