@@ -472,6 +472,7 @@ describe('stack preflight routing', () => {
     };
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    let routesAfterAppliedExit: string | undefined;
     persister.start();
     try {
       await expect(runStackPreflight({
@@ -484,6 +485,7 @@ describe('stack preflight routing', () => {
         exitRoutedHostAndReconcile: async () => {
           await subject.git(['update-ref', routeRecordRefFor('demo', unreadableRoundId), await writeGitBlob(subject, '{not-json')]);
           await subject.git(['update-ref', '-d', repairMarkerRefFor('demo')]);
+          routesAfterAppliedExit = await conductorRefSnapshot(subject.repo);
           return { kind: 'exit-halted' as const, detail: `routed exit host ${exitedHost}: cannot reread restacked route record`, unreadableRoundId };
         },
       })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
@@ -495,6 +497,7 @@ describe('stack preflight routing', () => {
       await expect(readRouteRecord(subject.repo, 'demo', earlierRoundId)).resolves.toMatchObject({
         kind: 'record', record: { hosts: { [exitedHost]: 'restacked', [pendingHost]: 'pending' } },
       });
+      expect(await conductorRefSnapshot(subject.repo)).toBe(routesAfterAppliedExit);
       // The r3 marker transaction would first hash this exact marker payload.
       // Diagnosis after r4's unreadable exit must not start that admission.
       expect(calls).not.toContainEqual(expect.objectContaining({
