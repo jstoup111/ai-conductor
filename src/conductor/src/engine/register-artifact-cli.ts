@@ -1,6 +1,8 @@
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { writeSync } from 'node:fs';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import {
   ARTIFACT_KINDS,
   MANIFEST_KIND_LOCATIONS,
@@ -10,6 +12,7 @@ import {
   type ArtifactKind,
   type DocsPath,
 } from './feature-manifest.js';
+import { commitEngineChange } from './guarded-engine-commit.js';
 
 export interface RegisterArtifactDispatch {
   readonly slug: string;
@@ -31,6 +34,49 @@ export interface RegistrationValidationDependencies {
 export interface RegisterArtifactCommandDependencies extends RegistrationValidationDependencies {
   cwd?: string;
   err?: (line: string) => void;
+}
+
+async function isRegistrationCommit(
+  worktree: string,
+  currentHead: string,
+  originalHead: string,
+  pathspec: readonly string[],
+  registrationMarker: string,
+): Promise<boolean> {
+  const parent = await execa('git', ['rev-parse', `${currentHead}^`], { cwd: worktree });
+  if (parent.stdout.trim() !== originalHead) return false;
+
+  const changed = await execa('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', currentHead], { cwd: worktree });
+  if (changed.stdout.trim().split('\n').filter(Boolean).sort().join('\0') !== [...pathspec].sort().join('\0')) return false;
+
+  const message = await execa('git', ['show', '-s', '--format=%B', currentHead], { cwd: worktree });
+  return message.stdout.split('\n').includes(registrationMarker);
+}
+
+async function restoreFailedRegistration(
+  worktree: string,
+  originalHead: string,
+  originalManifest: string,
+  manifestPath: string,
+  pathspec: readonly string[],
+  registrationMarker: string,
+): Promise<void> {
+  let restorationError: unknown;
+  try {
+    const currentHead = await execa('git', ['rev-parse', '--verify', 'HEAD'], { cwd: worktree });
+    if (currentHead.stdout.trim() !== originalHead) {
+      if (!await isRegistrationCommit(worktree, currentHead.stdout.trim(), originalHead, pathspec, registrationMarker)) {
+        throw new Error('could not safely roll back an unexpected HEAD change');
+      }
+      await execa('git', ['update-ref', 'HEAD', originalHead, currentHead.stdout.trim()], { cwd: worktree });
+      await execa('git', ['restore', '--staged', `--source=${originalHead}`, '--', ...pathspec], { cwd: worktree });
+    }
+  } catch (error) {
+    restorationError = error;
+  }
+
+  await writeFile(manifestPath, originalManifest, 'utf8');
+  if (restorationError !== undefined) throw restorationError;
 }
 
 function refusal(condition: string): RegistrationValidation {
@@ -113,7 +159,7 @@ export async function validateRegistration(
   };
 }
 
-/** Validate an operator registration request without mutating the worktree. */
+/** Validate, persist, and commit an operator registration request. */
 export async function dispatchRegisterArtifactCommand(
   command: RegisterArtifactDispatch,
   deps: RegisterArtifactCommandDependencies = {},
@@ -135,8 +181,52 @@ export async function dispatchRegisterArtifactCommand(
     readFile: deps.readFile,
     access: ensureAccessible,
   });
-  if (result.kind === 'rendered') return 0;
+  if (result.kind === 'refusal') {
+    err(`register-artifact: ${result.condition}.`);
+    return 1;
+  }
 
-  err(`register-artifact: ${result.condition}.`);
-  return 1;
+  const manifestPath = join(worktree, featureManifestPath(command.slug));
+  const pathspec = [command.path, featureManifestPath(command.slug)];
+  const registrationMarker = `Registration-Id: ${randomUUID()}`;
+  const readManifest = deps.readFile ?? readFile;
+  let originalManifest: string;
+  let originalHead: string | undefined;
+  try {
+    originalManifest = await readManifest(manifestPath, 'utf8');
+    originalHead = (await execa('git', ['rev-parse', '--verify', 'HEAD'], { cwd: worktree })).stdout.trim();
+    await writeFile(manifestPath, result.manifest, 'utf8');
+  } catch (error) {
+    err(`register-artifact: could not write manifest: ${error instanceof Error ? error.message : String(error)}.`);
+    return 1;
+  }
+  if (originalHead === undefined) {
+    err('register-artifact: could not resolve the current commit.');
+    return 1;
+  }
+
+  try {
+    const commit = await commitEngineChange({
+      worktree,
+      slug: command.slug,
+      pathspec,
+      message: `register artifact: ${command.slug}\n\n${registrationMarker}`,
+    });
+    if (commit.kind === 'written') return 0;
+
+    await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
+    err(`register-artifact: could not commit registration: ${commit.kind === 'noop' ? 'no changes staged' : commit.reason}.`);
+    return 1;
+  } catch (error) {
+    try {
+      if (originalHead !== undefined) {
+        await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
+      }
+    } catch {
+      // Preserve the original commit error; a restoration failure cannot make
+      // this command appear successful.
+    }
+    err(`register-artifact: could not commit registration: ${error instanceof Error ? error.message : String(error)}.`);
+    return 1;
+  }
 }
