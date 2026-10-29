@@ -6,6 +6,17 @@ nav_order: 2
 
 # `ai-conductor` CLI reference
 
+## `ai-conductor stack restack-resolve`
+
+```bash
+ai-conductor stack restack-resolve --slug <feature> --child <k> --tip <resolved-tip>
+```
+
+Records a scratch-branch resolution for a live `Restack-Conflict` HALT, emits the durable
+`restack_resolution` event, then clears that matching HALT. The command refuses a non-stacked
+feature, stale/mismatched conflict data, a resolution with unowned paths or merges, or a feature
+currently held by another dispatch lease.
+
 Every command, subcommand, flag, and exit code of the `ai-conductor` engine. Commands are grouped
 operator-first: the ones you type, then the ones the engine invokes on your behalf.
 

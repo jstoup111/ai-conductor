@@ -805,7 +805,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         if (error instanceof RemBlockBodyMismatchError) {
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, {
             commit: error.commit, paths: [error.path],
-          }, options.events, git, parent, 'conflict', `remediation block body mismatch: ${error.remId}`);
+          }, options.events, git, parent, 'conflict', `remediation block body mismatch: ${error.remId}`, await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`));
           terminal = true;
           return haltedResult(options.worktree);
         }

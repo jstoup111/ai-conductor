@@ -26,7 +26,8 @@ import {
   verifyRestackMove,
   type RestackMoveRef,
 } from './restack-move.js';
-import { replayChildRange } from './restack-replay.js';
+import { replayChildRange, RemBlockBodyMismatchError } from './restack-replay.js';
+import { consumeRecordedResolution } from './restack-conflict-record.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
@@ -409,6 +410,12 @@ type ResumePlannedResult =
     readonly paths: readonly string[];
   }
   | {
+    readonly kind: 'resolution-stale';
+    readonly journal: StoredRestackJournal;
+    readonly child: ChildRange['child'];
+    readonly field: 'record' | 'range' | 'parent-tree';
+  }
+  | {
     readonly kind: 'conflict-unresolved';
     readonly journal: StoredRestackJournal;
     readonly child: ChildRange['child'];
@@ -492,6 +499,26 @@ async function resumePlanned(
       parent = adopted;
       continue;
     }
+    if (current.journal.cause === 'feature-repair') {
+      const recorded = await consumeRecordedResolution({
+        slug: current.slug, range, parent, committer: current.journal.committer, git,
+        replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
+          replayRange, replayParent, replayCommitter, replayGit, { comparisonCommits: [] },
+        ),
+      });
+      if (recorded.kind === 'stale') return { kind: 'resolution-stale', journal: current, child: range.child, field: recorded.field };
+      if (recorded.kind === 'consumed') {
+        const ownership = await checkPathOwnership(range, parent, recorded.tip, git);
+        if (ownership.kind === 'refused') return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
+        const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'resolved', recorded.tip, recorded.rewrites, {
+          git, consumedResolution: recorded.resolution,
+        });
+        if (updated.kind !== 'updated') return { kind: 'unavailable' };
+        current = updated.journal;
+        parent = recorded.tip;
+        continue;
+      }
+    }
     let replay;
     try {
       replay = await replayChildRange(range, parent, current.journal.committer, git, {
@@ -499,6 +526,15 @@ async function resumePlanned(
         appendOnlyRemUnion: current.journal.routed !== undefined,
       });
     } catch (error) {
+      if (error instanceof RemBlockBodyMismatchError) {
+        const candidates = await runGit(git, ['rev-list', '--reverse', `${range.oldParent}..${range.oldTip}`]);
+        if (candidates?.exitCode !== 0) return { kind: 'unavailable' };
+        return {
+          kind: 'conflict-unresolved', journal: current, child: range.child, newParent: parent,
+          candidateSubjects: await replayCandidateSubjects(git, (candidates?.stdout ?? '').split('\n').filter(Boolean) as CommitSha[]),
+          commit: error.commit, paths: [error.path], detail: `remediation block body mismatch: ${error.remId}`,
+        };
+      }
       const conflict = await replayConflict(git, error);
       if (!conflict) throw error;
       const merge = await mergeInRange(git, range);
@@ -739,6 +775,16 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         await haltRestack(options.worktree, 'replay-mismatch', options.events, {
           child: resumed.child,
           detail: resumed.paths.join(', '),
+        });
+        return { kind: 'halted' };
+      }
+      if (resumed.kind === 'resolution-stale') {
+        journal = resumed.journal;
+        const aborted = await transition(options.worktree, journal, 'aborted', git);
+        if (!aborted) return { kind: 'unavailable', detail: 'cannot abort stale recovered restack resolution' };
+        await haltRestack(options.worktree, 'restack-resolution-stale', options.events, {
+          child: resumed.child,
+          detail: resumed.field,
         });
         return { kind: 'halted' };
       }
