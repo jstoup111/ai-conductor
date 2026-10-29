@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:11
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { conflictParentRefFor, conflictRecordRefFor, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import {
   createRestackJournal,
   journalRefFor,
@@ -131,6 +132,20 @@ async function journal(repo: string): Promise<StoredRestackJournal> {
   return found;
 }
 
+async function withConsumedResolution(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  const resolution = fixture.refs[2]!.oldSha;
+  const record = sha((await makeGitRunner(fixture.repo)(['hash-object', '-w', '--stdin'], { input: '{"resolution":true}' })).stdout.trim());
+  const parent = fixture.refs[1]!.oldSha;
+  await fixture.git(['update-ref', resolutionRefFor('demo', child(2)), resolution]);
+  await fixture.git(['update-ref', conflictRecordRefFor('demo'), record]);
+  await fixture.git(['update-ref', conflictParentRefFor('demo'), parent]);
+  const next = { ...fixture.stored.journal, consumedResolution: { child: child(2), tip: resolution, record, parent } };
+  const blob = await writeRestackJournalBlob(fixture.repo, next);
+  await fixture.git(['update-ref', journalRefFor('demo'), blob, fixture.stored.blob]);
+  const stored = await journal(fixture.repo);
+  return { ...fixture, stored, consumed: next.consumedResolution };
+}
+
 describe('journaled restack move (real local Git)', () => {
   it('moves branches, closure refs, and ready-to-moved journal state in one CAS transaction; any locked ref leaves all old', async () => {
     const fixture = await createFixture();
@@ -172,6 +187,35 @@ describe('journaled restack move (real local Git)', () => {
     expect((await journal(fixture.repo)).journal.state).toBe('aborted');
     expect(refused).toEqual([{ type: 'restack_refused', reason: 'stack-ref-changed', detail: 'refs/heads/feat/c2/demo' }]);
     await expect(fixture.git(['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: `${fixture.refs[0].oldSha}\n` });
+  });
+
+  it('atomically consumes the recorded-resolution refs, and a changed one halts without moving stack refs', async () => {
+    const appliedFixture = await withConsumedResolution(await createFixture());
+    const applied = await applyRestackMove(appliedFixture.repo, appliedFixture.stored, appliedFixture.moves);
+    expect(applied.kind).toBe('moved');
+    for (const refName of [
+      resolutionRefFor('demo', appliedFixture.consumed.child),
+      conflictRecordRefFor('demo'),
+      conflictParentRefFor('demo'),
+    ]) {
+      await expect(appliedFixture.git(['rev-parse', '-q', '--verify', refName])).rejects.toMatchObject({ code: 1 });
+    }
+
+    for (const [refName, oldValue] of [
+      [resolutionRefFor('demo', child(2)), 'tip'],
+      [conflictRecordRefFor('demo'), 'record'],
+      [conflictParentRefFor('demo'), 'parent'],
+    ] as const) {
+      const subject = await withConsumedResolution(await createFixture());
+      const expected = subject.consumed[oldValue];
+      await subject.git(['update-ref', refName, subject.newC1, expected]);
+      const result = await applyRestackMove(subject.repo, subject.stored, subject.moves);
+      expect(result).toMatchObject({ kind: 'refused', reason: 'stack-ref-changed', detail: refName });
+      expect((await journal(subject.repo)).journal.state).toBe('aborted');
+      for (const move of subject.moves) {
+        expect((await subject.git(['rev-parse', move.ref])).stdout.trim()).toBe(move.oldSha);
+      }
+    }
   });
 
   it('retries lock failures only within the bounded budget and applies once the lock is released', async () => {

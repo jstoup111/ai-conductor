@@ -21,6 +21,7 @@ import {
   type RestackOpId,
 } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
+import type { ConsumedConflictRefs } from './restack-conflict-record.js';
 
 export interface RestackJournalOwner {
   readonly host: string;
@@ -89,6 +90,8 @@ export interface RestackJournalDraft {
   readonly refs: readonly RestackJournalRef[];
   readonly ranges: readonly ChildRange[];
   readonly children: readonly RestackJournalChild[];
+  /** Exact conflict-state refs retired by the ready-to-moved transaction. */
+  readonly consumedResolution?: ConsumedConflictRefs;
 }
 
 /** Durable state stored as a blob behind the journal ref. */
@@ -239,6 +242,16 @@ function parseRewrites(value: unknown): readonly RestackJournalRewrite[] | undef
   return rewrites;
 }
 
+function parseConsumedResolution(value: unknown): ConsumedConflictRefs | undefined {
+  if (!isRecord(value) || typeof value.child !== 'number' || typeof value.tip !== 'string'
+    || typeof value.record !== 'string' || typeof value.parent !== 'string') return undefined;
+  const child = parseChildId(value.child);
+  const tip = parseCommitSha(value.tip);
+  const record = parseCommitSha(value.record);
+  const parent = parseCommitSha(value.parent);
+  return child && tip && record && parent ? { child, tip, record, parent } : undefined;
+}
+
 function parseRouted(value: unknown): RestackJournalRouted | undefined {
   if (!isRecord(value) || typeof value.roundId !== 'string' || typeof value.host !== 'number'
     || typeof value.routeOld !== 'string' || typeof value.markerOld !== 'string') return undefined;
@@ -304,6 +317,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
   const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
   const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
   const queueInvalidation = value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
+  const consumedResolution = value.consumedResolution === undefined ? undefined : parseConsumedResolution(value.consumedResolution);
   if (!cause || (value.followOnCause !== undefined && !followOnCause) || !journalStates.has(value.state as JournalState) || !owner || !committer
     || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children
     || (value.newDefault !== undefined && !newDefault)
@@ -314,7 +328,8 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     || (value.queueTracked !== undefined && value.queueTracked !== true)
     || (value.queueOld !== undefined && !queueOld)
     || (value.queueNew !== undefined && !queueNew)
-    || (value.queueInvalidation !== undefined && !queueInvalidation)) return undefined;
+    || (value.queueInvalidation !== undefined && !queueInvalidation)
+    || (value.consumedResolution !== undefined && !consumedResolution)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     cause,
@@ -329,6 +344,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(queueOld === undefined ? {} : { queueOld }),
     ...(queueNew === undefined ? {} : { queueNew }),
     ...(queueInvalidation === undefined ? {} : { queueInvalidation }),
+    ...(consumedResolution === undefined ? {} : { consumedResolution }),
     dirtyPaths: [...value.dirtyPaths],
     refs,
     ranges,
@@ -497,6 +513,7 @@ function childWithStatus(
   child: ChildId,
   status: ChildStatus,
   rewrites: ReadonlyMap<CommitSha, CommitSha>,
+  consumedResolution?: ConsumedConflictRefs,
 ): RestackJournal | undefined {
   if (journal.state !== 'planned') return undefined;
   let found = false;
@@ -506,7 +523,7 @@ function childWithStatus(
     found = true;
     return { ...entry, status, rewrites: [...rewrites].map(([from, to]) => ({ from, to })) };
   });
-  return found ? { ...journal, children } : undefined;
+  return found ? { ...journal, children, ...(consumedResolution === undefined ? {} : { consumedResolution }) } : undefined;
 }
 
 /** Atomically record a planned child's replay result and pin its staged commit. */
@@ -518,10 +535,10 @@ export async function updateRestackChildStatus(
   status: ChildStatus,
   tip: CommitSha,
   rewrites: ReadonlyMap<CommitSha, CommitSha>,
-  dependencies: RestackJournalDependencies = {},
+  dependencies: RestackJournalDependencies & { readonly consumedResolution?: ConsumedConflictRefs } = {},
 ): Promise<UpdateRestackChildStatusResult> {
   if (previous.slug !== slug) return { kind: 'unavailable', detail: 'journal slug does not match staging slug' };
-  const journal = childWithStatus(previous.journal, child, status, rewrites);
+  const journal = childWithStatus(previous.journal, child, status, rewrites, dependencies.consumedResolution);
   if (!journal) return { kind: 'unavailable', detail: 'invalid restack child-status transition' };
   const git = dependencies.git ?? makeGitRunner(worktree);
   const blob = await writeRestackJournalBlob(worktree, journal, { git });

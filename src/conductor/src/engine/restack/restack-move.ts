@@ -17,6 +17,7 @@ import {
   type StoredRestackJournal,
 } from './restack-journal.js';
 import { emitRestackRefused } from './restack-events.js';
+import { conflictDeleteLines } from './restack-conflict-record.js';
 import {
   parseCommitSha,
   type CommitSha,
@@ -209,6 +210,16 @@ function moveLines(moves: readonly RestackMoveRef[]): string[] {
   return moves.map((move) => `update ${move.ref} ${move.newSha} ${move.oldSha}`);
 }
 
+function consumedResolutionLines(journal: StoredRestackJournal): readonly string[] {
+  const consumed = journal.journal.consumedResolution;
+  if (!consumed) return [];
+  // update-ref forbids a separate verify and delete for one ref in the same
+  // prepared transaction. A delete with an old value is that ref's atomic
+  // verify-and-delete operation, so every consumed identity participates in
+  // the same CAS as the stack move.
+  return conflictDeleteLines(journal.slug, consumed);
+}
+
 function leafMovedLine(journal: StoredRestackJournal, moves: readonly RestackMoveRef[]): string | undefined {
   const leaf = journal.journal.ranges.find((range) => range.kind === 'leaf-active');
   if (!leaf) return undefined;
@@ -317,6 +328,7 @@ export async function applyRestackMove(
     const moved = await runGit(git, ['update-ref', '--stdin'], transaction([
       ...moveLines(moves),
       ...(marker === undefined ? [] : [marker]),
+      ...consumedResolutionLines(journal),
       ...journalStateUpdateLines(journal, nextBlob, 'moved'),
     ]));
     if (moved?.exitCode === 0) return { kind: 'moved', journal: { slug: journal.slug, blob: nextBlob, journal: next } };

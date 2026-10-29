@@ -772,7 +772,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             terminal = true;
             return haltedResult(options.worktree);
           }
-          const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', recorded.tip, recorded.rewrites, { git });
+          const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', recorded.tip, recorded.rewrites, {
+            git,
+            consumedResolution: recorded.resolution,
+          });
           if (updated.kind !== 'updated') throw new Error('restack journal changed while consuming resolution');
           journal = updated.journal;
           await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'consumed', tip: recorded.tip });
