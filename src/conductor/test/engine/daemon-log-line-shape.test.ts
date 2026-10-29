@@ -7,9 +7,10 @@ import {
   formatDaemonLogLine,
 } from '../../src/engine/daemon-log.js';
 import { DAEMON_EVENT_DEPTH } from '../../src/engine/daemon-line-shape.js';
-import { attachFeatureEventRenderer, renderDaemonEvent } from '../../src/daemon-cli.js';
+import { attachFeatureEventRenderer, renderDaemonEvent, resetRenderedReclaimRetentions } from '../../src/daemon-cli.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+import { RENDERED_DAEMON_EVENT_FIXTURES } from '../fixtures/rendered-daemon-events.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
@@ -105,6 +106,33 @@ describe('daemon logger line shape', () => {
       '· │  ! [rejected] HEAD -> feat/x',
       '· │ third diagnostic',
     ]);
+  });
+
+  it('renders every declared event through the emitter and keeps both daemon loggers byte-identical', async () => {
+    chalk.level = 0;
+    const fixtureTypes = new Set(Object.keys(RENDERED_DAEMON_EVENT_FIXTURES));
+    expect(fixtureTypes).toEqual(new Set(Object.keys(DAEMON_EVENT_DEPTH)));
+    expect(fixtureTypes).toEqual(new Set(renderedEventTypes()));
+
+    for (const event of Object.values(RENDERED_DAEMON_EVENT_FIXTURES)) {
+      const one = buildLoggers();
+      const two = buildLoggers();
+      const events = new ConductorEventEmitter();
+      resetRenderedReclaimRetentions();
+      const detach = attachFeatureEventRenderer(events, createFeatureDaemonLogger('feature-a', one.baseLog));
+      await events.emit(event);
+      detach();
+      resetRenderedReclaimRetentions();
+      renderDaemonEvent(event, createFeatureDaemonLogger('feature-a', two.baseLog));
+
+      const first = one.persisted.map((line) => line.replace(/^.*? \[daemon\]\[feature-a\] /, ''));
+      const second = two.persisted.map((line) => line.replace(/^.*? \[daemon\]\[feature-a\] /, ''));
+      expect(first, event.type).toEqual(second);
+      expect(first, event.type).not.toEqual([]);
+      const marker = DAEMON_EVENT_DEPTH[event.type];
+      const shape = marker === 0 ? /^(?:│|[^\s·])/ : marker === 1 ? /^· (?:│|[^\s·])/ : /^·   (?:│|[^\s·])/;
+      expect(first.every((line) => shape.test(line)), event.type).toBe(true);
+    }
   });
 
   it('uses one depth for provider lifecycle and every outer-review line', () => {
