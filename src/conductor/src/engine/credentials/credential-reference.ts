@@ -42,7 +42,7 @@ export function parseCredentialReference(value: unknown): ParseCredentialReferen
   if (value.prefix !== undefined && typeof value.prefix !== 'string') {
     return { ok: false, error: 'Credential reference prefix must be a string.' };
   }
-  if (value.cache_seconds !== undefined && (!Number.isInteger(value.cache_seconds) || value.cache_seconds <= 0)) {
+  if (value.cache_seconds !== undefined && (typeof value.cache_seconds !== 'number' || !Number.isInteger(value.cache_seconds) || value.cache_seconds <= 0)) {
     return { ok: false, error: 'Credential reference cache_seconds must be a positive integer.' };
   }
 
