@@ -1,5 +1,31 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
-import { resolvePlanStoriesPath } from '../../src/engine/plan-stories-reference.js';
+import {
+  readPlanStoriesReferenceText,
+  resolvePlanStoriesPath,
+} from '../../src/engine/plan-stories-reference.js';
+
+describe('readPlanStoriesReferenceText', () => {
+  it.each([
+    ['a plain path', '**Stories:**   .docs/stories/feature.md   ', '.docs/stories/feature.md'],
+    [
+      'an inline-code path with an Accepted annotation',
+      '**Stories:** `.docs/stories/feature.md` (Accepted)',
+      '`.docs/stories/feature.md` (Accepted)',
+    ],
+    [
+      'a Markdown link',
+      '**Stories:** [feature stories](../stories/feature.md)',
+      '[feature stories](../stories/feature.md)',
+    ],
+  ])('returns the raw text for %s', (_description, planContent, expected) => {
+    expect(readPlanStoriesReferenceText(planContent)).toBe(expected);
+  });
+
+  it('returns null when there is no Stories line', () => {
+    expect(readPlanStoriesReferenceText('# Plan')).toBeNull();
+  });
+});
 
 describe('resolvePlanStoriesPath', () => {
   it.each([
