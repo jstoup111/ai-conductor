@@ -155,6 +155,11 @@ export type RoundStallEntry =
   | { readonly roundId: RoundId; readonly readable: false }
   | { readonly roundId: RoundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> };
 
+/** A non-mutating view of route records which still require routing work. */
+export type AffectedRoundsDiagnostic =
+  | { readonly kind: 'affected'; readonly rounds: readonly RoundStallEntry[] }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
 export interface RecordedRoundStall {
   readonly detail: string;
   readonly haltClass?: 'mechanical';
@@ -260,6 +265,40 @@ async function stalledRounds(
     }
   }
   return rounds;
+}
+
+/**
+ * Read the durable rounds affected by a failed routing operation without
+ * recovering them.  In particular, this must remain safe to call after an
+ * outbox persistence failure: it neither advances a pending host nor repairs
+ * the marker/records it is describing.
+ */
+export async function diagnoseAffectedRounds(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<AffectedRoundsDiagnostic> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const marker = await readRepairMarker(worktree, slug, { git });
+  if (marker.kind === 'unreadable') return { kind: 'unavailable', detail: 'routing marker is unreadable' };
+  let refs: string[];
+  try {
+    const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+    if (listed.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot enumerate route records' };
+    refs = listed.stdout.split('\n').filter(Boolean);
+  } catch {
+    return { kind: 'unavailable', detail: 'cannot enumerate route records' };
+  }
+  const ids: RoundId[] = [];
+  for (const ref of refs) {
+    const id = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!id) return { kind: 'unavailable', detail: 'routing ref has an invalid round id' };
+    ids.push(id);
+  }
+  const orderedIds = marker.kind === 'marker'
+    ? [marker.marker.roundId, ...ids.filter((id) => id !== marker.marker.roundId)]
+    : ids;
+  return { kind: 'affected', rounds: await stalledRounds(worktree, slug, orderedIds, git) };
 }
 
 /** Recover the durable record/marker handshake without inferring a round from a branch. */

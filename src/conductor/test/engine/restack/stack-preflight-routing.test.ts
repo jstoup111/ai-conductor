@@ -12,7 +12,7 @@ import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, drainRoutingOutboxes, readRepairMarker } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { reconcileReceiptLedger } from '../../../src/engine/routing/round-receipt.js';
@@ -88,6 +88,10 @@ async function refNames(repo: string): Promise<string> {
   return (await execFile('git', ['for-each-ref', '--format=%(refname)'], { cwd: repo })).stdout;
 }
 
+async function conductorRefSnapshot(repo: string): Promise<string> {
+  return (await execFile('git', ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'], { cwd: repo })).stdout;
+}
+
 async function writeGitBlob(subject: Awaited<ReturnType<typeof fixture>>, contents: string): Promise<string> {
   const path = join(subject.repo, '.route-test-blob.json');
   await writeFile(path, contents);
@@ -95,6 +99,54 @@ async function writeGitBlob(subject: Awaited<ReturnType<typeof fixture>>, conten
 }
 
 describe('stack preflight routing', () => {
+  it('does not reconcile or admit a successor when routing outbox persistence fails', async () => {
+    const subject = await fixture();
+    const settled = parseChildId(1)!;
+    const successor = parseChildId(2)!;
+    const roundId = parseRoundId('r1')!;
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [
+        { findingId: 'settled', kind: 'audit', owner: settled, host: settled, reason: 'task-slice', fallback: [] },
+        { findingId: 'successor', kind: 'audit', owner: successor, host: successor, reason: 'task-slice', fallback: [] },
+      ],
+      allocation: {
+        [settled]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] },
+        [successor]: { remTaskIds: ['rem-prd-audit-T2'], blockBodies: ['### Task rem-prd-audit-T2\n'] },
+      },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    const open = { ...created.record, phase: 'open' as const, hosts: { [settled]: 'restacked' as const, [successor]: 'pending' as const } };
+    const blob = await writeGitBlob(subject, JSON.stringify(open));
+    await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+    expect(await readRepairMarker(subject.repo, 'demo')).toMatchObject({ kind: 'absent' });
+    const refsBefore = await conductorRefSnapshot(subject.repo);
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    vi.mocked(drainRoutingOutboxes).mockResolvedValueOnce({ kind: 'persist-failed' });
+
+    try {
+      await expect(runStackPreflight({
+        worktree: subject.repo,
+        slug: 'demo',
+        events,
+        git: makeGitRunner(subject.repo),
+      })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('r1 (2: pending)') });
+
+      expect(await conductorRefSnapshot(subject.repo)).toBe(refsBefore);
+      expect(await readRepairMarker(subject.repo, 'demo')).toMatchObject({ kind: 'absent' });
+      expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({
+        kind: 'record',
+        record: { hosts: { [settled]: 'restacked', [successor]: 'pending' } },
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('defers a due base refresh for an admitted round before reconciliation navigates to build', async () => {
     const subject = await fixture();
     const child = parseChildId(1)!;

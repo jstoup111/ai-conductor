@@ -15,7 +15,7 @@ import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
-import { exitRoutedHostAndReconcile, reconcileRounds, recordRoundStall, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
+import { diagnoseAffectedRounds, exitRoutedHostAndReconcile, reconcileRounds, recordRoundStall, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
@@ -229,15 +229,21 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
     const persister = new EventPersister(join(options.worktree, '.pipeline', 'events.jsonl'), options.events ?? new ConductorEventEmitter());
     const drained = await drainRoutingOutboxes(options.worktree, options.slug, (event) => persister.persistDurably(event), { git: options.git });
     if (drained.kind !== 'drained') {
-      // An unreadable route record is a durable routing stall, not a generic
-      // outbox failure. Reconcile only to render the complete affected-round
-      // set; queue admission remains unreachable after a failed drain.
-      const afterFailedDrain = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
-      if (afterFailedDrain.kind === 'stalled') {
-        const recorded = await recordRoundStall(options.worktree, options.slug, afterFailedDrain, stallEvents);
+      // A failed outbox must not enter reconciliation: that path may advance
+      // a pending successor or create a marker. Render its durable context
+      // through the read-only diagnostic instead.
+      const affected = await diagnoseAffectedRounds(options.worktree, options.slug, { git: options.git });
+      if (affected.kind === 'affected' && affected.rounds.length > 0) {
+        const recorded = await recordRoundStall(options.worktree, options.slug, {
+          kind: 'stalled',
+          detail: `cannot drain routing outbox: ${drained.kind}`,
+          rounds: affected.rounds,
+        }, stallEvents);
         return { kind: 'halted', ...recorded };
       }
-      return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
+      return { kind: 'unavailable', detail: affected.kind === 'unavailable'
+        ? `${affected.detail}; cannot drain routing outbox: ${drained.kind}`
+        : `cannot drain routing outbox: ${drained.kind}` };
     }
     // A due base refresh must yield to *any* durable routed obligation.  In
     // particular, reconciliation can otherwise navigate an admitted host (or
