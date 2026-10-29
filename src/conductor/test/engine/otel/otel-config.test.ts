@@ -422,7 +422,8 @@ describe('resolveOtelConfig', () => {
       expect((result as { spoolWarnings?: string[] }).spoolWarnings).toBeUndefined();
     });
 
-    it.each([
+    it('disables every malformed command or reference shape naming the header and requirement', () => {
+      for (const [_caseName, reference, requirement] of [
       ['a string command', { command: 'security' }, /command.*non-empty.*(array|list).*strings/i],
       ['an empty command', { command: [] }, /command.*non-empty.*(array|list).*strings/i],
       ['a non-string command argument', { command: ['security', 1] }, /command.*non-empty.*(array|list).*strings/i],
@@ -434,15 +435,16 @@ describe('resolveOtelConfig', () => {
       ['a non-numeric cache duration', { command: ['security'], cache_seconds: '60' }, /cache_seconds.*positive integer/i],
       ['a mixed env and command reference', { env: 'OTEL_TEST_AUTHORIZATION', command: ['security'] }, /\{ env:.*\}.*\{ command:/i],
       ['an unknown command-reference key', { command: ['security'], other: true }, /\{ env:.*\}.*\{ command:/i],
-    ] as const)('disables a command header with %s by header name', (_caseName, reference, requirement) => {
-      const result = resolveOtelConfig({
-        otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', headers: { Authorization: reference } },
-      } as never, PIPELINE_DIR);
+      ] as const) {
+        const result = resolveOtelConfig({
+          otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', headers: { Authorization: reference } },
+        } as never, PIPELINE_DIR);
 
-      expect(result).toMatchObject({ enabled: false });
-      const error = (result as { error?: string }).error ?? '';
-      expect(error).toContain('Authorization');
-      expect(error).toMatch(requirement);
+        expect(result).toMatchObject({ enabled: false });
+        const error = (result as { error?: string }).error ?? '';
+        expect(error).toContain('Authorization');
+        expect(error).toMatch(requirement);
+      }
     });
 
     it('retains __proto__ as an own resolved header without changing the header record prototype', () => {
@@ -530,17 +532,19 @@ describe('resolveOtelConfig', () => {
       }
     });
 
-    it.each([
-      ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: { Authorization: { command: ['security'] } } }],
-      ['file exporter', { exporter: 'file', headers: { Authorization: { command: ['security'] } } }],
-    ] as const)('refuses a command header with the %s by header name', (_caseName, otel) => {
-      const result = resolveOtelConfig({ otel } as never, PIPELINE_DIR);
+    it('rejects command headers with grpc and file exporter naming the header', () => {
+      for (const otel of [
+        { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: { Authorization: { command: ['security'] } } },
+        { exporter: 'file', headers: { Authorization: { command: ['security'] } } },
+      ]) {
+        const result = resolveOtelConfig({ otel } as never, PIPELINE_DIR);
 
-      expect(result).toMatchObject({ enabled: false });
-      expect((result as { error?: string }).error).toContain('Authorization');
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error).toContain('Authorization');
+      }
     });
 
-    it('keeps the existing unset-env error when a sibling command header is configured', () => {
+    it('retains the sibling unset-env error and does not run the command', () => {
       const previous = process.env.OTEL_TEST_AUTHORIZATION;
       try {
         delete process.env.OTEL_TEST_AUTHORIZATION;
