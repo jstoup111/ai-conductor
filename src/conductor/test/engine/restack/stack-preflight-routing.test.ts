@@ -432,7 +432,7 @@ describe('stack preflight routing', () => {
     }
   });
 
-  // Covers: task:8, task:rem-prd-audit-rem-prd-S1.8
+  // Covers: task:8, task:rem-prd-audit-rem-prd-S1.8, task:rem-prd-audit-rem-prd-audit-rem-prd-S1.8
   it('does not admit an earlier pending round when an applied exit cannot reread its restacked route record', async () => {
     const subject = await fixture();
     const exitedHost = parseChildId(1)!;
