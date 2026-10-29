@@ -1590,6 +1590,18 @@ steps:
     });
   });
 
+  describe('OTel credential references', () => {
+    it('accepts a command header in project-source configuration', () => {
+      expect(validateConfig({
+        otel: {
+          exporter: 'otlp',
+          endpoint: 'http://localhost:4318',
+          headers: { Authorization: { command: ['security', 'find-generic-password'] } },
+        },
+      }, '/repo', { source: 'project' })).toMatchObject({ ok: true });
+    });
+  });
+
   describe('acceptance_spec_globs validation', () => {
     it('accepts an array of glob strings', () => {
       const result = validateConfig({

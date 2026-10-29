@@ -64,7 +64,11 @@ export function createSpoolRuntime(
       endpoint: config.endpoint,
       // Resolve references per POST. Credentials never enter the spool.
       headers: () => config.headerReferences
-        ? Object.fromEntries(Object.entries(config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
+        ? Object.fromEntries(Object.entries(config.headerReferences)
+          .flatMap(([name, reference]) => {
+            if ('env' in reference) return [[name, process.env[reference.env] ?? '']];
+            return reference.kind === 'env' ? [[name, process.env[reference.variable] ?? '']] : [];
+          }))
         : config.headers ?? {},
       events,
     });

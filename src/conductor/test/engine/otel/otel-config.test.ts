@@ -378,7 +378,7 @@ describe('resolveOtelConfig', () => {
           endpoint: 'http://localhost:4318',
           headers: { Authorization: 'valid-token' },
           provenance: DEFAULT_PROVENANCE,
-          headerReferences: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION' } },
+          headerReferences: { Authorization: { kind: 'env', variable: 'OTEL_TEST_AUTHORIZATION' } },
           spool: { enabled: true, maxBytes: 536_870_912 },
         });
         expect((result as { error?: string }).error).toBeUndefined();
@@ -386,6 +386,63 @@ describe('resolveOtelConfig', () => {
         if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
         else process.env.OTEL_TEST_AUTHORIZATION = previous;
       }
+    });
+
+    it('retains a valid command header reference without resolving a credential value', () => {
+      const result = resolveOtelConfig(
+        {
+          otel: {
+            exporter: 'otlp',
+            endpoint: 'http://localhost:4318',
+            headers: {
+              Authorization: {
+                command: ['security', 'find-generic-password'],
+                prefix: 'Bearer ',
+                cache_seconds: 60,
+              },
+            },
+          },
+        } as never,
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        headerReferences: {
+          Authorization: {
+            kind: 'command',
+            argv: ['security', 'find-generic-password'],
+            prefix: 'Bearer ',
+            cacheSeconds: 60,
+          },
+        },
+      });
+      expect((result as { headers?: Record<string, string>; error?: string; spoolWarnings?: string[] }).headers).toBeUndefined();
+      expect((result as { error?: string }).error).toBeUndefined();
+      expect((result as { spoolWarnings?: string[] }).spoolWarnings).toBeUndefined();
+    });
+
+    it.each([
+      ['a string command', { command: 'security' }, /command.*non-empty.*(array|list).*strings/i],
+      ['an empty command', { command: [] }, /command.*non-empty.*(array|list).*strings/i],
+      ['a non-string command argument', { command: ['security', 1] }, /command.*non-empty.*(array|list).*strings/i],
+      ['an empty command argument', { command: ['security', ''] }, /command.*non-empty.*(array|list).*strings/i],
+      ['a non-string prefix', { command: ['security'], prefix: 1 }, /prefix.*string/i],
+      ['a zero cache duration', { command: ['security'], cache_seconds: 0 }, /cache_seconds.*positive integer/i],
+      ['a negative cache duration', { command: ['security'], cache_seconds: -1 }, /cache_seconds.*positive integer/i],
+      ['a fractional cache duration', { command: ['security'], cache_seconds: 0.5 }, /cache_seconds.*positive integer/i],
+      ['a non-numeric cache duration', { command: ['security'], cache_seconds: '60' }, /cache_seconds.*positive integer/i],
+      ['a mixed env and command reference', { env: 'OTEL_TEST_AUTHORIZATION', command: ['security'] }, /\{ env:.*\}.*\{ command:/i],
+      ['an unknown command-reference key', { command: ['security'], other: true }, /\{ env:.*\}.*\{ command:/i],
+    ] as const)('disables a command header with %s by header name', (_caseName, reference, requirement) => {
+      const result = resolveOtelConfig({
+        otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', headers: { Authorization: reference } },
+      } as never, PIPELINE_DIR);
+
+      expect(result).toMatchObject({ enabled: false });
+      const error = (result as { error?: string }).error ?? '';
+      expect(error).toContain('Authorization');
+      expect(error).toMatch(requirement);
     });
 
     it('retains __proto__ as an own resolved header without changing the header record prototype', () => {
@@ -418,7 +475,7 @@ describe('resolveOtelConfig', () => {
     });
 
     it.each([
-      ['a literal credential', { Authorization: 'literal-credential' }, /Authorization.*literal credential/i],
+      ['a literal credential', { Authorization: 'literal-credential' }, /Authorization.*literal credential.*\{ command:/i],
       ['an unknown reference key', { Authorization: { env: 'OTEL_TEST_AUTHORIZATION', secret: true } }, /Authorization.*\{ env:/i],
       ['an absent reference key', { Authorization: {} }, /Authorization.*\{ env:/i],
       ['a non-string environment variable name', { Authorization: { env: 42 } }, /Authorization.*\{ env:/i],
@@ -467,6 +524,37 @@ describe('resolveOtelConfig', () => {
         const error = (result as { error?: string }).error ?? '';
         expect(error).toContain('OTEL_TEST_AUTHORIZATION');
         expect(error).not.toContain(sentinel);
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
+    it.each([
+      ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: { Authorization: { command: ['security'] } } }],
+      ['file exporter', { exporter: 'file', headers: { Authorization: { command: ['security'] } } }],
+    ] as const)('refuses a command header with the %s by header name', (_caseName, otel) => {
+      const result = resolveOtelConfig({ otel } as never, PIPELINE_DIR);
+
+      expect(result).toMatchObject({ enabled: false });
+      expect((result as { error?: string }).error).toContain('Authorization');
+    });
+
+    it('keeps the existing unset-env error when a sibling command header is configured', () => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      try {
+        delete process.env.OTEL_TEST_AUTHORIZATION;
+        const result = resolveOtelConfig({
+          otel: {
+            exporter: 'otlp', endpoint: 'http://localhost:4318', headers: {
+              Authorization: { env: 'OTEL_TEST_AUTHORIZATION' },
+              'X-Command': { command: ['security'] },
+            },
+          },
+        } as never, PIPELINE_DIR);
+
+        expect(result).toMatchObject({ enabled: false });
+        expect((result as { error?: string }).error).toContain('OTEL_TEST_AUTHORIZATION');
       } finally {
         if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
         else process.env.OTEL_TEST_AUTHORIZATION = previous;
