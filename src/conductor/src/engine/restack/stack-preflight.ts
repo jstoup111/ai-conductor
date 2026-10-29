@@ -273,19 +273,26 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       });
       if (exited.kind === 'exit-halted' && exited.unreadableRoundId !== undefined) {
         // A restack can apply before its route record becomes unreadable (or
-        // before the continuation can drain it).  Reconcile that durable
-        // state once so an unreadable round takes the normal, bounded routing
-        // stall path.  A refused or rolled-back exit still has a readable
-        // record and keeps its original stop below.
-        const afterExitHalt = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
-        if (afterExitHalt.kind === 'stalled') {
-          const recorded = await recordRoundStall(options.worktree, options.slug, afterExitHalt, stallEvents);
+        // before the continuation can drain it). Diagnose that durable
+        // state without recovering it: a mutable reconciliation could admit
+        // an earlier pending round before it reaches this unreadable one.
+        // A refused or rolled-back exit still has a readable record and keeps
+        // its original stop below.
+        const affected = await diagnoseAffectedRounds(options.worktree, options.slug, { git: options.git });
+        if (affected.kind === 'affected' && affected.rounds.length > 0) {
+          const recorded = await recordRoundStall(options.worktree, options.slug, {
+            kind: 'stalled',
+            detail: `routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`,
+            rounds: affected.rounds,
+          }, stallEvents);
           return { kind: 'halted', ...recorded };
         }
         return {
           kind: 'halted',
           haltClass: 'mechanical',
-          detail: `routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`,
+          detail: affected.kind === 'unavailable'
+            ? `${affected.detail}; routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`
+            : `routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`,
         };
       }
       if (exited.kind === 'exit-halted') return { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };

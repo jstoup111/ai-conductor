@@ -13,7 +13,7 @@ import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
-import { revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { reconcileReceiptLedger } from '../../../src/engine/routing/round-receipt.js';
 import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-queue.js';
@@ -433,14 +433,39 @@ describe('stack preflight routing', () => {
   });
 
   // Covers: task:8, task:rem-prd-audit-rem-prd-S1.8
-  it('records an unreadable round mechanically when an applied exit cannot reread its restacked route record', async () => {
+  it('does not admit an earlier pending round when an applied exit cannot reread its restacked route record', async () => {
     const subject = await fixture();
-    const child = parseChildId(1)!;
-    const roundId = parseRoundId('r1')!;
+    const exitedHost = parseChildId(1)!;
+    const pendingHost = parseChildId(2)!;
+    const earlierRoundId = parseRoundId('r3')!;
+    const unreadableRoundId = parseRoundId('r4')!;
+    const earlier = await createRouteRecord(subject.repo, 'demo', {
+      roundId: earlierRoundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [],
+      allocation: {
+        [exitedHost]: { remTaskIds: [], blockBodies: [] },
+        [pendingHost]: { remTaskIds: [], blockBodies: [] },
+      },
+    });
+    const exiting = await createRouteRecord(subject.repo, 'demo', {
+      roundId: unreadableRoundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [],
+      allocation: { [exitedHost]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (earlier.kind !== 'created' || exiting.kind !== 'created') throw new Error('route creation failed');
+    await subject.git(['update-ref', routeRecordRefFor('demo', earlierRoundId), await writeGitBlob(subject, JSON.stringify({
+      ...earlier.record, phase: 'open', hosts: { [exitedHost]: 'restacked', [pendingHost]: 'pending' },
+    }))]);
+    await subject.git(['update-ref', routeRecordRefFor('demo', unreadableRoundId), await writeGitBlob(subject, JSON.stringify({
+      ...exiting.record, phase: 'open', hosts: { [exitedHost]: 'built' },
+    }))]);
+    await subject.git(['update-ref', repairMarkerRefFor('demo'), await writeGitBlob(subject, JSON.stringify({ host: exitedHost, roundId: unreadableRoundId }))]);
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
-    const refsBefore = await refNames(subject.repo);
-    let reconciliations = 0;
     persister.start();
     try {
       await expect(runStackPreflight({
@@ -448,23 +473,22 @@ describe('stack preflight routing', () => {
         slug: 'demo',
         events,
         git: makeGitRunner(subject.repo),
-        reconcileRounds: async () => {
-          reconciliations += 1;
-          return reconciliations === 1
-            ? { kind: 'resume-exit' as const, roundId, host: child }
-            : { kind: 'stalled' as const, detail: `routing round ${roundId} stalled: routing record is unreadable`, rounds: [{ roundId, readable: false as const }] };
+        // Simulate an applied restack that removed the marker before its r4
+        // record became unreadable. Initial reconciliation remains real.
+        exitRoutedHostAndReconcile: async () => {
+          await subject.git(['update-ref', routeRecordRefFor('demo', unreadableRoundId), await writeGitBlob(subject, '{not-json')]);
+          await subject.git(['update-ref', '-d', repairMarkerRefFor('demo')]);
+          return { kind: 'exit-halted' as const, detail: `routed exit host ${exitedHost}: cannot reread restacked route record`, unreadableRoundId };
         },
-        // This is the continuation result after its applied restack cannot
-        // reread the route record; the preflight must re-reconcile it.
-        exitRoutedHostAndReconcile: async () => ({ kind: 'exit-halted' as const, detail: `routed exit host ${child}: cannot reread restacked route record`, unreadableRoundId: roundId }),
       })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
 
       const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
-      expect(halt.split('\n', 1)[0]).toContain('r1 (unreadable)');
+      expect(halt.split('\n', 1)[0]).toContain('r3 (2: pending); r4 (unreadable)');
       await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
       expect(await readRepairMarker(subject.repo, 'demo')).toEqual({ kind: 'absent' });
-      expect(await refNames(subject.repo)).toBe(refsBefore);
-      expect(reconciliations).toBe(2);
+      await expect(readRouteRecord(subject.repo, 'demo', earlierRoundId)).resolves.toMatchObject({
+        kind: 'record', record: { hosts: { [exitedHost]: 'restacked', [pendingHost]: 'pending' } },
+      });
     } finally {
       persister.stop();
     }

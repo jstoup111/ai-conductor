@@ -368,8 +368,12 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     if (Object.values(stored.record.hosts).includes('reroute-moved')) {
       const synced = await completeRerouteSync({ worktree, slug, roundId: id, git });
       if (synced.kind === 'refused') return { kind: 'unavailable', detail: synced.detail };
-      deferred = true;
-      continue;
+      const recoveredHost = Object.entries(synced.record.hosts)
+        .find(([, state]) => state === 'admitted');
+      if (recoveredHost === undefined) {
+        return { kind: 'unavailable', detail: `routing round ${id} reroute sync completed without an admitted destination` };
+      }
+      return { kind: 'navigate-host', roundId: id, host: Number(recoveredHost[0]) as ChildId };
     }
     if (stored.record.phase === 'prepared' && (marker.kind !== 'marker' || marker.marker.roundId !== id)) {
       const deleted = await writeRoutingTransaction(worktree, slug, [{ kind: 'delete-record', previous: stored }], { git });
