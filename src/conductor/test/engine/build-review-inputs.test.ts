@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:8, task:12
+// Covers: task:1, task:2, task:3, task:8, task:12, task:16
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1519,6 +1519,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
     it('names exactly the engine-authored surfaces as machinery paths', () => {
       expect([...MACHINERY_AUTHORED_PATHS].sort()).toEqual([
+        '.docs/*/manifest.json',
         '.docs/shipped/',
         '.pipeline/',
         'CHANGELOG.md',
@@ -1660,6 +1661,86 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    it('excludes a feature manifest from the graded diff and inventory while retaining its listed plan', async () => {
+      const featurePlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/f'), { recursive: true });
+      await writeFile(join(dir, '.docs/f/manifest.json'), JSON.stringify({
+        schemaVersion: 1,
+        slug: 'f',
+        artifacts: [{ kind: 'plan', path: '.docs/plans/fixture.md' }],
+      }));
+      await writeFile(featurePlanPath, '# Updated fixture plan\n');
+      await git('add', '.docs');
+      await git('commit', '-m', 'add feature manifest and update plan');
+
+      const result = await assembleBuildReviewInputs(realGit(), featurePlanPath);
+
+      expect({
+        diff: result.diff,
+        paths: result.sourceSnapshot.sourceChanges.map((change) => change.path),
+      }).toEqual({
+        diff: expect.stringContaining('diff --git a/.docs/plans/fixture.md b/.docs/plans/fixture.md'),
+        paths: expect.arrayContaining(['.docs/plans/fixture.md']),
+      });
+      expect(result.diff).not.toContain('.docs/f/manifest.json');
+      expect(result.sourceSnapshot.sourceChanges.map((change) => change.path)).not.toContain('.docs/f/manifest.json');
+    });
+
+    it('keeps another feature’s document in the graded diff', async () => {
+      await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await writeFile(join(dir, '.docs/specs/g.md'), '# Other feature specification\n');
+      await git('add', '.docs/specs/g.md');
+      await git('commit', '-m', 'change another feature specification');
+
+      const result = await assembleBuildReviewInputs(realGit(), planPath);
+
+      expect(result.diff).toContain('diff --git a/.docs/specs/g.md b/.docs/specs/g.md');
+    });
+
+    it('preserves the legacy plan graded diff and inventory', async () => {
+      const legacyPlanPath = join(dir, '.docs/plans/fixture.md');
+      await writeFile(legacyPlanPath, '# Legacy fixture plan update\n');
+      await git('add', '.docs/plans/fixture.md');
+      await git('commit', '-m', 'update legacy plan');
+      const mergeBase = await git('merge-base', 'origin/main', 'HEAD');
+      const { stdout: priorDiff } = await execFileAsync('git', [
+        '-C', dir,
+        'diff',
+        `${mergeBase}..HEAD`,
+        '--',
+        '.',
+        ':(exclude).docs/shipped/',
+        ':(exclude).pipeline/',
+        ':(exclude)docs/',
+        ':(exclude)CHANGELOG.md',
+      ]);
+      const { stdout: priorInventory } = await execFileAsync('git', [
+        '-C', dir,
+        'diff',
+        '--name-status',
+        '-z',
+        '--find-renames',
+        `${mergeBase}..HEAD`,
+        '--',
+        '.',
+        ':(exclude).docs/shipped/',
+        ':(exclude).pipeline/',
+        ':(exclude)docs/',
+        ':(exclude)CHANGELOG.md',
+      ]);
+
+      const result = await assembleBuildReviewInputs(realGit(), legacyPlanPath);
+
+      expect({
+        diff: result.diff,
+        inventory: result.sourceSnapshot.sourceChanges.map((change) => [change.kind, change.path]),
+      }).toEqual({
+        diff: priorDiff,
+        inventory: [['M', '.docs/plans/fixture.md'], ['A', 'feature.txt']],
+      });
+      expect(priorInventory).toContain('M\0.docs/plans/fixture.md\0');
     });
 
     it('exposes path-sorted malformed Covers markers outside the frozen source snapshot', async () => {
