@@ -8,7 +8,7 @@ import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
-import { buildRewriteMapForRanges } from '../rebase-translate.js';
+import { buildRewriteMapForRanges } from '../rewrite-map.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   createRestackJournal,
