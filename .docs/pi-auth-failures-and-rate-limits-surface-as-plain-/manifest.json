@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "pi-auth-failures-and-rate-limits-surface-as-plain-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-pi-auth-and-rate-limit-signatures-are-anchored-to-captured-output.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/pi-auth-failures-and-rate-limits-surface-as-plain-.md"
+    }
+  ]
+}
