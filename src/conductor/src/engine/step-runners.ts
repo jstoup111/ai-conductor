@@ -147,7 +147,11 @@ import {
   resolveInstalledReviewPolicyCatalog,
   ReviewPolicyCatalogError,
 } from './build-review-policy-resolver.js';
-import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
+import {
+  renderBuildReviewSeverityDefinitions,
+  renderRubricContractShape,
+  type RubricContractDescriptor,
+} from './build-review-contract.js';
 import { captureInstalledReviewPolicyBundle, resolveReviewPolicyPackageReference, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import {
   evaluateBuildReviewPolicyPreflight,
@@ -5126,6 +5130,7 @@ export class DefaultStepRunner implements StepRunner {
             ]
           : []),
         `Your final message MUST end with one JSON object matching this schema:\n${contractShape}`,
+        renderBuildReviewSeverityDefinitions(),
         JSON.stringify(buildReviewRubricPromptView(projection)),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the

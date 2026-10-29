@@ -1,63 +1,10 @@
 // Covers: task:5
-import { describe, expect, it, vi } from 'vitest';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
-import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
-import type { TestQualityProjection } from '../../src/engine/build-review-projections.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
-
-const branch = {
-  rubric: 'testQuality' as const,
-  skillName: 'build-review-test-quality',
-  policy: {
-    enabled: true,
-    llm_provider: 'claude' as const,
-    model: 'opus',
-    effort: 'high' as const,
-    model_fallback_ladder: ['opus'],
-    max_retries: 1,
-    escalate: false,
-  },
-};
-
-const projection: TestQualityProjection = {
-  rubric: 'testQuality',
-  contractVersion: 'v4',
-  projectionVersion: 'v4',
-  lapId: parseBuildReviewLapId('lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8')!,
-  snapshotDigest: 'sha256:projection',
-  contentDigest: 'sha256:content',
-  digest: 'sha256:projection',
-  mergeBase: 'base-sha',
-  headSha: 'head-sha',
-  changedFiles: [],
-  reviewScope: { mode: 'full', deltaHunks: [] },
-  changedTestSelectors: [],
-  runnerSelectors: [],
-  unresolvedMarkers: [],
-  changedTestTitles: [],
-  testScope: { evidence: [], candidates: [] },
-  testSuiteProof: {},
-  revertedProductionManifest: [],
-  preflight: { classification: 'not-requested', excerpt: '' },
-};
-
-async function captureRubricPrompt(): Promise<string> {
-  const invoke = vi.fn().mockResolvedValue({
-    success: false,
-    exitCode: 0,
-  });
-  const runner = new DefaultStepRunner({ invoke }, 'build-review-prompt', '/tmp/project');
-
-  await (runner as unknown as {
-    dispatchBuildReviewRubric: (value: typeof branch, input: typeof projection) => Promise<unknown>;
-  }).dispatchBuildReviewRubric(branch, projection);
-
-  return (invoke.mock.calls[0]![0] as InvokeOptions).prompt;
-}
+import { describe, expect, it } from 'vitest';
+import { captureRubricPrompt } from './build-review-prompt-capture.js';
 
 describe('build_review testQuality evidence re-read prompt', () => {
   it('instructs the provider to verify pinned evidence and leave unreadable evidence indeterminate', async () => {
-    const prompt = await captureRubricPrompt();
+    const prompt = await captureRubricPrompt('testQuality', 'build-review-prompt');
     const evidenceInstruction = prompt.split('\n\n').find((paragraph) =>
       paragraph.includes('git show <mergeBase>:<path>')
       && paragraph.includes('git show <headSha>:<path>')
@@ -78,7 +25,7 @@ describe('build_review testQuality evidence re-read prompt', () => {
     // review session has no hashing tool, so asking it to recompute the hash
     // turned every inspected candidate indeterminate. Character offsets still
     // diverge from byteRegion on non-ASCII files (#2612).
-    const prompt = await captureRubricPrompt();
+    const prompt = await captureRubricPrompt('testQuality', 'build-review-prompt');
 
     expect(prompt).toMatch(/do not recompute .?contentHash/i);
     expect(prompt).not.toMatch(/verify `contentHash` as sha256/);
@@ -88,7 +35,7 @@ describe('build_review testQuality evidence re-read prompt', () => {
   });
 
   it('contains no provider-specific paths, environment variables, or model names', async () => {
-    const prompt = await captureRubricPrompt();
+    const prompt = await captureRubricPrompt('testQuality', 'build-review-prompt');
 
     expect(prompt).not.toMatch(/~\/.claude|CLAUDE_|CODEX_|claude-|gpt-|\b(?:opus|sonnet)\b/i);
   });

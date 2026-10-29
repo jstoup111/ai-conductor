@@ -481,7 +481,7 @@ else
   failures=1
 fi
 
-descriptor_module=$(rg -l '^function getBuildReviewRubricDescriptor\(' "$HARNESS_DIR/src/conductor/dist" --glob '*.js' | head -n 1 || true)
+descriptor_module=$(grep -rl --include='*.js' '^function getBuildReviewRubricDescriptor(' "$HARNESS_DIR/src/conductor/dist" 2>/dev/null | head -n 1 || true)
 if [ -z "$descriptor_module" ]; then
   echo 'build-review vocabulary guard !unenforced: could not locate the built descriptor module' >&2
   failures=1

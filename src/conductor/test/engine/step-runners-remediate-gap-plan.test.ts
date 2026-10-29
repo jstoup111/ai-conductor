@@ -30,7 +30,7 @@ function runnerFor(
   key: 'claude' | 'codex',
   invoke: LLMProvider['invoke'],
   nativeOutputSchema = true,
-  remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem,
+  remediationPlanStoreFilesystem: RemediationPlanStoreFilesystem = memoryFilesystem(),
 ) {
   const policy = key === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
   const provider: LLMProvider = {
