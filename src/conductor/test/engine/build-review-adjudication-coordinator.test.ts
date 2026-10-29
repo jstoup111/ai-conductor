@@ -2718,12 +2718,19 @@ describe('coordinateBuildReviewAdjudication', () => {
     const state = await store.read();
     if (!state.ok) throw new Error(state.reason);
     expect(state.state.version).toBe('v3');
-    expect(state.state.cases.find((record) => record.id === 'N')).toMatchObject({ recurrenceOf: ['case-R'], effect: { id: 'effect-N', status: 'applied' } });
+    expect(state.state.cases.find((record) => record.id === 'N')).toMatchObject({
+      disposition: 'act', resolution: 'open', recurrenceOf: ['case-R'],
+      sources: [expect.objectContaining({ sourceId, outcome: 'acted' })],
+      effect: { id: 'effect-N', kind: 'action', status: 'applied' },
+    });
     expect(state.state.cases.every((record) => !('reRaise' in record))).toBe(true);
     expect(await readFile(remediationCaseStorePath(root), 'utf8')).toContain(before.slice(0, before.indexOf('"cases"') + 8));
     expect(JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases.find((record: { id: string }) => record.id === 'case-R')).toEqual(JSON.parse(before).cases[0]);
     expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([
       expect.objectContaining({ caseId: 'N', recurrenceOf: ['case-R'], reRaiseKind: 'residual-gap', boundCaseId: 'case-R' }),
+    ]);
+    expect(events.filter((event) => event.type === 'remediation_effect_reserved')).toEqual([
+      expect.objectContaining({ caseId: 'N', effectId: 'effect-N', effectKind: 'action' }),
     ]);
     expect(charge).toHaveBeenCalledTimes(1);
     expect(charge.mock.calls[0]![1]).toBe('effect-N');
@@ -2733,11 +2740,32 @@ describe('coordinateBuildReviewAdjudication', () => {
     const replay = await coordinateBuildReviewAdjudication({ ...input(root, async () => residual), chargeEffect: charge, generateId: () => 'must-not-mint' });
     expect(replay).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
     expect(charge).toHaveBeenCalledTimes(1);
+  });
 
-    // Covers: task:5, task:rem-prd-audit-5
-    // A residual chain is bounded by applied lineage, not by the original
-    // binding. N can mint M after it is applied and resolved; M cannot mint a
-    // fourth action once case-R, N, and M have all been applied.
+  // Covers: task:5, task:rem-prd-audit-5
+  // A residual chain is bounded by applied lineage, not by the original
+  // binding. N can mint M after it is applied and resolved; M cannot mint a
+  // fourth action once case-R, N, and M have all been applied.
+  it('mints M from a chained N residual and halts a third rebind at the full recurrence lineage', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [], cases: [{
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The first repair was applied.', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+    }] });
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const residual: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-R', reRaise: { kind: 'residual-gap', reason: 'The repaired assertion still leaves a gap.' } }],
+    };
+    const first = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => residual), chargeEffect: charge,
+      generateId: (() => { const ids = ['N', 'effect-N']; return () => ids.shift()!; })(),
+    });
+    expect(first).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
+
     await store.mutate(async (current) => ({ value: null, nextState: {
       ...current,
       cases: current.cases.map((record) => record.id === 'N'
@@ -2755,7 +2783,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(second).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['M'] } });
     let chained = await store.read();
     if (!chained.ok) throw new Error(chained.reason);
-    expect(chained.state.cases.find((record) => record.id === 'M')).toMatchObject({ recurrenceOf: ['N'] });
+    const mintedM = chained.state.cases.find((record) => record.id === 'M');
+    expect(mintedM).toMatchObject({ recurrenceOf: ['N'] });
+    expect(mintedM?.recurrenceOf).toEqual(['N']);
 
     await store.mutate(async (current) => ({ value: null, nextState: {
       ...current,
