@@ -4,6 +4,13 @@ spec_hash: 074fa6bda928cc5ea34f354fe21a6e50b934d0b698342a5cd3bacf66f8055ab5
 pr: https://github.com/jstoup111/ai-conductor/pull/3523
 shipped: 2026-10-29
 engine_version: 20261029T113550Z-f30879854aa9
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This production change to where the provider writes per-invocation system-prompt temp files is unrelated to restack cascade allowances. It is outside the plan's intent. In production it only differs from tmpdir() if TMPDIR changes after module load, so operators should not notice it, but it is unplanned engine behavior shipped under a test-fix commit."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
