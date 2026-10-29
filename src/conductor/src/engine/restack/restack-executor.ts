@@ -8,6 +8,7 @@ import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
+import { buildRewriteMapForRanges } from '../rebase-translate.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   createRestackJournal,
@@ -654,6 +655,16 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
     const overlaps = new Map<number, string[]>();
     const exactRewrites = new Map<ChildId, ReadonlyMap<CommitSha, CommitSha>>();
+    // `consumeRecordedResolution` deliberately omits ambiguous duplicate
+    // subjects from its durable rewrite map. Keep the range-tip correspondence
+    // separately: an unentered leaf may itself be at that old tip, and moving
+    // it must not turn the ambiguity policy into a general rewrite entry.
+    const consumedTipCorrespondences = new Map<ChildId, {
+      readonly oldParent: CommitSha;
+      readonly oldTip: CommitSha;
+      readonly newParent: CommitSha;
+      readonly tip: CommitSha;
+    }>();
     const unenteredLeafOwners = new Map<ChildId, ChildId>();
     let parent = planningDefault;
     const lastOriginIndex = options.cause === 'feature-repair'
@@ -666,6 +677,27 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             const rewritten = rewrites.get(range.oldTip);
             return rewritten === undefined ? [] : [{ child, rewritten }];
           });
+        const explicitTipMatches = rewrittenMatches.length === 0
+          ? [...consumedTipCorrespondences.entries()].flatMap(([child, correspondence]) =>
+            correspondence.oldTip === range.oldTip ? [{ child, rewritten: correspondence.tip }] : [])
+          : [];
+        // The ordinary consumed map intentionally has no entry for duplicate
+        // subjects. If a leaf names such a non-tip commit, reconstruct only
+        // this leaf correspondence using the same patch-id range algorithm
+        // used by translateAfterRebase; do not persist it as an exact rewrite.
+        const reconstructedMatches = rewrittenMatches.length === 0 && explicitTipMatches.length === 0
+          ? (await Promise.all([...consumedTipCorrespondences.entries()].map(async ([child, correspondence]) => {
+            const reconstructed = await buildRewriteMapForRanges(
+              git,
+              correspondence.oldParent,
+              correspondence.oldTip,
+              correspondence.newParent,
+              correspondence.tip,
+            );
+            const rewritten = reconstructed.map[range.oldTip];
+            return rewritten === undefined ? undefined : { child, rewritten: parseCommitSha(rewritten) ?? correspondence.tip };
+          }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined)
+          : [];
         // A repair adopts every child through the highest origin unchanged
         // (originating or not), so a pre-region leaf contained by one of those
         // ranges has no rewritten counterpart. Its durable identity is its
@@ -678,7 +710,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
               : undefined;
           }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined)
           : [];
-        const matches = rewrittenMatches.length === 0 ? identityMatches : rewrittenMatches;
+        const matches = rewrittenMatches.length === 0
+          ? explicitTipMatches.length === 0
+            ? reconstructedMatches.length === 0 ? identityMatches : reconstructedMatches
+            : explicitTipMatches
+          : rewrittenMatches;
         if (matches.length !== 1) {
           throw new Error(`cannot resolve unentered leaf ${range.child} from its owning child rewrite map`);
         }
@@ -687,7 +723,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', rewritten, rewrites, { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while moving unentered leaf' : updated.detail);
         journal = updated.journal;
-        exactRewrites.set(range.child, rewrites);
+        // A leaf's move is still journaled, but a correspondence recovered
+        // from a consumed duplicate-subject resolution must remain local to
+        // that move. Feeding it to the transition translator would persist
+        // precisely the ambiguous entry consumption intentionally omitted.
+        const recoveredFromConsumedResolution = matches === explicitTipMatches || matches === reconstructedMatches;
+        exactRewrites.set(range.child, recoveredFromConsumedResolution ? new Map() : rewrites);
         unenteredLeafOwners.set(range.child, owner);
         overlaps.set(range.child, []);
         parent = rewritten;
@@ -736,6 +777,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           journal = updated.journal;
           await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'consumed', tip: recorded.tip });
           exactRewrites.set(range.child, recorded.rewrites);
+          consumedTipCorrespondences.set(range.child, {
+            oldParent: range.oldParent,
+            oldTip: range.oldTip,
+            newParent: parent,
+            tip: recorded.tip,
+          });
           overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
           parent = recorded.tip;
           continue;
