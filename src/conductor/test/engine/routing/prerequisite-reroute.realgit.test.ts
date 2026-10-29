@@ -358,6 +358,7 @@ describe('verified prerequisite reroute (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  // Covers: task:rem-as-built-rem-as-built-R2
   it('reconciles a crashed reroute before admitting or dispatching its destination, and retries a failed tree sync', async () => {
     const subject = await fixture();
     try {
@@ -386,6 +387,7 @@ describe('verified prerequisite reroute (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  // Covers: task:rem-as-built-rem-as-built-R2
   it('returns recovered reroute navigation before attempting another pending round', async () => {
     const subject = await fixture();
     try {

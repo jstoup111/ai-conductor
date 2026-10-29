@@ -10,7 +10,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
@@ -464,6 +464,12 @@ describe('stack preflight routing', () => {
       ...exiting.record, phase: 'open', hosts: { [exitedHost]: 'built' },
     }))]);
     await subject.git(['update-ref', repairMarkerRefFor('demo'), await writeGitBlob(subject, JSON.stringify({ host: exitedHost, roundId: unreadableRoundId }))]);
+    const baseGit = makeGitRunner(subject.repo);
+    const calls: { readonly args: readonly string[]; readonly input?: string }[] = [];
+    const tracedGit: GitRunner = async (args, options) => {
+      calls.push({ args, input: options?.input });
+      return baseGit(args, options);
+    };
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
     persister.start();
@@ -472,7 +478,7 @@ describe('stack preflight routing', () => {
         worktree: subject.repo,
         slug: 'demo',
         events,
-        git: makeGitRunner(subject.repo),
+        git: tracedGit,
         // Simulate an applied restack that removed the marker before its r4
         // record became unreadable. Initial reconciliation remains real.
         exitRoutedHostAndReconcile: async () => {
@@ -489,6 +495,12 @@ describe('stack preflight routing', () => {
       await expect(readRouteRecord(subject.repo, 'demo', earlierRoundId)).resolves.toMatchObject({
         kind: 'record', record: { hosts: { [exitedHost]: 'restacked', [pendingHost]: 'pending' } },
       });
+      // The r3 marker transaction would first hash this exact marker payload.
+      // Diagnosis after r4's unreadable exit must not start that admission.
+      expect(calls).not.toContainEqual(expect.objectContaining({
+        args: ['hash-object', '-w', '--stdin'],
+        input: JSON.stringify({ host: pendingHost, roundId: earlierRoundId }),
+      }));
     } finally {
       persister.stop();
     }
