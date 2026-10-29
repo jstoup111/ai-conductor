@@ -65,6 +65,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'kickback-budget',
   'rewind',
   'reseal',
+  'register-artifact',
   'memory',
   'register',
   'create',
