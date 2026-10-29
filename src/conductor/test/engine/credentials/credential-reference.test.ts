@@ -23,7 +23,7 @@ describe('parseCredentialReference', () => {
   });
 
   it('rejects every listed malformed shape without throwing', () => {
-    for (const [reference, expectedError] of [
+    const malformedReferences: ReadonlyArray<readonly [unknown, RegExp]> = [
       [{ command: 'security' }, /command.*array/i],
       [{ command: [] }, /command.*non-empty/i],
       [{ command: ['security', 1] }, /command.*string/i],
@@ -33,7 +33,8 @@ describe('parseCredentialReference', () => {
       [{ command: ['security'], cache_seconds: -1 }, /cache_seconds.*positive integer/i],
       [{ command: ['security'], cache_seconds: 0.5 }, /cache_seconds.*positive integer/i],
       [{ command: ['security'], cache_seconds: '60' }, /cache_seconds.*positive integer/i],
-    ]) {
+    ];
+    for (const [reference, expectedError] of malformedReferences) {
       expect(() => parseCredentialReference(reference)).not.toThrow();
       expect(parseCredentialReference(reference)).toEqual({
         ok: false,

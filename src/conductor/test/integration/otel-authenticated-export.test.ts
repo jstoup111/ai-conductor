@@ -7,6 +7,7 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { buildExporters } from '../../src/engine/otel/transport.js';
+import type { CommandRunner } from '../../src/engine/credentials/command-source.js';
 import { vi } from 'vitest';
 
 const HEADER_ENV = 'OTEL_AUTHENTICATED_EXPORT_TEST_TOKEN';
@@ -122,12 +123,12 @@ describe('authenticated OTLP HTTP export', () => {
       await once(server, 'listening');
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('loopback listener has no TCP address');
-      const config = (runner: ReturnType<typeof vi.fn>) => resolveOtelConfig({ otel: {
+      const config = () => resolveOtelConfig({ otel: {
         exporter: 'otlp', endpoint: `http://127.0.0.1:${address.port}`,
         headers: { authorization: { command: ['credential-command'] } }, spool: { enabled: false },
       } }, '/tmp/otel-authenticated-export');
-      const exportOne = async (runner: ReturnType<typeof vi.fn>) => {
-        const resolved = config(runner);
+      const exportOne = async (runner: CommandRunner) => {
+        const resolved = config();
         const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>, {
           env: { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined }, commandRunner: runner,
         });

@@ -170,8 +170,12 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const errors: Array<{ rendererName: string; error: string }> = [];
     const backlog: Array<{ lastFailureClass?: string }> = [];
-    events.on('renderer_error', (event) => { errors.push(event); });
-    events.on('otel_spool_backlog', (event) => { backlog.push(event); });
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push(event);
+    });
+    events.on('otel_spool_backlog', (event) => {
+      if (event.type === 'otel_spool_backlog') backlog.push(event);
+    });
     let headerAttempts = 0;
     let releaseBacklog!: () => void;
     const backlogReady = new Promise<void>((resolve) => { releaseBacklog = resolve; });
