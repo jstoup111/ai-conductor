@@ -375,6 +375,37 @@ async function readContainedProtectedArtifact(
 }
 
 /**
+ * Reports only the deletion case that may be attributed to the base branch.
+ * A missing target behind an escaping parent, a symlink, or any inaccessible
+ * target is deliberately not a deletion: the seal must retain its
+ * indeterminate containment refusal for those states.
+ */
+async function isAbsentContainedProtectedArtifact(
+  projectRoot: string,
+  path: string,
+): Promise<boolean> {
+  const root = await realpath(projectRoot);
+  const target = join(projectRoot, path);
+  let parent = dirname(target);
+  while (true) {
+    const resolvedParent = await realpath(parent).catch(() => undefined);
+    if (resolvedParent) {
+      if (!isContainedBy(root, resolvedParent)) return false;
+      break;
+    }
+    const nextParent = dirname(parent);
+    if (nextParent === parent || !isContainedBy(root, resolve(nextParent))) return false;
+    parent = nextParent;
+  }
+  try {
+    await lstat(target);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
+/**
  * Reports whether the current lifecycle step grants an exception for this
  * exact target. The allowlist is resolved for every decision so one step's
  * permission cannot be reused by a later step.
@@ -1275,7 +1306,7 @@ async function inspectSeal(
     // surface so the deletion pass below can establish base inheritance and
     // preserve its established attribution/refusal behavior.
     if (expected.has(classification.target)
-      && await readContainedProtectedArtifact(projectRoot, classification.target) === undefined) {
+      && await isAbsentContainedProtectedArtifact(projectRoot, classification.target)) {
       continue;
     }
     actualPaths.push(classification.target);
