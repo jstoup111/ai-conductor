@@ -1072,7 +1072,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` | omitted uses the exporter default |
-| `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
+| `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` or `{ command: [<argv>], prefix?: <string>, cache_seconds?: <positive integer> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 | `otel.worker_name` | string | No | any non-blank name | OS hostname |
 | `otel.attributes` | mapping | No | At most 16 namespaced keys with non-empty literal string values; keys beginning `service.`, `conductor.`, or `host.` are reserved | absent; no custom attributes |
@@ -1098,8 +1098,10 @@ otel:
     issue: false
 ```
 
-`otel.headers` supplies HTTP OTLP credentials by reference, never by value. Its only supported
-credential source in this slice is the process environment, using this shape:
+`otel.headers` supplies HTTP OTLP credentials by reference, never by value. Each header uses one of
+two credential sources.
+
+**Environment variable.** `{ env: <variable name> }` with no other keys:
 
 ```yaml
 otel:
@@ -1110,22 +1112,46 @@ otel:
       env: OTEL_EXPORT_TOKEN
 ```
 
-At configuration load, the resolver reads the non-empty `OTEL_EXPORT_TOKEN` environment variable and
-uses its value for the `authorization` HTTP header. The configuration remains a header-name and
-variable-name reference; it does not contain the credential. A literal string is refused rather than
-treated as a credential in configuration.
+At configuration load, the resolver requires `OTEL_EXPORT_TOKEN` to be set and non-empty. The value is
+re-read on every delivery attempt, so a rotated variable takes effect on the next export.
 
-The same silent-disable result names these header failures: a non-mapping `headers` value; an empty
-or control-character header name; a literal credential; a reference other than exactly
-`{ env: <non-empty variable name> }`; and an unset or empty referenced environment variable. Header
-entries are also refused for gRPC and the file exporter with an error that names the configured header
-and, when the reference contains a string `env` field, its environment-variable name; it never includes
-the environment variable's value.
+**Command.** `{ command: [<program>, <args>...], prefix?, cache_seconds? }`:
 
-Other credential sources are excluded from this slice. Headers are carried only by the HTTP/protobuf
-OTLP exporters: this configuration does not provide gRPC credential or metadata carriage. With the
-[spool](#otel-spool) active, the drainer re-reads each referenced variable on every delivery attempt;
-credentials are never written to the spool.
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example.test
+  headers:
+    authorization:
+      command: [op, read, "op://vault/otel/token"]
+      prefix: "Bearer "
+      cache_seconds: 600
+```
+
+| Field | Type | Required | Default | Behavior |
+| --- | --- | --- | --- | --- |
+| `command` | array of non-empty strings | Yes | — | Program and arguments, run without a shell. A leading `~/` in an argument expands to `$HOME`. |
+| `prefix` | string | No | none | Prepended to the command output. |
+| `cache_seconds` | positive integer | No | `300` | Reuse window for a successful result. Failures are not cached. |
+
+The command is not run at configuration load. It runs at the first delivery attempt and again after
+the cache expires, with a 10 s timeout and the conductor environment minus `TMUX` and `TMUX_PANE`. Trailing
+whitespace is trimmed from stdout. A missing program, non-zero exit, timeout, empty output, or
+`AI_CONDUCTOR_NO_REAL_EXEC=1` makes the credential unavailable. The unavailable reason names the
+command's argv, so do not put secrets in `command`.
+
+**Validation.** The same silent-disable result names these header failures: a non-mapping `headers`
+value; an empty or control-character header name; a literal string credential; a reference that is
+neither form, mixes `env` and `command`, or has unknown keys; an invalid `command`, `prefix`, or
+`cache_seconds`; and an unset or empty referenced environment variable. Header entries are also refused
+for gRPC and the file exporter with an error that names the configured header and, when the reference
+contains a string `env` field, its environment-variable name. Errors never include a credential value.
+
+**Delivery.** Headers are carried only by the HTTP/protobuf OTLP exporters: this configuration does not
+provide gRPC credential or metadata carriage. Credentials are resolved immediately before each send and
+are never written to the [spool](#otel-spool). When a credential is unavailable, the attempt is not
+sent; with the spool active, the batch is kept and retried with backoff, and the drainer emits one
+`otel` `renderer_error` reading `OTLP header <name> is unavailable: <reason>`.
 
 `otel.project_name` is trimmed before use. An absent, blank, or whitespace-only value falls back to
 the basename of the absolute project root for metric data-point identity; it does not affect
