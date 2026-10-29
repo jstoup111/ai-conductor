@@ -112,6 +112,7 @@ describe('engine git pin travels only in the environment (sweep G1)', () => {
       ['rev-list', '--merges', 'main..HEAD'],
       ['rebase', '--autostash', 'main'],
       ['diff', '--name-only', OLD, 'HEAD'],
+      ['symbolic-ref', 'refs/remotes/origin/HEAD'],
       ['rev-parse', 'HEAD'],
     ]);
     const rebaseCalls = [...performRebaseCalls, ...calls].filter(({ args }) => args[0] === 'rebase');
