@@ -8,7 +8,6 @@ import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
-import { buildRewriteMapForRanges } from '../rebase-translate.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   createRestackJournal,
@@ -28,6 +27,7 @@ import {
   applyRestackMove,
   checkRestackPreMove,
   haltRestack,
+  haltRestackConflict,
   rollbackRestackMove,
   verifyRestackMove,
   type RestackMoveRef,
@@ -36,7 +36,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { consumeRecordedResolution } from './restack-conflict-record.js';
+import { conflictDeleteLines, consumeRecordedResolution } from './restack-conflict-record.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
@@ -107,6 +107,39 @@ function ref(raw: string): RefName {
 
 async function runGit(git: GitRunner, args: string[], input?: string) {
   return git(args, input === undefined ? undefined : { input });
+}
+
+/**
+ * Reconstruct one ambiguous resolution correspondence locally.  The general
+ * rebase translator owns persistence and broader evidence handling; restack
+ * needs only this transient patch-id lookup for an unentered leaf.
+ */
+async function rewriteForPatchEquivalentRange(
+  git: GitRunner,
+  preImageBase: CommitSha,
+  oldTip: CommitSha,
+  postImageBase: CommitSha,
+  newTip: CommitSha,
+  oldCommit: CommitSha,
+): Promise<CommitSha | undefined> {
+  const [preImage, postImage] = await Promise.all([
+    runGit(git, ['rev-list', `${preImageBase}..${oldTip}`]),
+    runGit(git, ['rev-list', `${postImageBase}..${newTip}`]),
+  ]);
+  if (preImage.exitCode !== 0 || postImage.exitCode !== 0) return undefined;
+  const patchId = async (commit: string): Promise<string | undefined> => {
+    const shown = await runGit(git, ['show', commit]);
+    if (shown.exitCode !== 0) return undefined;
+    const identified = await runGit(git, ['patch-id', '--stable'], shown.stdout);
+    return identified.exitCode === 0 ? identified.stdout.trim().split(/\s+/, 1)[0] : undefined;
+  };
+  const wanted = await patchId(oldCommit);
+  if (!wanted) return undefined;
+  for (const commit of postImage.stdout.split('\n').map((value) => value.trim()).filter(Boolean)) {
+    if (await patchId(commit) !== wanted) continue;
+    return parseCommitSha(commit);
+  }
+  return undefined;
 }
 
 function transaction(lines: readonly string[]): string {
@@ -348,6 +381,9 @@ export async function appliedTransactionLines(
     if (journal.journal.queueOld === undefined) lines.push(`create ${queueRef} ${journal.journal.queueNew}`);
     else lines.push(`update ${queueRef} ${journal.journal.queueNew} ${journal.journal.queueOld}`);
   }
+  if (journal.journal.consumedResolution !== undefined) {
+    lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
+  }
   lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
   return { journal: { slug: journal.slug, blob, journal: next }, lines };
 }
@@ -507,7 +543,7 @@ async function haltUnresolvedConflict(
     await haltRecordedRestackConflict({
       worktree, slug, journal, range, replayParent: newParent,
       candidateSubjects: await replayCandidateSubjects(git, candidates),
-      commit: conflict.commit, paths: conflict.paths, detail, events, git,
+      commit: conflict.commit, paths: conflict.paths, detail, events, git, writeHalt: haltRestackConflict,
     });
   }
 }
@@ -687,15 +723,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         // used by translateAfterRebase; do not persist it as an exact rewrite.
         const reconstructedMatches = rewrittenMatches.length === 0 && explicitTipMatches.length === 0
           ? (await Promise.all([...consumedTipCorrespondences.entries()].map(async ([child, correspondence]) => {
-            const reconstructed = await buildRewriteMapForRanges(
+            const rewritten = await rewriteForPatchEquivalentRange(
               git,
               correspondence.oldParent,
               correspondence.oldTip,
               correspondence.newParent,
               correspondence.tip,
+              range.oldTip,
             );
-            const rewritten = reconstructed.map[range.oldTip];
-            return rewritten === undefined ? undefined : { child, rewritten: parseCommitSha(rewritten) ?? correspondence.tip };
+            return rewritten === undefined ? undefined : { child, rewritten };
           }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined)
           : [];
         // A repair adopts every child through the highest origin unchanged

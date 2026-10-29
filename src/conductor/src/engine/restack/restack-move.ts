@@ -17,7 +17,6 @@ import {
   type StoredRestackJournal,
 } from './restack-journal.js';
 import { emitRestackRefused } from './restack-events.js';
-import { conflictDeleteLines } from './restack-conflict-record.js';
 import {
   parseCommitSha,
   type CommitSha,
@@ -210,14 +209,14 @@ function moveLines(moves: readonly RestackMoveRef[]): string[] {
   return moves.map((move) => `update ${move.ref} ${move.newSha} ${move.oldSha}`);
 }
 
-function consumedResolutionLines(journal: StoredRestackJournal): readonly string[] {
+function consumedResolutionVerifyLines(journal: StoredRestackJournal): readonly string[] {
   const consumed = journal.journal.consumedResolution;
   if (!consumed) return [];
-  // update-ref forbids a separate verify and delete for one ref in the same
-  // prepared transaction. A delete with an old value is that ref's atomic
-  // verify-and-delete operation, so every consumed identity participates in
-  // the same CAS as the stack move.
-  return conflictDeleteLines(journal.slug, consumed);
+  return [
+    `verify refs/conductor/${journal.slug}/restack/resolution/c${consumed.child} ${consumed.tip}`,
+    `verify refs/conductor/${journal.slug}/restack/conflict/record ${consumed.record}`,
+    `verify refs/conductor/${journal.slug}/restack/conflict/parent ${consumed.parent}`,
+  ];
 }
 
 function leafMovedLine(journal: StoredRestackJournal, moves: readonly RestackMoveRef[]): string | undefined {
@@ -272,11 +271,7 @@ export async function haltRestack(
   return writeHaltMarker(worktree, `restack refused (${reason})${child}${detail}\n`, 'needs-human', events);
 }
 
-/**
- * Write the human halt for an unresolved replay conflict. A conflict is not a
- * refusal (ADR decision 12): its occurrence is `restack_conflict`, emitted by
- * the caller, so this writes the halt without a `restack_refused`.
- */
+/** Write the human halt for an unresolved replay conflict without a refusal event. */
 export async function haltRestackConflict(
   worktree: string,
   child: ChildId,
@@ -328,7 +323,7 @@ export async function applyRestackMove(
     const moved = await runGit(git, ['update-ref', '--stdin'], transaction([
       ...moveLines(moves),
       ...(marker === undefined ? [] : [marker]),
-      ...consumedResolutionLines(journal),
+      ...consumedResolutionVerifyLines(journal),
       ...journalStateUpdateLines(journal, nextBlob, 'moved'),
     ]));
     if (moved?.exitCode === 0) return { kind: 'moved', journal: { slug: journal.slug, blob: nextBlob, journal: next } };

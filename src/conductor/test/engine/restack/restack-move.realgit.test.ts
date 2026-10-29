@@ -25,6 +25,7 @@ import {
   verifyRestackMove,
   type RestackMoveRef,
 } from '../../../src/engine/restack/restack-move.js';
+import { restackTransactionBuilder } from '../../../src/engine/restack/restack-executor.js';
 import { parseCommitSha, parseRefName, type CommitSha, type RefName, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -189,10 +190,22 @@ describe('journaled restack move (real local Git)', () => {
     await expect(fixture.git(['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: `${fixture.refs[0].oldSha}\n` });
   });
 
-  it('atomically consumes the recorded-resolution refs, and a changed one halts without moving stack refs', async () => {
+  it('verifies recorded-resolution refs before moving, and a changed one halts without moving stack refs', async () => {
     const appliedFixture = await withConsumedResolution(await createFixture());
     const applied = await applyRestackMove(appliedFixture.repo, appliedFixture.stored, appliedFixture.moves);
-    expect(applied.kind).toBe('moved');
+    if (applied.kind !== 'moved') throw new Error('move did not apply');
+    const synced = { ...applied.journal.journal, state: 'synced' as const };
+    const syncedBlob = await writeRestackJournalBlob(appliedFixture.repo, synced);
+    await appliedFixture.git(['update-ref', journalRefFor('demo'), syncedBlob, applied.journal.blob]);
+    const transaction = await restackTransactionBuilder.appliedTransactionLines(
+      appliedFixture.repo,
+      await journal(appliedFixture.repo),
+      makeGitRunner(appliedFixture.repo),
+    );
+    const appliedWrite = await makeGitRunner(appliedFixture.repo)(['update-ref', '--stdin'], {
+      input: ['start', ...transaction.lines, 'prepare', 'commit', ''].join('\n'),
+    });
+    expect(appliedWrite.exitCode).toBe(0);
     for (const refName of [
       resolutionRefFor('demo', appliedFixture.consumed.child),
       conflictRecordRefFor('demo'),

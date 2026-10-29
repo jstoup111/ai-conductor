@@ -2,7 +2,6 @@ import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import type { GitRunner } from '../rebase.js';
 import { writeConflictRecord } from './restack-conflict-record.js';
 import { type StoredRestackJournal } from './restack-journal.js';
-import { haltRestackConflict } from './restack-move.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
 
 interface HaltRecordedRestackConflictOptions {
@@ -19,6 +18,9 @@ interface HaltRecordedRestackConflictOptions {
   readonly detail: string;
   readonly events?: ConductorEventEmitter;
   readonly git: GitRunner;
+  readonly writeHalt: (worktree: string, child: ChildRange['child'], detail: string, events?: ConductorEventEmitter, recipe?: {
+    readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha;
+  }) => Promise<unknown>;
 }
 
 /**
@@ -50,7 +52,7 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
       recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
-  await haltRestackConflict(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events,
+  await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events,
     journal.journal.cause === 'feature-repair'
       ? {
         slug: options.slug,

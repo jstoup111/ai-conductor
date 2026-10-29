@@ -21,6 +21,7 @@ import {
   applyRestackMove,
   checkRestackPreMove,
   haltRestack,
+  haltRestackConflict,
   rollbackRestackMove,
   verifyRestackMove,
   type RestackMoveRef,
@@ -727,7 +728,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           worktree: options.worktree, slug: options.slug, journal, range,
           replayParent: resumed.newParent,
           candidateSubjects: resumed.candidateSubjects, commit: resumed.commit, paths: resumed.paths,
-          detail, events: options.events, git,
+          detail, events: options.events, git, writeHalt: haltRestackConflict,
         });
         return { kind: 'halted' };
       }
