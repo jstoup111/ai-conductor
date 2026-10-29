@@ -15,7 +15,7 @@ import type { RemediationProjection } from '../../src/engine/remediation-project
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 const projection: RemediationProjection = {
-  version: 1,
+  version: 2,
   source: 'build-stall',
   requiredReferences: [],
   evidence: { excerpts: [], omittedFiles: [] },
