@@ -210,6 +210,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Raising the restack cascade cap for one originating child no longer blocks raising it later for a different originating child, and the cascade-cap halt now reports the budget that actually refused. ([implementation PR #3504](https://github.com/jstoup111/ai-conductor/pull/3504)).
 - Build reviews now halt for human action when a judge rejects a case binding. ([implementation PR #3520](https://github.com/jstoup111/ai-conductor/pull/3520)).
 - Stacked feature runs continue after successful restacks instead of halting on stale state. ([implementation PR #3515](https://github.com/jstoup111/ai-conductor/pull/3515)).
+- Build review now routes narrower residual repair gaps back to BUILD and clearly halts declared repeat repairs as regressions. ([implementation PR #3527](https://github.com/jstoup111/ai-conductor/pull/3527)).
 
 ## Migration
 
