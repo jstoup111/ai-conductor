@@ -500,17 +500,20 @@ describe('remediation case store', () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
 
-    await expect(store.mutate(async (state) => ({
-      value: 'recorded' as const,
-      nextState: { ...state, version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
-    }))).resolves.toEqual({ ok: true, value: 'recorded' });
+    await expect(store.mutate(async (state) => {
+      if (state.version !== 'v4') throw new Error('a new case store must start at v4');
+      return {
+        value: 'recorded' as const,
+        nextState: { ...state, asBuiltCases: [AS_BUILT_CASE] },
+      };
+    })).resolves.toEqual({ ok: true, value: 'recorded' });
 
     const stored = await store.read();
     expect(stored).toMatchObject({
       ok: true,
       state: { version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
     });
-    if (!stored.ok) throw new Error('expected an as-built case store');
+    if (!stored.ok || stored.state.version !== 'v4') throw new Error('expected a v4 as-built case store');
     expect(selectAsBuiltRemediationCases([
       ...stored.state.cases,
       ...stored.state.prdWideningCases,
@@ -527,10 +530,13 @@ describe('remediation case store', () => {
     const tracked = createTrackedFilesystem(`${JSON.stringify(legacy)}\n`);
     const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
 
-    await expect(store.mutate(async (state) => ({
-      value: 'upgraded' as const,
-      nextState: { ...state, version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
-    }))).resolves.toEqual({ ok: true, value: 'upgraded' });
+    await expect(store.mutate(async (state) => {
+      if (state.version !== 'v3') throw new Error('fixture requires a v3 store before mutation');
+      return {
+        value: 'upgraded' as const,
+        nextState: { ...state, version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
+      };
+    })).resolves.toEqual({ ok: true, value: 'upgraded' });
 
     const written = JSON.parse(tracked.contents);
     expect(written).toMatchObject({ version: 'v4', asBuiltCases: [AS_BUILT_CASE] });

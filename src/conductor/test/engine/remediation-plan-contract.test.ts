@@ -30,7 +30,7 @@ function projection(
   priorAsBuiltCases: RemediationProjection['priorAsBuiltCases'] = [],
 ): RemediationProjection {
   return {
-    version: 1,
+    version: 2,
     source,
     requiredReferences,
     evidence: { excerpts: [], omittedFiles: [] },
