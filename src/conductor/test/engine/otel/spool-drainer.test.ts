@@ -1,4 +1,4 @@
-// Covers: task:10, task:11, task:12, task:13, task:14
+// Covers: task:7, task:8, task:10, task:11, task:12, task:13, task:14
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';

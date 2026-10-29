@@ -1,3 +1,4 @@
+// Covers: task:7 task:8
 import { describe, expect, it, vi } from 'vitest';
 import { CredentialUnavailableError, createOtelHeaderProvider } from '../../../src/engine/otel/otel-header-provider.js';
 

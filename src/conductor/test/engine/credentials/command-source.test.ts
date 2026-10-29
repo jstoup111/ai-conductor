@@ -1,4 +1,4 @@
-// Covers: task:3 task:4
+// Covers: task:3 task:4 task:10
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const execFile = vi.hoisted(() => vi.fn());

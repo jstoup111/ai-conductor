@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2 task:5
 import { describe, expect, it, vi } from 'vitest';
 import { createCredentialResolver } from '../../../src/engine/credentials/credential-resolver.js';
 
