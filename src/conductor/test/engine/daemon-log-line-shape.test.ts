@@ -148,6 +148,7 @@ describe('daemon logger line shape', () => {
     expect(persisted).toEqual([
       '2026-10-29T00:00:00.000Z [daemon][feature-a] ↩ KICKBACK: build re-opened plan (×1)',
     ]);
+    expect(persisted[0]).not.toContain('· ');
   });
 
   it('uses one depth for provider lifecycle and every outer-review line', () => {
