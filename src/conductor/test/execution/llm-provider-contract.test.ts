@@ -81,8 +81,8 @@ describe('InvokeResult provider-unavailable contract', () => {
       NonNullable<InvokeResult['authentication']>
     >();
 
-    // @ts-expect-error cached-login authentication is exclusive to Pi.
     const claudeCachedLogin: NonNullable<InvokeResult['authentication']> = {
+      // @ts-expect-error cached-login authentication is exclusive to Pi.
       provider: 'claude',
       source: 'cached-login',
       state: 'unusable',

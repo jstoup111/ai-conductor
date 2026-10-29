@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
 import {
-  PI_FAILURE_SIGNATURES,
   parsePiModelId,
   parsePiModelListing,
   PiProvider,
