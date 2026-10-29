@@ -12,6 +12,7 @@ import {
   renderExecutorVersionsSection,
   runDaemonStatus,
   runDaemonLogs,
+  runDaemonStoriesRefs,
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from '../../src/engine/daemon-observe-cli.js';
@@ -1797,6 +1798,23 @@ describe('engine/daemon-observe-cli', () => {
       }
     }
 
+    async function dispatchStoriesRefsWithStreams(
+      repo: string,
+    ): Promise<{ code: number; stdout: string[]; stderr: string[] }> {
+      const command = detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo', repo));
+      expect(command).toEqual({ kind: 'stories-refs', repo });
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const out = vi.spyOn(console, 'log').mockImplementation((line: string) => { stdout.push(line); });
+      const err = vi.spyOn(console, 'error').mockImplementation((line: string) => { stderr.push(line); });
+      try {
+        return { code: await dispatchDaemonObserve(command!), stdout, stderr };
+      } finally {
+        out.mockRestore();
+        err.mockRestore();
+      }
+    }
+
     it('detects `daemon status`', () => {
       expect(detectDaemonObserveCommand(argv('daemon', 'status'))).toEqual({ kind: 'status' });
     });
@@ -1880,6 +1898,48 @@ describe('engine/daemon-observe-cli', () => {
         `stories-refs: scanned 0 specs at main (${sha.slice(0, 9)})\n`
         + 'stories-refs: clean — no spec has an unresolvable Stories reference\n',
       );
+    });
+
+    it('reports a non-Git repository scan failure only on stderr', async () => {
+      const result = await dispatchStoriesRefsWithStreams(root);
+
+      expect(result).toEqual({
+        code: 1,
+        stdout: [],
+        stderr: [`stories-refs: scan failed — ${root} is not inside a Git repository`],
+      });
+    });
+
+    it('reports an unresolvable base for a repository with no commits only on stderr', async () => {
+      await execFile('git', ['init', '--initial-branch=main', '--quiet'], { cwd: root });
+
+      const result = await dispatchStoriesRefsWithStreams(root);
+
+      expect(result).toEqual({
+        code: 1,
+        stdout: [],
+        stderr: ['stories-refs: scan failed — could not resolve base origin/main or main'],
+      });
+    });
+
+    it('maps a thrown scan to one stderr failure line without reporting clean', async () => {
+      const out: string[] = [];
+      const err: string[] = [];
+
+      const code = await runDaemonStoriesRefs(
+        { repo: root },
+        {
+          out: (line) => out.push(line),
+          err: (line) => err.push(line),
+          scan: async () => { throw new Error('fixture scan exploded'); },
+        },
+      );
+
+      expect({ code, out, err }).toEqual({
+        code: 1,
+        out: [],
+        err: ['stories-refs: scan failed — fixture scan exploded'],
+      });
     });
 
     it('does NOT match the bare `daemon` run command (no status/logs subcommand)', () => {

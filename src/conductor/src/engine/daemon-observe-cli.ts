@@ -39,7 +39,11 @@ import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { type ChildId } from './child-context.js';
-import { renderStoriesRefsReport, scanStoriesRefs } from './stories-refs-diagnostic.js';
+import {
+  renderStoriesRefsReport,
+  scanStoriesRefs,
+  type StoriesRefsScan,
+} from './stories-refs-diagnostic.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
 import { readCascadeCounts } from './restack/cascade-cap.js';
 import { renderCascadeSummary, resolveCascadeAllowanceForWorktree } from './restack/cascade-allowance.js';
@@ -1152,6 +1156,7 @@ export interface DaemonStoriesRefsDeps {
   cwd?: string;
   out?: (line: string) => void;
   err?: (line: string) => void;
+  scan?: (repoPath: string) => Promise<StoriesRefsScan>;
 }
 
 /**
@@ -1164,8 +1169,18 @@ export async function runDaemonStoriesRefs(
   deps: DaemonStoriesRefsDeps = {},
 ): Promise<number> {
   const out = deps.out ?? ((line: string) => console.log(line));
-  const scan = await scanStoriesRefs(args.repo ?? deps.cwd ?? process.cwd());
-  if (scan.kind !== 'ok') return 0;
+  const err = deps.err ?? ((line: string) => console.error(line));
+  let scan: StoriesRefsScan;
+  try {
+    scan = await (deps.scan ?? scanStoriesRefs)(args.repo ?? deps.cwd ?? process.cwd());
+  } catch (error) {
+    err(`stories-refs: scan failed — ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  if (scan.kind !== 'ok') {
+    err(`stories-refs: scan failed — ${scan.reason}`);
+    return 1;
+  }
 
   for (const line of renderStoriesRefsReport(scan)) out(line);
   if (scan.broken.length === 0) {

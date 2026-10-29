@@ -62,16 +62,16 @@ export async function classifyStoriesRefState(
 }
 
 export async function scanStoriesRefs(repoPath: string): Promise<StoriesRefsScan> {
-  const root = await resolveMainRepoRootStrict(repoPath);
-  if (root === null) return { kind: 'failed', reason: 'not inside a Git repository' };
-
-  const defaultBranch = await originDefaultBranch(makeGitRunner(root)) ?? 'main';
-  const base = await resolveDaemonBase(root, defaultBranch);
-  if (base === undefined) {
-    return { kind: 'failed', reason: `could not resolve base ${defaultBranch}` };
-  }
-
   try {
+    const root = await resolveMainRepoRootStrict(repoPath);
+    if (root === null) return { kind: 'failed', reason: `${repoPath} is not inside a Git repository` };
+
+    const defaultBranch = await originDefaultBranch(makeGitRunner(root)) ?? 'main';
+    const base = await resolveDaemonBase(root, defaultBranch);
+    if (base === undefined) {
+      return { kind: 'failed', reason: `could not resolve base origin/${defaultBranch} or ${defaultBranch}` };
+    }
+
     const tree = gitTreeSource(root, base.sha);
     const candidates = await listBacklogCandidates(tree);
     const shippedStems = new Set((await listShippedRecords(tree)).map(({ stem }) => stem));
