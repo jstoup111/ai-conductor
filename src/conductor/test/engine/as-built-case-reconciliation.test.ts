@@ -68,16 +68,28 @@ describe('as-built case reconciliation', () => {
   });
 
   it('records needs-human findings and resolves only open cases', () => {
+    const needsHumanReason = 'The verdict cannot proceed without a human decision.';
     const needsHuman = recordAsBuiltNeedsHuman(state(), {
       findings: [sources[0], { findingId: 'as-built:attempt-2:5', attemptId: 'attempt-2', class: 'DESIGN', summary: 'A human must decide.' }],
-      reason: 'The verdict cannot proceed without a human decision.',
+      reason: needsHumanReason,
       newCaseId: (() => { let number = 1; return () => `human-${number++}`; })(),
       newEventId: (() => { let number = 1; return () => `event-human-${number++}`; })(),
       occurredAt: '2026-10-29T12:00:00.000Z',
     });
-    expect(needsHuman.state.asBuiltCases.slice(1)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ status: 'needs-human', repairTaskIds: [], sources: [expect.objectContaining({ relation: 'needs-human' })] }),
-    ]));
+    expect(needsHuman.state.asBuiltCases.slice(1)).toEqual([
+      expect.objectContaining({
+        status: 'needs-human', repairTaskIds: [],
+        sources: [expect.objectContaining({ findingId: sources[0].findingId, relation: 'needs-human', reason: needsHumanReason })],
+      }),
+      expect.objectContaining({
+        status: 'needs-human', repairTaskIds: [],
+        sources: [expect.objectContaining({ findingId: 'as-built:attempt-2:5', relation: 'needs-human', reason: needsHumanReason })],
+      }),
+    ]);
+    expect(needsHuman.state.outbox).toEqual([
+      expect.objectContaining({ event: expect.objectContaining({ findingId: sources[0].findingId, outcome: 'needs-human', reason: needsHumanReason }) }),
+      expect.objectContaining({ event: expect.objectContaining({ findingId: 'as-built:attempt-2:5', outcome: 'needs-human', reason: needsHumanReason }) }),
+    ]);
     expect(needsHuman.recordedSources).toHaveLength(2);
 
     const resolved = resolveOpenAsBuiltCases({ ...needsHuman.state, asBuiltCases: [
