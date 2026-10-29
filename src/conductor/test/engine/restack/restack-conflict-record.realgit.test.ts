@@ -207,4 +207,82 @@ describe('restack conflict record (real local Git)', () => {
     await subject.git(['diff', '--exit-code', `${resolutionTip}^{tree}`, `${result.tip}^{tree}`]);
     expect(result.rewrites.get(original)).toBeDefined();
   });
+
+  it('reports absent, malformed-range, missing-record, and changed-parent resolution state without replaying', async () => {
+    const subject = await createRepo();
+    const commit = async (message: string, path: string, contents: string): Promise<CommitSha> => {
+      await writeFile(join(subject.repo, path), contents);
+      await subject.git(['add', path]);
+      await subject.git(['commit', '-qm', message]);
+      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    };
+    const oldParent = subject.head;
+    const oldTip = await commit('candidate', 'owned.txt', 'original\n');
+    await subject.git(['checkout', '-q', '-b', 'resolution', oldParent]);
+    const newParent = await commit('new parent', 'base.txt', 'new\n');
+    const resolutionTip = await commit('candidate', 'owned.txt', 'resolved\n');
+    const parentTree = sha((await subject.git(['rev-parse', `${newParent}^{tree}`])).stdout.trim());
+    const liveParent = newParent;
+    const replay = async () => ({ tip: resolutionTip, rewrites: new Map<CommitSha, CommitSha>() });
+    const input = (range = { child: child(2), oldParent, oldTip, kind: 'closed' as const }) => ({
+      slug: 'demo', range, parent: liveParent,
+      committer: { name: 'Restack', email: 'restack@example.test', date: '2030-01-01T00:00:00Z' },
+      git: makeGitRunner(subject.repo), replay,
+    });
+
+    await expect(consumeRecordedResolution(input())).resolves.toEqual({ kind: 'none' });
+    await subject.git(['update-ref', resolutionRefFor('demo', child(2)), resolutionTip]);
+    await expect(consumeRecordedResolution(input())).resolves.toEqual({ kind: 'stale', field: 'record' });
+
+    const conflict: RestackConflictRecord = {
+      ...record(oldTip), oldParent, oldTip, newParent, newParentTree: parentTree,
+      candidateSubjects: ['candidate'], commit: oldTip, paths: ['owned.txt'],
+    };
+    await writeConflictRecord(subject.repo, 'demo', conflict);
+    await expect(consumeRecordedResolution(input({ ...input().range, oldTip: oldParent }))).resolves.toEqual({ kind: 'stale', field: 'range' });
+
+    await subject.git(['checkout', '-q', newParent]);
+    const changedParent = await commit('changes parent tree', 'base.txt', 'changed\n');
+    await expect(consumeRecordedResolution({ ...input(), parent: changedParent })).resolves.toEqual({ kind: 'stale', field: 'parent-tree' });
+  });
+
+  it('maps only uniquely-subjected original candidates to rebuilt resolution commits', async () => {
+    const subject = await createRepo();
+    const commit = async (message: string, path: string, contents: string): Promise<CommitSha> => {
+      await writeFile(join(subject.repo, path), contents);
+      await subject.git(['add', path]);
+      await subject.git(['commit', '-qm', message]);
+      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    };
+    const oldParent = subject.head;
+    const uniqueOriginal = await commit('unique', 'unique.txt', 'original\n');
+    const duplicateOne = await commit('duplicate', 'one.txt', 'one\n');
+    const duplicateTwo = await commit('duplicate', 'two.txt', 'two\n');
+    await subject.git(['checkout', '-q', '-b', 'resolution', oldParent]);
+    const newParent = await commit('new parent', 'base.txt', 'new\n');
+    const uniqueResolution = await commit('unique', 'unique.txt', 'resolved\n');
+    await commit('duplicate', 'one.txt', 'resolved one\n');
+    const resolutionTip = await commit('duplicate', 'two.txt', 'resolved two\n');
+    const parentTree = sha((await subject.git(['rev-parse', `${newParent}^{tree}`])).stdout.trim());
+    const conflict: RestackConflictRecord = {
+      ...record(resolutionTip), oldParent, oldTip: duplicateTwo, newParent, newParentTree: parentTree,
+      candidateSubjects: ['unique', 'duplicate', 'duplicate'], commit: uniqueOriginal,
+      paths: ['unique.txt', 'one.txt', 'two.txt'],
+    };
+    await writeConflictRecord(subject.repo, 'demo', conflict);
+    await subject.git(['update-ref', resolutionRefFor('demo', child(2)), resolutionTip]);
+    const rebuiltUnique = sha((await subject.git(['rev-parse', uniqueResolution])).stdout.trim());
+
+    const result = await consumeRecordedResolution({
+      slug: 'demo', range: { child: child(2), oldParent, oldTip: duplicateTwo, kind: 'closed' }, parent: newParent,
+      committer: { name: 'Restack', email: 'restack@example.test', date: '2030-01-01T00:00:00Z' },
+      git: makeGitRunner(subject.repo),
+      replay: async () => ({ tip: resolutionTip, rewrites: new Map([[uniqueResolution, rebuiltUnique]]) }),
+    });
+    expect(result).toMatchObject({ kind: 'consumed' });
+    if (result.kind !== 'consumed') throw new Error('expected consumed resolution');
+    expect(result.rewrites.get(uniqueOriginal)).toBe(rebuiltUnique);
+    expect(result.rewrites.has(duplicateOne)).toBe(false);
+    expect(result.rewrites.has(duplicateTwo)).toBe(false);
+  });
 });
