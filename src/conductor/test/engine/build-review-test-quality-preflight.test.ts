@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:17
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import {
 } from '../../src/engine/build-review-test-quality-preflight.js';
 import { preflightProjection } from '../../src/engine/build-review-coordinator.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { FeatureOwnership } from '../../src/engine/feature-ownership.js';
 
 function scopedCommandResult(command: string) {
   const runner = new DefaultStepRunner({} as never, 'test', process.cwd(), {
@@ -26,6 +27,51 @@ function scopedCommandResult(command: string) {
 }
 
 describe('build-review test-quality preflight', () => {
+  const manifestOwnership = {
+    kind: 'manifest',
+    manifestPath: '.docs/f/manifest.json',
+    ownedPaths: ['.docs/f/review/stories.md'],
+    protectedPaths: [],
+  } as FeatureOwnership;
+
+  it('keeps listed artifacts out of the counterfactual production restore', async () => {
+    const paths = ['src/x.ts', 'test/x.test.ts', '.docs/f/review/stories.md'];
+    const writes = vi.fn(async () => {});
+
+    expect(classifyTautologyPaths(paths, [], manifestOwnership)).toEqual({
+      tests: ['test/x.test.ts'], testSupport: [], production: ['src/x.ts'],
+    });
+
+    await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: paths.map((path) => `diff --git a/${path} b/${path}`).join('\n'),
+      ownership: manifestOwnership,
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: writes,
+      runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }),
+      removeCheckout: async () => {},
+    });
+
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes).toHaveBeenCalledWith(
+      '/feature/.pipeline/build-review-preflight/head/src/x.ts',
+      'BASE',
+    );
+  });
+
+  it('does not classify manifests as production for manifest-backed features', () => {
+    expect(classifyTautologyPaths(['.docs/f/manifest.json'], [], manifestOwnership)).toEqual({
+      tests: [], testSupport: [], production: [],
+    });
+  });
+
+  it('preserves legacy production classification', () => {
+    const paths = ['.docs/plans/f.md', 'src/x.ts', 'test/x.test.ts'];
+
+    expect(classifyTautologyPaths(paths, [], { kind: 'legacy' })).toEqual(
+      classifyTautologyPaths(paths),
+    );
+  });
+
   it.each([
     [{ classification: 'nonzero-exit', cacheable: true, cacheProvenance: 'miss', changedPaths: [], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'assertion failed' } }, 'assertion failed'],
     [{ classification: 'stayed-green', cacheable: true, cacheProvenance: 'miss', changedPaths: [], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 0, runKind: 'passed', ranSelectors: ['test/a.test.ts'], failureExcerpt: '' } }, ''],

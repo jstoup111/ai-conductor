@@ -244,6 +244,7 @@ import {
 import { buildReviewSeverityThresholdPolicies, finalizedBuildReviewSourceIds, RemediationCaseStore } from './remediation-case-store.js';
 import { buildReviewRubricPromptView, type BuildReviewRubricProjection } from './build-review-projections.js';
 import { classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
+import { computeFeatureOwnership, worktreeFeatureOwnershipSource } from './feature-ownership.js';
 import {
   defaultBuildReviewScopedLauncher,
   runBuildReviewScopedCommand,
@@ -5591,7 +5592,16 @@ export class DefaultStepRunner implements StepRunner {
 
   private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {
     const paths = [...inputs.diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
-    const classified = classifyTautologyPaths(paths, inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors ?? []);
+    const ownership = await computeFeatureOwnership(
+      worktreeFeatureOwnershipSource(this.projectDir, this.gitRunner),
+      this.featureDesc || basename(this.projectDir),
+      inputs.sourceSnapshot.baseRef,
+    );
+    const classified = classifyTautologyPaths(
+      paths,
+      inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors ?? [],
+      ownership,
+    );
     // There is no empty selector fallback: a rubric still receives an
     // explicit, engine-authored exception projection and decides whether the
     // absence of changed tests is a concern.
@@ -5623,6 +5633,7 @@ export class DefaultStepRunner implements StepRunner {
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       diff: inputs.diff,
+      ownership,
       scopedCommand: this.config?.test_suite?.scoped_command ?? null,
       counterfactualFileSelectors,
       currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
