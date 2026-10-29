@@ -1,8 +1,8 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:3, task:4, task:5, task:8
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -54,6 +54,25 @@ async function createFixture(files: Record<string, string>): Promise<string> {
 async function commit(root: string, message: string): Promise<void> {
   await execFile('git', ['add', '.'], { cwd: root });
   await execFile('git', ['commit', '--quiet', '-m', message], { cwd: root });
+}
+
+async function snapshotFiles(root: string, relative = ''): Promise<Map<string, Buffer>> {
+  const directory = join(root, relative);
+  const entries = await readdir(directory, { withFileTypes: true });
+  const snapshot = new Map<string, Buffer>();
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = relative === '' ? entry.name : join(relative, entry.name);
+    if (entry.isDirectory()) {
+      for (const [child, bytes] of await snapshotFiles(root, path)) snapshot.set(child, bytes);
+    } else {
+      snapshot.set(path, await readFile(join(root, path)));
+    }
+  }
+  return snapshot;
+}
+
+async function gitOutput(root: string, args: string[]): Promise<string> {
+  return (await execFile('git', args, { cwd: root })).stdout;
 }
 
 async function addAheadOrigin(root: string, files: Record<string, string>): Promise<string> {
@@ -267,6 +286,7 @@ describe('engine/stories-refs-diagnostic', () => {
 
     const scan = await scanStoriesRefs(root);
     expect(scan).toMatchObject({ kind: 'ok', specCount: 4, broken: [] });
+    if (scan.kind !== 'ok') throw new Error(`fixture scan failed: ${scan.reason}`);
     expect(renderStoriesRefsReport(scan)).toEqual([
       `stories-refs: scanned 4 specs at main (${scan.baseSha.slice(0, 9)})`,
     ]);
@@ -340,5 +360,43 @@ describe('engine/stories-refs-diagnostic', () => {
     const scan = await scanStoriesRefs(worktree);
     expect(finding(scan, 'processed').state).toBe('processed');
     expect(finding(scan, 'parked').state).toBe('parked');
+  });
+
+  it('leaves daemon state, checkout, and refs unchanged while reporting shipped broken specs', async () => {
+    const root = await createFixture({
+      '.docs/plans/actionable.md': plan('.docs/stories/actionable.md'),
+      '.docs/plans/shipped.md': plan('.docs/stories/shipped.md'),
+      '.docs/shipped/shipped.md': '# Shipped\n',
+    });
+    await writeFixture(root, {
+      '.daemon/blocked.json': '{"existing":true}\n',
+      '.daemon/warned/actionable': 'already warned\n',
+      '.daemon/processed/other': 'already processed\n',
+    });
+
+    const before = {
+      daemon: await snapshotFiles(join(root, '.daemon')),
+      status: await gitOutput(root, ['status', '--porcelain']),
+      refs: await gitOutput(root, ['for-each-ref', '--format=%(refname)%00%(objectname)']),
+    };
+    const scan = await scanStoriesRefs(root);
+    const after = {
+      daemon: await snapshotFiles(join(root, '.daemon')),
+      status: await gitOutput(root, ['status', '--porcelain']),
+      refs: await gitOutput(root, ['for-each-ref', '--format=%(refname)%00%(objectname)']),
+    };
+
+    expect(scan.kind === 'ok' && finding(scan, 'shipped').state).toBe('shipped');
+    expect(after).toEqual(before);
+    await expect(readFile(join(root, '.daemon', 'processed', 'shipped'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not include mutation helpers or git fetch in the diagnostic source', async () => {
+    const source = await readFile(
+      new URL('../../src/engine/stories-refs-diagnostic.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).not.toMatch(/\b(?:fastForwardRoot|writeBlockedSnapshot|markWarned|repairProcessed|discoverBacklog|fetch)\b/);
   });
 });

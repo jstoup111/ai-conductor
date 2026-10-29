@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:11, task:24
+// Covers: task:6, task:7, task:8, task:11, task:24
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -1886,6 +1886,29 @@ describe('engine/daemon-observe-cli', () => {
       );
       expect(output).toContain('stories-refs: 1 broken (actionable 1, halted 0, parked 0, shipped 0, processed 0)');
       expect(output).not.toContain('stories-refs: clean');
+    });
+
+    it('reports from an already-fetched origin ref after origin becomes unreachable', async () => {
+      const sha = await commitStoriesRefsFixture({
+        '.docs/plans/broken.md': '# Plan\n**Stories:** .docs/stories/missing.md\n',
+      });
+      const origin = await mkdtemp(join(tmpdir(), 'daemon-observe-origin-'));
+      try {
+        await execFile('git', ['init', '--bare', '--initial-branch=main', '--quiet', origin]);
+        await execFile('git', ['remote', 'add', 'origin', origin], { cwd: root });
+        await execFile('git', ['push', '--quiet', '-u', 'origin', 'main'], { cwd: root });
+        await execFile('git', ['fetch', '--quiet', 'origin', 'main'], { cwd: root });
+        await execFile('git', ['remote', 'set-url', 'origin', join(origin, 'unreachable')], { cwd: root });
+
+        const { code, output } = await dispatchStoriesRefs(root);
+
+        expect({ code, output }).toMatchObject({
+          code: 0,
+          output: expect.stringContaining(`stories-refs: scanned 1 specs at origin/main (${sha.slice(0, 9)})`),
+        });
+      } finally {
+        await rm(origin, { recursive: true, force: true });
+      }
     });
 
     it('dispatches a zero-spec header for a committed corpus with no plans or manifests', async () => {
