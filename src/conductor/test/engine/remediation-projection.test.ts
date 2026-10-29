@@ -278,8 +278,9 @@ describe('remediation projection', () => {
     });
   });
 
+  // Covers: task:3
   // Covers: task:8
-  it('projects FIXABLE PRD criteria, their plan ownership, and engine vocabulary', async () => {
+  it('projects FIXABLE PRD criteria without widening the v1 PRD-only envelope', async () => {
     const root = await fixture();
     await writePrdVerdict(root);
 
@@ -311,6 +312,12 @@ describe('remediation projection', () => {
         },
       },
     });
+    if (!result.ok) throw new Error(result.fault.detail);
+    expect(REMEDIATION_PROJECTION_VERSION).toBe(2);
+    expect(result.projection).not.toHaveProperty('priorAsBuiltCases');
+    expect(JSON.stringify({ ...result.projection, version: 1 })).toBe(
+      '{"version":1,"source":"prd-audit","requiredReferences":[{"kind":"prd-criterion","id":"S1.2","sourceGate":"prd_audit","ownerTaskId":"7","summary":"The renderer ignores the durable disposition."}],"evidence":{"excerpts":[],"omittedFiles":[]},"tasks":[{"id":"7","title":"Repair the typed projection","doneWhen":["[test] The projection receives the criterion.","The task title and completion checks are available."]}],"pendingAsBuiltFindings":[],"priorLaps":[],"refusals":[],"vocabulary":{"dispositions":["build","acceptance_specs","architecture_review","plan","publication","existing-task","halt"],"haltCategories":["architectural-clarity","product-scope","unanswerable"]}}',
+    );
   });
 
   // Covers: task:rem-prd-audit-rem-prd-audit-s1-1-2

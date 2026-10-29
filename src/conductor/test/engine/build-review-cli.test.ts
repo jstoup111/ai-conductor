@@ -460,7 +460,7 @@ describe('build-review findings CLI', () => {
   });
 
   // Covers: task:23
-  it('renders child-scoped carried sources, operator resolutions, and pending case-store outbox entries', async () => {
+  it('renders pending case-store outbox entries from a v4 store alongside child-scoped case state', async () => {
     const originOne = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const originTwo = canonicalizeBuildReviewFindingIdentity({
       ...finding,
@@ -474,7 +474,7 @@ describe('build-review findings CLI', () => {
       { sourceId: `testQuality:${originTwo.id}`, lapId: 'lap-origin-two' },
     ];
     const childState: RemediationCaseStoreState = {
-      version: 'v3', feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, prdWideningCases: [], suppressions: [],
+      version: 'v4', feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, prdWideningCases: [], asBuiltCases: [], suppressions: [],
       cases: [{
         ...refutedCaseStore.cases[0]!, id: 'case-carried', disposition: 'reject', rationale: 'Already accepted risk.',
         sources: [{ sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T10:00:00.000Z' }],
