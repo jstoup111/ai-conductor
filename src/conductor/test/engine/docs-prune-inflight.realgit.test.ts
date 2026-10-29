@@ -1,11 +1,11 @@
-// Covers: task:14, task:16
+// Covers: task:14, task:16, task:23
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 
 import { initTestRepo } from '../fixtures/git-repo.js';
-import { commitDocsPruneDeletion } from '../../src/engine/docs-prune.js';
+import { applyOpenPullRequestDeferral, commitDocsPruneDeletion } from '../../src/engine/docs-prune.js';
 import { makeGitRunner, performRebase, runTier1, type GitRunner } from '../../src/engine/rebase.js';
 
 const roots: string[] = [];
@@ -62,4 +62,33 @@ it('keeps a local edit or stops with the pruned path conflict; it never silently
     await expect(readFile(join(repo, path), 'utf8'), 'tier-1 resolved the conflict and retained the feature edit').resolves.toContain('feature edit that must survive');
   }
   await git(['rebase', '--abort']);
+});
+
+it('defers a manifest-backed selection as a unit when an open PR changes its manifest', () => {
+  const paths = ['.docs/alpha/manifest.json', '.docs/alpha/machine/plan.md', '.docs/coherence/alpha.md'];
+  const selection = {
+    removable: paths,
+    deferred: [],
+    skipped: [],
+    excluded: [],
+    stems: new Map([['alpha', paths]]),
+  };
+
+  const outcome = applyOpenPullRequestDeferral(selection, [{
+    number: 42,
+    url: 'https://example.test/pr/42',
+    body: '',
+    headSha: 'a'.repeat(40),
+    headRef: 'feature/alpha',
+    author: 'other',
+    changedPaths: ['.docs/alpha/manifest.json'],
+  }], 'operator');
+
+  expect(outcome.removable).toEqual([]);
+  expect(outcome.deferred).toEqual([{
+    stem: 'alpha',
+    paths,
+    reason: 'open-pr-modifies',
+    pullRequests: ['https://example.test/pr/42'],
+  }]);
 });
