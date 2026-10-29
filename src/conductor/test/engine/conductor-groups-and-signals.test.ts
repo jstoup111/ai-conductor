@@ -95,6 +95,9 @@ import type { EscalateBuildFailureOpts } from '../../src/engine/build-failure-es
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
+import { validateRemediationPlan, REMEDIATION_PLAN_CONTRACT_VERSION } from '../../src/engine/remediation-plan-contract.js';
+import { appendRemediationTasks } from '../../src/engine/remediation-append.js';
+import { recordAsBuiltReconciliation } from '../../src/engine/as-built-case-reconciliation.js';
 
 import type {
   InvokeOptions,
@@ -1837,6 +1840,36 @@ describe('engine/conductor', () => {
       expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
 
       expect(kickbacks.some((k) => k.to === 'build')).toBe(true);
+    });
+
+    // Covers: task:rem-as-built-rem-vg-ab1
+    it('records each appended as-built repair on only its own reconciliation case', async () => {
+      const appended = appendRemediationTasks('# Plan\n', [
+        { id: 'S1.1', disposition: 'build', category: null, rationale: 'Repair criterion.', tasks: [{ id: 'prd-fix', title: 'Repair criterion' }], gateSource: 'prd-audit' },
+        { id: 'as-built:first', disposition: 'build', category: null, rationale: 'Repair first guard.', tasks: [{ id: 'ab-one', title: 'Repair first guard' }], gateSource: 'as-built' },
+        { id: 'as-built:second', disposition: 'build', category: null, rationale: 'Repair second guard.', tasks: [{ id: 'ab-two', title: 'Repair second guard' }], gateSource: 'as-built' },
+      ], 'as-built');
+      expect(appended.idsByGapId.get('as-built:first')).toEqual(['rem-as-built-ab-one']);
+      expect(appended.idsByGapId.get('as-built:second')).toEqual(['rem-as-built-ab-two']);
+
+      const recorded = recordAsBuiltReconciliation({ version: 'v4', feature: { version: 'v1', repository: 'fixture', feature: 'validation-remediation' }, cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [] }, {
+        results: [
+          { source: { findingId: 'as-built:first', attemptId: 'attempt', class: 'REMEDIABLE', summary: 'First missing guard.' }, relation: 'new', reason: 'New finding.', repairTaskIds: appended.idsByGapId.get('as-built:first') },
+          { source: { findingId: 'as-built:second', attemptId: 'attempt', class: 'REMEDIABLE', summary: 'Second missing guard.' }, relation: 'new', reason: 'New finding.', repairTaskIds: appended.idsByGapId.get('as-built:second') },
+        ], newCaseId: (() => { let n = 0; return () => `case-${++n}`; })(), newEventId: (() => { let n = 0; return () => `event-${++n}`; })(),
+      });
+      expect(recorded.state.asBuiltCases.map((record) => record.repairTaskIds)).toEqual([
+        ['rem-as-built-ab-one'], ['rem-as-built-ab-two'],
+      ]);
+
+      const rejected = validateRemediationPlan({ version: REMEDIATION_PLAN_CONTRACT_VERSION, dispositions: [
+        { reference: { kind: 'as-built-finding', id: 'first' }, disposition: 'existing-task', category: null, rationale: 'Bind sibling.', tasks: [], boundTaskIds: ['2'] },
+        { reference: { kind: 'as-built-finding', id: 'second' }, disposition: 'existing-task', category: null, rationale: 'Repair second.', tasks: [], boundTaskIds: ['2'] },
+      ] }, { source: 'as-built', requiredReferences: [
+        { kind: 'as-built-finding', id: 'first', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '1' }, summary: 'First missing guard.' },
+        { kind: 'as-built-finding', id: 'second', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Second missing guard.' },
+      ], activePlanTasks: [{ id: '1', title: 'First owner', doneWhen: [] }, { id: '2', title: 'Second owner', doneWhen: [] }], refusals: [], priorAsBuiltCases: [] });
+      expect(rejected).toMatchObject({ kind: 'rejected' });
     });
 
     it('halts a mixed as-built group report with every finding listed and re-runs the refused gate after HALT clears', async () => {
