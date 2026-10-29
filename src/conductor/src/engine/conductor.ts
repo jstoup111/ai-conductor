@@ -4943,6 +4943,7 @@ export class Conductor {
 
     let prdAuditBudget: RemediationGateAppendBudget | undefined;
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
+    let appendedTaskIdsByGapId: ReadonlyMap<string, readonly string[]> | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       try {
         prdAuditBudget = prdAuditCapEnforced
@@ -4986,6 +4987,7 @@ export class Conductor {
         if (appendResult.success) {
           appendAttempted = true;
           appendedTaskIds = appendResult.appendedIds;
+          appendedTaskIdsByGapId = appendResult.appendedIdsByGapId;
           const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
           if (unreadable) {
             return { kind: 'halt', haltClass: 'needs-human', detail: unreadable };
@@ -5474,7 +5476,7 @@ export class Conductor {
         if (finding === undefined) return [];
         const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
           ? resolvedExistingTaskIdsByGapId.get(disposition.reference.id)
-          : appendedTaskIds.length > 0 ? appendedTaskIds : undefined;
+          : appendedTaskIdsByGapId?.get(disposition.reference.id);
         if (repairTaskIds === undefined) return [];
         return [{
           source: {
