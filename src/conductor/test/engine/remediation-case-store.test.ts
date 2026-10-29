@@ -7,12 +7,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT,
+  asBuiltCasesForState,
   buildReviewRecurrenceLineage,
   classifyBuildReviewRecurrence,
   currentBuildReviewSourceLinks,
   finalizedBuildReviewSourceIds,
   parseRemediationCaseDomainRecord,
   RemediationCaseStore,
+  selectAsBuiltRemediationCases,
   selectBuildReviewRemediationCases,
   selectPrdWideningRemediationCases,
   withPrdWideningCases,
@@ -52,7 +54,7 @@ const CASE_STATE: RemediationCaseStoreState = {
   suppressions: [],
 };
 
-const CURRENT_CASE_STATE = { ...CASE_STATE, version: 'v3' as const, outbox: [] };
+const CURRENT_CASE_STATE = { ...CASE_STATE, version: 'v4' as const, asBuiltCases: [], outbox: [] };
 
 const V3_OPERATOR_CASE = {
   ...CASE_STATE.cases[0],
@@ -153,6 +155,30 @@ const PRD_WIDENING_CASE = {
     caseId: 'prd-case-1',
     reason: 'The reworded finding concerns the original behavior.',
   }],
+} as const;
+
+const AS_BUILT_CASE = {
+  id: 'as-built-case-1',
+  domain: 'as_built',
+  sources: [{
+    findingId: 'as-built:attempt-1:1',
+    attemptId: 'attempt-1',
+    class: 'REMEDIABLE',
+    reference: { kind: 'plan-task', taskId: '1' },
+    summary: 'The implemented behavior still leaves the contract uncovered.',
+    relation: 'new',
+    reason: 'No prior case describes this contract gap.',
+  }, {
+    findingId: 'as-built:attempt-1:2',
+    attemptId: 'attempt-1',
+    class: 'DESIGN',
+    summary: 'The architecture needs an operator decision.',
+    relation: 'needs-human',
+    reason: 'The finding is a DESIGN concern.',
+  }],
+  status: 'open',
+  repairTaskIds: ['rem-as-built-t1'],
+  recurrenceCount: 1,
 } as const;
 
 const temporaryDirectories: string[] = [];
@@ -470,6 +496,66 @@ describe('remediation case store', () => {
     expect(buildReviewCases[0]?.sources[0]?.sourceId).toBe(prdWideningCases[0]?.originalSources[0]?.sourceId);
   });
 
+  it('round-trips an as-built record and selects only that domain', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+
+    await expect(store.mutate(async (state) => ({
+      value: 'recorded' as const,
+      nextState: { ...state, version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
+    }))).resolves.toEqual({ ok: true, value: 'recorded' });
+
+    const stored = await store.read();
+    expect(stored).toMatchObject({
+      ok: true,
+      state: { version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
+    });
+    if (!stored.ok) throw new Error('expected an as-built case store');
+    expect(selectAsBuiltRemediationCases([
+      ...stored.state.cases,
+      ...stored.state.prdWideningCases,
+      ...stored.state.asBuiltCases,
+    ])).toEqual([AS_BUILT_CASE]);
+  });
+
+  it('upgrades a v3 store without changing existing collections, suppressions, or outbox entries', async () => {
+    const legacy = {
+      ...V3_STATE,
+      prdWideningCases: [PRD_WIDENING_CASE],
+      suppressions: [{ kind: 'confidence', findingId: 'suppressed-1', rubric: 'testQuality', summary: 'Below the confidence floor.', confidence: 40, floor: 70, lastSeenLap: 'lap-1' }],
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(legacy)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
+
+    await expect(store.mutate(async (state) => ({
+      value: 'upgraded' as const,
+      nextState: { ...state, version: 'v4', asBuiltCases: [AS_BUILT_CASE] },
+    }))).resolves.toEqual({ ok: true, value: 'upgraded' });
+
+    const written = JSON.parse(tracked.contents);
+    expect(written).toMatchObject({ version: 'v4', asBuiltCases: [AS_BUILT_CASE] });
+    expect(JSON.stringify(written.cases)).toBe(JSON.stringify(legacy.cases));
+    expect(JSON.stringify(written.prdWideningCases)).toBe(JSON.stringify(legacy.prdWideningCases));
+    expect(JSON.stringify(written.suppressions)).toBe(JSON.stringify(legacy.suppressions));
+    expect(JSON.stringify(written.outbox)).toBe(JSON.stringify(legacy.outbox));
+  });
+
+  it('reads v3 with no as-built cases and rejects foreign or malformed as-built records', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(V3_STATE)}\n`);
+    const result = await new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE }).read();
+    expect(result).toMatchObject({ ok: true, state: { version: 'v3' } });
+    if (!result.ok) throw new Error('expected v3 state');
+    expect(asBuiltCasesForState(result.state)).toEqual([]);
+
+    const foreign = createTrackedFilesystem(`${JSON.stringify({ ...CURRENT_CASE_STATE, asBuiltCases: [CASE_STATE.cases[0]] })}\n`);
+    await expect(new RemediationCaseStore('/project', FEATURE, { filesystem: foreign.filesystem, lock: IMMEDIATE_LEASE }).read())
+      .resolves.toEqual({ ok: false, reason: 'foreign-domain' });
+    expect(parseRemediationCaseDomainRecord({ ...AS_BUILT_CASE, status: 'unknown' })).toEqual({ ok: false, reason: 'malformed-state' });
+    expect(parseRemediationCaseDomainRecord({ ...AS_BUILT_CASE, sources: [{ ...AS_BUILT_CASE.sources[0], reason: '' }] })).toEqual({ ok: false, reason: 'malformed-state' });
+    expect(parseRemediationCaseDomainRecord({ ...AS_BUILT_CASE, recurrenceCount: 1.5 })).toEqual({ ok: false, reason: 'malformed-state' });
+    expect(parseRemediationCaseDomainRecord({ ...AS_BUILT_CASE, unexpected: true })).toEqual({ ok: false, reason: 'malformed-state' });
+  });
+
   it.each([
     ['a build-review effect', { ...PRD_WIDENING_CASE, effect: { kind: 'none' } }],
     ['autonomous acceptance authority', { ...PRD_WIDENING_CASE, decision: 'accept' }],
@@ -483,7 +569,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v3', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [], outbox: [] },
+      state: { version: 'v4', feature: FEATURE, cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [] },
     });
   });
 
@@ -537,7 +623,7 @@ describe('remediation case store', () => {
       .resolves.toEqual({ ok: true, value: 'seeded' });
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { ...state, version: 'v3', outbox: [] },
+      state: { ...state, version: 'v4', asBuiltCases: [], outbox: [] },
     });
   });
 
@@ -620,7 +706,7 @@ describe('remediation case store', () => {
 
     await expect(store.read()).resolves.toMatchObject({
       ok: true,
-      state: { version: 'v3', prdWideningCases: [PRD_WIDENING_CASE], outbox: V3_OUTBOX },
+      state: { version: 'v4', prdWideningCases: [PRD_WIDENING_CASE], asBuiltCases: [], outbox: V3_OUTBOX },
     });
   });
 
@@ -641,7 +727,7 @@ describe('remediation case store', () => {
       filesystem: tracked.filesystem,
       lock: IMMEDIATE_LEASE,
     });
-    const expectedState = { ...preservedState, version: 'v3', outbox: [] };
+    const expectedState = { ...preservedState, version: 'v4', asBuiltCases: [], outbox: [] };
 
     await expect(store.mutate(async (state) => ({ value: 'migrated' as const, nextState: state })))
       .resolves.toEqual({ ok: true, value: 'migrated' });
@@ -801,7 +887,7 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], domain: 'prd_audit' }],
     }, 'foreign-domain'],
-    ['an unsupported state version', { ...CASE_STATE, version: 'v4' }, 'unknown-version'],
+    ['an unsupported state version', { ...CASE_STATE, version: 'v5' }, 'unknown-version'],
     ['a mismatched action effect', {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
@@ -867,7 +953,7 @@ describe('remediation case store', () => {
   it.each([
     ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
     ['malformed JSON', '{not-json', 'malformed-json'],
-    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v4' }), 'unknown-version'],
+    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v5' }), 'unknown-version'],
   ])('does not overwrite %s while refusing it', async (_description, original, reason) => {
     const projectRoot = await createProjectRoot();
     const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
@@ -966,7 +1052,15 @@ describe('remediation case store', () => {
 
     await expect(store
       .mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({ ok: true, value: null });
-    const currentState = { ...proposedState, version: 'v3' as const, outbox: [] };
+    const currentState = {
+      version: 'v4' as const,
+      feature: proposedState.feature,
+      cases: proposedState.cases,
+      prdWideningCases: proposedState.prdWideningCases,
+      asBuiltCases: [],
+      suppressions: proposedState.suppressions,
+      outbox: [],
+    };
     expect(tracked.contents).toBe(`${JSON.stringify(currentState)}\n`);
     await expect(store.read()).resolves.toEqual({ ok: true, state: currentState });
     await expect(store.mutate(async (state) => ({ value: state.cases, nextState: state }))).resolves.toEqual({
@@ -1010,7 +1104,7 @@ describe('remediation case store', () => {
     const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
 
     await expect(store.mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({ ok: true, value: null });
-    const currentState = { ...proposedState, version: 'v3' as const, outbox: [] };
+    const currentState = { ...proposedState, version: 'v4' as const, asBuiltCases: [], outbox: [] };
     await expect(store.read()).resolves.toEqual({ ok: true, state: currentState });
     await expect(store.mutate(async (state) => ({ value: state.cases, nextState: state }))).resolves.toEqual({
       ok: true,
