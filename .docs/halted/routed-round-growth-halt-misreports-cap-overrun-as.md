@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-29T11:50:20.604Z
 Slug: routed-round-growth-halt-misreports-cap-overrun-as
 Class: needs-human
 Halting step: unknown
