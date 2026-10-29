@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "otlp-header-credentials-can-only-come-from-an-envi",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-28-otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-shared-credential-reference-resolver.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/otlp-header-credentials-can-only-come-from-an-envi.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/otlp-header-credentials-can-only-come-from-an-envi.md"
+    }
+  ]
+}
