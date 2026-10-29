@@ -85,6 +85,19 @@ describe('gate invalidation ownership (Task 13)', () => {
     expect(invalidated).toEqual(['architecture_review_as_built', 'prd_audit']);
   });
 
+  it('never adopts a manifest whose folder only matches the active plan filename', async () => {
+    await write('.pipeline/conduct-state.json', JSON.stringify({
+      feature_desc: 'g',
+      activePlanPath: '.docs/plans/f.md',
+    }));
+    await write('.docs/plans/f.md', '# Plan\n');
+
+    const inputs = await resolveReviewInputs(root, [listedStories]);
+
+    expect(inputs).not.toContain(manifestPath);
+    expect(inputs).not.toContain(listedStories);
+  });
+
   it('keeps a manifest that omits review kinds out of legacy same-stem resolution', async () => {
     await write(manifestPath, JSON.stringify({
       schemaVersion: 1,

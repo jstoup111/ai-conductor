@@ -1331,11 +1331,11 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
 /**
  * Resolve the feature identity used for every manifest lookup in this module.
  *
- * `feature_desc` is the durable feature identity; an active-plan path is only
- * a document location and need not share its filename with the manifest
- * folder. Prefer a candidate that actually has a manifest, then retain the
- * first candidate as the legacy fallback so manifest-absent behavior remains
- * unchanged.
+ * `feature_desc` is the durable feature identity and the only key that may
+ * select a manifest; an active-plan path is only a document location, so a
+ * manifest whose folder merely matches a plan filename never becomes this
+ * feature's authority. Without a `feature_desc` manifest, the first candidate
+ * is retained as the legacy fallback so manifest-absent behavior is unchanged.
  */
 async function resolveManifestIdentity(projectRoot: string): Promise<{
   featureDesc: string | undefined;
@@ -1353,10 +1353,8 @@ async function resolveManifestIdentity(projectRoot: string): Promise<{
     planPath ? basename(planPath, '.md') : undefined,
   ].filter((candidate): candidate is string => candidate !== undefined))];
   const manifestSource = worktreeManifestSource(projectRoot);
-  for (const candidate of candidates) {
-    if (await manifestSource.readFile(featureManifestPath(candidate)) !== null) {
-      return { featureDesc, planPath, context, manifestSlug: candidate, manifestOrigin: 'manifest' };
-    }
+  if (featureDesc !== undefined && await manifestSource.readFile(featureManifestPath(featureDesc)) !== null) {
+    return { featureDesc, planPath, context, manifestSlug: featureDesc, manifestOrigin: 'manifest' };
   }
   return { featureDesc, planPath, context, manifestSlug: candidates[0], manifestOrigin: 'legacy' };
 }
