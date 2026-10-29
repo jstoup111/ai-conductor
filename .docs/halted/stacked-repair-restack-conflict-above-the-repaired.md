@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-29T11:46:44.748Z
 Slug: stacked-repair-restack-conflict-above-the-repaired
 Class: needs-human
 Halting step: unknown
