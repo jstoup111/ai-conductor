@@ -152,6 +152,17 @@ describe('guardDaemonSessionInvocation', () => {
     expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
   });
 
+  it('refuses operator-recorded restack resolution before command dispatch', () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).not.toContain('stack');
+    expect(guardDaemonSessionInvocation(
+      argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--tip', 'a'.repeat(40)),
+      markedEnv(),
+    )).toMatchObject({
+      allowed: false,
+      message: expect.stringContaining('daemon-managed session'),
+    });
+  });
+
   it('never grants build-review operator authority to a daemon session', () => {
     // These are intentionally not in the sanctioned worker-command set.  No
     // daemon config or ordinary environment value may turn a maker session

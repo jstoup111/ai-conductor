@@ -88,12 +88,13 @@ describe('planned feature-repair conflict recovery recipe (real local Git)', () 
     await expect(recoverRestackJournal({ worktree: repo, slug: 'demo', events, git: makeGitRunner(repo) }))
       .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
 
+    const persistedTip = (await git(['rev-parse', 'feat/c2/demo'])).stdout.trim();
     expect(consumed).toEqual([{
-      type: 'restack_resolution', opId: 'recovery-resolution-event', child: 2, action: 'consumed', tip: expect.any(String),
+      type: 'restack_resolution', opId: 'recovery-resolution-event', child: 2, action: 'consumed', tip: persistedTip,
     }]);
   });
 
-  it('uses child 1\'s live rewritten tip and resolver candidates for child 2\'s durable record and halt recipe', async () => {
+  it('writes the complete child-2 conflict record and halt recipe from the live child-1 rewrite', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-recovery-conflict-recipe-'));
     repositories.push(repo);
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
