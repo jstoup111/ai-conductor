@@ -151,7 +151,7 @@ describe('routed BUILD settlement cap halt', () => {
 
     expect(fixture.build).not.toHaveBeenCalled();
     const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain('BUILD dispatch halted: prd_audit growth allowance exhausted.');
+    expect(halt.split('\n')[0]).toBe('BUILD dispatch halted: prd_audit growth allowance exhausted.');
     expect(halt).toContain('Plan growth: 13/14 added; 0 remaining (raised cap)\nPending growth: 2 (prd_audit 2); would reach 15/14 when build dispatches; minimum raise 1');
     expect(halt).toContain('kickback-budget raise --feature demo --gate prd_audit --by 1');
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
@@ -209,6 +209,7 @@ describe('routed BUILD settlement cap halt', () => {
     expect(halt).toContain('Pending growth: 1 (prd_audit 1); would reach 7/10 when build dispatches');
     expect(halt).not.toContain('minimum raise');
     expect(halt).toContain('--by «N»');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
   });
 
   it('settles and dispatches after a sufficient raise, while an unchanged cap remains side-effect free', async () => {
@@ -221,6 +222,7 @@ describe('routed BUILD settlement cap halt', () => {
 
     const unchanged = await subject();
     await unchanged.conductor.run();
+    await expect(readFile(join(unchanged.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('minimum raise 1');
     await expect(readKickbackLedger(unchanged.root)).resolves.toMatchObject({ growth: { added: 13 }, gates: { prd_audit: { laps: 0 } } });
     const unsettled = await readRouteRecord(unchanged.root, 'demo', unchanged.roundId, { git: unchanged.git });
     expect(unsettled).toMatchObject({ kind: 'record' });
@@ -286,6 +288,7 @@ describe('routed BUILD settlement cap halt', () => {
     const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('Plan growth: 0/16 added; 0 remaining (raised cap)');
     expect(halt).toContain('would reach 17/16 when build dispatches; minimum raise 1');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
     const after = await readKickbackLedger(fixture.root);
     expect(after).toMatchObject(before);
     expect(after).toMatchObject({
