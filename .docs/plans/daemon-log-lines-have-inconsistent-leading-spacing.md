@@ -187,3 +187,19 @@ An independent coverage judge assessed every criterion row. It took two rounds, 
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] `ai-conductor plan-protected-targets` passes
+
+### Task rem-as-built-fix-kickback-depth-zero: src/conductor/src/engine/daemon-line-shape.ts: set DAEMON_EVENT_DEPTH.kickback (and navigation_back, plus any other arm markerless on main) to 0 per the plan's keep-main-depth rule and ADR adr-2026-07-04 D1/D3
+**Gate:** as-built
+**Rationale:** Verified (99%): on main the kickback arm logs `↩ KICKBACK: ...` with no `·` marker (depth 0), matching ADR adr-2026-07-04 D1 (prefix-free prominent line). The plan's Technical Approach rule says an arm whose lines all use one depth on main keeps that depth, so DAEMON_EVENT_DEPTH.kickback must be 0, not 1. This is implementation drift from approved architecture and the approved plan, with no new architectural decision needed; Task 2 (Step 3: assign values by the rule; Step 5: update depth-changed expectations) admits the repair. Sibling in the same defect class: `navigation_back` (ADR D3 `↰ BACK:` line, also markerless on main) is admitted by the same Task 2 rule and should be checked and corrected too; any other arm that was markerless on main must likewise be depth 0. Task 2's completed behavior and coverage survive: the every-type line-shape invariant still holds at depth 0 (empty marker followed by a non-space, non-`·` character).
+**Governing clause:** adr-2026-07-04-kickback-event-emission-and-log-prominence decision 1
+**Done when:**
+- adr-2026-07-04-kickback-event-emission-and-log-prominence decision 1 is satisfied by this task.
+- The repair for task rem-as-built-fix-kickback-depth-zero is committed and its targeted tests pass.
+
+### Task rem-as-built-fix-kickback-test-expectations: src/conductor/test/engine/daemon-render.test.ts (:272, :278, :284, :636) and src/conductor/test/engine/daemon-mode-feature-log.integration.test.ts (:122): restore prefix-free `↩ KICKBACK: ...` exact-line expectations (and `↰ BACK:` if affected); add a line-shape assertion that kickback persists with no `· ` marker
+**Gate:** as-built
+**Rationale:** Verified (99%): on main the kickback arm logs `↩ KICKBACK: ...` with no `·` marker (depth 0), matching ADR adr-2026-07-04 D1 (prefix-free prominent line). The plan's Technical Approach rule says an arm whose lines all use one depth on main keeps that depth, so DAEMON_EVENT_DEPTH.kickback must be 0, not 1. This is implementation drift from approved architecture and the approved plan, with no new architectural decision needed; Task 2 (Step 3: assign values by the rule; Step 5: update depth-changed expectations) admits the repair. Sibling in the same defect class: `navigation_back` (ADR D3 `↰ BACK:` line, also markerless on main) is admitted by the same Task 2 rule and should be checked and corrected too; any other arm that was markerless on main must likewise be depth 0. Task 2's completed behavior and coverage survive: the every-type line-shape invariant still holds at depth 0 (empty marker followed by a non-space, non-`·` character).
+**Governing clause:** adr-2026-07-04-kickback-event-emission-and-log-prominence decision 1
+**Done when:**
+- adr-2026-07-04-kickback-event-emission-and-log-prominence decision 1 is satisfied by this task.
+- The repair for task rem-as-built-fix-kickback-test-expectations is committed and its targeted tests pass.
