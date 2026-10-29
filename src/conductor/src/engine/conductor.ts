@@ -1355,16 +1355,17 @@ export class Conductor {
       // Legacy in-memory fixtures can exercise gate routing without a Git
       // feature identity. Production remediation always has one; absent
       // identity here leaves the historical gate behavior unchanged.
-      if (!feature) return undefined;
-      const store = new RemediationCaseStore(this.projectRoot, {
-        version: 'v1', repository: feature.repository, feature: feature.feature,
-      });
-      const settled = await store.mutate(async (caseState) => {
-        const result = resolveOpenAsBuiltCases(caseState);
-        return { value: undefined, nextState: result.state };
-      });
-      if (!settled.ok) return `remediation case store write fault while resolving as-built cases: ${settled.reason}`;
-      await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      if (feature) {
+        const store = new RemediationCaseStore(this.projectRoot, {
+          version: 'v1', repository: feature.repository, feature: feature.feature,
+        });
+        const settled = await store.mutate(async (caseState) => {
+          const result = resolveOpenAsBuiltCases(caseState);
+          return { value: undefined, nextState: result.state };
+        });
+        if (!settled.ok) return `remediation case store write fault while resolving as-built cases: ${settled.reason}`;
+        await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      }
     }
     const recordedFindings: RecordedAsBuiltFinding[] = [...this.pendingAsBuiltRemediationFindings.values()]
       .map((finding) => ({

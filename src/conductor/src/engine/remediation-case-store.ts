@@ -17,7 +17,6 @@ import type {
   RemediationCaseSourceOutcome,
 } from './remediation-case-artifact.js';
 import type { ConductorEvent } from '../types/events.js';
-import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
 import { pipelinePathFor, type ChildId } from './child-context.js';
 
 /** Envelope format. Feature identity deliberately retains its own version. */
@@ -129,11 +128,16 @@ export interface RemediationCasePrdWideningRecord {
 
 export type RemediationCaseAsBuiltRelation = 'same' | 'recurrence' | 'materially-changed' | 'new' | 'needs-human';
 
+/** Kept structural so the durable case store does not depend on the verdict reader layer. */
+export type RemediationCaseAsBuiltReference =
+  | { readonly kind: 'adr-decision'; readonly stem: string; readonly decision: number }
+  | { readonly kind: 'plan-task'; readonly taskId: string };
+
 export interface RemediationCaseAsBuiltSource {
   readonly findingId: string;
   readonly attemptId: string;
   readonly class: 'REMEDIABLE' | 'DESIGN';
-  readonly reference?: AsBuiltGoverningReference;
+  readonly reference?: RemediationCaseAsBuiltReference;
   readonly summary: string;
   readonly relation: RemediationCaseAsBuiltRelation;
   readonly reason: string;
@@ -816,6 +820,16 @@ function parsePrdWideningCase(value: unknown): RemediationCasePrdWideningRecord 
   };
 }
 
+function isRemediationCaseAsBuiltReference(value: unknown): value is RemediationCaseAsBuiltReference {
+  if (!isRecord(value)) return false;
+  if (value.kind === 'adr-decision') {
+    return exactKeys(value, ['kind', 'stem', 'decision']) &&
+      boundedString(value.stem, MAX_REFERENCE_LENGTH) && Number.isInteger(value.decision);
+  }
+  return value.kind === 'plan-task' && exactKeys(value, ['kind', 'taskId']) &&
+    boundedString(value.taskId, MAX_REFERENCE_LENGTH);
+}
+
 function parseAsBuiltSource(value: unknown): RemediationCaseAsBuiltSource | undefined {
   if (!isRecord(value) || !boundedString(value.findingId, MAX_REFERENCE_LENGTH) ||
     !boundedString(value.attemptId, MAX_REFERENCE_LENGTH) || !boundedString(value.summary) ||
@@ -827,13 +841,13 @@ function parseAsBuiltSource(value: unknown): RemediationCaseAsBuiltSource | unde
     ...(Object.hasOwn(value, 'priorCaseId') ? ['priorCaseId'] : []),
   ];
   if (!exactKeys(value, expectedKeys) ||
-    (Object.hasOwn(value, 'reference') && !isAsBuiltGoverningReference(value.reference)) ||
+    (Object.hasOwn(value, 'reference') && !isRemediationCaseAsBuiltReference(value.reference)) ||
     (Object.hasOwn(value, 'priorCaseId') && !boundedString(value.priorCaseId, MAX_REFERENCE_LENGTH))) return undefined;
   return {
     findingId: value.findingId,
     attemptId: value.attemptId,
     class: value.class,
-    ...(Object.hasOwn(value, 'reference') ? { reference: value.reference as AsBuiltGoverningReference } : {}),
+    ...(Object.hasOwn(value, 'reference') ? { reference: value.reference as RemediationCaseAsBuiltReference } : {}),
     summary: value.summary,
     relation: value.relation,
     reason: value.reason,
