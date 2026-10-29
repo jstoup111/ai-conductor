@@ -2742,6 +2742,40 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(charge).toHaveBeenCalledTimes(1);
   });
 
+  // Covers: S2.3, task:4, task:rem-prd-audit-R4u
+  it('routes an undeclared bound rebind to BUILD and records its provenance', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The first repair was applied.', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+    }] });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const undeclared: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-R' }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => undeclared),
+      generateId: (() => { const ids = ['N', 'effect-N']; return () => ids.shift()!; })(),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
+    const state = await store.read();
+    if (!state.ok) throw new Error(state.reason);
+    expect(state.state.cases.find((record) => record.id === 'N')).toMatchObject({
+      disposition: 'act', resolution: 'open', recurrenceOf: ['case-R'],
+    });
+    expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([
+      expect.objectContaining({ caseId: 'N', recurrenceOf: ['case-R'], reRaiseKind: 'undeclared', boundCaseId: 'case-R' }),
+    ]);
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+  });
+
   // Covers: task:5, task:rem-prd-audit-5
   // A residual chain is bounded by applied lineage, not by the original
   // binding. N can mint M after it is applied and resolved; M cannot mint a
