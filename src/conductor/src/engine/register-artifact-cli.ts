@@ -200,11 +200,6 @@ export async function dispatchRegisterArtifactCommand(
     err(`register-artifact: could not write manifest: ${error instanceof Error ? error.message : String(error)}.`);
     return 1;
   }
-  if (originalHead === undefined) {
-    err('register-artifact: could not resolve the current commit.');
-    return 1;
-  }
-
   try {
     const commit = await commitEngineChange({
       worktree,
