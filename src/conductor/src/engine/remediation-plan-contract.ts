@@ -22,6 +22,7 @@ const REMEDIATION_DISPOSITIONS = [
 ] as const;
 
 const NON_BLANK_STRING = { type: 'string', minLength: 1 } as const;
+const AS_BUILT_RECONCILIATION_RELATIONS = ['same', 'recurrence', 'materially-changed', 'new'] as const;
 
 const REMEDIATION_REFERENCE_KINDS = ['prd-criterion', 'as-built-finding', 'refusal', 'stall', 'test'] as const;
 
@@ -70,6 +71,16 @@ export const REMEDIATION_PLAN_SCHEMA = deepFreeze({
           rationale: NON_BLANK_STRING,
           tasks: { type: 'array', items: remediationTaskSchema },
           boundTaskIds: { type: 'array', items: NON_BLANK_STRING },
+          reconciliation: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['relation', 'reason'],
+            properties: {
+              relation: { type: 'string', enum: AS_BUILT_RECONCILIATION_RELATIONS },
+              priorCaseId: NON_BLANK_STRING,
+              reason: NON_BLANK_STRING,
+            },
+          },
         },
       },
     },
@@ -98,6 +109,12 @@ export interface AcceptedRemediationPlanDisposition {
   readonly rationale: string;
   readonly tasks: readonly { readonly id: string; readonly title: string }[];
   readonly boundTaskIds: readonly string[];
+  /** Present only for an as-built finding, whose relation the engine has admitted. */
+  readonly reconciliation?: {
+    readonly relation: (typeof AS_BUILT_RECONCILIATION_RELATIONS)[number];
+    readonly priorCaseId?: string;
+    readonly reason: string;
+  };
 }
 
 export type ValidateRemediationPlanResult =
@@ -136,6 +153,10 @@ function isDisposition(value: unknown): value is RemediationDisposition {
 
 function isHaltCategory(value: unknown): value is RemediationHaltCategory {
   return typeof value === 'string' && (REMEDIATION_HALT_CATEGORIES as readonly string[]).includes(value);
+}
+
+function isAsBuiltReconciliationRelation(value: unknown): value is (typeof AS_BUILT_RECONCILIATION_RELATIONS)[number] {
+  return typeof value === 'string' && (AS_BUILT_RECONCILIATION_RELATIONS as readonly string[]).includes(value);
 }
 
 function renderRejectedVocabularyValue(value: unknown): string {
@@ -211,8 +232,10 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
   const answeredRefusalReferences = new Set<string>();
   for (const [index, candidate] of raw.dispositions.entries()) {
     const field = `dispositions[${index}]`;
-    if (!record(candidate) || !exactKeys(candidate, ['reference', 'disposition', 'category', 'rationale', 'tasks', 'boundTaskIds'])) {
-      diagnostics.push(`${field} requires exactly reference, disposition, category, rationale, tasks, and boundTaskIds`);
+    if (!record(candidate) || !Object.keys(candidate).every((key) =>
+      ['reference', 'disposition', 'category', 'rationale', 'tasks', 'boundTaskIds', 'reconciliation'].includes(key)) ||
+      !['reference', 'disposition', 'category', 'rationale', 'tasks', 'boundTaskIds'].every((key) => key in candidate)) {
+      diagnostics.push(`${field} requires exactly reference, disposition, category, rationale, tasks, boundTaskIds, and optional reconciliation`);
       continue;
     }
     if (!record(candidate.reference)) {
@@ -272,12 +295,59 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
       diagnostics.push(`${field}.boundTaskIds must be an array of non-empty task ids`);
       continue;
     }
+    const { kind, id } = candidate.reference;
+    let reconciliation: AcceptedRemediationPlanDisposition['reconciliation'];
+    if (kind === 'as-built-finding') {
+      if (!record(candidate.reconciliation)) {
+        diagnostics.push(`${field}.reconciliation is required for as-built findings`);
+        continue;
+      }
+      if (!exactKeys(candidate.reconciliation, candidate.reconciliation.priorCaseId === undefined
+        ? ['relation', 'reason']
+        : ['relation', 'priorCaseId', 'reason'])) {
+        diagnostics.push(`${field}.reconciliation requires exactly relation, reason, and optional priorCaseId`);
+        continue;
+      }
+      if (!isAsBuiltReconciliationRelation(candidate.reconciliation.relation)) {
+        diagnostics.push(`${field}.reconciliation.relation must be one of ${AS_BUILT_RECONCILIATION_RELATIONS.join(', ')}`);
+        continue;
+      }
+      if (!nonEmptyText(candidate.reconciliation.reason)) {
+        diagnostics.push(`${field}.reconciliation.reason must be non-empty`);
+        continue;
+      }
+      const { relation, priorCaseId, reason } = candidate.reconciliation;
+      if (relation === 'new') {
+        if (priorCaseId !== undefined) {
+          diagnostics.push(`${field}.reconciliation.priorCaseId is forbidden for new`);
+          continue;
+        }
+        reconciliation = { relation, reason };
+      } else {
+        if (!nonEmptyText(priorCaseId)) {
+          diagnostics.push(`${field}.reconciliation.priorCaseId is required for ${relation}`);
+          continue;
+        }
+        if (!(projection.priorAsBuiltCases ?? []).some((priorCase) => priorCase.id === priorCaseId)) {
+          diagnostics.push(`${field}.reconciliation.priorCaseId does not name projected as-built case ${priorCaseId}`);
+          continue;
+        }
+        reconciliation = { relation, priorCaseId, reason };
+      }
+    } else if (candidate.reconciliation !== undefined) {
+      diagnostics.push(`${field}.reconciliation applies only to as-built findings`);
+      continue;
+    }
+    if (reconciliation !== undefined &&
+      (reconciliation.relation === 'same' || reconciliation.relation === 'recurrence') &&
+      candidate.disposition !== REMEDIATION_EXISTING_TASK_DISPOSITION && candidate.disposition !== 'halt') {
+      diagnostics.push(`${field}.disposition for ${reconciliation.relation} admits only existing-task or halt`);
+      continue;
+    }
     if (candidate.disposition === 'build' && candidate.tasks.length === 0 && projection.source !== 'build-stall') {
       diagnostics.push(`${field}.tasks requires at least one task for build`);
       continue;
     }
-
-    const { kind, id } = candidate.reference;
     if (kind === 'stall' || kind === 'test') {
       const grammar = kind === 'stall' ? /^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/ : /^test:[A-Za-z0-9][A-Za-z0-9._-]*$/;
       if (!grammar.test(id)) {
@@ -309,6 +379,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         rationale: candidate.rationale,
         tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
         boundTaskIds: [...candidate.boundTaskIds] as string[],
+        ...(reconciliation === undefined ? {} : { reconciliation }),
       });
       continue;
     }
@@ -321,7 +392,46 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
       }
       const ownerTaskId = owningTaskId(requiredReference);
       let boundTaskIds = [...candidate.boundTaskIds] as string[];
-      if (candidate.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION && ownerTaskId !== undefined) {
+      // A reworded or recurring as-built finding repairs the already-admitted
+      // case.  It may therefore bind its original owner *and* that case's
+      // repair tasks; ordinary findings retain the owner-only rule below.
+      const linkedAsBuiltCase = reconciliation !== undefined &&
+        (reconciliation.relation === 'same' || reconciliation.relation === 'recurrence')
+        ? (projection.priorAsBuiltCases ?? []).find((priorCase) => priorCase.id === reconciliation.priorCaseId)
+        : undefined;
+      if (linkedAsBuiltCase !== undefined) {
+        if (candidate.disposition !== REMEDIATION_EXISTING_TASK_DISPOSITION && candidate.disposition !== 'halt') {
+          diagnostics.push(`${field}.disposition for ${reconciliation!.relation} admits only existing-task or halt`);
+          continue;
+        }
+        if (candidate.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
+          const repairTaskIds = new Set(linkedAsBuiltCase.repairTasks.map((task) => task.id));
+          if (boundTaskIds.length === 0) {
+            diagnostics.push(`${field}.boundTaskIds must bind a repair task of prior case ${linkedAsBuiltCase.id}: ${[...repairTaskIds].join(', ')}`);
+            continue;
+          }
+          const resolution = resolvePlanTaskReference(boundTaskIds.join(','), new Set(projection.tasks.map((task) => task.id)));
+          if (resolution.kind !== 'resolved') {
+            diagnostics.push(`${field}.boundTaskIds does not resolve active task ${resolution.ids.join(', ')}`);
+            continue;
+          }
+          if (!resolution.ids.some((taskId) => repairTaskIds.has(taskId))) {
+            diagnostics.push(`${field}.boundTaskIds must bind a repair task of prior case ${linkedAsBuiltCase.id}: ${[...repairTaskIds].join(', ')}`);
+            continue;
+          }
+          if (ownerTaskId !== undefined && !resolution.ids.includes(ownerTaskId)) {
+            diagnostics.push(`${field}.boundTaskIds must bind owner task ${ownerTaskId}`);
+            continue;
+          }
+          const unrelated = resolution.ids.find((taskId) => taskId !== ownerTaskId && !repairTaskIds.has(taskId));
+          if (unrelated !== undefined) {
+            diagnostics.push(`${field}.boundTaskIds must not bind non-owner task ${unrelated}; owner is ${ownerTaskId ?? 'none'}`);
+            continue;
+          }
+          boundTaskIds = resolution.ids;
+        }
+      }
+      if (linkedAsBuiltCase === undefined && candidate.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION && ownerTaskId !== undefined) {
         if (boundTaskIds.length === 0) {
           diagnostics.push(`${field}.boundTaskIds requires at least one task id for existing-task`);
           recordBoundTaskIdsRejection(rejected, requiredReference, boundTaskIds, ownerTaskId);
@@ -364,6 +474,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         rationale: candidate.rationale,
         tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
         boundTaskIds,
+        ...(reconciliation === undefined ? {} : { reconciliation }),
       });
       continue;
     }
@@ -376,6 +487,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         rationale: candidate.rationale,
         tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
         boundTaskIds: [...candidate.boundTaskIds] as string[],
+        ...(reconciliation === undefined ? {} : { reconciliation }),
       });
       continue;
     }
