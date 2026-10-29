@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-10-29T22:23:08.351Z
 Slug: stacked-repair-restack-conflict-above-the-repaired
 Class: needs-human
 Halting step: unknown
