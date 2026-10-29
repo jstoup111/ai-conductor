@@ -57,7 +57,9 @@ on the `NEEDS YOU:` line; `daemon status` reads the latest snapshot without a re
 contains an ADR whose first declared status is not `APPROVED` or `SUPERSEDED` (or that declares no
 status); it blocks every merged spec, not just the one it names. The
 snapshot is `.daemon/blocked.json`; a missing or malformed snapshot means only that no completed
-discovery pass is available, not that the spec is clear.
+discovery pass is available, not that the spec is clear. For a repo-wide list of plans with broken
+Stories references, labelled by lifecycle state, run
+[`ai-conductor daemon stories-refs`](../reference/cli.md#daemon-stories-refs); it needs no running daemon.
 
 **Recovery:** Apply the line's remedy on the repository's default branch. Do not repair only a
 feature branch or a local working tree: discovery reads the committed default-branch tree. After an
