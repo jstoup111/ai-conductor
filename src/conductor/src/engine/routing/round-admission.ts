@@ -208,7 +208,7 @@ export async function recordRoundStall(
 }
 
 export type ExitRoutedHostAndReconcileResult =
-  | { readonly kind: 'exit-halted'; readonly detail: string }
+  | { readonly kind: 'exit-halted'; readonly detail: string; readonly unreadableRoundId?: RoundId }
   | { readonly kind: 'continued'; readonly next: ReconcileRoundsResult };
 
 /** The sole production continuation after a routed host exit. */
@@ -219,11 +219,21 @@ export async function exitRoutedHostAndReconcile(
   },
 ): Promise<ExitRoutedHostAndReconcileResult> {
   const exited = await (input.exit ?? requestRoutedExit)(input);
-  if (exited.kind === 'halted') return { kind: 'exit-halted', detail: exited.detail };
+  if (exited.kind === 'halted') {
+    const record = await readRouteRecord(input.worktree, input.slug, input.roundId, { ...(input.git === undefined ? {} : { git: input.git }) });
+    return record.kind === 'record'
+      ? { kind: 'exit-halted', detail: exited.detail }
+      : { kind: 'exit-halted', detail: exited.detail, unreadableRoundId: input.roundId };
+  }
   const persist = input.persist ?? (input.events === undefined ? undefined : (event: Parameters<typeof persistOnActiveEventSpine>[1]) => persistOnActiveEventSpine(input.events!, event));
   if (persist !== undefined) {
     const drained = await drainRoutingOutboxes(input.worktree, input.slug, persist, { ...(input.git === undefined ? {} : { git: input.git }) });
-    if (drained.kind !== 'drained') return { kind: 'exit-halted', detail: `routing round ${input.roundId} outbox refused: ${drained.kind}` };
+    if (drained.kind !== 'drained') {
+      const record = await readRouteRecord(input.worktree, input.slug, input.roundId, { ...(input.git === undefined ? {} : { git: input.git }) });
+      return record.kind === 'record'
+        ? { kind: 'exit-halted', detail: `routing round ${input.roundId} outbox refused: ${drained.kind}` }
+        : { kind: 'exit-halted', detail: `routing round ${input.roundId} outbox refused: ${drained.kind}`, unreadableRoundId: input.roundId };
+    }
   }
   return { kind: 'continued', next: await (input.reconcile ?? reconcileRounds)(input.worktree, input.slug, { ...(input.git === undefined ? {} : { git: input.git }) }) };
 }
@@ -278,6 +288,7 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     detail: `routing round ${roundId} stalled: ${detail}`,
     rounds: await stalledRounds(worktree, slug, orderedIds, git),
   });
+  let deferred = false;
   for (const id of orderedIds) {
     const stored = await readRouteRecord(worktree, slug, id, { git });
     if (stored.kind !== 'record') return stalled(id, 'routing record is unreadable');
@@ -311,14 +322,15 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
       }
       const returned = await (await import('./routed-exit.js')).returnToLeaf(worktree, slug, current, { git, abandon: true });
       if (returned.kind === 'unavailable') return returned;
-      return returned.kind === 'leaf-returned'
-        ? { kind: 'leaf-returned', roundId: id }
-        : { kind: 'deferred' };
+      if (returned.kind === 'leaf-returned') return { kind: 'leaf-returned', roundId: id };
+      deferred = true;
+      continue;
     }
     if (Object.values(stored.record.hosts).includes('reroute-moved')) {
       const synced = await completeRerouteSync({ worktree, slug, roundId: id, git });
       if (synced.kind === 'refused') return { kind: 'unavailable', detail: synced.detail };
-      return { kind: 'deferred' };
+      deferred = true;
+      continue;
     }
     if (stored.record.phase === 'prepared' && (marker.kind !== 'marker' || marker.marker.roundId !== id)) {
       const deleted = await writeRoutingTransaction(worktree, slug, [{ kind: 'delete-record', previous: stored }], { git });
@@ -345,12 +357,13 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
         case 'closed':
           continue;
         case 'queue':
-          return { kind: 'deferred' };
+          deferred = true;
+          continue;
       }
       return assertNever(advanced);
     }
   }
-  return marker.kind === 'absent' ? { kind: 'quiescent' } : { kind: 'deferred' };
+  return marker.kind === 'absent' && !deferred ? { kind: 'quiescent' } : { kind: 'deferred' };
 }
 
 /** True when routing durability says that automatic base movement would race a round. */

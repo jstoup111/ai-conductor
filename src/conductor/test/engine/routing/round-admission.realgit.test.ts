@@ -158,6 +158,39 @@ describe('routed-round admission (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  it('continues past a deferred queue round to a later open round with a pending host', async () => {
+    const subject = await fixture();
+    try {
+      const first = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        allocation: {
+          [c1]: { remTaskIds: [], blockBodies: [] },
+          [c3]: { remTaskIds: [], blockBodies: [] },
+        },
+      });
+      const secondId = parseRoundId('r2')!;
+      const second = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        roundId: secondId,
+        allocation: {
+          [c1]: { remTaskIds: [], blockBodies: [] },
+          [c2]: { remTaskIds: [], blockBodies: [] },
+        },
+      });
+      if (first.kind !== 'created' || second.kind !== 'created') throw new Error('route creation failed');
+      await writeRecord(subject, openAudit(first.record, { [c1]: 'restacked', [c3]: 'pending' }));
+      await writeRecord(subject, openAudit(second.record, { [c1]: 'restacked', [c2]: 'pending' }));
+      await writeQueue(subject);
+
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
+        kind: 'navigate-host', roundId: secondId, host: c2,
+      });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker', marker: { roundId: secondId, host: c2 },
+      });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   // Covers: task:1
   it('refuses a second audit round while another open round has pending work', async () => {
     const subject = await fixture();

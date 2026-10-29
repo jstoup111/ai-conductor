@@ -265,6 +265,23 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
         ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
         ...(options.reconcileRounds === undefined ? {} : { reconcile: options.reconcileRounds }),
       });
+      if (exited.kind === 'exit-halted' && exited.unreadableRoundId !== undefined) {
+        // A restack can apply before its route record becomes unreadable (or
+        // before the continuation can drain it).  Reconcile that durable
+        // state once so an unreadable round takes the normal, bounded routing
+        // stall path.  A refused or rolled-back exit still has a readable
+        // record and keeps its original stop below.
+        const afterExitHalt = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
+        if (afterExitHalt.kind === 'stalled') {
+          const recorded = await recordRoundStall(options.worktree, options.slug, afterExitHalt, stallEvents);
+          return { kind: 'halted', ...recorded };
+        }
+        return {
+          kind: 'halted',
+          haltClass: 'mechanical',
+          detail: `routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`,
+        };
+      }
       if (exited.kind === 'exit-halted') return { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
       reconciled = exited.next;
       if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
@@ -314,6 +331,19 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
           return { kind: 'repaired' };
         }
         return { kind: 'unavailable', detail: 'routing leaf return did not reach a terminal routing state' };
+      }
+
+      // A routed continuation owns its next action.  In particular, a queue
+      // fence can report busy because another open round has a pending host;
+      // falling through to the receipt cursor here could restack that former
+      // host and incorrectly report a feature repair.
+      if (await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+        return {
+          kind: 'unavailable',
+          detail: consumed.kind === 'busy' && consumed.detail !== undefined
+            ? `routing queue remains busy while routed rounds are open: ${consumed.detail}`
+            : 'routing rounds remain open after reconciliation',
+        };
       }
     }
     if (reconciled.kind === 'navigate-leaf-to-build' || reconciled.kind === 'navigate-host') return reconciled;

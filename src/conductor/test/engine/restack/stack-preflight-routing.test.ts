@@ -13,6 +13,7 @@ import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker } from '../../../src/engine/routing/route-record-store.js';
+import { revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -343,6 +344,78 @@ describe('stack preflight routing', () => {
     } finally {
       persister.stop();
     }
+  });
+
+  it('records an unreadable round mechanically when an applied exit cannot reread its restacked route record', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    const refsBefore = await refNames(subject.repo);
+    let reconciliations = 0;
+    persister.start();
+    try {
+      await expect(runStackPreflight({
+        worktree: subject.repo,
+        slug: 'demo',
+        events,
+        git: makeGitRunner(subject.repo),
+        reconcileRounds: async () => {
+          reconciliations += 1;
+          return reconciliations === 1
+            ? { kind: 'resume-exit' as const, roundId, host: child }
+            : { kind: 'stalled' as const, detail: `routing round ${roundId} stalled: routing record is unreadable`, rounds: [{ roundId, readable: false as const }] };
+        },
+        // This is the continuation result after its applied restack cannot
+        // reread the route record; the preflight must re-reconcile it.
+        exitRoutedHostAndReconcile: async () => ({ kind: 'exit-halted' as const, detail: `routed exit host ${child}: cannot reread restacked route record`, unreadableRoundId: roundId }),
+      })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
+
+      const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+      expect(halt.split('\n', 1)[0]).toContain('r1 (unreadable)');
+      await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+      expect(await readRepairMarker(subject.repo, 'demo')).toEqual({ kind: 'absent' });
+      expect(await refNames(subject.repo)).toBe(refsBefore);
+      expect(reconciliations).toBe(2);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('does not restack through the pre-exit cursor when a deferred round leaves the queue fence busy', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [{ findingId: 'pending', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
+      allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    const open = { ...created.record, phase: 'open' as const, outbox: [] };
+    const recordBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(open) })).stdout.trim();
+    await subject.git(['update-ref', routeRecordRefFor('demo', roundId), recordBlob]);
+    const closureSha = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const queueBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({
+      generation: 1,
+      entries: [{ child, position: child, closureSha, gates: ['test_suite'], replay: { oldParent: closureSha, newParent: closureSha }, state: 'queued' }],
+      outbox: [],
+    }) })).stdout.trim();
+    await subject.git(['update-ref', revalidationQueueRefFor('demo'), queueBlob]);
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({ kind: 'deferred' as const }),
+    })).resolves.toMatchObject({ kind: 'unavailable', detail: expect.stringContaining('busy') });
+
+    expect(runRestack).not.toHaveBeenCalled();
+    await expect(readRepairMarker(subject.repo, 'demo')).resolves.toEqual({ kind: 'absent' });
+    await expect(readFile(join(subject.repo, '.git', 'HEAD'), 'utf8')).resolves.toContain('ref: refs/heads/feat/daemon-demo');
   });
 
 });
