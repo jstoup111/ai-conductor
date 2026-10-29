@@ -828,14 +828,20 @@ remainder; the refuted source settles only after that residual is applied, while
 residual remains blocking. A second refutation of the same case halts `needs-human`. In a mixed lap,
 an action route takes precedence while an uncovered infrastructure failure remains blocking after the
 BUILD attempt. Invalid, incomplete, stale, repeated, or unfinished case state halts rather than silently
-routing or passing. A repeated or regressed action case halts naming its recovery command; see
+routing or passing. A repeated action case, or a regression the judgement declares a repeat, halts
+naming its recovery command; see
 [semantic case repeat or regression](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
 
 Only open cases own a source. A later judgement may re-raise a source that resolved history already
 links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the
 `build_review` kickback cap like any other. An unbound `act` re-raise over a resolved action case is a
 recurrence: the new case records that owner in `recurrenceOf`, unless the judgement declares it
-distinct through `distinctFrom` with a non-empty reason. A new unbound `act` case with no such owner,
+distinct through `distinctFrom` with a non-empty reason. An `act` row bound through `existingCaseId`
+to a resolved case whose action effect was applied may declare `reRaise` `{ kind, reason }`.
+`repeat` halts as a regression. `residual-gap`, or no declaration, opens a new unbound case whose
+`recurrenceOf` includes the bound case, so the repair routes to BUILD under the lineage limit below;
+`remediation_case_reconciled` carries `reRaiseKind` (`residual-gap` or `undeclared`) and
+`boundCaseId`. The engine drops `reRaise` from any other row. A new unbound `act` case with no such owner,
 one of whose sources maps to a delta hunk, may instead continue a repair: its provenance candidates
 are act cases with an applied action that own a source raised in the predecessor lap on the same
 path. The engine stamps `recurrenceOf` with the candidate whose lineage has the most applied attempts,

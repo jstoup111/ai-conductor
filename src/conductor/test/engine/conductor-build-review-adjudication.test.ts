@@ -346,6 +346,8 @@ interface FixtureOptions {
   readonly adjudicationEnabled?: boolean;
   /** Forces an actual BUILD entry without relying on durable retry recovery. */
   readonly buildPending?: boolean;
+  /** Observes the durable handoff at the BUILD dispatch boundary. */
+  readonly onBuildDispatch?: (projectRoot: string) => Promise<void>;
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
   readonly rawVerdict?: 'PASS' | 'FAIL';
@@ -413,7 +415,10 @@ async function fixture(options: FixtureOptions = {}) {
     run: async (step: StepName, _state: ConductState, opts?: StepRunOptions): Promise<StepRunResult> => {
       dispatched.push(step);
       if (opts?.retryReason !== undefined) retryReasons.set(step, opts.retryReason);
-      if (step === 'build') throw new Error('stop after BUILD dispatch');
+      if (step === 'build') {
+        await options.onBuildDispatch?.(projectRoot);
+        throw new Error('stop after BUILD dispatch');
+      }
       if (step === 'remediate') {
         remediateDispatches += 1;
         const result = options.remediateResults?.[remediateDispatches - 1];
@@ -824,6 +829,83 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(halt).toContain('remediate judgement failed:');
     expect(halt).not.toContain('claude subprocess exited without a classifiable result');
     expect(halt).not.toContain('processErrorCode=E2BIG');
+  });
+
+  // Covers: task:8, task:rem-prd-audit-8
+  // Parse failure must precede every durable remediation write.
+  it.each([
+    { kind: 'maybe', reason: 'A bounded reason.' },
+    { kind: 'residual-gap', reason: '' },
+    { kind: 'residual-gap', reason: 'x'.repeat(8_001) },
+    { kind: 'residual-gap', reason: 'A bounded reason.', note: 'unexpected' },
+  ])('halts malformed reRaise judgement without changing durable remediation state: %o', async (reRaise) => {
+    let caseStoreBytes = '';
+    const ledgerBytes = '{"version":1,"gates":{}}';
+    const baseJudgement = actionJudgement() as {
+      readonly [key: string]: unknown;
+      readonly cases: readonly [Record<string, unknown>];
+    };
+    const run = await fixture({
+      judgement: {
+        ...baseJudgement,
+        cases: [{ ...baseJudgement.cases[0], reRaise }],
+      },
+      seedPipeline: async (root) => {
+        // These are deliberately inert bytes: malformed parsing must halt before
+        // any durable remediation reader or writer can normalize them.
+        caseStoreBytes = JSON.stringify({ version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' }, cases: [] });
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), caseStoreBytes, 'utf8');
+        await writeFile(join(root, '.pipeline/kickback-ledger.json'), ledgerBytes, 'utf8');
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('remediate judgement failed: invalid-case-keys');
+    await expect(Promise.all([
+      readFile(join(run.projectRoot, '.pipeline/remediation-cases.json'), 'utf8'),
+      readFile(join(run.projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'),
+    ])).resolves.toEqual([caseStoreBytes, ledgerBytes]);
+    // A missing pre-lap work order is durable state too: parsing must not
+    // materialize one while rejecting the malformed declaration.
+    await expect(readFile(join(run.projectRoot, '.pipeline/build-review-work-order.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: S2.4, task:8, task:rem-prd-audit-R8b
+  it('routes the #3348 undeclared rebind through build_review to the Task 16 work order', async () => {
+    const tasks = [{ title: 'Task 16 — add the focused regression assertion.' }];
+    const judgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'case-N' }],
+      cases: [{
+        caseRef: 'case-N', existingCaseId: '26a04ec0', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The new testQuality finding needs the Task 16 repair.',
+        effect: { kind: 'action', route: 'build', tasks },
+      }],
+    };
+    let publishedTasks: unknown;
+    await fixture({
+      planText: '# Plan\n\n### Task 16: Regression repair\n**Files:** test/example.test.ts\n',
+      remediateJudgements: [judgement],
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '16', status: 'in_progress' }] }), 'utf8');
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: [{
+            id: '26a04ec0', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The prior repair was applied.', resolution: 'resolved',
+            sources: [{ sourceId: 'testQuality:previous', outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+            effect: { id: '74d67e04', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+          }],
+        }), 'utf8');
+      },
+      onBuildDispatch: async (root) => {
+        await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as { cases: Array<{ tasks: unknown }> };
+        expect(order.cases).toHaveLength(1);
+        publishedTasks = order.cases[0]!.tasks;
+      },
+    });
+
+    expect(publishedTasks).toEqual(tasks);
   });
 
   // Covers: S2.1, S2.2, S2.3, task:4

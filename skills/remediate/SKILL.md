@@ -144,6 +144,10 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
   A malformed `distinctFrom` shape rejects the artifact. An entry may name either a provenance
   candidate of the row or a resolved act owner of a row source; an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate.
+- A bound `act` row on a resolved `act` case with an applied action effect may carry `reRaise`
+  `{ "kind": "residual-gap" | "repeat", "reason": "..." }`; its reason is non-empty.
+  `residual-gap` routes the repair to BUILD under the lineage limit of three applied attempts;
+  `repeat` halts the lap. An absent `reRaise` is treated as a residual gap.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.

@@ -280,7 +280,116 @@ function boundJudgement(
   } as RemediationCaseJudgement;
 }
 
+const RESIDUAL_RE_RAISE = { kind: 'residual-gap', reason: 'the repair left a narrower gap' } as const;
+const REPEAT_RE_RAISE = { kind: 'repeat', reason: 'the same defect is back' } as const;
+
+function judgementWithReRaise(
+  caseId: string | undefined,
+  disposition: 'act' | 'defer',
+  reRaise?: typeof RESIDUAL_RE_RAISE | typeof REPEAT_RE_RAISE,
+): RemediationCaseJudgement {
+  const judgement = boundJudgement(caseId ?? 'case-R', disposition);
+  const originalCase = judgement.cases[0]!;
+  const { existingCaseId: _existingCaseId, ...unboundCase } = originalCase;
+  return {
+    ...judgement,
+    cases: [{
+      ...(caseId === undefined ? unboundCase : originalCase),
+      ...(reRaise === undefined ? {} : { reRaise }),
+    }],
+  } as RemediationCaseJudgement;
+}
+
 describe('remediation case graph validator', () => {
+  // Covers: S1.1, task:2
+  it('keeps residual-gap reRaise exactly on an eligible bound act row', () => {
+    const judgement = judgementWithReRaise('case-R', 'act', RESIDUAL_RE_RAISE);
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], judgement, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual(expect.objectContaining({
+      ok: true,
+      graph: expect.objectContaining({
+        cases: [expect.objectContaining({ case: expect.objectContaining({ reRaise: RESIDUAL_RE_RAISE }) })],
+      }),
+    }));
+  });
+
+  // Covers: S1.1, task:2
+  it('keeps repeat reRaise exactly on an eligible bound act row', () => {
+    const judgement = judgementWithReRaise('case-R', 'act', REPEAT_RE_RAISE);
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], judgement, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual(expect.objectContaining({
+      ok: true,
+      graph: expect.objectContaining({
+        cases: [expect.objectContaining({ case: expect.objectContaining({ reRaise: REPEAT_RE_RAISE }) })],
+      }),
+    }));
+  });
+
+  // Covers: S1.1, task:2
+  it('drops reRaise without rejection on an unbound act row', () => {
+    const withReRaise = judgementWithReRaise(undefined, 'act', RESIDUAL_RE_RAISE);
+    const withoutReRaise = judgementWithReRaise(undefined, 'act');
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withoutReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    }));
+  });
+
+  // Covers: S1.1, task:2
+  it('drops reRaise without rejection on an act row bound to case-A', () => {
+    const withReRaise = judgementWithReRaise('case-A', 'act', RESIDUAL_RE_RAISE);
+    const withoutReRaise = judgementWithReRaise('case-A', 'act');
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withoutReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    }));
+  });
+
+  // Covers: S1.1, task:2
+  it('drops reRaise without rejection on an act row bound to case-X', () => {
+    const withReRaise = judgementWithReRaise('case-X', 'act', RESIDUAL_RE_RAISE);
+    const withoutReRaise = judgementWithReRaise('case-X', 'act');
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withoutReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    }));
+  });
+
+  // Covers: S1.1, task:2
+  it('drops reRaise without rejection on a defer row bound to case-R', () => {
+    const withReRaise = judgementWithReRaise('case-R', 'defer', RESIDUAL_RE_RAISE);
+    const withoutReRaise = judgementWithReRaise('case-R', 'defer');
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual(validateRemediationCaseGraph([CASE_BINDING_SOURCE], withoutReRaise, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    }));
+  });
+
+  // Covers: S1.1, task:2
+  it('rejects a malformed reRaise shape before returning a graph', () => {
+    const judgement = judgementWithReRaise('case-R', 'act', RESIDUAL_RE_RAISE);
+    const malformed = {
+      ...judgement,
+      cases: [{ ...judgement.cases[0]!, reRaise: { kind: 'residual-gap', reason: '', note: 'extra' } }],
+    } as unknown as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph([CASE_BINDING_SOURCE], malformed, {
+      reRaiseEligibleCaseIds: ['case-R'],
+    })).toEqual({ ok: false, reason: 'invalid-case-keys' });
+  });
+
   // Covers: S3.2, task:3
   it('rejects an existing-case binding outside the engine-provided disposition set', () => {
     const judgement = {

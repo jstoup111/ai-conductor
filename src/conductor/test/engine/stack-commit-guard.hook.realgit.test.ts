@@ -16,7 +16,9 @@ import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
-const sourceIndex = fileURLToPath(new URL('../../src/index.ts', import.meta.url));
+// global-setup builds this entry before workers start. Invoking it directly
+// avoids compiling TypeScript once per Git hook under CI parallelism.
+const engineIndex = fileURLToPath(new URL('../../dist/index.js', import.meta.url));
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
 const fixtureFilesystem: SliceTopologyFixtureFilesystem = {
@@ -36,7 +38,7 @@ async function git(root: string, args: string[]): Promise<string> {
 
 async function writeHookLauncher(root: string): Promise<string> {
   const launcher = join(root, 'stack-commit-guard-launcher');
-  await writeFile(launcher, `#!/bin/sh\nexec node --import tsx ${JSON.stringify(sourceIndex)} "$@"\n`, 'utf8');
+  await writeFile(launcher, `#!/bin/sh\nexec node ${JSON.stringify(engineIndex)} "$@"\n`, 'utf8');
   await chmod(launcher, 0o755);
   return launcher;
 }

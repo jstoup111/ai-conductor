@@ -1902,7 +1902,9 @@ build_review adjudication halted: semantic remediation case recurrence limit <ca
 **Diagnosis:** the judgement re-raised a concern over a resolved action case without declaring it
 distinct, and that recurrence lineage already consumed three applied BUILD attempts. Another BUILD
 route is not progress. The engine bound the current source to `<case>` and emitted
-`remediation_semantic_repeat_halt` with reason `recurrence-limit` and `lineageCaseIds`.
+`remediation_semantic_repeat_halt` with reason `recurrence-limit` and `lineageCaseIds`. When the
+judgement bound the re-raise to a resolved, applied action case, the event also carries
+`reRaiseKind` (`residual-gap` or `undeclared`).
 
 **Recovery:**
 
@@ -1938,15 +1940,22 @@ build_review adjudication halted: semantic remediation case regression <case>; a
 build_review adjudication halted: semantic remediation case regression <case>; fix the finding on child <child> (build-review accept has no --child yet)
 ```
 
+A regression on a case whose action was applied also names the lineage after the case:
+`regression <case>; declared repeat; lineage <cases> has <n> applied attempts; ...`.
+
 The matching `remediation_semantic_repeat_halt` event carries reason `already-attempted` for a repeat
-or `regressed` for a regression.
+or `regressed` for a regression. A declared-repeat regression also carries `reRaiseKind: "repeat"`,
+`lineageCaseIds`, and `appliedAttempts`.
 
 **Diagnosis:** the judgement bound a current finding to an `act` case whose BUILD action already ran.
 Another BUILD route would repeat that action, so the engine halts instead.
 
 - **Repeat:** the case is still open. Its action was applied (`effect.status: applied`), and the next
   lap raised the same concern again.
-- **Regression:** the case was resolved, and the finding came back.
+- **Regression:** the case was resolved, and the finding came back. When the case's action was
+  applied, the judgement declared the re-raise a `repeat`; a residual gap or an undeclared re-raise
+  routes to BUILD as a recurrence instead and halts only at the
+  [recurrence limit](#build_review-halted-on-a-recurrence-limit).
 
 Decide whether the finding can be satisfied. A repair that did not satisfy it once will not satisfy
 it on a second attempt. Example: a test-insensitivity finding on a behavior-preserving refactor. No

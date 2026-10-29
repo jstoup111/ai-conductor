@@ -87,6 +87,7 @@ export interface RemediationCaseRow {
   readonly caseRef: string;
   readonly existingCaseId?: string;
   readonly distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
+  readonly reRaise?: { readonly kind: 'residual-gap' | 'repeat'; readonly reason: string };
   readonly disposition: RemediationCaseDisposition;
   readonly priority: RemediationCasePriority;
   readonly rationale: string;
@@ -286,6 +287,13 @@ function parseDistinctFrom(value: unknown): ParseResult<readonly { readonly case
   return { ok: true, value: distinctFrom };
 }
 
+function parseReRaise(value: unknown): ParseResult<{ readonly kind: 'residual-gap' | 'repeat'; readonly reason: string }> {
+  if (!isRecord(value) || !hasExactKeys(value, ['kind', 'reason']) || !oneOf(value.kind, ['residual-gap', 'repeat'] as const) || !isBoundedString(value.reason)) {
+    return { ok: false, reason: 'invalid-case-keys' };
+  }
+  return { ok: true, value: { kind: value.kind, reason: value.reason } };
+}
+
 function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): ParseResult<RemediationCaseRow> {
   if (!isRecord(value)) return { ok: false, reason: 'invalid-case-keys' };
   if (Object.hasOwn(value, 'operatorAcceptance')) return { ok: false, reason: 'operator-owned-acceptance' };
@@ -313,12 +321,18 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
     : value.existingCaseId === undefined
     ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect']
     : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect'];
-  const expectedKeys = value.distinctFrom === undefined ? baseKeys : [...baseKeys, 'distinctFrom'];
+  const expectedKeys = [
+    ...baseKeys,
+    ...(value.distinctFrom === undefined ? [] : ['distinctFrom']),
+    ...(value.reRaise === undefined ? [] : ['reRaise']),
+  ];
   if (!hasExactKeys(value, expectedKeys) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) || (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
     return { ok: false, reason: 'invalid-case-keys' };
   }
   const distinctFrom = value.distinctFrom === undefined ? undefined : parseDistinctFrom(value.distinctFrom);
   if (distinctFrom !== undefined && !distinctFrom.ok) return distinctFrom;
+  const reRaise = value.reRaise === undefined ? undefined : parseReRaise(value.reRaise);
+  if (reRaise !== undefined && !reRaise.ok) return reRaise;
   if (!oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const)) {
     return { ok: false, reason: 'invalid-case-priority' };
   }
@@ -345,6 +359,7 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
       caseRef: value.caseRef,
       ...(value.existingCaseId === undefined ? {} : { existingCaseId: value.existingCaseId }),
       ...(distinctFrom === undefined ? {} : { distinctFrom: distinctFrom.value }),
+      ...(reRaise === undefined ? {} : { reRaise: reRaise.value }),
       disposition: value.disposition,
       priority: value.priority,
       rationale: value.rationale,

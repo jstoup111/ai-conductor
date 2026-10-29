@@ -127,6 +127,14 @@ describe('remediate build_review case-mode contract', () => {
     expect(files.filter((file) => file.endsWith('SKILL.md'))).toEqual(['SKILL.md']);
   });
 
+  it('states the bound reRaise recurrence rule', async () => {
+    const caseMode = section(await readFile(remediateSkillPath, 'utf8'), 'Engine-selected build_review case-v1 mode');
+    expect(caseMode).toMatch(/bound `act` row.*resolved `act` case.*applied action effect.*`reRaise`/is);
+    expect(caseMode).toMatch(/`residual-gap` routes the repair to BUILD.*three applied attempts/is);
+    expect(caseMode).toMatch(/`repeat` halts the lap/i);
+    expect(caseMode).toMatch(/absent `reRaise` is treated as a residual gap/i);
+  });
+
   it('treats bounded prior-source finding digests as binding context rather than report text', async () => {
     const skill = await readFile(remediateSkillPath, 'utf8');
     const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
