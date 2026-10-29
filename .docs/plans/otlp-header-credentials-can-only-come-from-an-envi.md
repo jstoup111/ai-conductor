@@ -316,3 +316,19 @@ Task 1 ─┬─ Task 2 ── Task 3 ─┬─ Task 4
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-R1: Trim only trailing whitespace from command output in src/conductor/src/engine/credentials/command-source.ts (trimEnd), with a RED test in src/conductor/test/engine/credentials/command-source.test.ts asserting leading whitespace is preserved
+**Gate:** as-built
+**Rationale:** Verified (99%): command-source.ts:85 uses `stdout.trim()`, which strips leading whitespace too. ADR D2 and plan Task 3 Step 3 both say 'trailing-whitespace trimming'. The approved architecture is clear and the code does not conform, so this is BUILD work admitted by Task 3. Use `trimEnd()` before the empty check and prefixing. Add a RED test where the fake runner prints `  tok-123\n` and the resolved value keeps the leading spaces. Existing Task 3 assertions (`Bearer tok-123` and `tok-123` from `tok-123\n`) still hold, and Task 8's whitespace-only-output unavailable case still holds because `trimEnd()` of whitespace-only output is ''.
+**Governing clause:** adr-2026-10-28-shared-credential-reference-resolver decision 2
+**Done when:**
+- adr-2026-10-28-shared-credential-reference-resolver decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: Build resolved headers in src/conductor/src/engine/otel/otel-header-provider.ts so every configured key, including __proto__, is an own property, with a RED test in src/conductor/test/engine/otel/otel-header-provider.test.ts
+**Gate:** as-built
+**Rationale:** Verified (99%): otel-header-provider.ts:30 builds `headers` as a `{}` literal and :34 assigns `headers[header] = result.value`. For a `__proto__` header name this calls the inherited Object.prototype setter, so the header never becomes an own property and is dropped from both the spool and direct requests. ADR D5 requires every configured header to be sent. This is a conforming implementation defect in the provider that plan Task 7 created (Task 9 reuses it on the direct path), so it is BUILD work admitted by Task 7. Build the record so arbitrary keys stay own properties, e.g. Object.fromEntries over the resolved pairs, or Object.defineProperty on the result. Add a RED test in otel-header-provider.test.ts asserting a `__proto__` header resolves as an own key with its value. Out of scope and left unchanged: the `{ ...fallback }` path, since spread copies own properties correctly. Sibling resolver map at :25 already uses Object.fromEntries.
+**Governing clause:** adr-2026-10-28-shared-credential-reference-resolver decision 5
+**Done when:**
+- adr-2026-10-28-shared-credential-reference-resolver decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
