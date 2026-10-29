@@ -193,4 +193,62 @@ describe('authenticated OTLP HTTP export', () => {
       await once(server, 'close');
     }
   });
+
+  it('shares an expired direct-export refresh and retries an uncached failed credential', async () => {
+    const received: string[] = [];
+    const server = createServer((request, response) => {
+      received.push(String(request.headers.authorization));
+      request.resume();
+      response.writeHead(200).end();
+    });
+    try {
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('loopback listener has no TCP address');
+      const resolved = resolveOtelConfig({ otel: {
+        exporter: 'otlp', endpoint: `http://127.0.0.1:${address.port}`,
+        headers: { authorization: { command: ['credential-command'], prefix: 'Bearer ' } }, spool: { enabled: false },
+      } }, '/tmp/otel-authenticated-export') as Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>;
+      let now = 0;
+      let releaseRefresh!: (result: { stdout: string }) => void;
+      const refresh = new Promise<{ stdout: string }>((resolve) => { releaseRefresh = resolve; });
+      const runner = vi.fn().mockResolvedValueOnce({ stdout: 'tok-1\n' }).mockImplementationOnce(() => refresh);
+      const exporters = buildExporters(resolved, { env: { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined }, commandRunner: runner, now: () => now });
+      const exportOne = () => new Promise<{ code: number }>((resolve) => {
+        const span = new BasicTracerProvider().getTracer('otel-authenticated-export-test').startSpan('concurrent-command-export');
+        span.end();
+        exporters.spanExporter.export([span as unknown as ReadableSpan], resolve);
+      });
+      await expect(exportOne()).resolves.toMatchObject({ code: ExportResultCode.SUCCESS });
+      now = 300_000;
+      const exports = Array.from({ length: 5 }, exportOne);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(runner).toHaveBeenCalledTimes(2);
+      releaseRefresh({ stdout: 'tok-2\n' });
+      await expect(Promise.all(exports)).resolves.toEqual(Array.from({ length: 5 }, () => expect.objectContaining({ code: ExportResultCode.SUCCESS })));
+      await exporters.spanExporter.shutdown();
+
+      const retryRunner = vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error('failed'), { code: 3 }))
+        .mockResolvedValueOnce({ stdout: 'recovered\n' });
+      const retryExporters = buildExporters(resolved, { env: { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined }, commandRunner: retryRunner, now: () => now });
+      const retryOne = () => new Promise<{ code: number }>((resolve) => {
+        const span = new BasicTracerProvider().getTracer('otel-authenticated-export-test').startSpan('retry-command-export');
+        span.end();
+        retryExporters.spanExporter.export([span as unknown as ReadableSpan], resolve);
+      });
+      await expect(retryOne()).resolves.toMatchObject({ code: ExportResultCode.FAILED });
+      await expect(retryOne()).resolves.toMatchObject({ code: ExportResultCode.SUCCESS });
+      await retryExporters.spanExporter.shutdown();
+      expect({ runnerCalls: runner.mock.calls.length, retryCalls: retryRunner.mock.calls.length, received }).toEqual({
+        runnerCalls: 2,
+        retryCalls: 2,
+        received: ['Bearer tok-1', 'Bearer tok-2', 'Bearer tok-2', 'Bearer tok-2', 'Bearer tok-2', 'Bearer tok-2', 'Bearer recovered'],
+      });
+    } finally {
+      server.close();
+      await once(server, 'close');
+    }
+  });
 });

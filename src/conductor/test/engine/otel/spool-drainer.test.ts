@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { SpoolDrainer } from '../../../src/engine/otel/spool-drainer.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
-import { CredentialUnavailableError } from '../../../src/engine/otel/otel-header-provider.js';
+import { CredentialUnavailableError, createOtelHeaderProvider } from '../../../src/engine/otel/otel-header-provider.js';
 
 const directories: string[] = [];
 const servers: Server[] = [];
@@ -85,7 +85,11 @@ describe('SpoolDrainer', () => {
     });
     const drainer = new SpoolDrainer(store, {
       endpoint: 'http://collector.test', events, fetch,
-      headers: async () => { throw new CredentialUnavailableError('authorization', 'Command credential source credential is unavailable: command exited with exit code 3.'); },
+      headers: createOtelHeaderProvider(
+        { authorization: { kind: 'command', argv: ['credential', '--token'] } },
+        undefined,
+        { commandRunner: vi.fn().mockRejectedValue(Object.assign(new Error('failed'), { code: 3 })) },
+      ),
       sleep: async () => new Promise<void>(() => {}),
     });
     const draining = drainer.drainUntilStopped();
@@ -158,6 +162,41 @@ describe('SpoolDrainer', () => {
       credentialErrors: [expect.objectContaining({ rendererName: 'otel' })],
       delays: expect.arrayContaining([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000]),
     });
+  });
+
+  it('reports a credential transition after a network warning without replacing the backlog failure class', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('credential-protected'));
+    const events = new ConductorEventEmitter();
+    const errors: Array<{ rendererName: string; error: string }> = [];
+    const backlog: Array<{ lastFailureClass?: string }> = [];
+    events.on('renderer_error', (event) => { errors.push(event); });
+    events.on('otel_spool_backlog', (event) => { backlog.push(event); });
+    let headerAttempts = 0;
+    let releaseBacklog!: () => void;
+    const backlogReady = new Promise<void>((resolve) => { releaseBacklog = resolve; });
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test', events, random: () => 0,
+      headers: async () => {
+        if (headerAttempts++ === 0) return {};
+        throw new CredentialUnavailableError('authorization', 'Command credential --token is unavailable: command exited with exit code 3.');
+      },
+      fetch: async () => { throw new TypeError('network unavailable'); },
+      sleep: async () => new Promise<void>((resolve) => setImmediate(resolve)),
+      backlogSleep: async () => backlogReady,
+    });
+    const draining = drainer.drainUntilStopped();
+    await waitFor(() => errors.length === 2, 'network and credential failures were not reported');
+    releaseBacklog();
+    await waitFor(() => backlog.length === 1, 'credential transition did not produce a backlog event');
+    await drainer.stop();
+    await draining;
+
+    expect(errors).toEqual([
+      expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/network/i) }),
+      expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/authorization.*credential --token/i) }),
+    ]);
+    expect(backlog).toEqual([expect.objectContaining({ lastFailureClass: 'network' })]);
   });
 
   it('retries a transient spool list failure without delaying the other signal', async () => {
