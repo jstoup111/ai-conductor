@@ -11,7 +11,7 @@ import {
   writeRoutingTransaction,
   type StoredRouteRecord,
 } from './route-record-store.js';
-import { admitRound } from './round-admission.js';
+import { admitRound, checkRoundAdmissionFence } from './round-admission.js';
 import { assertNever, parseRoundId } from './route-types.js';
 import type { RevalidationQueueEntry, RevalidationQueueRecord, RoundId } from './route-types.js';
 
@@ -48,7 +48,7 @@ export function mergeQueueGeneration(
 
 export type ConsumeLowestQueuedResult =
   | { readonly kind: 'admitted'; readonly roundId: RoundId; readonly host: ChildId }
-  | { readonly kind: 'none' | 'busy' | 'unavailable' };
+  | { readonly kind: 'none' | 'busy' | 'unavailable' | 'stalled'; readonly detail?: string };
 
 /** Converts only the queue head into a durable revalidate route. */
 export async function consumeLowestQueued(
@@ -66,6 +66,10 @@ export async function consumeLowestQueued(
   const entry = queue.queue.entries[0]!;
   const roundId = await nextRoundId(worktree, slug, { git });
   if (typeof roundId !== 'string') return { kind: 'unavailable' };
+  const fence = await checkRoundAdmissionFence(worktree, slug, { roundId, kind: 'revalidate' }, { git });
+  if (fence !== undefined) {
+    return fence.detail.includes('unreadable') ? { kind: 'stalled', detail: fence.detail } : { kind: 'busy', detail: fence.detail };
+  }
   const created = await createRouteRecord(worktree, slug, {
     roundId,
     kind: 'revalidate',

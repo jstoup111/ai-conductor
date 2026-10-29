@@ -153,9 +153,16 @@ dispatch records `restack_planned` in `.pipeline/events.jsonl`.
 
 ## 3. Two routed rounds open at once
 
-Engine defect [#3445](https://github.com/jstoup111/ai-conductor/issues/3445).
+Engine defect [#3445](https://github.com/jstoup111/ai-conductor/issues/3445). Engines with the
+fix refuse a second audit round while one is open, and drain a feature that already holds two:
+the marker's round finishes first, then the older round's pending hosts run
+([routed repair](../reference/configuration.md#stacked_prs)). A round that cannot advance
+halts with `routing rounds stalled: r<n> (<host>: <state>, …); <cause>`. The first two identical
+stalls are `mechanical` and retry on their own. A third halts `needs-human`. Then summarize the
+rounds ([section 1](#1-inspect-stack-and-routing-state)), fix the named round as below, and clear
+the halt. The rest of this section is for older engines.
 
-**Symptom.** Every resume ends within seconds with no reason anywhere:
+**Symptom (older engines).** Every resume ends within seconds with no reason anywhere:
 
 ```text
 ■ done <slug>: error — loop ended without DONE or HALT marker

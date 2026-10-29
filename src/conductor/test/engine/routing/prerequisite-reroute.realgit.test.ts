@@ -358,6 +358,7 @@ describe('verified prerequisite reroute (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  // Covers: task:rem-as-built-rem-as-built-R2
   it('reconciles a crashed reroute before admitting or dispatching its destination, and retries a failed tree sync', async () => {
     const subject = await fixture();
     try {
@@ -375,7 +376,7 @@ describe('verified prerequisite reroute (real local Git)', () => {
         kind: 'record', record: { hosts: { 1: 'reroute-moved', 2: 'pending' } },
       });
 
-      await expect(reconcileRounds(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'deferred' });
+      await expect(reconcileRounds(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'navigate-host', roundId: 'r1', host: c2 });
       await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
         kind: 'record', record: { hosts: { 1: 'rerouted', 2: 'admitted' } },
       });
@@ -383,6 +384,32 @@ describe('verified prerequisite reroute (real local Git)', () => {
         .toBe((await subject.git(['rev-parse', `${subject.closed1}^{tree}`])).stdout.trim());
       await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
         .resolves.toMatchObject({ kind: 'completed', record: { hosts: { 1: 'rerouted', 2: 'admitted' } } });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:rem-as-built-rem-as-built-R2
+  it('returns recovered reroute navigation before attempting another pending round', async () => {
+    const subject = await fixture();
+    try {
+      await expect(rerouteRound({ worktree: subject.repo, slug: 'demo', roundId, from: c1, to: c2, evidence: ['parseB'], git: subject.git }))
+        .resolves.toMatchObject({ kind: 'rerouted' });
+      const secondRoundId = parseRoundId('r2')!;
+      const second = await createRouteRecord(subject.repo, 'demo', {
+        roundId: secondRoundId,
+        sealedAuthored: 1,
+        kind: 'audit',
+        items: [{ findingId: 'second-pending', kind: 'audit', owner: c1, host: c1, reason: 'task-slice', fallback: [] }],
+        allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
+      });
+      if (second.kind !== 'created') throw new Error('second route creation failed');
+      const secondBefore = (await subject.git(['rev-parse', routeRecordRefFor('demo', secondRoundId)])).stdout.trim();
+
+      await expect(reconcileRounds(subject.repo, 'demo', { git: subject.git }))
+        .resolves.toEqual({ kind: 'navigate-host', roundId: 'r1', host: c2 });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker', marker: { roundId: 'r1', host: c2 },
+      });
+      expect((await subject.git(['rev-parse', routeRecordRefFor('demo', secondRoundId)])).stdout.trim()).toBe(secondBefore);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 

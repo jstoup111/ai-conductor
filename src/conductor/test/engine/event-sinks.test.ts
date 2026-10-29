@@ -256,6 +256,7 @@ const ROUTING_EVENT_TYPES = [
   'remediation_rerouted',
   'operator_round',
   'routed_repair_phase',
+  'routing_rounds_stalled',
   'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -670,6 +671,12 @@ const routingEvents = [
     closureSha: routingClosureSha,
     outcome: 'passed',
   },
+  {
+    type: 'routing_rounds_stalled',
+    rounds: [{ roundId: routingRoundId, readable: true, unsettledHosts: { [routingChild]: 'pending' } }],
+    detail: 'routing rounds stalled: r1 (1: pending); test refusal',
+    attempt: 1,
+  },
 ] as const satisfies readonly ConductorEvent[];
 
 // @ts-expect-error -- routing occurrences always retain their execution child.
@@ -728,6 +735,7 @@ describe('event sink subscriptions', () => {
         remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
         operator_round: { render: false, persist: true, audit: false, otel: false },
         routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+        routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
         child_revalidated: { render: false, persist: true, audit: false, otel: false },
       });
     } finally {

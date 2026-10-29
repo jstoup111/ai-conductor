@@ -1526,6 +1526,11 @@ a routed round instead of appended to the leaf plan:
   One transaction, fenced on the restack journal, then opens the round and writes the `repairing`
   marker. The engine persists `remediation_routed` and `routed_repair_phase`, records one kickback,
   and navigates back to `build`. No leaf plan append, budget receipt, or commit happens first.
+- **Admission fence.** Before allocating a route record, the engine checks every other `open`
+  round, plus a `prepared` one that the marker names. An `audit` round is refused while any such
+  round exists. A `revalidate` round is refused while any such round has an `admitted`,
+  `repairing`, or `built` host or is not waiting on the queue. An unreadable other record refuses
+  and names its round. A fence refusal halts `mechanical` and allocates no record.
 - **Host entry.** At BUILD-region entry the engine pins the host's base and tree, switches to the
   host branch, writes the round's frozen `rem-*` task blocks into the host's plan in one commit with
   a `Round: r<n>` trailer, binds each item's repair obligation to the host branch, and seeds task
@@ -1563,7 +1568,11 @@ a routed round instead of appended to the leaf plan:
   Otherwise the engine marks the host `built` and runs a journaled `feature-repair`
   [restack](#restack), whose transaction marks the host `restacked` and deletes the marker. A failed
   exit halts `needs-human` with `routed exit host <k>:` plus the detail.
-- **Progression.** The round then admits its next pending child host in recorded order. After the
+- **Progression.** The in-loop exit and the resume preflight share one exit path: after the exit,
+  the engine drains the routing outboxes and reconciles. Reconciliation visits the marker's round
+  first, then the others in ref order, and continues past a round that closes, so a feature
+  holding two open rounds drains both without hand repair. A round admits its next pending child
+  host in recorded order. After the
   child hosts come queued revalidations, then the leaf host. With nothing pending, the engine
   switches to the leaf, records the return in the route record, closes the round, and re-pends
   `prd_audit`, `architecture_review_as_built`, `manual_test`, and the custom gates between
@@ -1581,13 +1590,22 @@ a routed round instead of appended to the leaf plan:
   `routing round limit r999 reached`, `routing round r<n> is already open; cannot admit r<m>`,
   `routing cannot read the sealed task-slice ownership envelope`, or
   `leaf branch <branch> is missing prerequisite paths: <paths>`.
+- **Stalls.** When reconciliation cannot advance a round (an unreadable record, a refused
+  compare-and-swap on advance, close, or leaf return, or a marker naming an unreadable round), the
+  engine emits `routing_rounds_stalled` and halts with `routing rounds stalled: r<n> (<host>:
+  <state>, …); <cause>`. The first and second consecutive identical stalls halt `mechanical`; the
+  third halts `needs-human`. A `routed_repair_phase` or `remediation_routed` event, or a stall
+  naming a different round set, restarts the count. A stall whose event cannot be persisted halts
+  `needs-human`. Recovery:
+  [two routed rounds open at once](../runbooks/stacked-feature-manual-recovery.md#3-two-routed-rounds-open-at-once).
 - **Recovery.** After journal recovery and the outbox drain, the stack preflight deletes a
   `prepared` record that no marker names. For an admitted round, conductor resume rewinds the leaf
   region to `build` without re-admitting.
 - **Base refresh.** While any route record is not `closed` or the `revalidate` queue exists, the
   stack preflight, the daemon re-kick rebase, and the finish-time `rebase` step defer the base
-  refresh and emit `restack_refused` with reason `deferred-base-refresh`. The re-kick keeps its
-  sentinel for a later run.
+  refresh and emit `restack_refused` with reason `deferred-base-refresh`. The stack preflight then
+  still reconciles, so the open round advances in the same run. The re-kick keeps its sentinel for
+  a later run.
 
 When `enabled` is `true` and the plan declares a `## Slices` manifest, the `stacked-delivery` land
 gate at `engineer/land` refuses the plan unless all of these hold:

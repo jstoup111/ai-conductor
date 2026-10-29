@@ -2330,6 +2330,16 @@ type ConductorEventBody =
       credit: boolean;
       child: ChildId;
     }
+  | {
+      /** A reconciliation could not safely advance a durable routing round. */
+      type: 'routing_rounds_stalled';
+      rounds: readonly (
+        | { readonly roundId: RoundId; readonly readable: false }
+        | { readonly roundId: RoundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> }
+      )[];
+      detail: string;
+      attempt: number;
+    }
   /** Lifecycle of an operator-owned landing, delivered from the route outbox. */
   | {
       type: 'operator_round';

@@ -429,17 +429,7 @@ describe('ClaudeProvider', () => {
       });
 
       const testTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      const originalTmpdir = process.env.TMPDIR;
-      delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      process.env.TMPDIR = '/tmp';
-      try {
-        await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
-      } finally {
-        if (testTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-        else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = testTmpRoot;
-        if (originalTmpdir === undefined) delete process.env.TMPDIR;
-        else process.env.TMPDIR = originalTmpdir;
-      }
+      await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).not.toContain('--append-system-prompt');

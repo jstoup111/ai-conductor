@@ -217,13 +217,12 @@ import { assertNever, emptyUnsettledReceipt, routingEligible, type RegionGate, t
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
-import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
-import { admitRound } from './routing/round-admission.js';
-import { reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
+import { admitRound, checkRoundAdmissionFence, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
-import { requestRoutedExit } from './routing/routed-exit.js';
+import type { requestRoutedExit } from './routing/routed-exit.js';
 import { consumeLowestQueued } from './routing/revalidation-queue.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
@@ -731,7 +730,7 @@ export class Conductor {
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
-  private readonly requestRoutedExit: typeof requestRoutedExit;
+  private readonly requestRoutedExit: typeof requestRoutedExit | undefined;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
@@ -824,9 +823,9 @@ export class Conductor {
    * region has no safe child target. Keep their operator-facing recovery
    * precise and terminal before any region state or provider work can start.
    */
-  private async haltChildRegionRefusal(reason: string): Promise<void> {
+  private async haltChildRegionRefusal(reason: string, haltClass: 'needs-human' | 'mechanical' = 'needs-human'): Promise<void> {
     const body = `child BUILD region refused: ${reason}`;
-    await this.writeHaltMarker(`${body}\n`, 'needs-human');
+    await this.writeHaltMarker(`${body}\n`, haltClass);
     const prUrl = await this.surfaceRemediationPr(body);
     await this.emitLoopHalt(body, prUrl);
   }
@@ -2631,7 +2630,7 @@ export class Conductor {
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
     this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
-    this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit ?? requestRoutedExit;
+    this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
@@ -5111,6 +5110,8 @@ export class Conductor {
             };
             const priorSealed = await routedSealedAuthored(this.projectRoot, this.featureSlug, { cursor, config: this.config });
             const sealedAuthored = priorSealed ?? countAuthoredTaskHeadings(planText);
+            const fence = await checkRoundAdmissionFence(this.projectRoot, this.featureSlug, { roundId, kind: 'audit' });
+            if (fence !== undefined) return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail };
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
@@ -5124,7 +5125,7 @@ export class Conductor {
                 return 'persisted';
               },
             });
-            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
+            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: admission.fence ? 'mechanical' : 'needs-human', detail: admission.detail };
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
           }
         }
@@ -15577,7 +15578,7 @@ export class Conductor {
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
             const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
             if (execution.source === 'routed-host' && execution.roundId !== undefined) {
-              const exited = await this.requestRoutedExit({
+              const continued = await exitRoutedHostAndReconcile({
                 worktree: this.projectRoot,
                 slug,
                 roundId: execution.roundId,
@@ -15587,8 +15588,11 @@ export class Conductor {
                   ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
                   : undefined,
                 resolverCap: resolveRebaseResolutionAttempts(this.config),
+                persist: (event) => persistOnActiveEventSpine(this.events, event),
+                exit: this.requestRoutedExit,
+                reconcile: reconcileRounds,
               });
-              if (exited.kind === 'halted') {
+              if (continued.kind === 'exit-halted') {
                 // requestRoutedExit supplies the durable diagnostic (including
                 // a restack HALT where appropriate); do not replace it with a
                 // generic conductor refusal.
@@ -15600,25 +15604,21 @@ export class Conductor {
                   const prUrl = await this.surfaceRemediationPr(body);
                   await this.emitLoopHalt(body, prUrl);
                 } else {
-                  await this.haltChildRegionRefusal(exited.detail);
+                  await this.haltChildRegionRefusal(continued.detail);
                 }
-                return;
-              }
-              const drained = await drainRoutingOutboxes(
-                this.projectRoot,
-                slug,
-                (event) => persistOnActiveEventSpine(this.events, event),
-              );
-              if (drained.kind !== 'drained') {
-                await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
                 return;
               }
               // A routed exit only settles its host. Reconcile immediately so
               // the same loop iteration admits the next host, closes a round
               // before queue consumption, or records the final leaf return.
-              const reconciled = await reconcileRounds(this.projectRoot, slug);
+              const reconciled = continued.next;
               if (reconciled.kind === 'unavailable') {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
+                return;
+              }
+              if (reconciled.kind === 'stalled') {
+                const stall = await recordRoundStall(this.projectRoot, slug, reconciled, this.events);
+                await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
                 return;
               }
               let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
@@ -15637,6 +15637,16 @@ export class Conductor {
                 consumed = await consumeLowestQueued(this.projectRoot, slug);
                 if (consumed.kind === 'unavailable') {
                   await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
+                  return;
+                }
+                if (consumed.kind === 'stalled') {
+                  const stalled = await reconcileRounds(this.projectRoot, slug);
+                  if (stalled.kind === 'stalled') {
+                    const stall = await recordRoundStall(this.projectRoot, slug, stalled, this.events);
+                    await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
+                    return;
+                  }
+                  await this.haltChildRegionRefusal(consumed.detail ?? 'routing queue consumption stalled', 'mechanical');
                   return;
                 }
                 if (consumed.kind === 'admitted') {

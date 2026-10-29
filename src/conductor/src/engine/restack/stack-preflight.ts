@@ -15,10 +15,9 @@ import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
-import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
+import { diagnoseAffectedRounds, exitRoutedHostAndReconcile, reconcileRounds, recordRoundStall, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
-import { requestRoutedExit } from '../routing/routed-exit.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
@@ -62,6 +61,8 @@ export interface RunStackPreflightOptions {
   readonly hasLiveHalt?: () => Promise<boolean>;
   /** Routing recovery belongs between journal recovery and cursor resolution. */
   readonly reconcileRounds?: typeof reconcileRounds;
+  /** Injectable continuation keeps resume-exit behavior parity-testable. */
+  readonly exitRoutedHostAndReconcile?: typeof exitRoutedHostAndReconcile;
   readonly routedRoundOpen?: typeof routedRoundOpen;
 }
 
@@ -124,6 +125,9 @@ async function haltForLiveJournalOwner(
  * stack cannot be flattened by lost worktree metadata.
  */
 async function runStackPreflightInner(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
+  // A routing stall cannot be retryable unless its attempt reaches the active
+  // event spine. A direct caller without an emitter therefore fails closed.
+  const stallEvents = options.events ?? new ConductorEventEmitter();
   // Establish whether the feature is stacked before touching routing state.
   // A journal itself establishes durable child state, so this still recovers
   // interrupted stacks while keeping N=1 features on their historical path.
@@ -179,8 +183,11 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   if (marker?.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot read operator repair marker' };
   if (marker?.kind === 'marker') {
     const stored = await readRouteRecord(options.worktree, options.slug, marker.marker.roundId, { git: options.git });
-    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `cannot read operator round ${marker.marker.roundId}` };
-    if (stored.record.kind === 'operator') {
+    // Do not stop at the marker's first unreadable record.  The outbox drain
+    // remains the admission fence, and reconciliation below turns every
+    // unreadable durable round (including an earlier one) into one named,
+    // mechanical stall.
+    if (stored.kind === 'record' && stored.record.kind === 'operator') {
       const tips = await checkOperatorTips({
         worktree: options.worktree,
         slug: options.slug,
@@ -221,31 +228,80 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
     }
     const persister = new EventPersister(join(options.worktree, '.pipeline', 'events.jsonl'), options.events ?? new ConductorEventEmitter());
     const drained = await drainRoutingOutboxes(options.worktree, options.slug, (event) => persister.persistDurably(event), { git: options.git });
-    if (drained.kind !== 'drained') return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
+    if (drained.kind !== 'drained') {
+      // A failed outbox must not enter reconciliation: that path may advance
+      // a pending successor or create a marker. Render its durable context
+      // through the read-only diagnostic instead.
+      const affected = await diagnoseAffectedRounds(options.worktree, options.slug, { git: options.git });
+      if (affected.kind === 'affected' && affected.rounds.length > 0) {
+        const recorded = await recordRoundStall(options.worktree, options.slug, {
+          kind: 'stalled',
+          detail: `cannot drain routing outbox: ${drained.kind}`,
+          rounds: affected.rounds,
+        }, stallEvents);
+        return { kind: 'halted', ...recorded };
+      }
+      return { kind: 'unavailable', detail: affected.kind === 'unavailable'
+        ? `${affected.detail}; cannot drain routing outbox: ${drained.kind}`
+        : `cannot drain routing outbox: ${drained.kind}` };
+    }
     // A due base refresh must yield to *any* durable routed obligation.  In
     // particular, reconciliation can otherwise navigate an admitted host (or
     // consume the queue) before this deferral is observed.
     if (options.baseRefreshDue && await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
       await deferredBaseRefresh(options.events);
-      return { kind: 'clear' };
     }
-    const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
+    let reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
     if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
+    if (reconciled.kind === 'stalled') {
+      const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, stallEvents);
+      return { kind: 'halted', ...recorded };
+    }
     if (reconciled.kind === 'resume-exit') {
-      const exited = await requestRoutedExit({
+      const exited = await (options.exitRoutedHostAndReconcile ?? exitRoutedHostAndReconcile)({
         worktree: options.worktree,
         slug: options.slug,
         roundId: reconciled.roundId,
         host: reconciled.host,
         skipBuiltCompareAndSwap: true,
+        persist: (event) => persister.persistDurably(event),
         ...(options.git === undefined ? {} : { git: options.git }),
         ...(options.events === undefined ? {} : { events: options.events }),
         ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
         ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
+        ...(options.reconcileRounds === undefined ? {} : { reconcile: options.reconcileRounds }),
       });
-      return exited.kind === 'restacked' || exited.kind === 'no-commit-done' || exited.kind === 'noop'
-        ? { kind: 'repaired' }
-        : { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
+      if (exited.kind === 'exit-halted' && exited.unreadableRoundId !== undefined) {
+        // A restack can apply before its route record becomes unreadable (or
+        // before the continuation can drain it). Diagnose that durable
+        // state without recovering it: a mutable reconciliation could admit
+        // an earlier pending round before it reaches this unreadable one.
+        // A refused or rolled-back exit still has a readable record and keeps
+        // its original stop below.
+        const affected = await diagnoseAffectedRounds(options.worktree, options.slug, { git: options.git });
+        if (affected.kind === 'affected' && affected.rounds.length > 0) {
+          const recorded = await recordRoundStall(options.worktree, options.slug, {
+            kind: 'stalled',
+            detail: `routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`,
+            rounds: affected.rounds,
+          }, stallEvents);
+          return { kind: 'halted', ...recorded };
+        }
+        return {
+          kind: 'halted',
+          haltClass: 'mechanical',
+          detail: affected.kind === 'unavailable'
+            ? `${affected.detail}; routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`
+            : `routing round ${exited.unreadableRoundId} is unreadable after routed exit: ${stageDetail('routed exit', exited.detail)}`,
+        };
+      }
+      if (exited.kind === 'exit-halted') return { kind: 'halted', detail: stageDetail('routed exit', exited.detail) };
+      reconciled = exited.next;
+      if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: stageDetail('round reconciliation', reconciled.detail) };
+      if (reconciled.kind === 'stalled') {
+        const recorded = await recordRoundStall(options.worktree, options.slug, reconciled, stallEvents);
+        return { kind: 'halted', ...recorded };
+      }
     }
     // Queue admission is marker-first and happens before any leaf return.
     // A closed audit round may therefore yield to its lowest invalidated child.
@@ -259,6 +315,49 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       const consumed = await consumeLowestQueued(options.worktree, options.slug, { git: options.git });
       if (consumed.kind === 'admitted') return { kind: 'navigate-host', roundId: consumed.roundId, host: consumed.host };
       if (consumed.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
+      if (consumed.kind === 'stalled') {
+        // Queue admission discovered an unreadable durable round. Reconcile
+        // again to preserve the round set and bounded escalation on the
+        // existing routing-stall event spine.
+        const stalled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
+        if (stalled.kind === 'stalled') {
+          const recorded = await recordRoundStall(options.worktree, options.slug, stalled, stallEvents);
+          return { kind: 'halted', ...recorded };
+        }
+        return { kind: 'halted', detail: consumed.detail ?? 'routing queue consumption stalled', haltClass: 'mechanical' };
+      }
+      // The exit continuation has already reconciled the durable return. Do
+      // not reuse the pre-exit cursor and manufacture a feature-repair
+      // restack from the former host's closure.
+      if (reconciled.kind === 'leaf-returned' && consumed.kind === 'none') {
+        if (!await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+          // A carried child deliberately survives an operator abandon.  It is
+          // no longer covered by the just-closed round, so do not let the
+          // terminal fast path hide its unlanded closed-child commit.
+          const returnedCursor = await resolveActiveChild(options.worktree, options.slug, { git: options.git });
+          if (returnedCursor.kind === 'repair-pending') {
+            return {
+              kind: 'halted',
+              detail: unlandedClosedChildCommitsHalt(options.slug, returnedCursor.repairChildren).trimEnd(),
+            };
+          }
+          return { kind: 'repaired' };
+        }
+        return { kind: 'unavailable', detail: 'routing leaf return did not reach a terminal routing state' };
+      }
+
+      // A routed continuation owns its next action.  In particular, a queue
+      // fence can report busy because another open round has a pending host;
+      // falling through to the receipt cursor here could restack that former
+      // host and incorrectly report a feature repair.
+      if (await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+        return {
+          kind: 'unavailable',
+          detail: consumed.kind === 'busy' && consumed.detail !== undefined
+            ? `routing queue remains busy while routed rounds are open: ${consumed.detail}`
+            : 'routing rounds remain open after reconciliation',
+        };
+      }
     }
     if (reconciled.kind === 'navigate-leaf-to-build' || reconciled.kind === 'navigate-host') return reconciled;
   }

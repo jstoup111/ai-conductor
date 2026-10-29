@@ -521,12 +521,15 @@ describe('stack preflight dispatch boundaries', () => {
       runRebaseStep(value: typeof state): Promise<{ success: boolean; output?: string }>;
     };
     conductor.persistedStateSnapshot = { ...state };
+    const expectedDetail = _kind === 'halted'
+      ? `routing round round-1 is unreadable after routed exit: ${detail}`
+      : detail;
 
     await expect(conductor.runRebaseStep(state)).resolves.toEqual({
       success: false,
-      output: `stack preflight ${_kind}: ${detail}`,
+      output: `stack preflight ${_kind}: ${expectedDetail}`,
     });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`^${detail}`));
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`^${expectedDetail}`));
   });
 
   it('reports an outbox-drain refusal to the daemon re-kick outcome', async () => {

@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:8, task:1
+// Covers: task:3, task:5, task:6, task:8, task:1
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -87,6 +87,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
@@ -100,6 +101,8 @@ import { journalRefFor, writeRestackJournalBlob } from '../../src/engine/restack
 import type { RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-rekick.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 // Covers: task:1
 
@@ -259,19 +262,33 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
-  it('reports a real stack preflight refusal from the durable HALT, not the no-marker fallback', async () => {
+  it('reports a stalled routing preflight refusal from the durable mechanical HALT, not the no-marker fallback', async () => {
     const worktreePath = await stackPreflightFixture(ITEM.slug);
     const log: string[] = [];
     try {
       const featureDeps = deps({ done: false, halted: false });
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
       featureDeps.runConductor = async (worktree) => {
-        await runStackPreflight({
-          worktree: worktree.path,
-          slug: ITEM.slug,
-          git: makeGitRunner(worktree.path),
-          reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
-        });
+        const events = new ConductorEventEmitter();
+        const persister = new EventPersister(join(worktree.path, '.pipeline', 'events.jsonl'), events);
+        persister.start();
+        try {
+          await runStackPreflight({
+            worktree: worktree.path,
+            slug: ITEM.slug,
+            events,
+            git: makeGitRunner(worktree.path),
+            reconcileRounds: async () => ({
+              kind: 'stalled', detail: 'next-host admission refused',
+              rounds: [{
+                roundId: parseRoundId('r1')!, readable: true,
+                unsettledHosts: { [parseChildId(1)!]: 'pending' },
+              }],
+            }),
+          });
+        } finally {
+          persister.stop();
+        }
       };
       featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
       featureDeps.beginFeatureRun = () => ({
@@ -287,8 +304,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
       const outcome = await makeRunFeature(featureDeps)(ITEM);
       expect(outcome.status).toBe('halted');
-      expect(outcome.reason).toContain('round advance cas-failed');
+      expect(outcome.reason).toContain('routing rounds stalled: r1 (1: pending); next-host admission refused');
       expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
+        haltClass: 'mechanical', retained: false,
+      });
     } finally {
       await rm(worktreePath, { recursive: true, force: true });
     }
