@@ -59,6 +59,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked feature operators can safely land and recover closed-child changes with the `conduct stack land` workflow. ([implementation PR #3453](https://github.com/jstoup111/ai-conductor/pull/3453)).
 - Operators can inspect and accept build-review findings for stacked children from the CLI. ([implementation PR #3513](https://github.com/jstoup111/ai-conductor/pull/3513)).
 - Codex dispatches automatically use the newest available model in each configured capability tier. ([implementation PR #3512](https://github.com/jstoup111/ai-conductor/pull/3512)).
+- Stacked feature operators gain tier-aware restack cascade allowances and cascade status reporting. ([implementation PR #3523](https://github.com/jstoup111/ai-conductor/pull/3523)).
 
 ### Changed
 
