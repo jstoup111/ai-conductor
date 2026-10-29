@@ -1169,6 +1169,38 @@ describe('engine/daemon-observe-cli', () => {
       }
 
       // Covers: task:7
+      it('derives plan growth status caps from the main checkout config', async () => {
+        const repo = join(root, 'repo-main-growth-cap');
+        const slug = 'main-growth-cap-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 26));
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 8\n  max_appended_ratio: 0.8\n', 'utf8');
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-main-growth-cap', repo)]), out: (line) => out.push(line) });
+
+        expect(out.find((line) => line.startsWith(`  PLAN GROWTH [${slug}]`))).toContain('remaining 2/8');
+
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          effectiveGrowthCap: 9,
+          gates: {},
+          growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+        }), 'utf8');
+        const raisedOut: string[] = [];
+        await runDaemonStatus({ registryPath: await registry([record('repo-main-growth-cap', repo)]), out: (line) => raisedOut.push(line) });
+
+        expect(raisedOut.find((line) => line.startsWith(`  PLAN GROWTH [${slug}]`))).toContain('remaining 3/9');
+      });
+
+      // Covers: task:7
       it('resolves a daemon feature plan without an activePlanPath', async () => {
         const repo = join(root, 'repo-daemon-plan');
         const slug = 'daemon-feature';
@@ -1244,8 +1276,8 @@ describe('engine/daemon-observe-cli', () => {
         const repo = join(root, 'repo-pending-growth');
         const slug = 'pending-growth-feature';
         const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 40), tasks('rem-', 11)].join('\n'));
-        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
         await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
           version: 1,
           gates: {},
@@ -1273,8 +1305,6 @@ describe('engine/daemon-observe-cli', () => {
         const repo = join(root, 'repo-status-growth-variants');
         const pendingRoot = await writeDaemonPlan(repo, 'partial-pending', [tasks('', 40), tasks('rem-', 3)].join('\n'));
         const baseLedger = { version: 1, gates: {}, growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } } };
-        await mkdir(join(pendingRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(pendingRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
         await writeFile(join(pendingRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
           ...baseLedger,
           pendingRepair: {
@@ -1297,7 +1327,7 @@ describe('engine/daemon-observe-cli', () => {
 
         await runDaemonStatus({ registryPath: await registry([record('repo-status-growth-variants', repo)]), out: (line) => out.push(line) });
 
-        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 5/10; pending 3 (prd_audit 3)');
+        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 0/5; pending 3 (prd_audit 3)');
         expect(out.find((line) => line.startsWith('  PLAN GROWTH [partial-pending]:'))).not.toContain('minimum raise');
         expect(out).toContain('  PLAN GROWTH [laps-only]: authored 39; added 2 (prd_audit: 2); remaining 3/5');
         expect(out).toContain('  PLAN GROWTH [ordinary]: authored 40; added 2 (prd_audit: 2); remaining 3/5');
@@ -1310,8 +1340,8 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 24), tasks('rem-', 9)].join('\n'), {
           otherPlan: { name: 'other.md', content: tasks('', 5) },
         });
-        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
         const ledgerPath = join(featureRoot, '.pipeline', 'kickback-ledger.json');
         const growth = { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
         await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {}, growth }), 'utf8');

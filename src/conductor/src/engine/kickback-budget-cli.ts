@@ -72,8 +72,8 @@ async function defaultsFor(worktree: string): Promise<BudgetDefaults> {
 }
 
 /** Resolve the shared plan-growth accounting view without consulting halt prose. */
-async function planGrowthViewFor(worktree: string, ledger: KickbackLedger): Promise<KickbackPlanGrowthView> {
-  const config = await loadConfig(worktree);
+async function planGrowthViewFor(worktree: string, root: string, ledger: KickbackLedger): Promise<KickbackPlanGrowthView> {
+  const config = await loadConfig(root);
   const budget = await readPlanGrowthBudget(worktree, config.ok ? config.config : {} as HarnessConfig, { persist: false });
   return withPendingGrowth({
     ...budget.growth,
@@ -214,7 +214,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const { limits: defaults, allowances, restackAllowance } = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
-    const planGrowth = await planGrowthViewFor(worktree, flatLedger);
+    const planGrowth = await planGrowthViewFor(worktree, root, flatLedger);
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
     const unavailable = child === undefined
@@ -418,7 +418,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     );
     committed = true;
     const flatLedger = await readKickbackLedger(worktree);
-    const planGrowth = await planGrowthViewFor(worktree, flatLedger);
+    const planGrowth = await planGrowthViewFor(worktree, root, flatLedger);
     print(`${renderKickbackBudgetView(applied, gate, defaults[gate], planGrowth)}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {

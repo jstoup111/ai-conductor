@@ -1384,8 +1384,8 @@ describe('kickback-budget inspect daemon plan-growth budget', () => {
     await writeFile(join(fixture.worktree, '.docs', 'plans', `${input.planStem ?? slug}.md`), `${headings}\n${remHeadings}`);
     await writeFile(join(fixture.worktree, '.docs', 'plans', 'other.md'), '### Task other: other');
     if (input.config) {
-      await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
-      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), input.config);
+      await mkdir(join(fixture.root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.root, '.ai-conductor', 'config.yml'), input.config);
     }
     return { ...fixture, ledgerPath: join(fixture.worktree, '.pipeline', 'kickback-ledger.json') };
   }

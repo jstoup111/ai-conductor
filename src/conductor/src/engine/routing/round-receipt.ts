@@ -37,6 +37,23 @@ export interface ReceiptRoutingScope {
   readonly config: { readonly stacked_prs?: StackedPrsConfig } | undefined;
 }
 
+/** Durable context for a routed receipt that cannot fit the current allowance. */
+export interface RefusedRoundDetail {
+  readonly roundId: string;
+  readonly findingIds: readonly string[];
+  readonly remTaskIds: readonly string[];
+  readonly existingTaskIds: readonly string[];
+  readonly pendingAsBuiltFindings: readonly NonNullable<RouteRecord['pendingAsBuiltFindings']>[number][];
+  readonly charges: Readonly<Record<string, { readonly laps: number; readonly growth: number }>>;
+  readonly settledAdded: number;
+  readonly growthCap: number;
+  readonly growthCapSource: 'config-derived' | 'raised';
+  readonly growthAuthored: number;
+  readonly growthAuthoredSource: 'plan' | 'ledger' | 'unresolved';
+  readonly settledGrowthByGate: Readonly<Record<string, number>>;
+  readonly capEvidence: { readonly consumed: number; readonly limit: number };
+}
+
 type RouteReceiptRecord =
   | { readonly kind: 'ok'; readonly roundId: RoundId; readonly record: RouteRecord }
   | { readonly kind: 'malformed'; readonly ref: string }
@@ -135,7 +152,7 @@ export type RoundSettlementResult =
   /** Revalidation and operator rounds acknowledge without a receipt settlement. */
   | { readonly kind: 'acknowledged'; readonly settlementId?: string }
   | { readonly kind: 'refused'; readonly reason: 'not-current-host' }
-  | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth' }
+  | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth'; readonly round: RefusedRoundDetail }
   | { readonly kind: 'halted'; readonly reason: string };
 
 export interface SettleRoundAtDispatchInput {
@@ -219,22 +236,48 @@ function nextLedgerForReceipt(
   ledger: KickbackLedger,
   record: RouteRecord,
   budgets: readonly PendingRepairSettlementBudget[],
-): { readonly ledger: KickbackLedger; readonly exhausted?: { gate: string; allowance: 'laps' | 'growth' } } {
+): { readonly ledger: KickbackLedger; readonly exhausted?: { gate: string; allowance: 'laps' | 'growth'; round: RefusedRoundDetail } } {
   const charges = receiptCharges(record);
   const budgetByGate = new Map(budgets.map((budget) => [budget.gate, budget]));
   const next = applySettledReceiptToLedger(ledger, record);
+  const growthCap = next.effectiveGrowthCap ?? budgets[0]?.growthCap ?? 0;
+  const owner = WHOLE_FEATURE_BUDGET_GATES.find((gate) => charges.laps[gate] !== undefined) ?? 'prd_audit';
+  const round = {
+    roundId: record.roundId,
+    findingIds: record.items.map((item) => item.findingId),
+    remTaskIds: Object.entries(record.allocation)
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .flatMap(([, allocation]) => allocation.remTaskIds),
+    existingTaskIds: record.items.flatMap((item) => item.existingTask ? item.taskIds : []),
+    pendingAsBuiltFindings: record.pendingAsBuiltFindings ?? [],
+    charges: Object.fromEntries(WHOLE_FEATURE_BUDGET_GATES.flatMap((gate) => {
+      const laps = charges.laps[gate];
+      return laps === undefined ? [] : [[gate, { laps, growth: gate === owner ? charges.growth : 0 }]];
+    })),
+    settledAdded: ledger.growth?.added ?? 0,
+    growthCap,
+    growthCapSource: next.effectiveGrowthCap === undefined ? 'config-derived' as const : 'raised' as const,
+    growthAuthored: next.growth?.authored ?? record.sealedAuthored ?? 0,
+    growthAuthoredSource: budgets[0]?.authoredSource ?? 'unresolved',
+    settledGrowthByGate: ledger.growth?.byGate ?? {},
+  };
+  const exhausted = (
+    gate: string,
+    allowance: 'laps' | 'growth',
+    consumed: number,
+    limit: number,
+  ) => ({ ledger, exhausted: { gate, allowance, round: { ...round, capEvidence: { consumed, limit } } } });
   for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
     const laps = charges.laps[gate];
     if (laps === undefined) continue;
     const budget = budgetByGate.get(gate);
-    if (!budget) return { ledger, exhausted: { gate, allowance: 'laps' } };
+    if (!budget) return exhausted(gate, 'laps', ledger.gates[gate]?.laps ?? 0, 0);
     const entry = next.gates[gate] ?? defaultGateEntry();
     const lapCap = entry.effectiveLapCap ?? budget.lapCap;
-    if ((entry.laps ?? 0) > lapCap) return { ledger, exhausted: { gate, allowance: 'laps' } };
+    if ((entry.laps ?? 0) > lapCap) return exhausted(gate, 'laps', ledger.gates[gate]?.laps ?? 0, lapCap);
   }
-  const growthCap = next.effectiveGrowthCap ?? budgets[0]?.growthCap;
-  if ((next.growth?.added ?? 0) > (growthCap ?? 0)) {
-    return { ledger, exhausted: { gate: Object.keys(charges.laps)[0] ?? 'prd_audit', allowance: 'growth' } };
+  if ((next.growth?.added ?? 0) > growthCap) {
+    return exhausted(owner, 'growth', round.settledAdded, growthCap);
   }
   return { ledger: next };
 }
@@ -249,12 +292,15 @@ export async function reconcileReceiptLedgerUnlocked(
   slug: string,
   routing: ReceiptRoutingScope,
   git: GitRunner = makeGitRunner(projectRoot),
-): Promise<{ readonly kind: 'reconciled' | 'malformed' | 'unreadable' }> {
+): Promise<
+  | { readonly kind: 'reconciled' }
+  | { readonly kind: 'malformed' | 'unreadable'; readonly ref?: string }
+> {
   const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
   let ledger = await readKickbackLedger(projectRoot);
   let changed = false;
   for (const item of records) {
-    if (item.kind !== 'ok') return { kind: item.kind };
+    if (item.kind !== 'ok') return { kind: item.kind, ref: item.ref };
     if (item.record.receipt.settlementId === undefined || ledger.settlementReceipts?.[item.record.receipt.settlementId]) continue;
     // Reconciliation deliberately uses the receipt's durable numbers rather
     // than current caps: the admission was already settled by the ref CAS.
@@ -276,11 +322,9 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await withKickbackLedgerLease(input.projectRoot, async () => {
       const stored = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
-      // A malformed route receipt is a budget-boundary refusal.  Returning an
-      // exhausted result lets the conductor persist the normal, flat cap
-      // evidence and halt before a provider receives BUILD; a generic error
-      // would otherwise bypass that evidence path.
-      if (stored.kind !== 'record') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
+      if (stored.kind !== 'record') return {
+        kind: 'halted', reason: `route record ${input.roundId} is ${stored.kind}`,
+      } as const;
       if (currentHostOf(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
       // Revalidation replays an already-accounted child contribution. An
       // operator round is likewise charged only through its host-local caps;
@@ -295,7 +339,9 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
       }
       if (stored.record.kind !== 'audit') return assertNever(stored.record.kind);
       const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
-      if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
+      if (reconciled.kind !== 'reconciled') return {
+        kind: 'halted', reason: `route record ${reconciled.ref ?? input.roundId} is ${reconciled.kind}`,
+      } as const;
       const receipt = stored.record.receipt;
       if (receipt.settlementId !== undefined) {
         if (receipt.acks[input.dispatchingChild]) return { kind: 'acknowledged', settlementId: receipt.settlementId } as const;
@@ -350,7 +396,7 @@ export async function readRoutedGrowthSnapshot(
   const ids = new Set<string>();
   let sealedAuthored: number | undefined;
   for (const item of records) {
-    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
+    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}${item.ref ? `: ${item.ref}` : ''}`);
     if (!item.record.receipt.settlementId) for (const allocation of Object.values(item.record.allocation)) for (const taskId of allocation.remTaskIds) ids.add(taskId);
     // A revalidate round authors no remediation tasks and has no denominator;
     // rounds written before #3389's placeholder was removed still carry 0.

@@ -10346,6 +10346,7 @@ export class Conductor {
           let settlementGrowth: PlanGrowth | undefined;
           let growthCap: number | undefined;
           let settlementAuthoredSource: 'plan' | 'ledger' | 'unresolved' | undefined;
+          let routedSettlement = false;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
             if (
@@ -10357,6 +10358,7 @@ export class Conductor {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
             const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
+            routedSettlement = execution?.source === 'routed-host';
             // A routed round owns a receipt instead of a flat pendingRepair.
             // Either durable admission shape needs its budget settled before
             // the provider can receive BUILD.
@@ -10407,9 +10409,14 @@ export class Conductor {
           if (settlement?.kind === 'exhausted' || settlementFailure !== undefined) {
             const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
             const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
+            const routedExhaustion = settlement?.kind === 'exhausted' && 'round' in settlement
+              ? settlement
+              : undefined;
+            const refusedRound = routedExhaustion?.round;
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
-            const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const legacyPendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const pendingAsBuiltFindings = refusedRound?.pendingAsBuiltFindings ?? legacyPendingAsBuiltFindings;
             const asBuiltFindingIds = pendingAsBuiltFindings.map((finding) => finding.finding);
             const haltingFindings = gate === 'architecture_review_as_built'
               ? asBuiltFindingIds
@@ -10420,61 +10427,94 @@ export class Conductor {
             const otherFindings = gate === 'architecture_review_as_built'
               ? prdAuditCriteria
               : asBuiltFindingIds;
-            const findings = haltingFindings.length > 0
-              ? `Findings (${gate}): ${haltingFindings.join(', ')}`
-              : pendingTasks.length > 0
-              ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
-              : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const renderFindings = (): string => {
+              if (refusedRound !== undefined) return `Routed round ${refusedRound.roundId} findings: ${refusedRound.findingIds.join(', ')}`;
+              if (settlementFailure !== undefined && routedSettlement) return `Pending remediation findings are unavailable: ${settlementFailure}.`;
+              if (haltingFindings.length > 0) return `Findings (${gate}): ${haltingFindings.join(', ')}`;
+              if (pendingTasks.length > 0) return `Pending remediation tasks: ${pendingTasks.join(', ')}`;
+              return 'Pending remediation findings are unavailable because the repair record is malformed.';
+            };
+            const renderRoutedTasks = (): string => {
+              if (refusedRound === undefined) return '';
+              const taskLines: string[] = [];
+              if (refusedRound.remTaskIds.length > 0) {
+                taskLines.push(`Routed round ${refusedRound.roundId} remediation tasks: ${refusedRound.remTaskIds.join(', ')}`);
+              }
+              if (refusedRound.existingTaskIds.length > 0) {
+                taskLines.push(`Routed round ${refusedRound.roundId} repairs existing tasks: ${refusedRound.existingTaskIds.join(', ')}`);
+              }
+              return taskLines.join('\n');
+            };
             const alsoPending = otherFindings.length > 0
               ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
               : '';
-            const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
-              ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
-                  `${finding.finding} (${finding.class}; ${finding.reference === undefined
-                    ? finding.governingClause
-                    : finding.reference.kind === 'plan-task'
-                      ? `plan task ${finding.reference.taskId}`
-                      : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
-                ).join('; ')}`
-              : '';
+            const renderAsBuiltFindingDetail = (): string => {
+              if (refusedRound !== undefined) {
+                if (refusedRound.pendingAsBuiltFindings.length === 0) return '';
+                return `\n\nBlocking findings:\n${refusedRound.pendingAsBuiltFindings.map((finding) =>
+                  `${finding.finding} (${finding.class}; ${finding.governingClause}): ${finding.summary}`,
+                ).join('; ')}`;
+              }
+              if (legacyPendingAsBuiltFindings.length === 0) return '';
+              return `\n\nBlocking findings:\n${legacyPendingAsBuiltFindings.map((finding) =>
+                `${finding.finding} (${finding.class}; ${finding.reference === undefined
+                  ? finding.governingClause
+                  : finding.reference.kind === 'plan-task'
+                    ? `plan task ${finding.reference.taskId}`
+                    : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
+              ).join('; ')}`;
+            };
             const fallbackLapCap = remediationLapCapForGate(
               gate, this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
             );
             const remediationAllowance = gate === 'prd_audit' || gate === 'architecture_review_as_built'
               ? resolveRemediationLapAllowance(gate, this.config, state.complexity_tier)
               : undefined;
-            const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
-              ? undefined
-              : withPendingGrowth({
-                  ...settlementGrowth,
-                  cap: growthCap,
-                  capSource: settlementLedger?.effectiveGrowthCap === undefined
-                    ? 'config-derived' as const
-                    : 'raised' as const,
-                  authoredSource: settlementAuthoredSource,
-                }, settlementLedger?.pendingRepair);
-            const detail = settlementFailure === undefined
-              ? renderKickbackBudgetView(
-                  settlementLedger?.gates[gate],
-                  gate,
-                  fallbackLapCap,
-                  growthView,
-                  undefined,
-                  undefined,
-                  0,
-                  remediationAllowance,
-                )
-              : `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
+            const growthView = refusedRound !== undefined
+              ? withPendingGrowth({
+                  authored: refusedRound.growthAuthored,
+                  added: refusedRound.settledAdded,
+                  byGate: refusedRound.settledGrowthByGate,
+                  remaining: Math.max(0, refusedRound.growthCap - refusedRound.settledAdded),
+                  cap: refusedRound.growthCap,
+                  capSource: refusedRound.growthCapSource,
+                  authoredSource: refusedRound.growthAuthoredSource,
+                }, { charges: refusedRound.charges })
+              : settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
+                ? undefined
+                : withPendingGrowth({
+                    ...settlementGrowth,
+                    cap: growthCap,
+                    capSource: settlementLedger?.effectiveGrowthCap === undefined
+                      ? 'config-derived' as const
+                      : 'raised' as const,
+                    authoredSource: settlementAuthoredSource,
+                  }, settlementLedger?.pendingRepair);
+            const renderBudgetDetail = (): string => {
+              if (settlementFailure !== undefined) return `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
+              return renderKickbackBudgetView(
+                settlementLedger?.gates[gate], gate, fallbackLapCap, growthView, undefined, undefined, 0, remediationAllowance,
+              );
+            };
+            const findings = renderFindings();
+            const routedTasks = renderRoutedTasks();
+            const asBuiltFindingDetail = renderAsBuiltFindingDetail();
+            const detail = renderBudgetDetail();
+            const capEvidence = refusedRound === undefined
+              ? {
+                  consumed: allowance === 'laps'
+                    ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
+                    : settlementGrowth?.added ?? growthCap ?? 0,
+                  limit: allowance === 'laps'
+                    ? settlementLedger?.gates[gate]?.effectiveLapCap ?? fallbackLapCap
+                    : growthCap ?? 0,
+                }
+              : refusedRound.capEvidence;
 
             let generation: string | undefined;
             try {
               const capEntry = await recordKickbackCapEvidence(this.projectRoot, gate, {
-                consumed: allowance === 'laps'
-                  ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
-                  : settlementGrowth?.added ?? growthCap ?? 0,
-                limit: allowance === 'laps'
-                  ? settlementLedger?.gates[gate]?.effectiveLapCap ?? fallbackLapCap
-                  : growthCap ?? 0,
+                ...capEvidence,
                 latestReason: findings,
                 allowance,
               });
@@ -10486,7 +10526,7 @@ export class Conductor {
             }
             const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
+              `${detail}\n${findings}${routedTasks === '' ? '' : `\n${routedTasks}`}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,

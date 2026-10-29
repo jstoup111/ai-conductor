@@ -1,5 +1,5 @@
-// Covers: task:62, task:63, task:67
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:2, task:62, task:63, task:67
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,6 +31,7 @@ import { emptyUnsettledReceipt, parseRoundId } from '../../../src/engine/routing
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
+const round8 = parseRoundId('r8')!;
 const routing = { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } } as const;
 const budgets: readonly PendingRepairSettlementBudget[] = [{
   gate: 'prd_audit', lapCap: 2, growthCap: 4,
@@ -138,21 +139,62 @@ describe('round receipt recovery', () => {
     }
   });
 
-  it('returns exhausted when reconciliation encounters a malformed stored route record', async () => {
+  it('halts with the named round when its route record is absent or unreadable', async () => {
     const subject = await fixture();
     try {
-      const malformed = await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' });
-      await subject.git(['update-ref', routeRecordRefFor('demo', parseRoundId('r2')!), malformed.stdout.trim()]);
-
       await expect(settleRoundAtDispatch({
         projectRoot: subject.root,
         slug: 'demo',
-        roundId,
+        roundId: round8,
         dispatchingChild: child,
         budgets: [{ gate: 'prd_audit', lapCap: 2, growthCap: 4, growth: { authored: 4, added: 0, byGate: {}, remaining: 4 }, authoredSource: 'plan' }],
         routing: { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } },
         git: subject.git,
-      })).resolves.toMatchObject({ kind: 'exhausted' });
+      })).resolves.toEqual({ kind: 'halted', reason: 'route record r8 is absent' });
+
+      const malformed = await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' });
+      await subject.git(['update-ref', routeRecordRefFor('demo', round8), malformed.stdout.trim()]);
+
+      await expect(settleRoundAtDispatch({
+        projectRoot: subject.root,
+        slug: 'demo',
+        roundId: round8,
+        dispatchingChild: child,
+        budgets: [{ gate: 'prd_audit', lapCap: 2, growthCap: 4, growth: { authored: 4, added: 0, byGate: {}, remaining: 4 }, authoredSource: 'plan' }],
+        routing: { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } },
+        git: subject.git,
+      })).resolves.toEqual({ kind: 'halted', reason: 'route record r8 is unreadable' });
+    } finally {
+      await rm(subject.root, { recursive: true, force: true });
+    }
+  });
+
+  it('halts without changing the current receipt or ledger when a sibling route record is unreadable', async () => {
+    const subject = await fixture();
+    try {
+      const made = await createRouteRecord(subject.root, 'demo', {
+        roundId: round8,
+        sealedAuthored: 1,
+        kind: 'audit',
+        items: [{ findingId: 'finding-r8', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
+        allocation: { [child]: { remTaskIds: ['rem-prd-audit-T8'], blockBodies: ['### Task rem-prd-audit-T8\n'] } },
+        receipt: { ...emptyUnsettledReceipt(), laps: { prd_audit: 1 }, growth: 1 },
+      }, { git: subject.git });
+      if (made.kind !== 'created') throw new Error(made.kind);
+      await mkdir(join(subject.root, '.pipeline'), { recursive: true });
+      await writeFile(join(subject.root, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {}, growth: { authored: 1, added: 0, byGate: {} } }));
+      const ledgerBefore = await readFile(join(subject.root, '.pipeline', 'kickback-ledger.json'), 'utf8');
+      const malformed = await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' });
+      const sibling = routeRecordRefFor('demo', parseRoundId('r2')!);
+      await subject.git(['update-ref', sibling, malformed.stdout.trim()]);
+
+      await expect(settleRoundAtDispatch({
+        projectRoot: subject.root, slug: 'demo', roundId: round8, dispatchingChild: child, budgets, routing, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'halted', reason: expect.stringContaining(sibling) });
+      await expect(readFile(join(subject.root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toBe(ledgerBefore);
+      const current = await readRouteRecord(subject.root, 'demo', round8, { git: subject.git });
+      if (current.kind !== 'record') throw new Error('missing current route record');
+      expect(current.record.receipt).not.toHaveProperty('settlementId');
     } finally {
       await rm(subject.root, { recursive: true, force: true });
     }
