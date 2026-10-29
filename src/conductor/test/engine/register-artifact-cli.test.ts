@@ -1,13 +1,19 @@
-// Covers: task:18
+// Covers: task:18, task:21
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  detectRegisterArtifactCommand,
   dispatchRegisterArtifactCommand,
   validateRegistration,
   type RegisterArtifactDispatch,
 } from '../../src/engine/register-artifact-cli.js';
+import { createProgram } from '../../src/cli.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
+import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
+import { prepareProtectedArtifactReseal } from '../../src/engine/protected-artifact-seal.js';
 
 const cleanupRoots: string[] = [];
 
@@ -69,6 +75,7 @@ async function dispatch(
   const errors: string[] = [];
   const code = await dispatchRegisterArtifactCommand(command, {
     cwd: root,
+    isInteractive: true,
     err: (line) => errors.push(line),
   });
   return { code, errors };
@@ -97,6 +104,10 @@ describe('register-artifact validation', () => {
       errors: [`register-artifact: ${condition}.`],
     });
     await expect(readFile(manifestPath, 'utf8')).resolves.toBe(before);
+    const eventRoot = command.slug === 'f' ? join(root, '.worktrees', command.slug) : root;
+    await expect(readFile(join(eventRoot, '.pipeline', 'events.jsonl'), 'utf8')).resolves.toContain(
+      `"condition":"${condition}"`,
+    );
   });
 
   it.each([
@@ -144,5 +155,105 @@ describe('register-artifact validation', () => {
       errors: ['register-artifact: .docs/f/manifest.json slug "other" does not match folder slug "f".'],
     });
     await expect(readFile(manifestPath, 'utf8')).resolves.toBe(malformed);
+  });
+
+  it('refuses non-interactive registration without changing the manifest and records one spine event', async () => {
+    const { root, manifestPath, worktree } = await fixture();
+    const before = await readFile(manifestPath, 'utf8');
+    const errors: string[] = [];
+
+    await expect(dispatchRegisterArtifactCommand(request(), {
+      cwd: root,
+      isInteractive: false,
+      err: (line) => errors.push(line),
+    })).resolves.toBe(1);
+
+    expect(errors).toEqual(['register-artifact: requires an interactive terminal.']);
+    await expect(readFile(manifestPath, 'utf8')).resolves.toBe(before);
+    await expect(readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).resolves.toMatch(
+      /"type":"feature_artifact_registration_refused","slug":"f","condition":"requires an interactive terminal"/,
+    );
+  });
+
+  it('keeps reseal refusal unchanged for an unlisted, unsealed artifact', async () => {
+    const { root, worktree, manifestPath } = await fixture({
+      files: {
+        '.pipeline/protected-artifact-seal.json': JSON.stringify({
+          version: 2,
+          baselineCommit: 'base',
+          protectedArtifacts: [{ path: '.docs/stories/f.md', fingerprint: 'sha256:before' }],
+          rebaselines: [],
+        }),
+      },
+    });
+    const command = detectResealCommand([
+      'node', 'conduct', 'reseal', '--slug', 'f', '--path', '.docs/stories/extra.md', '--reason', 'Operator review.',
+    ]);
+    if (!command) throw new Error('expected reseal command');
+    const before = await readFile(manifestPath, 'utf8');
+    const errors: string[] = [];
+
+    await expect(dispatchResealCommand(command, {
+      cwd: root,
+      isInteractive: true,
+      resolveHead: async () => 'target',
+      resolveBaseBranch: async () => 'main',
+      reseal: async (options) => {
+        await prepareProtectedArtifactReseal({
+          ...options,
+          ownership: {
+            kind: 'manifest',
+            manifestPath: '.docs/f/manifest.json',
+            ownedPaths: ['.docs/plans/f.md', '.docs/stories/f.md'],
+            protectedPaths: ['.docs/plans/f.md', '.docs/stories/f.md', '.docs/f/manifest.json'],
+          },
+        });
+        return options.seal;
+      },
+      events: new ConductorEventEmitter(),
+      err: (line) => errors.push(line),
+    })).resolves.toBe(1);
+
+    expect(errors).toEqual([
+      'reseal: Protected artifact reseal target is not sealed: .docs/stories/extra.md.',
+    ]);
+    await expect(readFile(join(worktree, '.docs/f/manifest.json'), 'utf8')).resolves.toBe(before);
+  });
+});
+
+describe('register-artifact operator command wiring', () => {
+  it('recognizes only the fully bound registration grammar', () => {
+    expect(detectRegisterArtifactCommand([
+      'node',
+      'conduct',
+      'register-artifact',
+      '--slug', 'f',
+      '--kind', 'stories',
+      '--path', '.docs/stories/extra.md',
+      '--reason', 'Split the stories document.',
+      '--clear-halt',
+    ])).toEqual({
+      slug: 'f',
+      artifactKind: 'stories',
+      path: '.docs/stories/extra.md',
+      reason: 'Split the stories document.',
+      clearHalt: true,
+    });
+    expect(detectRegisterArtifactCommand([
+      'node', 'conduct', 'register-artifact', '--slug', 'f', '--path', '.docs/stories/extra.md', '--reason', 'why',
+    ])).toBeNull();
+  });
+
+  it('declares a pre-pipeline operator command without adding a pipeline step', async () => {
+    const indexSource = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
+    const dispatchAt = indexSource.indexOf('const registerArtifactCmd = detectRegisterArtifactCommand(process.argv);');
+    const pipelineAt = indexSource.indexOf('const conductor = new Conductor({');
+
+    expect(createProgram().commands.find((command) => command.name() === 'register-artifact')?.options.map((option) => option.long))
+      .toEqual(['--slug', '--kind', '--path', '--reason', '--clear-halt']);
+    expect(dispatchAt).toBeGreaterThan(-1);
+    expect(dispatchAt).toBeLessThan(pipelineAt);
+    expect(ALL_STEPS.map((step) => step.name)).not.toContain('register-artifact');
+    expect(ALL_STEPS.map((step) => step.name)).not.toContain('register_artifact');
   });
 });

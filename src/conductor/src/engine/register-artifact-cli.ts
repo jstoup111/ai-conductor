@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { clearMarker } from './daemon-rekick.js';
-import { EventPersister } from './event-persister.js';
+import { EventPersister, startOperatorEventSpine } from './event-persister.js';
 import { computeFeatureOwnership, worktreeFeatureOwnershipSource } from './feature-ownership.js';
 import {
   ARTIFACT_KINDS,
@@ -44,7 +44,9 @@ export interface RegistrationValidationDependencies {
 
 export interface RegisterArtifactCommandDependencies extends RegistrationValidationDependencies {
   cwd?: string;
+  isInteractive?: boolean;
   err?: (line: string) => void;
+  events?: ConductorEventEmitter;
 }
 
 async function clearProtectedArtifactHalt(worktree: string): Promise<void> {
@@ -171,6 +173,39 @@ function isRegistrablePath(path: string, slug: string): boolean {
   ].some((excluded) => path.startsWith(excluded));
 }
 
+/** Detect only the fully bound, operator-only registration grammar. */
+export function detectRegisterArtifactCommand(argv: string[]): RegisterArtifactDispatch | null {
+  if (argv[2] !== 'register-artifact') return null;
+  const args = argv.slice(3);
+  const read = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const slug = read('--slug');
+  const artifactKind = read('--kind');
+  const path = read('--path');
+  const reason = read('--reason');
+  const clearHalt = args.includes('--clear-halt');
+  const expected = [
+    '--slug', slug,
+    '--kind', artifactKind,
+    '--path', path,
+    '--reason', reason,
+    ...(clearHalt ? ['--clear-halt'] : []),
+  ];
+  if (
+    args.length !== expected.length
+    || expected.some((value, index) => args[index] !== value)
+    || !slug
+    || !artifactKind
+    || !path
+    || !reason
+    || !/^[a-z0-9][a-z0-9-]*$/.test(slug)
+    || !ARTIFACT_KINDS.includes(artifactKind as ArtifactKind)
+  ) return null;
+  return { slug, artifactKind: artifactKind as ArtifactKind, path, reason, clearHalt };
+}
+
 /**
  * Validate one operator-requested manifest addition without writing it. Later
  * registration tasks own the resulting commit, seal rotation, and event.
@@ -237,68 +272,106 @@ export async function dispatchRegisterArtifactCommand(
   const err = deps.err ?? ((line: string) => writeSync(process.stderr.fd, `${line}\n`));
   const worktree = join(cwd, '.worktrees', command.slug);
   const ensureAccessible = deps.access ?? access;
+  const events = deps.events ?? new ConductorEventEmitter();
+  let persister: EventPersister | undefined;
+  const refuse = async (condition: string): Promise<void> => {
+    await events.emitOrThrow({
+      type: 'feature_artifact_registration_refused',
+      slug: command.slug,
+      condition,
+    });
+    err(`register-artifact: ${condition}.`);
+  };
 
   try {
     await ensureAccessible(worktree);
   } catch {
-    err(`register-artifact: unknown feature worktree '${command.slug}'.`);
-    return 1;
-  }
-
-  const result = await validateRegistration(command, {
-    worktree,
-    readFile: deps.readFile,
-    access: ensureAccessible,
-  });
-  if (result.kind === 'refusal') {
-    err(`register-artifact: ${result.condition}.`);
-    return 1;
-  }
-
-  const manifestPath = join(worktree, featureManifestPath(command.slug));
-  const pathspec = [command.path, featureManifestPath(command.slug)];
-  const registrationMarker = `Registration-Id: ${randomUUID()}`;
-  const readManifest = deps.readFile ?? readFile;
-  let originalManifest: string;
-  let originalHead: string | undefined;
-  try {
-    originalManifest = await readManifest(manifestPath, 'utf8');
-    originalHead = (await execa('git', ['rev-parse', '--verify', 'HEAD'], { cwd: worktree })).stdout.trim();
-    await writeFile(manifestPath, result.manifest, 'utf8');
-  } catch (error) {
-    err(`register-artifact: could not write manifest: ${error instanceof Error ? error.message : String(error)}.`);
-    return 1;
-  }
-  try {
-    const commit = await commitEngineChange({
-      worktree,
-      slug: command.slug,
-      pathspec,
-      message: `register artifact: ${command.slug}\n\n${registrationMarker}`,
-    });
-    if (commit.kind === 'written') {
+    if (deps.events) {
+      await refuse(`unknown feature worktree '${command.slug}'`);
+    } else {
+      const rootSpine = startOperatorEventSpine(cwd);
       try {
-        await rotateSealAndRecordRegistration(command, worktree);
-        return 0;
-      } catch (error) {
-        err(`register-artifact: could not finalize registration: ${error instanceof Error ? error.message : String(error)}.`);
-        return 1;
+        await rootSpine.events.emitOrThrow({
+          type: 'feature_artifact_registration_refused',
+          slug: command.slug,
+          condition: `unknown feature worktree '${command.slug}'`,
+        });
+      } finally {
+        rootSpine.stop();
       }
+      err(`register-artifact: unknown feature worktree '${command.slug}'.`);
+    }
+    return 1;
+  }
+
+  try {
+    if (!deps.events) {
+      persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+      persister.start();
+    }
+    const isInteractive = deps.isInteractive ?? process.stdin.isTTY === true;
+    if (!isInteractive) {
+      await refuse('requires an interactive terminal');
+      return 1;
     }
 
-    await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
-    err(`register-artifact: could not commit registration: ${commit.kind === 'noop' ? 'no changes staged' : commit.reason}.`);
-    return 1;
-  } catch (error) {
-    try {
-      if (originalHead !== undefined) {
-        await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
-      }
-    } catch {
-      // Preserve the original commit error; a restoration failure cannot make
-      // this command appear successful.
+    const result = await validateRegistration(command, {
+      worktree,
+      readFile: deps.readFile,
+      access: ensureAccessible,
+    });
+    if (result.kind === 'refusal') {
+      await refuse(result.condition);
+      return 1;
     }
-    err(`register-artifact: could not commit registration: ${error instanceof Error ? error.message : String(error)}.`);
-    return 1;
+
+    const manifestPath = join(worktree, featureManifestPath(command.slug));
+    const pathspec = [command.path, featureManifestPath(command.slug)];
+    const registrationMarker = `Registration-Id: ${randomUUID()}`;
+    const readManifest = deps.readFile ?? readFile;
+    let originalManifest: string;
+    let originalHead: string | undefined;
+    try {
+      originalManifest = await readManifest(manifestPath, 'utf8');
+      originalHead = (await execa('git', ['rev-parse', '--verify', 'HEAD'], { cwd: worktree })).stdout.trim();
+      await writeFile(manifestPath, result.manifest, 'utf8');
+    } catch (error) {
+      err(`register-artifact: could not write manifest: ${error instanceof Error ? error.message : String(error)}.`);
+      return 1;
+    }
+    try {
+      const commit = await commitEngineChange({
+        worktree,
+        slug: command.slug,
+        pathspec,
+        message: `register artifact: ${command.slug}\n\n${registrationMarker}`,
+      });
+      if (commit.kind === 'written') {
+        try {
+          await rotateSealAndRecordRegistration(command, worktree);
+          return 0;
+        } catch (error) {
+          err(`register-artifact: could not finalize registration: ${error instanceof Error ? error.message : String(error)}.`);
+          return 1;
+        }
+      }
+
+      await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
+      err(`register-artifact: could not commit registration: ${commit.kind === 'noop' ? 'no changes staged' : commit.reason}.`);
+      return 1;
+    } catch (error) {
+      try {
+        if (originalHead !== undefined) {
+          await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
+        }
+      } catch {
+        // Preserve the original commit error; a restoration failure cannot make
+        // this command appear successful.
+      }
+      err(`register-artifact: could not commit registration: ${error instanceof Error ? error.message : String(error)}.`);
+      return 1;
+    }
+  } finally {
+    persister?.stop();
   }
 }

@@ -48,6 +48,7 @@ export const EVENT_SINKS = {
   land_gate_rejected: { render: false, persist: true, audit: false, otel: false },
   land_dependency_decided: { render: false, persist: true, audit: false, otel: false },
   feature_artifacts_registered: { render: false, persist: true, audit: false, otel: false },
+  feature_artifact_registration_refused: { render: false, persist: true, audit: false, otel: false },
   dependency_drift_swept: { render: false, persist: true, audit: false, otel: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },

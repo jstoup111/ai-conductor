@@ -67,7 +67,7 @@ async function register(root: string): Promise<{ code: number; errors: string[] 
     path: '.docs/stories/extra.md',
     reason: 'split story file',
     clearHalt: false,
-  }, { cwd: root, err: (line) => errors.push(line) });
+  }, { cwd: root, isInteractive: true, err: (line) => errors.push(line) });
   return { code, errors };
 }
 
@@ -185,7 +185,7 @@ describe('register-artifact commit (real local Git)', () => {
       path: '.docs/stories/extra.md',
       reason: 'split story file',
       clearHalt: true,
-    }, { cwd: subject.root, err: (line) => errors.push(line) })).resolves.toBe(0);
+    }, { cwd: subject.root, isInteractive: true, err: (line) => errors.push(line) })).resolves.toBe(0);
 
     await expect(readFile(join(subject.worktree, HALT_MARKER), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(errors).toEqual([]);

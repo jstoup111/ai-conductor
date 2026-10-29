@@ -668,6 +668,11 @@ type ConductorEventBody =
       added: Array<{ kind: ArtifactKind; path: string }>;
     }
   | {
+      type: 'feature_artifact_registration_refused';
+      slug: string;
+      condition: string;
+    }
+  | {
       type: 'dependency_drift_swept';
       repository: string;
       status: 'swept' | 'repository-indeterminate';

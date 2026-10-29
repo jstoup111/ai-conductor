@@ -968,8 +968,8 @@ export function createProgram(): Command {
     .command('plan-protected-targets <path>')
     .description('Blocking scan for plan tasks that target another feature’s protected artifact');
 
-  // Reseal is an operator-driven, non-interactive command. It is declared here
-  // for discoverability; index.ts adds its pre-boot dispatch separately.
+  // Reseal and register-artifact are operator-only commands. They are declared
+  // here for discoverability; index.ts dispatches them before pipeline boot.
   program
     .command('reseal')
     .description('Re-fingerprint named protected DECIDE artifacts after operator review')
@@ -977,6 +977,15 @@ export function createProgram(): Command {
     .requiredOption('--path <path>', 'Protected artifact path to reseal (repeatable)')
     .requiredOption('--reason <reason>', 'Operator rationale for the reseal')
     .option('--clear-halt', 'Clear a resolved protected-artifact halt after resealing');
+
+  program
+    .command('register-artifact')
+    .description('Register an added feature artifact after operator review')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--kind <kind>', 'Artifact kind')
+    .requiredOption('--path <path>', 'Artifact path to register')
+    .requiredOption('--reason <reason>', 'Operator rationale for the registration')
+    .option('--clear-halt', 'Clear a resolved protected-artifact halt after registration');
 
   program
     .command('rewind')
