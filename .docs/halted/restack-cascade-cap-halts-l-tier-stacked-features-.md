@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-29T11:48:09.472Z
 Slug: restack-cascade-cap-halts-l-tier-stacked-features-
 Class: needs-human
 Halting step: unknown
