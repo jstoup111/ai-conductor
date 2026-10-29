@@ -35,7 +35,7 @@ function exporterBuildOptions(options: ExporterBuildOptions | ExporterBuildEnvir
   // The default empty options object is options, not an explicitly supplied
   // empty environment: otherwise it suppresses the process-environment
   // refusal fallback below.
-  if (Object.keys(options).length === 0 || 'env' in options || 'spoolStore' in options || 'events' in options) {
+  if (Object.keys(options).length === 0 || 'env' in options || 'spoolStore' in options || 'events' in options || 'commandRunner' in options || 'now' in options) {
     return options as ExporterBuildOptions;
   }
   return { env: options as ExporterBuildEnvironment };

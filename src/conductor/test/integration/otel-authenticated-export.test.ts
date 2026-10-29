@@ -195,6 +195,48 @@ describe('authenticated OTLP HTTP export', () => {
     }
   });
 
+  it('honors runner and clock seams when they are the only exporter options', async () => {
+    const received: string[] = [];
+    const previousNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    const server = createServer((request, response) => {
+      received.push(String(request.headers.authorization));
+      request.resume();
+      response.writeHead(200).end();
+    });
+    try {
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('loopback listener has no TCP address');
+      const resolved = resolveOtelConfig({ otel: {
+        exporter: 'otlp', endpoint: `http://127.0.0.1:${address.port}`,
+        headers: { authorization: { command: ['credential-command'], prefix: 'Bearer ' } }, spool: { enabled: false },
+      } }, '/tmp/otel-authenticated-export') as Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>;
+      let now = 0;
+      const runner = vi.fn().mockResolvedValueOnce({ stdout: 'first-token\n' }).mockResolvedValueOnce({ stdout: 'second-token\n' });
+      const exporters = buildExporters(resolved, { commandRunner: runner, now: () => now });
+      const exportOne = () => new Promise<{ code: number }>((resolve) => {
+        const span = new BasicTracerProvider().getTracer('otel-authenticated-export-test').startSpan('seam-only-command-export');
+        span.end();
+        exporters.spanExporter.export([span as unknown as ReadableSpan], resolve);
+      });
+
+      await expect(exportOne()).resolves.toMatchObject({ code: ExportResultCode.SUCCESS });
+      now = 300_000;
+      await expect(exportOne()).resolves.toMatchObject({ code: ExportResultCode.SUCCESS });
+      await exporters.spanExporter.shutdown();
+      expect({ received, calls: runner.mock.calls.length }).toEqual({
+        received: ['Bearer first-token', 'Bearer second-token'], calls: 2,
+      });
+    } finally {
+      server.close();
+      await once(server, 'close');
+      if (previousNoRealExec === undefined) delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      else process.env.AI_CONDUCTOR_NO_REAL_EXEC = previousNoRealExec;
+    }
+  });
+
   it('shares an expired direct-export refresh and retries an uncached failed credential', async () => {
     const received: string[] = [];
     const server = createServer((request, response) => {

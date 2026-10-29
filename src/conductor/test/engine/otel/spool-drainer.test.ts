@@ -88,7 +88,7 @@ describe('SpoolDrainer', () => {
       headers: createOtelHeaderProvider(
         { authorization: { kind: 'command', argv: ['credential', '--token'] } },
         undefined,
-        { commandRunner: vi.fn().mockRejectedValue(Object.assign(new Error('failed'), { code: 3 })) },
+        { commandRunner: vi.fn().mockRejectedValue(Object.assign(new Error('failed'), { code: 3, stdout: 'SENTINEL-OUT', stderr: 'SENTINEL-ERR' })) },
       ),
       sleep: async () => new Promise<void>(() => {}),
     });
