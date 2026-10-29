@@ -2770,6 +2770,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const minted = state.state.cases.find((record) => record.id === 'N');
     expect(minted).toMatchObject({
       disposition: 'act', resolution: 'open', recurrenceOf: ['case-R'],
+      effect: { id: 'effect-N', kind: 'action', status: 'applied' },
     });
     expect(minted?.recurrenceOf).toEqual(['case-R']);
     expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([
