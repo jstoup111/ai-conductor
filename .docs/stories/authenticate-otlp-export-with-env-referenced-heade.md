@@ -40,7 +40,7 @@ Approved by the operator on 2026-09-06 (delegated). Scope is one `otel.headers` 
 #### Negative Paths
 
 - Given a header entry whose value is a literal string rather than a reference, when the config is resolved, then otel is disabled with an error naming the header key and stating that a literal credential in configuration is refused.
-- Given a header entry whose reference object has an unknown key, no key, or a non-string variable name, when the config is resolved, then otel is disabled with an error naming the header key and the supported reference form.
+- Given a header entry whose reference object has a key outside the supported reference forms, no key, or a non-string variable name, when the config is resolved, then otel is disabled with an error naming the header key and the supported reference forms.
 - Given a header block that is not a mapping, or a header name that is empty or contains a control character, when the config is resolved, then otel is disabled with an error naming the offending key.
 - Given header entries configured together with the grpc protocol or with the file exporter, when the config is resolved, then otel is disabled with an error naming that combination as unsupported.
 
@@ -59,7 +59,7 @@ Approved by the operator on 2026-09-06 (delegated). Scope is one `otel.headers` 
 
 - Given a credential supplied through an environment reference, when its value changes in the environment, then the same unchanged configuration resolves to the new header value.
 - Given the parsed otel block used to resolve the config, when it is inspected after resolution, then it contains the header name and the variable name and no credential value.
-- Given an operator reads the otel reference documentation, when they look for how a credential is supplied, then the reference form, its one supported source, the refusals, and the excluded sources are stated alongside the other otel keys.
+- Given an operator reads the otel reference documentation, when they look for how a credential is supplied, then the reference forms, their supported sources, the refusals, and the excluded sources are stated alongside the other otel keys.
 
 #### Negative Paths
 
@@ -70,7 +70,7 @@ Approved by the operator on 2026-09-06 (delegated). Scope is one `otel.headers` 
 - [ ] A unit case proves the same configuration object resolves to a different header value after the environment variable changes.
 - [ ] A unit case asserts the parsed otel block carries no credential value after resolution.
 - [ ] A unit case asserts every header-related error string contains the variable name and never the value that variable holds.
-- [ ] The reference documentation describes the reference form, the supported source, the refusals, and the excluded sources.
+- [ ] The reference documentation describes the reference forms, their supported sources, the refusals, and the excluded sources.
 
 ## Negative-category review
 
