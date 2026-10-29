@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
 import type {
-  RemediationCaseAsBuiltRecord,
   RemediationCaseAsBuiltRelation,
   RemediationCaseAsBuiltSource,
   RemediationCaseStoreState,
@@ -132,7 +131,7 @@ function appendOutbox(
   return { ...state, outbox: [...state.outbox, ...entries] } as unknown as RemediationCaseStoreV4State;
 }
 
-function recordedFindingIds(state: RemediationCaseStoreV4State): ReadonlySet<string> {
+function recordedFindingIds(state: RemediationCaseStoreV4State): Set<string> {
   return new Set(state.asBuiltCases.flatMap((record) => record.sources.map((source) => source.findingId)));
 }
 

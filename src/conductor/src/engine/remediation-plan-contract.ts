@@ -412,7 +412,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
           }
           const resolution = resolvePlanTaskReference(boundTaskIds.join(','), new Set(projection.tasks.map((task) => task.id)));
           if (resolution.kind !== 'resolved') {
-            diagnostics.push(`${field}.boundTaskIds does not resolve active task ${resolution.ids.join(', ')}`);
+            diagnostics.push(`${field}.boundTaskIds does not resolve active task ${resolution.kind === 'unresolvable' ? resolution.ids.join(', ') : boundTaskIds.join(', ')}`);
             continue;
           }
           if (!resolution.ids.some((taskId) => repairTaskIds.has(taskId))) {

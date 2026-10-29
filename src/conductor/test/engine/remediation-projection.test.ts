@@ -485,6 +485,7 @@ describe('remediation projection', () => {
       rationale: 'The current stamped finding belongs to Task 7.',
       tasks: [],
       boundTaskIds: ['7'],
+      reconciliation: { relation: 'new', reason: 'The current finding has no prior case.' },
     };
     expect(validateRemediationPlan({
       version: REMEDIATION_PLAN_CONTRACT_VERSION,
