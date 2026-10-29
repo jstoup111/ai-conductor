@@ -2396,6 +2396,18 @@ export async function resolveRebaseConflicts(
   cap: number,
   opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'> & { supersessionJudgement?: boolean },
 ): Promise<RebaseOutcome> {
+  const manifestConflicts = conflictOutcome.kind === 'conflict_halt'
+    ? conflictOutcome.conflicts.filter(isFeatureManifestConflict)
+    : [];
+  if (manifestConflicts.length > 0) {
+    return {
+      kind: 'conflict_halt',
+      conflicts: conflictOutcome.conflicts,
+      reason:
+        `feature manifest conflict requires human resolution: ${manifestConflicts.join(', ')}. ` +
+        "Recovery: take the base branch's manifest, then re-run ai-conductor register-artifact for each feature artifact entry.",
+    };
+  }
   const resolved = await resolveRebaseConflictsInner(
     git,
     projectRoot,
@@ -3197,6 +3209,10 @@ export async function emitRebaseEvent(
 
 // ── .docs keep-both resolver ────────────────────────────────────────────────
 
+function isFeatureManifestConflict(path: string): boolean {
+  return /^\.docs\/[^/]+\/manifest\.json$/.test(path);
+}
+
 /**
  * Deterministic resolver for .docs/ conflicts: keep both sides of add/add or
  * rename/rename conflicts by preserving both versions with distinct names,
@@ -3214,6 +3230,10 @@ export async function emitRebaseEvent(
  */
 export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
   const { conflicts, projectRoot } = ctx;
+
+  if (conflicts.some(isFeatureManifestConflict)) {
+    return { resolved: false, reason: 'feature manifest conflicts require human resolution' };
+  }
 
   // Only resolve .docs/ conflicts; anything else is not our domain.
   if (!conflicts.every((f) => f.startsWith('.docs/'))) {
