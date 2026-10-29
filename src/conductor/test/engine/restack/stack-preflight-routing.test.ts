@@ -298,23 +298,34 @@ describe('stack preflight routing', () => {
 
     persister.start();
     try {
+      // Different consecutive round sets never inherit one another's retry
+      // count: A, B, A are each their first observed occurrence.
       await runStackPreflight(options);
       roundId = roundB;
       await runStackPreflight(options);
       roundId = roundA;
       await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
 
-      const attempts = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number })
-        .filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt);
-      expect(attempts).toEqual([1, 1, 1]);
+      // The next A is the second consecutive identical stall; the live-HALT
+      // run below is therefore the third, escalating occurrence.
+      await expect(runStackPreflight(options)).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical' });
 
       const retained = 'an earlier durable halt must not be replaced\n';
       await writeFile(join(subject.repo, '.pipeline', 'HALT'), retained);
       await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), 'needs-human');
-      roundId = roundA;
-      await runStackPreflight({ ...options, hasLiveHalt: async () => false });
+      await expect(runStackPreflight({
+        ...options,
+        // Let the inner routing path observe the third stall, but keep the
+        // wrapper from treating the pre-existing HALT as an authorized resume.
+        hasLiveHalt: async () => false,
+        hasMatchingResumeAuthorization: async () => false,
+      })).resolves.toMatchObject({ kind: 'halted' });
       await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(retained);
+
+      const attempts = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; attempt?: number })
+        .filter((event) => event.type === 'routing_rounds_stalled').map((event) => event.attempt);
+      expect(attempts).toEqual([1, 1, 1, 2, 3]);
     } finally {
       persister.stop();
     }
