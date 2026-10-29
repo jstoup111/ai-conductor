@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:19, task:20
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { dispatchRegisterArtifactCommand } from '../../src/engine/register-artifact-cli.js';
 import { parseFeatureManifest } from '../../src/engine/feature-manifest.js';
+import { resolveFeatureArtifact, worktreeManifestSource } from '../../src/engine/feature-manifest-source.js';
+import { computeFeatureOwnership, worktreeFeatureOwnershipSource } from '../../src/engine/feature-ownership.js';
+import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from '../../src/engine/halt-marker.js';
+import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { writeGitHooksAndWire } from '../../src/engine/worktree-prepare.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
@@ -40,9 +44,15 @@ async function fixture() {
   }, null, 2));
   await writeFile(join(worktree, '.docs', 'plans', 'f.md'), '# Plan\n');
   await writeFile(join(worktree, '.docs', 'stories', 'f.md'), '# Stories\n');
-  await writeFile(sealPath, '{"protectedArtifacts":[]}\n');
   await execa('git', ['add', '-A'], { cwd: worktree });
   await execa('git', ['commit', '-m', 'base'], { cwd: worktree });
+  const ownership = await computeFeatureOwnership(worktreeFeatureOwnershipSource(worktree), 'f', 'main');
+  if (ownership.kind !== 'manifest') throw new Error(`expected manifest ownership, received ${ownership.kind}`);
+  await createProtectedArtifactSeal({
+    projectRoot: worktree,
+    baselineCommit: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim(),
+    ownership,
+  });
   await writeFile(join(worktree, '.docs', 'stories', 'extra.md'), '# Extra stories\n');
   await writeGitHooksAndWire(worktree);
 
@@ -126,5 +136,58 @@ describe('register-artifact commit (real local Git)', () => {
     await expect(readFile(subject.sealPath)).resolves.toEqual(sealBefore);
     await expect(execa('git', ['rev-parse', 'HEAD'], { cwd: subject.worktree }))
       .resolves.not.toMatchObject({ stdout: headBefore });
+  });
+
+  it('rotates the seal, records the registration, and resolves the added story', async () => {
+    const subject = await fixture();
+
+    await expect(register(subject.root)).resolves.toEqual({ code: 0, errors: [] });
+
+    const ownership = await computeFeatureOwnership(worktreeFeatureOwnershipSource(subject.worktree), 'f', 'main');
+    expect(ownership).toMatchObject({ kind: 'manifest' });
+    const seal = await verifyProtectedArtifactSeal({
+      projectRoot: subject.worktree,
+      featureDesc: 'f',
+      baseBranch: 'main',
+      ownership: ownership.kind === 'manifest' ? ownership : undefined,
+    });
+    expect(seal).toMatchObject({ ok: true, selfAmendments: [] });
+
+    await expect(resolveFeatureArtifact(
+      worktreeManifestSource(subject.worktree),
+      'f',
+      'stories',
+      async () => [],
+    )).resolves.toMatchObject({
+      origin: 'manifest',
+      paths: expect.arrayContaining(['.docs/stories/extra.md']),
+    });
+
+    const events = (await readFile(join(subject.worktree, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string });
+    expect(events.filter((event) => event.type === 'feature_artifacts_registered')).toEqual([
+      expect.objectContaining({
+        slug: 'f',
+        added: [{ kind: 'stories', path: '.docs/stories/extra.md' }],
+      }),
+    ]);
+  });
+
+  it('clears a protected-artifact halt after successful registration when requested', async () => {
+    const subject = await fixture();
+    await writeFile(join(subject.worktree, HALT_MARKER), 'registration blocked\n');
+    await writeFile(join(subject.worktree, HALT_CLASS_MARKER), `${PROTECTED_ARTIFACT_HALT_CLASS}\n`);
+
+    const errors: string[] = [];
+    await expect(dispatchRegisterArtifactCommand({
+      slug: 'f',
+      artifactKind: 'stories',
+      path: '.docs/stories/extra.md',
+      reason: 'split story file',
+      clearHalt: true,
+    }, { cwd: subject.root, err: (line) => errors.push(line) })).resolves.toBe(0);
+
+    await expect(readFile(join(subject.worktree, HALT_MARKER), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(errors).toEqual([]);
   });
 });

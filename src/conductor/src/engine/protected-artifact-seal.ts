@@ -1872,7 +1872,7 @@ interface PersistProtectedArtifactSealRotationOptions {
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
-async function persistProtectedArtifactSealRotation({
+export async function persistProtectedArtifactSealRotation({
   projectRoot,
   seal,
   recomputed,

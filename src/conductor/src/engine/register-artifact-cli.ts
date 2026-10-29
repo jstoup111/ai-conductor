@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { execa } from 'execa';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
+import { clearMarker } from './daemon-rekick.js';
+import { EventPersister } from './event-persister.js';
+import { computeFeatureOwnership, worktreeFeatureOwnershipSource } from './feature-ownership.js';
 import {
   ARTIFACT_KINDS,
   MANIFEST_KIND_LOCATIONS,
@@ -13,6 +17,13 @@ import {
   type DocsPath,
 } from './feature-manifest.js';
 import { commitEngineChange } from './guarded-engine-commit.js';
+import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
+import {
+  PROTECTED_ARTIFACT_SEAL_PATH,
+  rotateProtectedArtifactSeal,
+  type ProtectedArtifactSeal,
+} from './protected-artifact-seal.js';
+import { makeGitRunner, originDefaultBranch } from './rebase.js';
 
 export interface RegisterArtifactDispatch {
   readonly slug: string;
@@ -34,6 +45,64 @@ export interface RegistrationValidationDependencies {
 export interface RegisterArtifactCommandDependencies extends RegistrationValidationDependencies {
   cwd?: string;
   err?: (line: string) => void;
+}
+
+async function clearProtectedArtifactHalt(worktree: string): Promise<void> {
+  try {
+    await access(join(worktree, HALT_MARKER));
+  } catch {
+    return;
+  }
+
+  const haltClass = await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => undefined);
+  if (haltClass?.trim() !== PROTECTED_ARTIFACT_HALT_CLASS) return;
+  await clearMarker(worktree).catch(() => undefined);
+}
+
+async function rotateSealAndRecordRegistration(
+  command: RegisterArtifactDispatch,
+  worktree: string,
+): Promise<void> {
+  const seal = JSON.parse(
+    await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8'),
+  ) as ProtectedArtifactSeal;
+  const baseBranch = await originDefaultBranch(makeGitRunner(worktree)) ?? 'main';
+  const ownership = await computeFeatureOwnership(
+    worktreeFeatureOwnershipSource(worktree),
+    command.slug,
+    baseBranch,
+  );
+  if (ownership.kind !== 'legacy' && ownership.kind !== 'manifest') {
+    throw new Error(`registered manifest ownership is ${ownership.kind}`);
+  }
+
+  const paths: string[] = [featureManifestPath(command.slug)];
+  if (ownership.kind === 'manifest' && ownership.protectedPaths.includes(command.path as DocsPath)) {
+    paths.push(command.path);
+  }
+  await rotateProtectedArtifactSeal({
+    projectRoot: worktree,
+    seal,
+    toCommit: (await execa('git', ['rev-parse', '--verify', 'HEAD'], { cwd: worktree })).stdout.trim(),
+    trigger: 'operator-register',
+    paths,
+    ownership,
+  });
+
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+  persister.start();
+  try {
+    await events.emitOrThrow({
+      type: 'feature_artifacts_registered',
+      slug: command.slug,
+      added: [{ kind: command.artifactKind, path: command.path }],
+    });
+  } finally {
+    persister.stop();
+  }
+
+  if (command.clearHalt) await clearProtectedArtifactHalt(worktree);
 }
 
 async function isRegistrationCommit(
@@ -207,7 +276,15 @@ export async function dispatchRegisterArtifactCommand(
       pathspec,
       message: `register artifact: ${command.slug}\n\n${registrationMarker}`,
     });
-    if (commit.kind === 'written') return 0;
+    if (commit.kind === 'written') {
+      try {
+        await rotateSealAndRecordRegistration(command, worktree);
+        return 0;
+      } catch (error) {
+        err(`register-artifact: could not finalize registration: ${error instanceof Error ? error.message : String(error)}.`);
+        return 1;
+      }
+    }
 
     await restoreFailedRegistration(worktree, originalHead, originalManifest, manifestPath, pathspec, registrationMarker);
     err(`register-artifact: could not commit registration: ${commit.kind === 'noop' ? 'no changes staged' : commit.reason}.`);
