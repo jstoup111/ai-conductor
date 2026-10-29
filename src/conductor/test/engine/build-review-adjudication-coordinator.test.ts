@@ -2660,6 +2660,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     ]);
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
+      reRaiseKind: 'repeat', lineageCaseIds: ['case-durable'], appliedAttempts: 1,
     }));
   });
 
@@ -2686,6 +2687,46 @@ describe('coordinateBuildReviewAdjudication', () => {
       ok: false,
       detail: 'semantic remediation case regression case-durable; declared repeat; lineage case-durable has 1 applied attempts; fix the finding on child 2 (build-review accept has no --child yet)',
     });
+  });
+
+  // Covers: task:4 — a residual rebind is fresh BUILD work, not a regression.
+  it('rebinds an applied resolved residual once, records its lineage metadata, and converges on replay', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The first repair was applied.', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+    }] });
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const residual: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-R', reRaise: { kind: 'residual-gap', reason: 'The repaired assertion still leaves a gap.' } }],
+    };
+    const first = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => residual), generateId: (() => { const ids = ['N', 'effect-N']; return () => ids.shift()!; })(),
+      chargeEffect: charge, emit: async (event) => { events.push(event); },
+    });
+    expect(first).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
+    const state = await store.read();
+    if (!state.ok) throw new Error(state.reason);
+    expect(state.state.cases.find((record) => record.id === 'N')).toMatchObject({ recurrenceOf: ['case-R'], effect: { id: 'effect-N', status: 'applied' } });
+    expect(await readFile(remediationCaseStorePath(root), 'utf8')).toContain(before.slice(0, before.indexOf('"cases"') + 8));
+    expect(JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases.find((record: { id: string }) => record.id === 'case-R')).toEqual(JSON.parse(before).cases[0]);
+    expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([
+      expect.objectContaining({ caseId: 'N', recurrenceOf: ['case-R'], reRaiseKind: 'residual-gap', boundCaseId: 'case-R' }),
+    ]);
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(charge.mock.calls[0]![1]).toBe('effect-N');
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+    expect(events.map((event) => event.type)).not.toContain('remediation_adjudication_failed');
+
+    const replay = await coordinateBuildReviewAdjudication({ ...input(root, async () => residual), chargeEffect: charge, generateId: () => 'must-not-mint' });
+    expect(replay).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
+    expect(charge).toHaveBeenCalledTimes(1);
   });
 
   // Covers: task:11, task:rem-prd-audit-R11a
@@ -4976,7 +5017,7 @@ describe('coordinateBuildReviewAdjudication', () => {
         ...replay.sourceOutcomes,
         { sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', caseRef: 'unrelated' },
       ],
-      cases: [...replay.cases, {
+      cases: [{ ...replay.cases[0]!, existingCaseId: 'N2' }, {
         caseRef: 'unrelated', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'An unrelated source needs BUILD work.',
         effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the unrelated source' }] },
       }],
@@ -4987,6 +5028,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(bounded).toMatchObject({ ok: false, detail: 'semantic remediation case recurrence limit N2: lineage R, N, N2 has 3 applied attempts (limit 3)' });
     expect(charge).toHaveBeenCalledTimes(2);
     expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt', caseId: 'N2', reason: 'recurrence-limit', lineageCaseIds: ['R', 'N', 'N2'] }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt', caseId: 'N2', reRaiseKind: 'undeclared' }));
     const afterHalt = await store.read();
     if (!afterHalt.ok) throw new Error(afterHalt.reason);
     expect(afterHalt.state.cases).toHaveLength(3);

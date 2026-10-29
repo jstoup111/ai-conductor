@@ -1265,7 +1265,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
       caseId, ...(owner.effect.kind === 'none' ? {} : { effectId: owner.effect.id }),
       reason: 'recurrence-limit', lineageCaseIds: [...lineage.caseIds],
-      ...(reRaiseMetadataByCaseRef.get(proposed.case.caseRef)?.kind === 'residual-gap' ? { reRaiseKind: 'residual-gap' as const } : {}),
+      ...(reRaiseMetadataByCaseRef.get(proposed.case.caseRef) === undefined
+        ? {}
+        : { reRaiseKind: reRaiseMetadataByCaseRef.get(proposed.case.caseRef)!.kind }),
     });
     return failUnlessAccepted(
       `semantic remediation case recurrence limit ${caseId}: lineage ${lineage.caseIds.join(', ')} has ${lineage.appliedAttempts} applied attempts (limit ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT})`,

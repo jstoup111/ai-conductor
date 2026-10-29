@@ -1369,6 +1369,24 @@ describe('event sink subscriptions', () => {
     ));
   });
 
+  it('keeps remediation re-raise telemetry on the registered lifecycle sinks', () => {
+    const reconciled: ConductorEvent = {
+      type: 'remediation_case_reconciled', domain: 'build_review', lapId: 'lap-1' as never,
+      caseId: 'N', resolution: 'open', recurrenceOf: ['case-R'], reRaiseKind: 'residual-gap', boundCaseId: 'case-R',
+    };
+    const halted: ConductorEvent = {
+      type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: 'lap-1' as never,
+      caseId: 'case-R', reason: 'recurrence-limit', reRaiseKind: 'undeclared', lineageCaseIds: ['case-R'], appliedAttempts: 3,
+    };
+    expect(REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES).toEqual([
+      'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
+      'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
+      'remediation_effect_reserved', 'remediation_effect_applied', 'remediation_effect_failed', 'remediation_semantic_repeat_halt',
+    ]);
+    expect(EVENT_SINKS[reconciled.type]).toEqual({ render: false, persist: true, audit: false, otel: false });
+    expect(EVENT_SINKS[halted.type]).toEqual({ render: false, persist: true, audit: false, otel: false });
+  });
+
   it('renders, persists, and audits a refuted remediation case without exporting it to OpenTelemetry', () => {
     expect(EVENT_SINKS.remediation_case_refuted).toEqual({
       render: true,

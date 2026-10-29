@@ -1059,7 +1059,7 @@ type ConductorEventBody =
       effectId?: string;
       reason: 'already-attempted' | 'regressed' | 'recurrence-limit';
       lineageCaseIds?: readonly string[];
-      reRaiseKind?: 'residual-gap' | 'repeat';
+      reRaiseKind?: 'residual-gap' | 'undeclared' | 'repeat';
       appliedAttempts?: number;
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
