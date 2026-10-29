@@ -158,10 +158,21 @@ describe('remediation case artifact', () => {
     }));
   });
 
-  it.each([
-    ['residual-gap', { kind: 'residual-gap', reason: 'the repair left a narrower gap' }],
-    ['repeat', { kind: 'repeat', reason: 'the same defect is back' }],
-  ] as const)('accepts a bound act row declaring a %s reRaise', async (_kind, reRaise) => {
+  it('accepts a bound act row declaring a residual-gap reRaise', async () => {
+    const reRaise = { kind: 'residual-gap', reason: 'the repair left a narrower gap' } as const;
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({
+      ok: true,
+      judgement,
+    });
+  });
+
+  it('accepts a bound act row declaring a repeat reRaise', async () => {
+    const reRaise = { kind: 'repeat', reason: 'the same defect is back' } as const;
     const judgement = {
       ...CASE_V1,
       cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
