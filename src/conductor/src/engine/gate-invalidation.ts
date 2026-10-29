@@ -201,7 +201,9 @@ export function projectGateSurfaces(
       // callers deliberately supply an empty list in that case. It means the
       // delta named no concrete document, not that the gate has no document
       // dependency; retain the prefix declaration for its event surface.
-      declaredSurface: declared && declared.length > 0 ? declared : [`<${prefixes.join('|')}>`],
+      declaredSurface: manifestBacked && declared && declared.length > 0
+        ? declared
+        : [`<${prefixes.join('|')}>`],
     };
   };
   const prdInputs = documents(PRD_AUDIT_DOCUMENT_INPUT_PREFIXES);

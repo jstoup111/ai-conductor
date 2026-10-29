@@ -1,9 +1,9 @@
-// Covers: task:13
+// Covers: task:13, task:14
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js';
+import { classifyGateInvalidation, projectGateSurfaces } from '../../src/engine/gate-invalidation.js';
 import { resolveReviewInputs } from '../../src/engine/rebase.js';
 
 const listedStories = '.docs/f/review/stories.md';
@@ -100,5 +100,25 @@ describe('gate invalidation ownership (Task 13)', () => {
     const invalidated = classifyGateInvalidation([legacyStory], [], true, inputs).invalidated.sort();
 
     expect(invalidated).toEqual(['architecture_review_as_built', 'prd_audit']);
+  });
+
+  it('reports listed manifest-backed inputs as the declared prd_audit surface', async () => {
+    const inputs = await resolveReviewInputs(root, [listedStories]);
+    const projection = projectGateSurfaces([listedStories], [], inputs)['feature-prd-inputs'];
+
+    expect(projection).toMatchObject({
+      matchedPaths: [listedStories],
+      declaredSurface: expect.arrayContaining([listedStories, manifestPath]),
+    });
+  });
+
+  it('keeps the legacy prd_audit declaration as the document-prefix pair', async () => {
+    await rm(join(root, '.docs', 'f'), { recursive: true, force: true });
+    await write('.docs/stories/f.md', '# Legacy stories\n');
+    const legacyStory = '.docs/stories/f.md';
+    const inputs = await resolveReviewInputs(root, [legacyStory]);
+    const projection = projectGateSurfaces([legacyStory], [], inputs)['feature-prd-inputs'];
+
+    expect(projection.declaredSurface).toEqual(['<.docs/stories/|.docs/specs/>']);
   });
 });
