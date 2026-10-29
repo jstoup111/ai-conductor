@@ -159,6 +159,35 @@ describe('remediation case artifact', () => {
   });
 
   it.each([
+    ['residual-gap', { kind: 'residual-gap', reason: 'the repair left a narrower gap' }],
+    ['repeat', { kind: 'repeat', reason: 'the same defect is back' }],
+  ] as const)('accepts a bound act row declaring a %s reRaise', async (_kind, reRaise) => {
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({
+      ok: true,
+      judgement,
+    });
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'maybe', reason: 'the repair left a narrower gap' }],
+    ['an empty reason', { kind: 'residual-gap', reason: '' }],
+    ['an over-bound reason', { kind: 'residual-gap', reason: 'r'.repeat(8_001) }],
+    ['an extra key', { kind: 'residual-gap', reason: 'the repair left a narrower gap', note: 'unexpected' }],
+  ])('rejects reRaise with %s as a malformed case row', async (_name, reRaise) => {
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({ ok: false, reason: 'invalid-case-keys' });
+  });
+
+  it.each([
     ['an empty list', []],
     ['an empty reason', [{ caseId: 'R', reason: '' }]],
     ['an over-bound reason', [{ caseId: 'R', reason: 'r'.repeat(8_001) }]],
