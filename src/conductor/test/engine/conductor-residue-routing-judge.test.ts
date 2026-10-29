@@ -785,7 +785,7 @@ describe('Conductor residue routing judge binding', () => {
     routingMutationSpy.projectionResult = {
       ok: true,
       projection: {
-        version: 1,
+        version: 2,
         source: 'as-built',
         requiredReferences: [{
           kind: 'as-built-finding', id: 'as-built:fixture-multi-task:1',
