@@ -46,10 +46,67 @@ export async function checkRoundSupersession(
   roundId: RoundId,
   dependencies: DescribeRoutingRoundsDependencies = {},
 ): Promise<RoundSupersessionCheck> {
+  if (parseRoundId(roundId) === undefined) {
+    return { kind: 'refused', detail: `routing round id ${roundId} is invalid` };
+  }
   const git = dependencies.git ?? makeGitRunner(worktree);
   const readRecord = dependencies.readRouteRecord ?? readRouteRecord;
   const stored = await readRecord(worktree, slug, roundId, { git });
-  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing round ${roundId} is unavailable` };
+  if (stored.kind !== 'record') {
+    return {
+      kind: 'refused',
+      detail: `routing round ${roundId} is ${stored.kind === 'absent' ? 'missing' : 'unreadable'}`,
+    };
+  }
+
+  if (stored.record.phase !== 'open') {
+    return { kind: 'refused', detail: `routing round ${roundId} is ${stored.record.phase}, not open` };
+  }
+  if (stored.record.kind !== 'audit') {
+    const abandon = stored.record.kind === 'operator'
+      ? `; use ai-conductor stack land --slug ${slug} --abandon`
+      : '';
+    return {
+      kind: 'refused',
+      detail: `routing round ${roundId} is ${stored.record.kind}; only audit rounds can be superseded${abandon}`,
+    };
+  }
+  if (stored.record.reroute !== undefined) {
+    return { kind: 'refused', detail: `routing round ${roundId} has an in-progress reroute` };
+  }
+
+  const droppedHosts: ChildId[] = [];
+  for (const [host, state] of Object.entries(stored.record.hosts)) {
+    const child = parseChildId(Number(host));
+    if (child === undefined) return { kind: 'refused', detail: `routing round ${roundId} has invalid host ${host}` };
+    switch (state) {
+      case 'pending':
+        droppedHosts.push(child);
+        break;
+      case 'restacked':
+      case 'done':
+      case 'rerouted':
+        break;
+      case 'admitted':
+      case 'repairing':
+      case 'reroute-moved':
+      case 'built':
+      case 'abandoning':
+      case 'abandoned':
+        return { kind: 'refused', detail: `routing round ${roundId} host ${host} is ${state}` };
+      default:
+        return assertNever(state);
+    }
+  }
+
+  const readMarker = dependencies.readRepairMarker ?? readRepairMarker;
+  const marker = await readMarker(worktree, slug, { git });
+  if (marker.kind === 'unreadable') {
+    return { kind: 'refused', detail: `routing round ${roundId}: repair marker is unreadable` };
+  }
+  if (marker.kind === 'marker' && marker.marker.roundId === roundId) {
+    return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${roundId}` };
+  }
 
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
   if (listed.exitCode !== 0) return { kind: 'refused', detail: `could not list routing rounds for ${slug}` };
@@ -58,29 +115,20 @@ export async function checkRoundSupersession(
     .map((ref) => parseRoundId(ref.slice(`refs/conductor/${slug}/routes/`.length)))
     .filter((id): id is RoundId => id !== undefined)
     .sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
-  const otherRounds = await Promise.all(roundIds
-    .filter((id) => id !== roundId)
-    .map(async (id) => ({ roundId: id, stored: await readRecord(worktree, slug, id, { git }) })));
-  const supersededBy = otherRounds.find(({ stored: other }) => other.kind === 'record' && other.record.phase !== 'closed')?.roundId;
-  if (supersededBy === undefined) return { kind: 'refused', detail: `routing round ${roundId} has no succeeding open round` };
+  let supersededBy: RoundId | undefined;
+  for (const otherRoundId of roundIds) {
+    if (otherRoundId === roundId) continue;
+    const other = await readRecord(worktree, slug, otherRoundId, { git });
+    if (other.kind !== 'record') {
+      return { kind: 'refused', detail: `other routing round ${otherRoundId} is ${other.kind === 'absent' ? 'missing' : 'unreadable'}` };
+    }
+    if (supersededBy === undefined && other.record.phase !== 'closed') supersededBy = otherRoundId;
+  }
+  if (supersededBy === undefined) {
+    return { kind: 'refused', detail: `closing sole non-closed round ${roundId} would skip the leaf return` };
+  }
 
-  const droppedHosts = Object.entries(stored.record.hosts)
-    .flatMap(([host, state]) => {
-      switch (state) {
-        case 'pending': return [parseChildId(Number(host))!];
-        case 'admitted':
-        case 'repairing':
-        case 'reroute-moved':
-        case 'built':
-        case 'restacked':
-        case 'done':
-        case 'rerouted':
-        case 'abandoning':
-        case 'abandoned': return [];
-        default: return assertNever(state);
-      }
-    })
-    .sort((left, right) => left - right);
+  droppedHosts.sort((left, right) => left - right);
   const dropped = new Set(droppedHosts);
   return {
     kind: 'supersedable',
