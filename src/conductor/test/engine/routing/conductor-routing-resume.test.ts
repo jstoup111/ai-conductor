@@ -1,4 +1,4 @@
-// Covers: task:67, task:rem-prd-audit-W7
+// Covers: task:6, task:9, task:10, task:67, task:rem-prd-audit-W7
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
