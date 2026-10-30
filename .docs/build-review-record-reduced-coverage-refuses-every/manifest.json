@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "build-review-record-reduced-coverage-refuses-every",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/build-review-record-reduced-coverage-refuses-every.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/build-review-record-reduced-coverage-refuses-every.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/build-review-record-reduced-coverage-refuses-every.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/build-review-record-reduced-coverage-refuses-every.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/build-review-record-reduced-coverage-refuses-every.md"
+    }
+  ]
+}
