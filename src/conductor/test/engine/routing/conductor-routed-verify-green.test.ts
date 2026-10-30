@@ -19,10 +19,14 @@ const mocks = vi.hoisted(() => ({
   routedRoundMarker: undefined as undefined | { host: number; roundId: string },
 }));
 
-vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
-  enterHostRegion: vi.fn(),
-  verifyGreenAcceptance: (...args: unknown[]) => mocks.verifyGreenAcceptance(...args),
-}));
+vi.mock('../../../src/engine/routing/host-region-entry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/host-region-entry.js')>();
+  return {
+    ...actual,
+    enterHostRegion: vi.fn(),
+    verifyGreenAcceptance: (...args: unknown[]) => mocks.verifyGreenAcceptance(...args),
+  };
+});
 vi.mock('../../../src/engine/acceptance-red-runner.js', () => ({
   selfHealAcceptanceRed: (...args: unknown[]) => mocks.selfHealAcceptanceRed(...args),
 }));
@@ -92,6 +96,8 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { clearMarker, readRawHaltClass, rekickSweep, resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
+import { renderDaemonEvent } from '../../../src/daemon-cli.js';
+import { restageHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -264,6 +270,75 @@ describe('Conductor routed acceptance verify-green path', () => {
     expect(selectNextGate({ steps: ALL_STEPS, state: childState, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'leaf-host' } })).toMatchObject({ kind: 'run', step: 'test_suite' });
     childState.test_suite = 'done';
     expect(selectNextGate({ steps: ALL_STEPS, state: childState, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'leaf-host' } })).toMatchObject({ kind: 'run', step: 'build_review' });
+  });
+
+  // Covers: task:4, task:rem-prd-audit-S1.3
+  it('re-pends an operator round entered at test_suite and dispatches its stale successful gates in order', async () => {
+    const { root } = await routedFixture();
+    const host = parseChildId(1)!;
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    await Promise.all(['test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    const operator = parsedOpenRevalidatingRecord('operator');
+    const enteredAtTestSuite = parseRouteRecord(JSON.stringify({
+      ...operator,
+      roundId: 'r5',
+      operator: { ...operator.operator!, origin: 'rewind', entryStep: 'test_suite' },
+    }));
+    if (enteredAtTestSuite === undefined) throw new Error('expected parsed operator route');
+    await expect(restageHostRegion(root, 'demo', host, enteredAtTestSuite, makeGitRunner(root))).resolves.toEqual({ kind: 'restaged' });
+
+    mocks.routedRoundMarker = { host, roundId: 'r5' };
+    const conductor = routedConductor(root, new ConductorEventEmitter(), { run: vi.fn(), resetSession: vi.fn() }, host, parseRoundId('r5')!, false);
+    const privateConductor = conductor as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, never>> };
+    privateConductor.activeRegionChild = host;
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'));
+    const overlay = await privateConductor.readGateVerdictOverlay();
+    const dispatched: string[] = [];
+    for (const expected of ['test_suite', 'build_review']) {
+      const selected = selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child' } });
+      expect(selected).toMatchObject({ kind: 'run', step: expected });
+      dispatched.push(expected);
+      state[expected] = 'done';
+    }
+    expect(dispatched).toEqual(['test_suite', 'build_review']);
+  });
+
+  // Covers: task:5, task:rem-prd-audit-S2.1, task:rem-prd-audit-S2.3
+  it('runs fresh validation after an unchanged routed repair build and renders its persisted running lines in order', async () => {
+    const { root } = await routedFixture();
+    const host = parseChildId(1)!;
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'pending', build_review: 'pending',
+    }));
+    await Promise.all(['test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    mocks.routedRoundMarker = { host, roundId: 'r5' };
+    const conductor = routedConductor(root, new ConductorEventEmitter(), { run: vi.fn(), resetSession: vi.fn() }, host, parseRoundId('r5')!, false);
+    const privateConductor = conductor as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, never>> };
+    privateConductor.activeRegionChild = host;
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'));
+    const overlay = await privateConductor.readGateVerdictOverlay();
+    const dispatched: string[] = ['build']; // The repair leaves the tree byte-identical; its round stamp is the invalidation authority.
+    for (const expected of ['test_suite', 'build_review']) {
+      expect(selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child' } })).toMatchObject({ kind: 'run', step: expected });
+      dispatched.push(expected);
+      state[expected] = 'done';
+    }
+    expect(dispatched).toEqual(['build', 'test_suite', 'build_review']);
+
+    const rendered: string[] = [];
+    for (const event of dispatched.map((step, index) => ({ type: 'step_started' as const, step: step as 'build' | 'test_suite' | 'build_review', index, child: host }))) {
+      renderDaemonEvent(event, (line) => rendered.push(line));
+    }
+    expect(rendered.findIndex((line) => line.includes('▶ build'))).toBeLessThan(rendered.findIndex((line) => line.includes('▶ test_suite')));
+    expect(rendered.findIndex((line) => line.includes('▶ test_suite'))).toBeLessThan(rendered.findIndex((line) => line.includes('▶ build_review')));
   });
 
   // Covers: task:8

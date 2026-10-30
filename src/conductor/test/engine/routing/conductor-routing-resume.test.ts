@@ -32,7 +32,7 @@ import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context
 import { Conductor } from '../../../src/engine/conductor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -266,5 +266,122 @@ describe('routed round conductor resume', () => {
     const refs = (await subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/'])).stdout.split('\n').filter(Boolean);
     expect(refs.filter((ref) => ref.includes('/routes/'))).toHaveLength(1);
     expect(refs.filter((ref) => ref.endsWith('/repairing'))).toHaveLength(1);
+  });
+
+  // Covers: task:6, task:rem-prd-audit-S1.4
+  it('heals the #3455 markerless needs-human halt without editing stale verdicts, preserving region dispatch order', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r5')!;
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId, sealedAuthored: 0, kind: 'audit', items: [],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    await expect(admitRound(subject.repo, 'demo', created.record, host)).resolves.toMatchObject({ kind: 'admitted' });
+    const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (admitted.kind !== 'record') throw new Error('missing r5 record');
+    const repairing = transitionHost(admitted, host, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') throw new Error('could not enter repairing');
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }]))
+      .resolves.toMatchObject({ kind: 'updated' });
+
+    const childStatePath = pipelinePathFor(subject.repo, 'conduct-state.json', host);
+    await writeState(childStatePath, {
+      acceptance_specs: 'pending', build: 'in_progress', test_suite: 'pending', build_review: 'in_progress',
+    });
+    const gates = join(subject.repo, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    const before = await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) => readFile(join(gates, `${step}.json`), 'utf8')));
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'needs human\n');
+    await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), 'needs-human');
+    await rm(join(subject.repo, '.pipeline', 'HALT'));
+    await rm(join(subject.repo, '.pipeline', 'HALT.class'));
+
+    const state = (await readState(childStatePath));
+    if (!state.ok) throw state.error;
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: childStatePath, featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+    }) as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, unknown>> };
+    conductor.activeRegionChild = host;
+    const overlay = await conductor.readGateVerdictOverlay();
+    expect(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) => overlay[step])).toEqual([undefined, undefined, undefined, undefined]);
+    expect(['acceptance_specs', 'build', 'test_suite', 'build_review'].filter((step) => ['pending', 'in_progress'].includes(state.value[step] as string)))
+      .toEqual(['acceptance_specs', 'build', 'test_suite', 'build_review']);
+    const after = await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) => readFile(join(gates, `${step}.json`), 'utf8')));
+    expect(after).toEqual(before);
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:9, task:rem-prd-audit-S5.1
+  it('takes the parked resume exit for an r5-complete routed host without re-dispatching its region', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r5')!;
+    const statePath = pipelinePathFor(subject.repo, 'conduct-state.json', host);
+    const state: ConductState = {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      feature_desc: 'demo', complexity_tier: 'M',
+    };
+    await writeState(statePath, state);
+    const gates = join(subject.repo, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, routedRound: 'r5', checkedAt: 1 }))));
+    const routed = {
+      kind: 'repair-pending' as const, child: host, position: host, isLeaf: false,
+      branch: 'feat/c1/demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    const exits: string[] = [];
+    mocks.routedExit = async () => {
+      exits.push('r5');
+      return { kind: 'continued', next: { kind: 'none' } };
+    };
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as { activeRegionChild: typeof host; continueRoutedHostExit: (state: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion: boolean) => Promise<unknown> };
+    conductor.activeRegionChild = host;
+    await expect(conductor.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
+    expect(exits).toEqual(['r5']);
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:9, task:rem-prd-audit-S5.2
+  it('takes the same parked resume exit for a revalidate host after only its re-pended gates complete', async () => {
+    const subject = await fixture();
+    const host = parseChildId(2)!;
+    const statePath = pipelinePathFor(subject.repo, 'conduct-state.json', host);
+    const state: ConductState = {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      feature_desc: 'demo', complexity_tier: 'M',
+    };
+    await writeState(statePath, state);
+    const gates = join(subject.repo, '.pipeline', 'children', '2', 'gates');
+    await mkdir(gates, { recursive: true });
+    await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, routedRound: 'r6', checkedAt: 1 }))));
+    // At this boundary the route resolver promotes the revalidate cursor to
+    // routed-host; otherwise the parked arm must not attempt an exit.
+    const routed = {
+      kind: 'repair-pending' as const, child: host, position: host, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId: parseRoundId('r6')! },
+    };
+    mocks.routedExit = async () => ({ kind: 'continued', next: { kind: 'none' } });
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as { activeRegionChild: typeof host; continueRoutedHostExit: (state: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion: boolean) => Promise<unknown> };
+    conductor.activeRegionChild = host;
+    await expect(conductor.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
