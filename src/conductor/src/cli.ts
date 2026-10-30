@@ -172,6 +172,7 @@ export type BuildReviewResolveCaseDispatch = {
 export type BuildReviewRecordReducedCoverageDispatch = {
   readonly kind: 'record-reduced-coverage';
   readonly feature: string;
+  readonly child?: string;
   readonly lapId: string;
   readonly rubric: string;
   readonly rationale: string;
@@ -237,13 +238,14 @@ export function detectBuildReviewRecordReducedCoverageCommand(argv: string[]): B
     return index >= 0 ? args[index + 1] : undefined;
   };
   const feature = read('--feature');
+  const child = read('--child');
   const lapId = read('--lap');
   const rubric = read('--rubric');
   const rationale = read('--rationale');
-  const expected = ['--feature', feature, '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !rubric || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
-  return { kind: 'record-reduced-coverage', feature, lapId, rubric, rationale };
+  return { kind: 'record-reduced-coverage', feature, ...(child === undefined ? {} : { child }), lapId, rubric, rationale };
 }
 
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
@@ -924,6 +926,7 @@ export function createProgram(): Command {
     .command('record-reduced-coverage')
     .description('Record an operator reduced-coverage decision from an interactive terminal')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Stacked child whose current lap and allowance are checked')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');

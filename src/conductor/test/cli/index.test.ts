@@ -151,6 +151,24 @@ describe('CLI', () => {
       'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
     ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
   });
+  it('accepts --child only between --feature and --lap for reduced coverage', () => {
+    // Covers: task:1
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--child', '2', '--lap', 'lap-current', '--rubric', 'testQuality', '--rationale', 'risk',
+    ])).toEqual({ kind: 'record-reduced-coverage', feature: 'review-rubrics', child: '2', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk' });
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--child', '2', '--rubric', 'testQuality', '--rationale', 'risk',
+    ])).toBeNull();
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--child', '2', '--child', '3', '--lap', 'lap-current', '--rubric', 'testQuality', '--rationale', 'risk',
+    ])).toBeNull();
+  });
+  it('documents the child scope on build-review reduced coverage', () => {
+    // Covers: task:1
+    const buildReview = createProgram().commands.find((command) => command.name() === 'build-review');
+    const reducedCoverage = buildReview?.commands.find((command) => command.name() === 'record-reduced-coverage');
+    expect(reducedCoverage?.helpInformation()).toContain('--child <child>');
+  });
   it('accepts the child-scoped resolve-case command rendered in build-review halts', () => {
     expect(detectBuildReviewResolveCaseCommand([
       'node', 'conduct', 'build-review', 'resolve-case', '--feature', 'review-rubrics', '--child', '2', '--case', 'case-open', '--rationale', 'known risk',
