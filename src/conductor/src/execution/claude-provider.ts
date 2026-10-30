@@ -1038,11 +1038,25 @@ const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
 // a prompt file into the operator's real temp directory after clearing it.
 const testTmpRootAtModuleLoad = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? process.env.TMPDIR;
 
+/**
+ * Resolve the private prompt-file parent without allowing a nested Vitest
+ * helper's temporary root override to escape its enclosing run scope.
+ */
+export function resolveSystemPromptTempRoot(
+  environment: NodeJS.ProcessEnv = process.env,
+  fallback: () => string = tmpdir,
+): string {
+  return environment.AI_CONDUCTOR_TEST_TMP_ROOT
+    ?? environment.AI_CONDUCTOR_TEST_TMP_SCOPE
+    ?? testTmpRootAtModuleLoad
+    ?? fallback();
+}
+
 /** Write one invocation's system prompt to a private temp file Claude reads at startup. */
 async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
   // Resolve this at invocation time: Vitest installs its run root after some
   // modules have already loaded, and fixtures can temporarily change TMPDIR.
-  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? testTmpRootAtModuleLoad ?? tmpdir();
+  const tempRoot = resolveSystemPromptTempRoot();
   const dir = await mkdtemp(join(tempRoot, 'ai-conductor-claude-system-prompt-'));
   const path = join(dir, 'system-prompt.md');
   await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });

@@ -35,6 +35,7 @@ const {
   ClaudeProvider,
   detectsSessionLimit,
   parseRateLimitWaitSeconds,
+  resolveSystemPromptTempRoot,
 } = await import('../../src/execution/claude-provider.js');
 import { classifyMetering } from '../../src/engine/metering.js';
 import { executeAuxiliaryProviderCandidates } from '../../src/engine/provider-execution.js';
@@ -103,6 +104,13 @@ describe('ClaudeProvider', () => {
     sessionId: 'abc-123',
     resume: false,
   };
+
+  it('keeps system-prompt files within the Vitest scope while nested discovery clears its run root', () => {
+    expect(resolveSystemPromptTempRoot({
+      AI_CONDUCTOR_TEST_TMP_SCOPE: '/isolated/vitest-scope',
+      TMPDIR: '/tmp',
+    }, () => '/tmp')).toBe('/isolated/vitest-scope');
+  });
 
   it.each([
     {
