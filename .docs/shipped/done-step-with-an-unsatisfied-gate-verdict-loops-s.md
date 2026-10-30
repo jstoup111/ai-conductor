@@ -4,6 +4,19 @@ spec_hash: c9a8fd3cf49af04aa49408ee7bba33327e12ff310b55bd0b304a0ebb82be9996
 pr: https://github.com/jstoup111/ai-conductor/pull/3538
 shipped: 2026-10-30
 engine_version: 20261030T100118Z-079e48ea5f1d
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This change has nothing to do with stale rebase-verdict reconciliation. It fixes where the Claude system-prompt temp file goes under nested Vitest runs. In production neither env var is normally set, so it falls back to TMPDIR/tmpdir as before and has no operator-visible effect. It does add a new exported production symbol."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This is unplanned documentation, but it describes exactly the new needs-human halt this feature adds, including its recovery, and it fixes the freeze table that would otherwise say 'No HALT'. It is within the feature's intent."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
