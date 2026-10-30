@@ -166,7 +166,14 @@ async function routedFixture() {
   return { root };
 }
 
-function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner, host = child, round = roundId) {
+function routedConductor(
+  root: string,
+  events: ConductorEventEmitter,
+  runner: StepRunner,
+  host = child,
+  round = roundId,
+  verifyArtifacts = true,
+) {
   const cursor = {
     kind: 'repair-pending' as const,
     child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
@@ -178,7 +185,7 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     featureSlug: 'demo',
     fromStep: 'acceptance_specs',
-    mode: 'auto', daemon: true, verifyArtifacts: true,
+    mode: 'auto', daemon: true, verifyArtifacts,
     config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
     events,
     stepRunner: runner,
@@ -302,8 +309,23 @@ describe('Conductor routed acceptance verify-green path', () => {
       acceptance_specs: 'pending', build: 'skipped', test_suite: 'skipped', build_review: 'skipped',
     }));
     await prepareParkingRound(root, leaf);
-    await writeFile(join(root, '.pipeline', 'HALT'), 'routing rounds stalled: r5; parked child awaiting admission\n');
-    await writeFile(join(root, '.pipeline', 'HALT.class'), 'mechanical');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
+    persister.start();
+    try {
+      // Drive the actual parking terminal through the conductor so this
+      // regression fails if stopParkedForRouting no longer writes a retryable
+      // r5 halt.
+      await parkedConductor(root, events).run();
+    } finally {
+      persister.stop();
+      advanceTail.mockRestore();
+    }
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/r5.*parked leaf-host host 2.*awaiting admission/);
     await expect(resolveHaltRetention(() => readRawHaltClass(root))).resolves.toEqual({
       haltClass: 'mechanical', retained: false,
     });
@@ -321,19 +343,23 @@ describe('Conductor routed acceptance verify-green path', () => {
     }, 'a'.repeat(40))).resolves.toEqual({ cleared: ['demo'], skipped: [] });
     await expect(readFile(join(root, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('rekick\n');
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    mocks.reconcileRounds = async () => ({ kind: 'navigate-host', roundId: parseRoundId('r5')!, host: leaf });
+
+    // Reconcile the real durable r5 route record, rather than echoing a
+    // canned navigation result through the mock seam.
     await expect(runStackPreflight({
       worktree: root,
       slug: 'demo',
       git: makeGitRunner(root),
-      reconcileRounds: async () => ({ kind: 'navigate-host', roundId: parseRoundId('r5')!, host: leaf }) as never,
-    })).resolves.toMatchObject({ kind: 'navigate-host', roundId: 'r5', host: leaf });
+    })).resolves.toMatchObject({ kind: 'navigate-leaf-to-build', roundId: 'r5', host: leaf });
 
-    mocks.routedRoundMarker = { host: 2, roundId: 'r5' };
     mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'verified', headSha: 'a'.repeat(40) });
     const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
-    await routedConductor(root, new ConductorEventEmitter(), runner, leaf, parseRoundId('r5')!).run();
-    expect(runner.run).toHaveBeenCalled();
+    await routedConductor(root, new ConductorEventEmitter(), runner, leaf, parseRoundId('r5')!, false).run();
+    expect(runner.run).toHaveBeenCalledWith('acceptance_specs', expect.any(Object), expect.any(Object));
+    const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    const stalls = ledger.filter((event) => event.type === 'routing_rounds_stalled');
+    expect(stalls).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
+    expect(ledger.some((event) => event.type?.includes('operator'))).toBe(false);
   });
 
   // Covers: task:7
