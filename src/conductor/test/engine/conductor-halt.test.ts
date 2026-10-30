@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import {
   type StepRunner,
 } from '../../src/engine/conductor.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
@@ -318,6 +319,51 @@ describe('renderExhaustedMechanicalBuildReviewHalt', () => {
       '1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric testQuality --rationale "<rationale>".',
       '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
     ].join('\n'));
+  });
+
+  it('renders the child 2 recovery command with the other recovery lines unchanged', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-current' as never,
+      snapshotDigest: 'sha256:current',
+      results: {
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'current diagnostic' },
+      },
+    } as never);
+
+    expect(renderExhaustedMechanicalBuildReviewHalt(entry, aggregate, parseChildId(2))).toBe([
+      'build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.',
+      'Current lap lap-current: testQuality closed cause provider-error (current diagnostic).',
+      '1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --child 2 --lap lap-current --rubric testQuality --rationale "<rationale>".',
+      '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+    ].join('\n'));
+  });
+
+  it('renders only child 3 in the reduced-coverage recovery command', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-current' as never,
+      snapshotDigest: 'sha256:current',
+      results: {
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'current diagnostic' },
+      },
+    } as never);
+
+    expect(renderExhaustedMechanicalBuildReviewHalt(entry, aggregate, parseChildId(3)).split('\n')[2]).toBe(
+      '1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --child 3 --lap lap-current --rubric testQuality --rationale "<rationale>".',
+    );
+  });
+
+  it('does not render a child recovery command when the valid current aggregate has no infrastructure failure', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-current' as never,
+      snapshotDigest: 'sha256:current',
+      results: {
+        testQuality: { kind: 'scope-empty', rubric: 'testQuality' },
+      },
+    } as never);
+
+    expect(renderExhaustedMechanicalBuildReviewHalt(entry, aggregate, parseChildId(2))).toBe(
+      'build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed; current-lap diagnostic is unavailable; Last recorded fault: testQuality closed cause provider-error on lap lap-ledger-fault (provider returned a malformed rubric payload).',
+    );
   });
 
   it('renders a materialization excerpt from the current aggregate', () => {

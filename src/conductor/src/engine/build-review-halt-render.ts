@@ -12,6 +12,7 @@ import type { ChildId } from './child-context.js';
 export function renderExhaustedMechanicalBuildReviewHalt(
   entry: Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'>,
   currentLap: unknown,
+  child?: ChildId,
 ): string {
   const aggregate = parseBuildReviewAggregate(currentLap);
   const failure = aggregate && Object.values(aggregate.results).find(
@@ -30,7 +31,7 @@ export function renderExhaustedMechanicalBuildReviewHalt(
   const message = [
     `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
-    `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
+    `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug>${child === undefined ? '' : ` --child ${child}`} --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
   ].join('\n');
   // /ai-conductor:session-command-context
