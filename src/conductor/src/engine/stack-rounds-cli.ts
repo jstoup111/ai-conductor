@@ -1,3 +1,4 @@
+import { parseChildId, type ChildId } from './child-context.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
   readRepairMarker,
@@ -5,7 +6,7 @@ import {
   type ReadRepairMarkerResult,
   type ReadRouteRecordResult,
 } from './routing/route-record-store.js';
-import { parseRoundId, type RoundId } from './routing/route-types.js';
+import { assertNever, parseRoundId, type RoundId } from './routing/route-types.js';
 
 export interface DescribedRoutingRound {
   readonly roundId: RoundId;
@@ -22,6 +23,72 @@ export interface DescribeRoutingRoundsDependencies {
   readonly git?: GitRunner;
   readonly readRouteRecord?: typeof readRouteRecord;
   readonly readRepairMarker?: typeof readRepairMarker;
+}
+
+export type RoundSupersessionCheck =
+  | {
+    readonly kind: 'supersedable';
+    readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
+    readonly supersededBy: RoundId;
+    readonly droppedHosts: readonly ChildId[];
+    readonly findingIds: readonly string[];
+  }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+/**
+ * Read-only first pass for closing an old audit round. Refusal detail is
+ * deliberately expanded by the next task; this task establishes the admitted
+ * audit shape and the complete host-state classification seam.
+ */
+export async function checkRoundSupersession(
+  worktree: string,
+  slug: string,
+  roundId: RoundId,
+  dependencies: DescribeRoutingRoundsDependencies = {},
+): Promise<RoundSupersessionCheck> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const readRecord = dependencies.readRouteRecord ?? readRouteRecord;
+  const stored = await readRecord(worktree, slug, roundId, { git });
+  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing round ${roundId} is unavailable` };
+
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return { kind: 'refused', detail: `could not list routing rounds for ${slug}` };
+  const roundIds = listed.stdout.split('\n')
+    .filter(Boolean)
+    .map((ref) => parseRoundId(ref.slice(`refs/conductor/${slug}/routes/`.length)))
+    .filter((id): id is RoundId => id !== undefined)
+    .sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
+  const otherRounds = await Promise.all(roundIds
+    .filter((id) => id !== roundId)
+    .map(async (id) => ({ roundId: id, stored: await readRecord(worktree, slug, id, { git }) })));
+  const supersededBy = otherRounds.find(({ stored: other }) => other.kind === 'record' && other.record.phase !== 'closed')?.roundId;
+  if (supersededBy === undefined) return { kind: 'refused', detail: `routing round ${roundId} has no succeeding open round` };
+
+  const droppedHosts = Object.entries(stored.record.hosts)
+    .flatMap(([host, state]) => {
+      switch (state) {
+        case 'pending': return [parseChildId(Number(host))!];
+        case 'admitted':
+        case 'repairing':
+        case 'reroute-moved':
+        case 'built':
+        case 'restacked':
+        case 'done':
+        case 'rerouted':
+        case 'abandoning':
+        case 'abandoned': return [];
+        default: return assertNever(state);
+      }
+    })
+    .sort((left, right) => left - right);
+  const dropped = new Set(droppedHosts);
+  return {
+    kind: 'supersedable',
+    stored,
+    supersededBy,
+    droppedHosts,
+    findingIds: stored.record.items.filter((item) => dropped.has(item.host)).map((item) => item.findingId),
+  };
 }
 
 /**
