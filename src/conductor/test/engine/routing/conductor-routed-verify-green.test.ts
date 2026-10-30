@@ -188,7 +188,13 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
   });
 }
 
-async function prepareParkingRound(root: string, host: NonNullable<ReturnType<typeof parseChildId>>, admit = true) {
+async function prepareParkingRound(
+  root: string,
+  host: NonNullable<ReturnType<typeof parseChildId>>,
+  admit = true,
+  roundId = parseRoundId('r5')!,
+  kind: RouteRecord['kind'] = 'audit',
+) {
   const git = makeGitRunner(root);
   await git(['init', '-q', '-b', 'feat/daemon-demo']);
   await git(['config', 'user.email', 'routing@example.test']);
@@ -201,7 +207,7 @@ async function prepareParkingRound(root: string, host: NonNullable<ReturnType<ty
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['host', 'leaf'] },
   });
   const created = await createRouteRecord(root, 'demo', {
-    roundId: parseRoundId('r5')!, kind: 'audit', sealedAuthored: 0, items: [],
+    roundId, kind, sealedAuthored: 0, items: [],
     allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
   });
   if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
@@ -231,21 +237,8 @@ describe('Conductor routed acceptance verify-green path', () => {
     // revalidate marker must make both gates run again.
     await Promise.all(['test_suite', 'build_review'].map((step) =>
       writeFile(join(root, '.pipeline', 'children', '2', 'gates', `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
-    const git = makeGitRunner(root);
-    await git(['init', '-q', '-b', 'feat/daemon-demo']);
-    await git(['config', 'user.email', 'routing@example.test']);
-    await git(['config', 'user.name', 'Routing']);
-    await writeFile(join(root, 'base.txt'), 'base\n');
-    await git(['add', 'base.txt']);
-    await git(['commit', '-qm', 'base']);
-    await writeSliceTopologyFixture(root, { slug: 'demo', sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['host', 'leaf'] } });
     const revalidate = parseRoundId('r6')!;
-    const created = await createRouteRecord(root, 'demo', {
-      roundId: revalidate, kind: 'revalidate', sealedAuthored: 0, items: [],
-      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
-    });
-    if (created.kind !== 'created') throw new Error(created.kind);
-    await expect(admitRound(root, 'demo', created.record, host, { git })).resolves.toMatchObject({ kind: 'admitted' });
+    await prepareParkingRound(root, host, true, revalidate, 'revalidate');
     const conductor = new Conductor({
       projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
       fromStep: 'test_suite', mode: 'auto', daemon: true, verifyArtifacts: false,
@@ -300,27 +293,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     { label: 'leaf host', host: parseChildId(2)!, kind: 'leaf-host' },
   ])('turns an advanceTail $label parking decision into a named mechanical routed-round HALT', async ({ host, kind }) => {
     const { root } = await routedFixture();
-    const git = makeGitRunner(root);
-    await git(['init', '-q', '-b', 'feat/daemon-demo']);
-    await git(['config', 'user.email', 'routing@example.test']);
-    await git(['config', 'user.name', 'Routing']);
-    await writeFile(join(root, 'base.txt'), 'base\n');
-    await git(['add', 'base.txt']);
-    await git(['commit', '-qm', 'base']);
-    await writeSliceTopologyFixture(root, {
-      slug: 'demo',
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['host', 'leaf'] },
-    });
-    const parkedRound = parseRoundId('r5')!;
-    const created = await createRouteRecord(root, 'demo', {
-      roundId: parkedRound,
-      kind: 'audit',
-      sealedAuthored: 0,
-      items: [],
-      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
-    });
-    if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
-    await expect(admitRound(root, 'demo', created.record, host, { git })).resolves.toMatchObject({ kind: 'admitted' });
+    await prepareParkingRound(root, host);
 
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
