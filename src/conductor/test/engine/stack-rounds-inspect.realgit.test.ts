@@ -1,3 +1,4 @@
+// Covers: task:3
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
