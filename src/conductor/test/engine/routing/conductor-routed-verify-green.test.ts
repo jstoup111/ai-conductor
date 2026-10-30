@@ -83,15 +83,14 @@ import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { selectNextGate } from '../../../src/engine/selector.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { admitRound, recordRoundStall } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { admitRound, reconcileRounds, recordRoundStall } from '../../../src/engine/routing/round-admission.js';
+import { createRouteRecord, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import type { HaltDisposition } from '../../../src/engine/halt-marker.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
-import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { clearMarker, readRawHaltClass, rekickSweep, resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
 
 const child = parseChildId(1)!;
@@ -173,6 +172,7 @@ function routedConductor(
   host = child,
   round = roundId,
   verifyArtifacts = true,
+  mode: 'auto' | 'interactive' = 'auto',
 ) {
   const cursor = {
     kind: 'repair-pending' as const,
@@ -185,7 +185,7 @@ function routedConductor(
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     featureSlug: 'demo',
     fromStep: 'acceptance_specs',
-    mode: 'auto', daemon: true, verifyArtifacts,
+    mode, daemon: mode === 'auto', verifyArtifacts,
     config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
     events,
     stepRunner: runner,
@@ -344,22 +344,42 @@ describe('Conductor routed acceptance verify-green path', () => {
     await expect(readFile(join(root, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('rekick\n');
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
-    // Reconcile the real durable r5 route record, rather than echoing a
-    // canned navigation result through the mock seam.
-    await expect(runStackPreflight({
-      worktree: root,
-      slug: 'demo',
-      git: makeGitRunner(root),
-    })).resolves.toMatchObject({ kind: 'navigate-leaf-to-build', roundId: 'r5', host: leaf });
+    // routedConductor injects a resumed host entry.  Persist the matching
+    // production transition so its later routed exit sees the same durable
+    // state as a real re-kick after host entry.
+    const git = makeGitRunner(root);
+    const stored = await readRouteRecord(root, 'demo', parseRoundId('r5')!, { git });
+    if (stored.kind !== 'record') throw new Error(`expected durable r5 record, got ${stored.kind}`);
+    const repairing = transitionHost(stored, leaf, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') throw new Error('expected r5 leaf to enter repairing');
+    await expect(writeRoutingTransaction(root, 'demo', [
+      { kind: 'update-record', previous: stored, record: repairing.record },
+    ], { git })).resolves.toMatchObject({ kind: 'updated' });
+
+    // Read the persisted r5 record through the production reconciler, rather
+    // than echoing a canned navigation result through the mock seam.
+    await expect(reconcileRounds(root, 'demo', { git: makeGitRunner(root) })).resolves.toMatchObject({
+      kind: 'navigate-leaf-to-build', roundId: 'r5', host: leaf,
+    });
 
     mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'verified', headSha: 'a'.repeat(40) });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+    }));
+    const rerunEvents: Array<{ type?: string; step?: string; child?: number }> = [];
+    const rerunEventEmitter = new ConductorEventEmitter();
+    rerunEventEmitter.on('step_started', (event) => rerunEvents.push(event as { type?: string; step?: string; child?: number }));
+    rerunEventEmitter.on('loop_halt', (event) => rerunEvents.push(event as { type?: string; step?: string; child?: number }));
     const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
-    await routedConductor(root, new ConductorEventEmitter(), runner, leaf, parseRoundId('r5')!, false).run();
-    expect(runner.run).toHaveBeenCalledWith('acceptance_specs', expect.any(Object), expect.any(Object));
+    await routedConductor(root, rerunEventEmitter, runner, leaf, parseRoundId('r5')!, false, 'interactive').run();
+    expect(runner.run).toHaveBeenCalledWith('build_review', expect.any(Object), expect.any(Object));
+    expect(rerunEvents).toContainEqual(expect.objectContaining({ type: 'step_started', step: 'build_review', child: leaf }));
+    expect(rerunEvents).not.toContainEqual(expect.objectContaining({ type: 'loop_halt' }));
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
     const stalls = ledger.filter((event) => event.type === 'routing_rounds_stalled');
     expect(stalls).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
-    expect(ledger.some((event) => event.type?.includes('operator'))).toBe(false);
+    expect([...ledger, ...rerunEvents].some((event) => event.type?.includes('operator'))).toBe(false);
   });
 
   // Covers: task:7
