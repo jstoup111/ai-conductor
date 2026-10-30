@@ -168,13 +168,13 @@ describe('stack owners CLI with real local Git', () => {
     expect(await snapshot(repo, git)).toEqual(before);
   });
 
-  it('registers stack owners for Commander help and pre-dispatch routing', async () => {
+  it('registers stack operator commands for Commander help and pre-dispatch routing', async () => {
     expect({
       command: (await import('../../src/cli.js')).createProgram().commands.find((entry) => entry.name() === 'stack')
         ?.commands.map((entry) => entry.name()),
       preDispatch: PRE_DISPATCH_COMMANDS.find((entry) => entry.detector === 'detectStackOwnersCommand'),
     }).toEqual({
-      command: ['land', 'owners'],
+      command: ['land', 'owners', 'rounds'],
       preDispatch: { detector: 'detectStackOwnersCommand', commandPath: ['stack', 'owners'], helpOwner: 'router' },
     });
   });
