@@ -179,7 +179,7 @@ keeps engine prompts and shipped skills from directing a managed session to a re
 ai-conductor build-review findings --feature <slug> [--child <child>] [--json]
 ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale <text>
 ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <id> --rationale <text>
-ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
+ai-conductor build-review record-reduced-coverage --feature <slug> [--child <child>] --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
 `findings` is read-only and renders the current feature's raw and effective build-review findings plus
@@ -220,7 +220,13 @@ It derives the closed infrastructure cause from the current review state; caller
 It records a decision only when that rubric currently has an exhausted mechanical infrastructure
 fault, or a current `projection-oversized` fault (which halts without consuming that allowance).
 Judged, skipped, duplicate, unknown-rubric, allowance-remaining for every other cause, and stale-review
-requests are refused without changing the decision state.
+requests are refused without changing the decision state. `record-reduced-coverage --child <child>`
+checks the lap, rubric, and mechanical-fault allowance against that child's aggregate and kickback
+ledger (`.pipeline/children/<child>/`) and records the decision in the feature's store. Each refusal
+names its cause and exits 1: an invalid child id; the aggregate path and whether it is missing,
+malformed, or unreadable (with the same `--child <k>` hint as `accept`); the requested and current
+laps; the consumed allowance and the ledger it was read from (`<n> of 3 consumed in <ledger>`); an
+unreadable kickback-ledger gate; or a disposition-store rejection.
 
 `resolve-case` resolves one open remediation case in the feature's case store, or in the child's with
 `--child`. It has the same interactive-terminal and local-operator-identity gate as `accept` and

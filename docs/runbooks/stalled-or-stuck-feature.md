@@ -2012,9 +2012,13 @@ test can fail against the base, so the finding is accepted risk.
 ```text
 build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed.
 Current lap <lap>: <rubric> closed cause <reason> (<detail>).
-1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale "<rationale>".
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <slug> [--child <child>] --lap <lap> --rubric <rubric> --rationale "<rationale>".
 2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
+
+On a stacked feature halted inside a child region, step 1 includes `--child <child>`, and `<lap>`
+and `<consumed>` come from that child's aggregate and kickback ledger under
+`.pipeline/children/<child>/`. A flat feature's halt has no `--child`.
 
 When the current lap has no readable aggregate (for example, its verdict came from an earlier
 lap and the completion guard scored it `absent`), the halt instead reads:
@@ -2067,9 +2071,12 @@ A missing record means retention failed; the fault itself is unaffected.
    not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
    stale):
    ```bash
-   ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> \
+   ai-conductor build-review record-reduced-coverage --feature <slug> [--child <child>] --lap <lap> \
      --rubric <rubric> --rationale "<why this rubric's coverage is being reduced>"
    ```
+   Copy `--child` exactly as the halt prints it. A refusal names the failed check and the file it
+   read, for example `the mechanical-fault allowance remains (2 of 3 consumed in
+   .pipeline/children/2/kickback-ledger.json)`.
    This only writes the decision — it does not touch the halt marker.
 2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
 
