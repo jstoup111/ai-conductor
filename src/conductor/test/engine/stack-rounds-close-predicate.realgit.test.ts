@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { CHILD_REGION_STEPS, parseChildId } from '../../src/engine/child-context.js';
+import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
 import { checkRoundSupersession } from '../../src/engine/stack-rounds-cli.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
@@ -148,13 +149,13 @@ describe('stack rounds close predicate (real local Git)', () => {
       items: [],
       operator: {
         origin: 'land', reason: 'operator work', operator: 'tester', entryStep: 'build', carried: [],
-        otherTips: { main: '1'.repeat(40) },
+        otherTips: { main: parseCommitSha('1'.repeat(40))! },
         priorRegion: {
           statuses: Object.fromEntries(CHILD_REGION_STEPS.map((step) => [step, 'done'])) as Record<(typeof CHILD_REGION_STEPS)[number], 'done'>,
           verdicts: {},
         },
       },
-    } as RouteRecord));
+    }));
     const operatorBefore = await routeRefs(subject);
     await expect(checkRoundSupersession(subject.repo, slug, r4)).resolves.toMatchObject({
       kind: 'refused', detail: expect.stringMatching(/operator.*only audit rounds can be superseded.*ai-conductor stack land --slug demo --abandon/),
@@ -194,8 +195,13 @@ describe('stack rounds close predicate (real local Git)', () => {
       ...record,
       hosts: { [c1]: 'reroute-moved', [c2]: 'pending' },
       currentHostIndex: 1,
-      fallback: [{ from: c1, to: c2, evidence: ['because'], branch: 'feat/c1/demo', head: '1'.repeat(40) }],
-      reroute: { sourceBranch: 'feat/c1/demo', rejectedTip: '1'.repeat(40), resetTip: '1'.repeat(40), destination: c2 },
+      fallback: [{ from: c1, to: c2, evidence: ['because'], branch: 'feat/c1/demo', head: parseCommitSha('1'.repeat(40))! }],
+      reroute: {
+        sourceBranch: 'feat/c1/demo',
+        rejectedTip: parseCommitSha('1'.repeat(40))!,
+        resetTip: parseCommitSha('1'.repeat(40))!,
+        destination: c2,
+      },
     }));
     const rerouteBefore = await routeRefs(rerouting);
     await expect(checkRoundSupersession(rerouting.repo, slug, r4)).resolves.toMatchObject({

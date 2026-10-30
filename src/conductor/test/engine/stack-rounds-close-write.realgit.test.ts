@@ -1,5 +1,5 @@
 // Covers: task:6
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import { checkRoundSupersession, supersedeRound } from '../../src/engine/stack-rounds-cli.js';

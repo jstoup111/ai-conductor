@@ -13,7 +13,7 @@ describe('stack rounds CLI', () => {
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-inspect', slug: 'demo' }, {
       cwd: '/tmp', resolveMainRoot: async () => '/tmp', resolveWorktree: async () => '/tmp',
       loadConfig: async () => ({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: false } }, warnings: [] }),
-      readRouteRecord, print: (line) => output.push(line),
+      readRouteRecord, print: (line: string) => output.push(line),
     } as never)).resolves.toBe(1);
     expect(output.join('\n')).toContain('Routing is disabled');
     expect(readRouteRecord).not.toHaveBeenCalled();
@@ -34,8 +34,8 @@ describe('stack rounds CLI', () => {
       resolveOperator: async () => 'operator',
       checkSupersession: async () => { calls.push('check'); return checked; },
       acquireLease: async () => ({ kind: 'acquired', lease: { release: async () => { calls.push('release'); return { ok: true }; } } }),
-      supersede: async (input) => { calls.push(`write:${input.reason}`); return { kind: 'superseded', event: {} } as never; },
-      print: (line) => output.push(line),
+      supersede: async (input: { readonly reason: string }) => { calls.push(`write:${input.reason}`); return { kind: 'superseded', event: {} } as never; },
+      print: (line: string) => output.push(line),
     } as never);
     expect(code).toBe(0);
     expect(calls).toEqual(['check', 'write:newer round', 'release']);
