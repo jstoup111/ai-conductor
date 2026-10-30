@@ -334,3 +334,30 @@ Task 6 ────────────────────────�
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-R1: Add a conductor-run test in src/conductor/test/conductor-halt.test.ts (Covers: task:7). Drive a Conductor with active region child 2, an exhausted child kickback ledger, and a child build-review.json on lap-child-2 with a testQuality infrastructure failure. Assert that .pipeline/HALT contains `ai-conductor build-review record-reduced-coverage --feature <feature-slug> --child 2 --lap lap-child-2 --rubric testQuality --rationale "<rationale>"` and `3 of 3 shared faults consumed`.
+**Gate:** prd-audit
+**Rationale:** Verified from the audit evidence: the production wiring already exists. conductor.ts:12055-12087 reads the child ledger and the child build-review.json and passes activeRegionChild to the renderer, and the renderer emits --child. The gap is only that no test runs the conductor. Task 7's first and third doneWhen criteria require that test, so the repair falls inside approved task 7. No architectural or product decision is needed. This is BUILD test work (confidence 95%).
+**Criterion:** S2.1
+**Parent task:** 7
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: Add a flat-feature conductor-run test in the same file (Covers: task:7). Use no active child, an exhausted root ledger, and a root aggregate on lap-current with a testQuality infrastructure failure. Assert the HALT body equals, byte for byte, the four-line text pinned by the `keeps the aggregate-present recovery text byte-for-byte unchanged` renderer test plus a trailing newline, and that it contains no `--child`.
+**Gate:** prd-audit
+**Rationale:** Verified from the audit evidence: the production wiring already exists. conductor.ts:12055-12087 reads the child ledger and the child build-review.json and passes activeRegionChild to the renderer, and the renderer emits --child. The gap is only that no test runs the conductor. Task 7's first and third doneWhen criteria require that test, so the repair falls inside approved task 7. No architectural or product decision is needed. This is BUILD test work (confidence 95%).
+**Criterion:** S2.1
+**Parent task:** 7
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: Extend the active-child-2 conductor-run test (Covers: task:7). Extract the `ai-conductor build-review record-reduced-coverage` line from the written HALT and drop the sentence-ending period. Replace `<feature-slug>` with `review-rubrics` and `"<rationale>"` with `risk`, split the line into argv, and pass it to detectBuildReviewRecordReducedCoverageCommand. Assert the result has child '2', lapId 'lap-child-2' and rubric 'testQuality'.
+**Gate:** prd-audit
+**Rationale:** The audit confirms that the rendered argument order matches the strict vector the detector in cli.ts expects. The gap is a missing round-trip test, which task 7's second doneWhen criterion requires. That is BUILD test work inside task 7. When extracting the command line, the test must remove the sentence-ending period after "<rationale>" before substituting `risk`, so the rationale value is exact (confidence 90%).
+**Criterion:** S2.2
+**Parent task:** 7
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
