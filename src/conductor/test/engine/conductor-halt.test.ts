@@ -1,6 +1,6 @@
 // Covers: task:2, task:3, task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,8 @@ import {
 } from '../../src/engine/conductor.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { detectBuildReviewRecordReducedCoverageCommand } from '../../src/cli.js';
+import { bumpMechanicalFaultsInLedgerResult } from '../../src/engine/kickback-ledger.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
@@ -284,6 +286,118 @@ describe('engine/conductor typed unretryable-input halts', () => {
     ]);
     expect(JSON.parse(await readFile(statePath, 'utf8'))).toMatchObject({ architecture_diagram: 'skipped' });
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// Covers: task:7
+describe('engine/conductor exhausted build-review mechanical allowance halts', () => {
+  let dir: string;
+  let statePath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-build-review-halt-'));
+    statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function runExhaustedBuildReview(options: { child?: 2; lapId: string }): Promise<string> {
+    const state: Record<string, unknown> = { complexity_tier: 'M', feature_desc: 'review-rubrics' };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+
+    const child = options.child === undefined ? undefined : parseChildId(options.child)!;
+    const pipelineDir = child === undefined
+      ? join(dir, '.pipeline')
+      : join(dir, '.pipeline', 'children', String(child));
+    await mkdir(pipelineDir, { recursive: true });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: options.lapId as never,
+      snapshotDigest: 'sha256:current',
+      results: {
+        testQuality: {
+          kind: 'infrastructure-failure',
+          rubric: 'testQuality',
+          reason: 'provider-error',
+          detail: 'current diagnostic',
+        },
+      },
+    } as never);
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step: StepName) => {
+          if (step !== 'build_review') return { success: true };
+          for (let fault = 0; fault < 3; fault++) {
+            await bumpMechanicalFaultsInLedgerResult(dir, 'build_review', {
+              rubric: 'testQuality',
+              reason: 'provider-error',
+              detail: 'current diagnostic',
+              lapId: options.lapId,
+            }, child);
+          }
+          await writeFile(join(pipelineDir, 'build-review.json'), JSON.stringify(aggregate));
+          return { success: false, currentLapMechanicalFault: true };
+        }),
+      },
+      events: new ConductorEventEmitter(),
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'build_review',
+      maxRetries: 3,
+      childRegionLifecycle: child === undefined ? undefined : {
+        resolveActiveChild: async () => ({ kind: 'no-child' }),
+      },
+    });
+    if (child !== undefined) {
+      (conductor as unknown as { activeRegionChild: typeof child }).activeRegionChild = child;
+    }
+    await conductor.run();
+    return readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+  }
+
+  it('writes a child recovery command that the CLI accepts', async () => {
+    const halt = await runExhaustedBuildReview({ child: 2, lapId: 'lap-child-2' });
+
+    expect(halt).toContain(
+      'ai-conductor build-review record-reduced-coverage --feature <feature-slug> --child 2 --lap lap-child-2 --rubric testQuality --rationale "<rationale>"',
+    );
+    expect(halt).toContain('3 of 3 shared faults consumed');
+
+    const commandLine = halt.split('\n').find((line) =>
+      line.includes('ai-conductor build-review record-reduced-coverage'))!;
+    const argv = ['node', ...commandLine.slice(commandLine.indexOf('ai-conductor'))
+      .replace(/\.$/, '')
+      .replace('<feature-slug>', 'review-rubrics')
+      .replace('"<rationale>"', 'risk')
+      .split(' ')];
+
+    expect(detectBuildReviewRecordReducedCoverageCommand(argv)).toMatchObject({
+      child: '2',
+      lapId: 'lap-child-2',
+      rubric: 'testQuality',
+    });
+  });
+
+  it('keeps the flat aggregate-present recovery text byte-for-byte unchanged', async () => {
+    const halt = await runExhaustedBuildReview({ lapId: 'lap-current' });
+
+    expect(halt).toBe([
+      'build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.',
+      'Current lap lap-current: testQuality closed cause provider-error (current diagnostic).',
+      '1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric testQuality --rationale "<rationale>".',
+      '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+      '',
+    ].join('\n'));
+    expect(halt).not.toContain('--child');
   });
 });
 
