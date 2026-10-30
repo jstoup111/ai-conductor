@@ -5845,6 +5845,68 @@ export class Conductor {
   }
 
   /**
+   * Finish the narrow crash window between a routed host becoming green and
+   * the ordinary build-review closure.  The verdict overlay is deliberately
+   * consulted here: evidence from an earlier round must re-run, not exit.
+   */
+  private async continueFinishedRoutedHostOnResume(
+    state: ConductState,
+    indexOf: (name: StepName) => number,
+  ): Promise<number | 'halt' | undefined> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug || this.activeRegionChild === undefined) return undefined;
+    const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+    if (execution.source !== 'routed-host' || execution.roundId === undefined || execution.target.child !== this.activeRegionChild) {
+      return undefined;
+    }
+    const verdicts = await this.readGateVerdictOverlay();
+    if (!CHILD_REGION_STEPS.every((step) => gateSatisfied(step, state, verdicts))) return undefined;
+
+    const continued = await exitRoutedHostAndReconcile({
+      worktree: this.projectRoot,
+      slug,
+      roundId: execution.roundId,
+      host: execution.target.child,
+      events: this.events,
+      resolver: this.stepRunner.resolveRebaseConflict
+        ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+        : undefined,
+      resolverCap: resolveRebaseResolutionAttempts(this.config),
+      persist: (event) => persistOnActiveEventSpine(this.events, event),
+      exit: this.requestRoutedExit,
+      reconcile: reconcileRounds,
+    });
+    if (continued.kind === 'exit-halted') {
+      const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
+      if (existing?.trim()) await this.emitLoopHalt(existing.trim());
+      else await this.haltChildRegionRefusal(continued.detail);
+      return 'halt';
+    }
+    if (continued.next.kind === 'unavailable') {
+      await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${continued.next.detail}`);
+      return 'halt';
+    }
+    if (continued.next.kind === 'stalled') {
+      const stall = await recordRoundStall(this.projectRoot, slug, continued.next, this.events);
+      await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
+      return 'halt';
+    }
+
+    // The exit may have admitted a following host.  Rebind the overlay before
+    // selecting its first region gate, exactly as the in-loop continuation.
+    const next = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+    if (next.source === 'routed-host' || next.source === 'revalidating' || next.source === 'cursor') {
+      await this.activateChildRegionState(state, next.target.child, next.target.isLeaf);
+      return indexOf('acceptance_specs');
+    }
+    if (!await routedRoundOpen(this.projectRoot, slug)) {
+      await this.restoreWholeFeatureState(state);
+      return indexOf('manual_test');
+    }
+    return undefined;
+  }
+
+  /**
    * A selector parking decision is durable unfinished routing work, not a
    * successful terminal state.  Give it the same bounded, event-spine-backed
    * diagnostic as an in-loop round stall before returning control to daemon.
@@ -15834,6 +15896,20 @@ export class Conductor {
             return;
           }
           if (advance === 'parked') {
+            // A process can stop after every region gate has settled but before
+            // the build-review closure advances the routed host. On resume the
+            // selector reports the region as parked; that is not a stall when
+            // this round's own evidence says the host is green.
+            const resumedExit = await this.continueFinishedRoutedHostOnResume(state, indexOf);
+            if (resumedExit === 'halt') {
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
+            }
+            if (typeof resumedExit === 'number') {
+              i = resumedExit - 1;
+              continue;
+            }
             parkedForRouting = true;
             await this.stopParkedForRouting({
               kind: 'parked',
