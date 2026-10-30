@@ -2352,6 +2352,19 @@ type ConductorEventBody =
       action: 'opened' | 'declared' | 'abandoned';
     }
   | {
+      /** An operator closed a stale audit round without dispatching its pending hosts. */
+      type: 'routing_round_superseded';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      supersededBy: RoundId;
+      droppedHosts: readonly ChildId[];
+      findingIds: readonly string[];
+      reason: string;
+      operator: string;
+    }
+  | {
       type: 'child_revalidated';
       eventId: string;
       occurredAt: string;

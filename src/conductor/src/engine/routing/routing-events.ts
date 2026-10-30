@@ -41,6 +41,22 @@ export function operatorRoundEvent(
   };
 }
 
+/** Creates the durable occurrence paired with closing a stale audit round. */
+export function routingRoundSupersededEvent(
+  record: RouteRecord,
+  supersededBy: RoundId,
+  droppedHosts: readonly ChildId[],
+  findingIds: readonly string[],
+  reason: string,
+  operator: string,
+): Extract<ConductorEvent, { type: 'routing_round_superseded' }> {
+  return {
+    type: 'routing_round_superseded', ...occurrence(), roundId: record.roundId,
+    supersededBy, droppedHosts, findingIds, reason, operator,
+    child: Math.min(...droppedHosts) as ChildId,
+  };
+}
+
 /** Creates the one durable occurrence for a completed queued revalidation. */
 export function childRevalidatedEvent(
   child: ChildId,

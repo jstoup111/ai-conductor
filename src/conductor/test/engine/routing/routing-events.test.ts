@@ -2,6 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { parseChildId } from '../../../src/engine/child-context.js';
+import { routingRoundSupersededEvent } from '../../../src/engine/routing/routing-events.js';
+import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 
 const SOURCE_ROOT = join(import.meta.dirname, '../../../src');
 const CANONICAL_ROUTING_EVENTS_MODULE = 'engine/routing/routing-events.ts';
@@ -34,6 +37,27 @@ function routingEventLiteralViolations(files: readonly SourceFile[]): string[] {
 }
 
 describe('routing event constructors', () => {
+  it('creates an identified supersession occurrence for the lowest dropped host', () => {
+    const event = routingRoundSupersededEvent(
+      { roundId: parseRoundId('r4')! } as RouteRecord,
+      parseRoundId('r5')!,
+      [parseChildId(2)!],
+      ['finding-2'],
+      'stale audit round',
+      'operator@example.test',
+    );
+
+    expect(event).toMatchObject({
+      type: 'routing_round_superseded', roundId: 'r4', supersededBy: 'r5',
+      droppedHosts: [2], child: 2, findingIds: ['finding-2'],
+      reason: 'stale audit round', operator: 'operator@example.test',
+    });
+    expect(event.eventId).toEqual(expect.any(String));
+    expect(event.eventId).not.toHaveLength(0);
+    expect(event.occurredAt).toEqual(expect.any(String));
+    expect(event.occurredAt).not.toHaveLength(0);
+  });
+
   it('permits the canonical module and unrelated event syntax', () => {
     expect(routingEventLiteralViolations([
       { path: CANONICAL_ROUTING_EVENTS_MODULE, source: "return { type: 'remediation_routed' };" },
