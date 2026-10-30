@@ -437,8 +437,17 @@ export interface DecideGrantDispatch {
   reason: string;
 }
 
-export type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch, StackOwnersDispatch } from './types/cli.js';
-import type { StackLandDispatch, StackOwnersDispatch } from './types/cli.js';
+export type {
+  StackLandAbandonDispatch,
+  StackLandDispatch,
+  StackLandDoneDispatch,
+  StackLandOpenDispatch,
+  StackOwnersDispatch,
+  StackRoundsCloseDispatch,
+  StackRoundsDispatch,
+  StackRoundsInspectDispatch,
+} from './types/cli.js';
+import type { StackLandDispatch, StackOwnersDispatch, StackRoundsDispatch } from './types/cli.js';
 
 /** Parse the read-only ownership evidence grammar. */
 export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDispatch | null {
@@ -485,6 +494,39 @@ export function detectStackLandCommand(argv: readonly string[]): StackLandDispat
   const reason = values.get('--reason');
   if (!slug || !child || reason === undefined || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
   return { kind: 'stack-land', slug, child, carry, reason };
+}
+
+/** Parse the routed-round inspection and close grammars. */
+export function detectStackRoundsCommand(argv: readonly string[]): StackRoundsDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'rounds') return null;
+  const values = new Map<string, string>();
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || value === undefined || !['--slug', '--close', '--reason'].includes(flag) || values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug');
+  if (!slug || slug.includes('/') || slug === '.' || slug === '..') return null;
+  const roundId = values.get('--close');
+  const reason = values.get('--reason');
+  if (roundId === undefined && reason === undefined && values.size === 1) {
+    return { kind: 'stack-rounds-inspect', slug };
+  }
+  if (roundId === undefined || reason === undefined || values.size !== 3) return null;
+  return { kind: 'stack-rounds-close', slug, roundId, reason };
+}
+
+/**
+ * Isolate detector fallthrough from the eventual CLI entry-point wiring.
+ * A rejected vector must never reach a stack-rounds dispatcher.
+ */
+export async function dispatchStackRoundsIfDetected(
+  argv: readonly string[],
+  dispatch: (command: StackRoundsDispatch) => Promise<number> | number,
+): Promise<number | null> {
+  const command = detectStackRoundsCommand(argv);
+  return command === null ? null : dispatch(command);
 }
 
 export type { HaltClearDispatch } from './types/cli.js';
