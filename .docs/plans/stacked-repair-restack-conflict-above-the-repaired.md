@@ -590,5 +590,5 @@ Tasks 6, 8, 10, 11, 13 -> Task 14
 **Criterion:** S4.5
 **Parent task:** 14
 **Done when:**
-- [test] S4.5 is satisfied by this task.
+- [test] `routed-resolution-integration.realgit.test.ts` creates two child-2 commits with the same subject that are omitted from the exact rewrite map, verifies patch-id reconstruction for both and an applied restack, then consumes child 2's queued re-validation and verifies the conductor dispatches `build` and `build_review`, runs the suite verifier once, and records child 2's `build` step as done.
 - The repair for task rem-prd-audit-14 is committed and its targeted tests pass.
