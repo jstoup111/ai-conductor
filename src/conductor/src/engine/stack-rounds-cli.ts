@@ -141,9 +141,11 @@ export async function checkRoundSupersession(
     return { kind: 'refused', detail: `routing round ${roundId} is ${stored.record.phase}, not open` };
   }
   if (stored.record.kind !== 'audit') {
+    // ai-conductor:session-command-context=operator-only
     const abandon = stored.record.kind === 'operator'
       ? `; use ai-conductor stack land --slug ${slug} --abandon`
       : '';
+    // /ai-conductor:session-command-context
     return {
       kind: 'refused',
       detail: `routing round ${roundId} is ${stored.record.kind}; only audit rounds can be superseded${abandon}`,
@@ -275,9 +277,11 @@ function wedges(slug: string, description: RoutingRoundsDescription): readonly s
     if (stored.kind !== 'record' || stored.record.phase !== 'open' || roundId === marker.roundId) return [];
     if (Object.values(stored.record.hosts).some((state) => active.has(state))) return [];
     const pending = Object.entries(stored.record.hosts).find(([, state]) => state === 'pending');
+    // ai-conductor:session-command-context=operator-only
     return pending === undefined
       ? []
       : [`wedge: ${roundId} host ${pending[0]} pending unadmitted behind marker ${marker.roundId}; ai-conductor stack rounds --slug ${slug} --close ${roundId} --reason <text>`];
+    // /ai-conductor:session-command-context
   });
 }
 
@@ -349,7 +353,9 @@ export async function dispatchStackRoundsCommand(
       ...(deps.git === undefined ? {} : { git: deps.git }),
     });
     if (result.kind === 'refused') return refused(print, result.detail);
+    // ai-conductor:session-command-context=operator-only
     print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    // /ai-conductor:session-command-context
     return 0;
   } catch (error) {
     return refused(print, error instanceof Error ? error.message : String(error));
