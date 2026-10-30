@@ -583,3 +583,12 @@ Tasks 6, 8, 10, 11, 13 -> Task 14
 **Done when:**
 - adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 1 is satisfied by this task.
 - The repair for task rem-as-built-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-14: rebase-translate.ts: in buildExactRewriteMap/translateAfterRebase, try patch-id matching for pre-image shas the exact map leaves unmapped (exact entries still win; only patch-id-unmatched shas become residue); add the routed-resolution-integration.realgit.test.ts case where two child 2 commits share one subject, are absent from the map passed to applyRestackTransition, are rebuilt by patch-id, the restack applies, and child 2's re-validation runs
+**Gate:** prd-audit
+**Rationale:** Verified (~90%) implementation gap, no architectural or product decision needed. S4.5 requires duplicate-subject child commits to stay out of the exact rewrite map and be rebuilt by translateAfterRebase's patch-id matching. Instead, rebase-translate.ts:492-494 sends any defined exactRewrites to buildExactRewriteMap (rebase-translate.ts:42-57), which puts every unmapped pre-image sha into residue without trying a patch-id match. restack-executor.ts always passes a defined map for a consumed child, so the duplicate-subject commits become residue. Task 14 already covers this: its fifth doneWhen asserts this exact scenario. The fix goes to BUILD under task 14: try patch-id matching for pre-image shas the exact map leaves unmapped, and add the duplicate-subject real-git assertion. This preserves completed coverage: exact-mapped commits, including empty and resolver-modified ones, still use the exact map.
+**Criterion:** S4.5
+**Parent task:** 14
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-14 is committed and its targeted tests pass.
