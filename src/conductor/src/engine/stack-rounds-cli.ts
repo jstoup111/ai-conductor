@@ -1,12 +1,20 @@
 import { parseChildId, type ChildId } from './child-context.js';
+import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
+import { loadConfig } from './config.js';
+import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
+import { resolveMainRepoRoot } from './park-marker.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
+import { hasDurableChildState } from './slice-topology.js';
+import type { StackRoundsDispatch } from '../types/cli.js';
 import {
   readRepairMarker,
   readRouteRecord,
+  writeRoutingTransaction,
   type ReadRepairMarkerResult,
   type ReadRouteRecordResult,
 } from './routing/route-record-store.js';
-import { assertNever, parseRoundId, type RoundId } from './routing/route-types.js';
+import { routingRoundSupersededEvent, withOutboxEvent } from './routing/routing-events.js';
+import { assertNever, parseRoundId, routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface DescribedRoutingRound {
   readonly roundId: RoundId;
@@ -34,6 +42,76 @@ export type RoundSupersessionCheck =
     readonly findingIds: readonly string[];
   }
   | { readonly kind: 'refused'; readonly detail: string };
+
+export interface SupersedeRoundInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly checked: Extract<RoundSupersessionCheck, { readonly kind: 'supersedable' }>;
+  readonly reason: string;
+  readonly operator: string;
+  readonly git?: GitRunner;
+}
+
+export type SupersedeRoundResult =
+  | { readonly kind: 'superseded'; readonly event: Extract<import('../types/events.js').ConductorEvent, { readonly type: 'routing_round_superseded' }> }
+  | { readonly kind: 'refused'; readonly detail: string };
+
+/** Close one already-checked audit round with its durable occurrence in one CAS. */
+export async function supersedeRound(input: SupersedeRoundInput): Promise<SupersedeRoundResult> {
+  const { worktree, slug, checked } = input;
+  const hosts = Object.fromEntries(Object.entries(checked.stored.record.hosts).map(([host, state]) => [
+    host,
+    state === 'pending' ? 'done' : state,
+  ])) as typeof checked.stored.record.hosts;
+  const event = routingRoundSupersededEvent(
+    checked.stored.record,
+    checked.supersededBy,
+    checked.droppedHosts,
+    checked.findingIds,
+    input.reason.trim(),
+    input.operator.trim(),
+  );
+  const record = withOutboxEvent({ ...checked.stored.record, phase: 'closed', hosts }, event);
+  const wrote = await writeRoutingTransaction(worktree, slug, [
+    { kind: 'update-record', previous: checked.stored, record },
+  ], { ...(input.git === undefined ? {} : { git: input.git }) });
+  if (wrote.kind === 'updated') return { kind: 'superseded', event };
+  const detail = wrote.kind === 'cas-failed'
+    ? `contested write for routing round ${checked.stored.record.roundId}`
+    : `failed write for routing round ${checked.stored.record.roundId} (${wrote.kind})`;
+  return { kind: 'refused', detail };
+}
+
+export interface StackRoundsCliDeps extends DescribeRoutingRoundsDependencies {
+  readonly cwd?: string;
+  readonly print?: (message: string) => void;
+  readonly resolveMainRoot?: (cwd: string) => Promise<string>;
+  readonly resolveWorktree?: (slug: string) => Promise<string | undefined>;
+  readonly loadConfig?: typeof loadConfig;
+  readonly hasDurableChildState?: typeof hasDurableChildState;
+  readonly resolveOperator?: (root: string) => Promise<string | undefined>;
+  readonly acquireLease?: typeof acquireFeatureDispatchLease;
+  readonly checkSupersession?: typeof checkRoundSupersession;
+  readonly supersede?: typeof supersedeRound;
+}
+
+type StackRoundsEligibility = { readonly kind: 'eligible' } | { readonly kind: 'refused'; readonly detail: string };
+
+async function checkStackRoundsEligibility(worktree: string, slug: string, deps: StackRoundsCliDeps): Promise<StackRoundsEligibility> {
+  const config = await (deps.loadConfig ?? loadConfig)(worktree);
+  if (!routingSettingOn(config.ok ? config.config : undefined)) {
+    return { kind: 'refused', detail: 'Routing is disabled by stacked_prs.route_whole_feature_fixes; enable it before using stack rounds.' };
+  }
+  const durable = await (deps.hasDurableChildState ?? hasDurableChildState)(worktree, slug);
+  if (durable === 'git-error') return { kind: 'refused', detail: 'Cannot determine durable child state; refusing stack rounds.' };
+  if (!durable) return { kind: 'refused', detail: `Feature ${slug} is not a stacked feature; stack rounds is unavailable.` };
+  return { kind: 'eligible' };
+}
+
+function refused(print: (message: string) => void, detail: string): number {
+  print(`stack rounds: refused — ${detail}`);
+  return 1;
+}
 
 /**
  * Read-only first pass for closing an old audit round. Refusal detail is
@@ -223,4 +301,61 @@ export function renderRoutingRounds(slug: string, description: RoutingRoundsDesc
   }
   lines.push(...wedges(slug, description));
   return lines.join('\n');
+}
+
+/**
+ * Dispatch the operator-facing routed-rounds commands. Inspection deliberately
+ * has no lease; the close path takes one only after all read-only refusals.
+ */
+export async function dispatchStackRoundsCommand(
+  command: StackRoundsDispatch,
+  deps: StackRoundsCliDeps = {},
+): Promise<number> {
+  const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const cwd = deps.cwd ?? process.cwd();
+  const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
+  const worktree = await (deps.resolveWorktree ?? ((slug) => resolveCliFeatureWorktree(slug, {
+    cwd,
+    resolveMainRoot: deps.resolveMainRoot,
+  })))(command.slug);
+  if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
+
+  const eligibility = await checkStackRoundsEligibility(worktree, command.slug, deps);
+  if (eligibility.kind === 'refused') return refused(print, eligibility.detail);
+
+  if (command.kind === 'stack-rounds-inspect') {
+    const described = await describeRoutingRounds(worktree, command.slug, deps);
+    print(renderRoutingRounds(command.slug, described));
+    return described.readable ? 0 : 1;
+  }
+
+  const operator = await (deps.resolveOperator ?? resolveMachineOperatorIdentity)(root);
+  if (!operator?.trim()) return refused(print, 'no approved operator identity is available.');
+  const reason = command.reason.trim();
+  if (!reason) return refused(print, 'a non-empty --reason is required.');
+  const roundId = parseRoundId(command.roundId);
+  if (roundId === undefined) return refused(print, `routing round id ${command.roundId} is invalid`);
+  const checked = await (deps.checkSupersession ?? checkRoundSupersession)(worktree, command.slug, roundId, deps);
+  if (checked.kind === 'refused') return refused(print, checked.detail);
+
+  const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack rounds --close');
+  if (acquired.kind !== 'acquired') return refused(print, formatFeatureDispatchLeaseRefusal(acquired));
+  try {
+    const result = await (deps.supersede ?? supersedeRound)({
+      worktree,
+      slug: command.slug,
+      checked,
+      reason,
+      operator: operator.trim(),
+      ...(deps.git === undefined ? {} : { git: deps.git }),
+    });
+    if (result.kind === 'refused') return refused(print, result.detail);
+    print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    return 0;
+  } catch (error) {
+    return refused(print, error instanceof Error ? error.message : String(error));
+  } finally {
+    const released = await acquired.lease.release();
+    if (!released.ok) print(`stack rounds: refused — ${released.message}`);
+  }
 }

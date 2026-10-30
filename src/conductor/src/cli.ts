@@ -939,6 +939,12 @@ export function createProgram(): Command {
     .requiredOption('--slug <slug>', 'Feature worktree slug')
     .option('--path <path>', 'Path to inspect (repeatable)')
     .option('--diff <range>', 'Git range whose changed paths to inspect');
+  stack
+    .command('rounds')
+    .description('Inspect routed rounds or close a superseded audit round')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .option('--close <round>', 'Superseded audit round to close')
+    .option('--reason <text>', 'Operator reason required with --close');
 
   const buildReview = program
     .command('build-review')
