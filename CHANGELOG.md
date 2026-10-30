@@ -218,6 +218,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators receive accurate routed-round growth-cap diagnostics and recovery guidance. ([implementation PR #3524](https://github.com/jstoup111/ai-conductor/pull/3524)).
 - Routed repair rounds now drain correctly and halt safely when reconciliation cannot advance. ([implementation PR #3521](https://github.com/jstoup111/ai-conductor/pull/3521)).
 - Daemon logs now render consistently indented first and continuation lines. ([implementation PR #3536](https://github.com/jstoup111/ai-conductor/pull/3536)).
+- Claude limit notices are recognized only when the CLI itself prints them, so a step whose output quotes a usage-limit or spend-limit message is no longer misread as rate-limited and re-run indefinitely. ([implementation PR #3546](https://github.com/jstoup111/ai-conductor/pull/3546)).
 
 ## Migration
 
