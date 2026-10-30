@@ -80,9 +80,10 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
 
 import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
+import { selectNextGate } from '../../../src/engine/selector.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { admitRound } from '../../../src/engine/routing/round-admission.js';
+import { admitRound, recordRoundStall } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
@@ -218,6 +219,81 @@ function parkedConductor(root: string, events: ConductorEventEmitter) {
 }
 
 describe('Conductor routed acceptance verify-green path', () => {
+  // Covers: task:4
+  it('revalidates child 2 by selecting its re-pended test_suite then build_review before the parked exit', async () => {
+    const { root } = await routedFixture();
+    const host = parseChildId(2)!;
+    await mkdir(join(root, '.pipeline', 'children', '2', 'gates'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'pending', build_review: 'pending',
+    }));
+    // Earlier successful verdicts are deliberately unstamped; the admitted
+    // revalidate marker must make both gates run again.
+    await Promise.all(['test_suite', 'build_review'].map((step) =>
+      writeFile(join(root, '.pipeline', 'children', '2', 'gates', `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    const git = makeGitRunner(root);
+    await git(['init', '-q', '-b', 'feat/daemon-demo']);
+    await git(['config', 'user.email', 'routing@example.test']);
+    await git(['config', 'user.name', 'Routing']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await git(['add', 'base.txt']);
+    await git(['commit', '-qm', 'base']);
+    await writeSliceTopologyFixture(root, { slug: 'demo', sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['host', 'leaf'] } });
+    const revalidate = parseRoundId('r6')!;
+    const created = await createRouteRecord(root, 'demo', {
+      roundId: revalidate, kind: 'revalidate', sealedAuthored: 0, items: [],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    await expect(admitRound(root, 'demo', created.record, host, { git })).resolves.toMatchObject({ kind: 'admitted' });
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'test_suite', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn(), resetSession: vi.fn(async () => {}) }, acceptanceRedExec: vi.fn(),
+    });
+    const privateConductor = conductor as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, never>> };
+    privateConductor.activeRegionChild = host;
+    const overlay = await privateConductor.readGateVerdictOverlay();
+    expect(overlay.test_suite).toBeUndefined();
+    expect(overlay.build_review).toBeUndefined();
+    const childState = JSON.parse(await readFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8'));
+    expect(selectNextGate({ steps: ALL_STEPS, state: childState, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'leaf-host' } })).toMatchObject({ kind: 'run', step: 'test_suite' });
+    childState.test_suite = 'done';
+    expect(selectNextGate({ steps: ALL_STEPS, state: childState, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'leaf-host' } })).toMatchObject({ kind: 'run', step: 'build_review' });
+  });
+
+  // Covers: task:8
+  it('escalates the third identical parked r5 stall, and resets after either routing progress event', async () => {
+    const { root } = await routedFixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const stall = {
+      kind: 'stalled' as const,
+      detail: 'awaiting admission',
+      rounds: [{ roundId: parseRoundId('r5')!, readable: true as const, unsettledHosts: { [child]: 'admitted' as const } }],
+    };
+    persister.start();
+    try {
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toEqual({ detail: expect.stringContaining('r5') });
+
+      for (const progress of ['routed_repair_phase', 'remediation_routed'] as const) {
+        // A progress occurrence splits the backwards scan, even when two
+        // identical stalls immediately preceded it.
+        await writeFile(join(root, '.pipeline', 'events.jsonl'), [
+          JSON.stringify({ type: 'routing_rounds_stalled', rounds: stall.rounds }),
+          JSON.stringify({ type: 'routing_rounds_stalled', rounds: stall.rounds }),
+          JSON.stringify({ type: progress }),
+        ].join('\n') + '\n', 'utf8');
+        await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      }
+    } finally {
+      persister.stop();
+    }
+  });
+
   // Covers: task:7
   it.each([
     { label: 'child host', host: child, kind: 'child' },
