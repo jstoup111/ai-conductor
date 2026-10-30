@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-W10
+// Covers: task:rem-prd-audit-W10, task:1
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';

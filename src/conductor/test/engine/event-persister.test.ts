@@ -275,6 +275,7 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
   });
 
+  // Covers: task:1
   it.each([
     'remediation_routed',
     'remediation_rerouted',
@@ -293,6 +294,7 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 
+  // Covers: task:1
   it('returns duplicate when a routing-round supersession is replayed', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     const event = routingEvent('routing_round_superseded', 'superseded-r1');
