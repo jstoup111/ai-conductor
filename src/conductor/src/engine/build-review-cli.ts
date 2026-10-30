@@ -909,7 +909,15 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     const rubric = command.rubric;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
-    if (!aggregateRead.ok) throw new Error('current build-review aggregate is unavailable');
+    if (!aggregateRead.ok) {
+      const failure = await describeCliAggregateFailure(
+        aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+      );
+      return refuse(
+        'aggregate-unreadable',
+        `build-review record-reduced-coverage: refused for '${command.feature}'; ${failure.path} ${failure.predicate}${failure.trailingDetail}.${failure.stackedChildHint}`,
+      );
+    }
     const aggregate = aggregateRead.aggregate;
     if (aggregate.lapId !== requestedLap) {
       return refuse('requested-lap-not-current', `build-review record-reduced-coverage: refused for '${command.feature}'; lap '${requestedLap}' is not the current lap ('${aggregate.lapId}') in ${pipelineRelativePath(worktree, 'build-review.json', child)}.`);
@@ -923,10 +931,12 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     }
     if (!feature) throw new Error('feature identity is unavailable');
     let stateRefusal: string | undefined;
+    let ledgerRefusal: string | undefined;
     const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string, selectedChild?: ChildId) => {
       const ledger = await readKickbackLedger(root, selectedChild);
       if (isUnreadableKickbackGate(ledger, 'build_review')) {
-        throw new Error("kickback ledger gate 'build_review' is unreadable");
+        ledgerRefusal = `${pipelineRelativePath(root, 'kickback-ledger.json', selectedChild)} gate 'build_review' is unreadable`;
+        return undefined;
       }
       return ledger.gates.build_review?.mechanicalFaults;
     });
@@ -963,8 +973,14 @@ export async function dispatchBuildReviewRecordReducedCoverage(
       return true;
     });
     if (!appended.ok) {
+      if (ledgerRefusal) {
+        return refuse('kickback-ledger-unreadable', `build-review record-reduced-coverage: refused for '${command.feature}'; ${ledgerRefusal}.`);
+      }
       if (stateRefusal) return refuse('current-rubric-lap-or-state-invalid', `build-review record-reduced-coverage: refused because ${stateRefusal}.`);
-      throw new Error(appended.message);
+      return refuse(
+        `disposition-store-${appended.kind}`,
+        `build-review record-reduced-coverage: refused for '${command.feature}'; .pipeline/build-review-dispositions.json rejected the decision (${appended.kind}): ${appended.message}.`,
+      );
     }
     try {
       (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
@@ -996,7 +1012,9 @@ export async function dispatchBuildReviewRecordReducedCoverage(
         // The refusal remains authoritative when best-effort telemetry cannot append.
       }
     }
-    print(`build-review record-reduced-coverage: refused for '${command.feature}'; the current rubric, lap, or state could not be verified.`);
+    print(worktree === undefined
+      ? `build-review record-reduced-coverage: refused for '${command.feature}'; the feature worktree could not be resolved.`
+      : `build-review record-reduced-coverage: refused for '${command.feature}'; the current rubric, lap, or state could not be verified.`);
     return 1;
   }
 }
