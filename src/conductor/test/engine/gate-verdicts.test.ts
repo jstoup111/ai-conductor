@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5
+// Covers: task:1, task:2, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -55,6 +55,27 @@ describe('engine/gate-verdicts', () => {
     const onDisk = await readVerdict(dir, 'build');
     expect(onDisk?.satisfied).toBe(false);
     expect(onDisk?.checkedAt).toBeTypeOf('number');
+  });
+
+  it('stamps a routed round only on child-region verdicts', async () => {
+    const child = parseChildId('1')!;
+
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 }, child, { routedRound: 'r5' });
+
+    expect(await readVerdict(dir, 'build', child)).toMatchObject({ routedRound: 'r5' });
+
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 2 }, undefined, { routedRound: 'r5' });
+    expect(await readVerdict(dir, 'build')).not.toHaveProperty('routedRound');
+
+    for (const step of ['acceptance_specs', 'build', 'test_suite', 'build_review'] as const) {
+      await computeAndWriteVerdict(dir, step, { activeChild: child, routedRound: 'r5' });
+      expect(await readVerdict(dir, step, child)).toMatchObject({ routedRound: 'r5' });
+    }
+
+    await computeAndWriteVerdict(dir, 'build', { activeChild: child });
+    expect(await readVerdict(dir, 'build', child)).not.toHaveProperty('routedRound');
+    await computeAndWriteVerdict(dir, 'build', { routedRound: 'r5' });
+    expect(await readVerdict(dir, 'build')).not.toHaveProperty('routedRound');
   });
 
   it('readAllVerdicts returns every persisted gate', async () => {

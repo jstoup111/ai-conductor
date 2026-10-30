@@ -1426,6 +1426,8 @@ export interface CompletionContext {
    * region; absent preserves the legacy feature-root evidence paths.
    */
   activeChild?: ChildId;
+  /** Routed repair round currently executing for the active child. */
+  routedRound?: string;
   /** Routed verify-green has already captured the exact host tip; this keeps the predicate process-free. */
   routedVerifyGreen?: { readonly roundId: string; readonly host: ChildId; readonly headSha: string };
   /**
