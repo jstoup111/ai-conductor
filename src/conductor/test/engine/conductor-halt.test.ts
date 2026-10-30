@@ -364,6 +364,7 @@ describe('engine/conductor exhausted build-review mechanical allowance halts', (
     return readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
   }
 
+  // Covers: task:7, task:rem-prd-audit-R1, task:rem-prd-audit-R3
   it('writes a child recovery command that the CLI accepts', async () => {
     const halt = await runExhaustedBuildReview({ child: 2, lapId: 'lap-child-2' });
 
@@ -387,6 +388,7 @@ describe('engine/conductor exhausted build-review mechanical allowance halts', (
     });
   });
 
+  // Covers: task:7, task:rem-prd-audit-R2
   it('keeps the flat aggregate-present recovery text byte-for-byte unchanged', async () => {
     const halt = await runExhaustedBuildReview({ lapId: 'lap-current' });
 
