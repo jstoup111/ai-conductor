@@ -1415,7 +1415,7 @@ Once a stack is published, the engine rewrites none of its members.
 
 | Engine action | On a published stack |
 | --- | --- |
-| Base refresh (the FINISH `rebase` step, the re-kick base refresh) | Refuses with `restack_refused` reason `published-stack` and continues on the current base. No HALT. |
+| Base refresh (the FINISH `rebase` step, the re-kick base refresh) | Refuses with `restack_refused` reason `published-stack` and continues on the current base. No HALT, unless an older unsatisfied rebase verdict survives the refusal: see [the rebase step completed without refreshing its gate verdict](#the-rebase-step-completed-without-refreshing-its-gate-verdict). |
 | Local-work restack (stack-preflight feature repair, routed-exit restack) | Halts `needs-human` with `restack refused (published-stack)`, naming the child. |
 | Routed-repair admission | Halts `needs-human` with `routing admission refused: published-stack`. |
 | CI fix or open-PR autoresolve on the leaf | CI fix logs `skipped(published-stack)`. Both label the leaf PR `needs-remediation` and comment `published stacked feature requires manual resolution (#2945)`. |
@@ -1554,6 +1554,38 @@ commands complete the rebase; they do not reconcile the daemon's pipeline marker
 
 The next dashboard snapshot should list the feature under ELIGIBLE or IN-PROGRESS rather than
 PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
+
+### The rebase step completed without refreshing its gate verdict
+
+**Symptom:** `.pipeline/HALT` is `needs-human` and reads `step 'rebase' completed but its gate
+verdict was not refreshed (stale verdict: <reason>)`. `<reason>` is the earlier unsatisfied
+verdict still stored in `.pipeline/gates/rebase.json`.
+
+**Diagnosis:** a rebase dispatch normally rewrites its own gate verdict. After the dispatch, the
+engine compares the stored verdict's `checkedAt` with the dispatch start. An unsatisfied verdict
+older than the dispatch is stale:
+
+| Dispatch outcome | Behavior |
+|---|---|
+| No-op rebase, or a cleanly mergeable skip | Re-applies the outcome to the rebase verdict, emits `gate_verdict`, and selects `finish`. No HALT. |
+| Conflict halt | Keeps the existing conflict HALT. |
+| Any other outcome, for example a `published-stack` refusal | Halts once with the line above instead of re-selecting `rebase` until the selection cap. |
+
+A verdict written during the dispatch, satisfied or not, is never treated as stale.
+
+**Recovery:**
+
+```bash
+ai-conductor daemon park <slug>
+cat .worktrees/<slug>/.pipeline/gates/rebase.json
+```
+
+Resolve the condition named in `<reason>`. For a published stack, follow
+[What the published-stack freeze blocks](#what-the-published-stack-freeze-blocks). Then clear the
+halt with [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** the daemon log shows `↻ resume <slug>` and the feature does not re-write the
+same halt.
 
 ### Resume halted on the rebase transition record
 
