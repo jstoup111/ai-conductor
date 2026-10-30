@@ -67,10 +67,14 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
 import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { admitRound } from '../../../src/engine/routing/round-admission.js';
+import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -168,6 +172,71 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
 }
 
 describe('Conductor routed acceptance verify-green path', () => {
+  // Covers: task:7
+  it('turns an advanceTail child parking decision into a named mechanical routed-round HALT', async () => {
+    const { root } = await routedFixture();
+    const git = makeGitRunner(root);
+    await git(['init', '-q', '-b', 'feat/daemon-demo']);
+    await git(['config', 'user.email', 'routing@example.test']);
+    await git(['config', 'user.name', 'Routing']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await git(['add', 'base.txt']);
+    await git(['commit', '-qm', 'base']);
+    await writeSliceTopologyFixture(root, {
+      slug: 'demo',
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['host', 'leaf'] },
+    });
+    const parkedRound = parseRoundId('r5')!;
+    const created = await createRouteRecord(root, 'demo', {
+      roundId: parkedRound,
+      kind: 'audit',
+      sealedAuthored: 0,
+      items: [],
+      allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
+    await expect(admitRound(root, 'demo', created.record, child, { git })).resolves.toMatchObject({ kind: 'admitted' });
+
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => { if (event.type === 'loop_halt') loopHalts.push(event.reason); });
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events, stepRunner: runner, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+
+    persister.start();
+    try {
+      await conductor.run();
+    } finally {
+      persister.stop();
+      advanceTail.mockRestore();
+    }
+
+    const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8');
+    const firstLine = halt.trim().split('\n')[0]!;
+    expect(firstLine).toContain('r5');
+    expect(firstLine).toContain('child');
+    expect(firstLine).toContain('1');
+    expect(firstLine).toContain('awaiting admission');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    expect(loopHalts).toEqual([firstLine]);
+    const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(ledger.filter((event) => event.type === 'routing_rounds_stalled')).toEqual([
+      expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 }),
+    ]);
+  });
+
   it('refuses a parsed operator record at the revalidating-source exclusion while an otherwise-identical open revalidate record enters', async () => {
     const { root } = await routedFixture();
     mocks.operatorRevalidation = true;

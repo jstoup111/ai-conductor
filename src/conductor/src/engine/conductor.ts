@@ -220,7 +220,7 @@ import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
-import { admitRound, checkRoundAdmissionFence, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
+import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { consumeLowestQueued } from './routing/revalidation-queue.js';
@@ -5813,6 +5813,56 @@ export class Conductor {
       await writeFile(join(this.projectRoot, DONE_MARKER), doneMarkerBody, 'utf-8').catch(() => {});
     }
     return true;
+  }
+
+  /**
+   * A selector parking decision is durable unfinished routing work, not a
+   * successful terminal state.  Give it the same bounded, event-spine-backed
+   * diagnostic as an in-loop round stall before returning control to daemon.
+   */
+  private async stopParkedForRouting(
+    cause: { readonly kind: 'parked' | 'completion-refused'; readonly reason: string },
+    state: ConductState,
+  ): Promise<void> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return;
+
+    const [affected, marker, queue, leaf] = await Promise.all([
+      diagnoseAffectedRounds(this.projectRoot, slug),
+      readRepairMarker(this.projectRoot, slug),
+      readRevalidationQueue(this.projectRoot, slug),
+      resolveSealedLeaf(this.projectRoot),
+    ]);
+    const rounds = affected.kind === 'affected' ? affected.rounds : [];
+    const parked = cause.kind === 'parked'
+      ? marker.kind === 'marker'
+        ? marker.marker.host === leaf
+          ? { kind: 'leaf-host' as const, subject: `host ${marker.marker.host}` }
+          : { kind: 'child' as const, subject: `host ${marker.marker.host}` }
+        : { kind: 'queue' as const, subject: queue.kind === 'queue' && queue.queue.entries.length > 0
+          ? `child ${queue.queue.entries[0]!.child}`
+          : 'routing work' }
+      : undefined;
+    const detail = cause.kind === 'completion-refused'
+      ? `completion refused: ${cause.reason}`
+      : `parked ${parked!.kind} ${parked!.subject}: ${cause.reason}`;
+    // `advanceTail` optimistically leaves DONE at selector convergence. A
+    // later completion fence can still reject an open routed round; do not
+    // let the daemon observe that provisional marker as terminal success.
+    if (cause.kind === 'completion-refused') {
+      await unlinkFile(join(this.projectRoot, DONE_MARKER)).catch(() => {});
+    }
+    const stall = await recordRoundStall(this.projectRoot, slug, {
+      kind: 'stalled',
+      detail,
+      rounds,
+    }, this.events);
+    const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf8').catch(() => undefined);
+    const reason = existing?.trim().split('\n')[0] || stall.detail;
+    if (!existing?.trim()) {
+      await this.writeHaltMarker(`${stall.detail}\n`, stall.haltClass ?? 'needs-human');
+    }
+    await this.emitLoopHalt(reason);
   }
 
   /** Emit a HALT event with the most recently advanced conductor step. */
@@ -15528,7 +15578,13 @@ export class Conductor {
             await this.commitStateChanges(state, 'adopt documentation delivery pull request URL', {
               pr_url: documentationDelivery.prUrl,
             });
-            if (!await this.completeRun(state, 'documentation delivery complete\n')) parkedForRouting = true;
+            if (!await this.completeRun(state, 'documentation delivery complete\n')) {
+              parkedForRouting = true;
+              await this.stopParkedForRouting({
+                kind: 'completion-refused',
+                reason: 'a routed round remains open',
+              }, state);
+            }
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -15750,6 +15806,10 @@ export class Conductor {
           }
           if (advance === 'parked') {
             parkedForRouting = true;
+            await this.stopParkedForRouting({
+              kind: 'parked',
+              reason: 'routed work is awaiting admission',
+            }, state);
             return;
           }
           if (advance !== null) {
@@ -15779,6 +15839,10 @@ export class Conductor {
 
       if (!parkedForRouting && !await this.completeRun(state, 'gate-driven loop converged\n')) {
         parkedForRouting = true;
+        await this.stopParkedForRouting({
+          kind: 'completion-refused',
+          reason: 'a routed round remains open',
+        }, state);
       }
       if (!parkedForRouting && state.feature_desc && state.pr_url) {
         await refreshPostFinishShippedRecord({
