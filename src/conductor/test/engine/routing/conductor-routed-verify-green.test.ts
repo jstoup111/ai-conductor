@@ -300,7 +300,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     const overlay = await privateConductor.readGateVerdictOverlay();
     const dispatched: string[] = [];
     for (const expected of ['test_suite', 'build_review']) {
-      const selected = selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child' } });
+      const selected = selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child', child: host } });
       expect(selected).toMatchObject({ kind: 'run', step: expected });
       dispatched.push(expected);
       state[expected] = 'done';
@@ -327,7 +327,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     const overlay = await privateConductor.readGateVerdictOverlay();
     const dispatched: string[] = ['build']; // The repair leaves the tree byte-identical; its round stamp is the invalidation authority.
     for (const expected of ['test_suite', 'build_review']) {
-      expect(selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child' } })).toMatchObject({ kind: 'run', step: expected });
+      expect(selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child', child: host } })).toMatchObject({ kind: 'run', step: expected });
       dispatched.push(expected);
       state[expected] = 'done';
     }
@@ -443,8 +443,8 @@ describe('Conductor routed acceptance verify-green path', () => {
     }));
     const rerunEvents: Array<{ type?: string; step?: string; child?: number }> = [];
     const rerunEventEmitter = new ConductorEventEmitter();
-    rerunEventEmitter.on('step_started', (event) => rerunEvents.push(event as { type?: string; step?: string; child?: number }));
-    rerunEventEmitter.on('loop_halt', (event) => rerunEvents.push(event as { type?: string; step?: string; child?: number }));
+    rerunEventEmitter.on('step_started', (event) => { rerunEvents.push(event as { type?: string; step?: string; child?: number }); });
+    rerunEventEmitter.on('loop_halt', (event) => { rerunEvents.push(event as { type?: string; step?: string; child?: number }); });
     const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
     await routedConductor(root, rerunEventEmitter, runner, leaf, parseRoundId('r5')!, false, 'interactive').run();
     expect(runner.run).toHaveBeenCalledWith('build_review', expect.any(Object), expect.any(Object));

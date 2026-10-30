@@ -310,7 +310,7 @@ describe('routed round conductor resume', () => {
     conductor.activeRegionChild = host;
     const overlay = await conductor.readGateVerdictOverlay();
     expect(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) => overlay[step])).toEqual([undefined, undefined, undefined, undefined]);
-    expect(['acceptance_specs', 'build', 'test_suite', 'build_review'].filter((step) => ['pending', 'in_progress'].includes(state.value[step] as string)))
+    expect(['acceptance_specs', 'build', 'test_suite', 'build_review'].filter((step) => ['pending', 'in_progress'].includes((state.value as Record<string, unknown>)[step] as string)))
       .toEqual(['acceptance_specs', 'build', 'test_suite', 'build_review']);
     const after = await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) => readFile(join(gates, `${step}.json`), 'utf8')));
     expect(after).toEqual(before);
