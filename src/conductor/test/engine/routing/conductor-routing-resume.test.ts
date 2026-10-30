@@ -4,7 +4,29 @@ import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  routedExit: undefined as undefined | (() => Promise<unknown>),
+  consumeQueued: undefined as undefined | (() => Promise<unknown>),
+}));
+
+vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/round-admission.js')>();
+  return {
+    ...actual,
+    exitRoutedHostAndReconcile: (...args: Parameters<typeof actual.exitRoutedHostAndReconcile>) =>
+      mocks.routedExit === undefined ? actual.exitRoutedHostAndReconcile(...args) : mocks.routedExit(),
+  };
+});
+vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/revalidation-queue.js')>();
+  return {
+    ...actual,
+    consumeLowestQueued: (...args: Parameters<typeof actual.consumeLowestQueued>) =>
+      mocks.consumeQueued === undefined ? actual.consumeLowestQueued(...args) : mocks.consumeQueued(),
+  };
+});
 
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
@@ -26,7 +48,11 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   rename,
 };
 
-afterEach(async () => { await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  mocks.routedExit = undefined;
+  mocks.consumeQueued = undefined;
+  await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 function doneThrough(stopAt: StepName): ConductState {
   const state: ConductState = { feature_desc: 'demo', complexity_tier: 'M' };
@@ -72,6 +98,96 @@ async function fixture() {
 }
 
 describe('routed round conductor resume', () => {
+  it('consumes queued revalidation before selecting the next region after a resumed routed exit', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const queued = parseChildId(2)!;
+    const roundId = parseRoundId('r1')!;
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    const order: string[] = [];
+    const routed = {
+      kind: 'repair-pending' as const, child: queued, position: queued, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    const revalidating = {
+      kind: 'repair-pending' as const, child: queued, position: queued, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], revalidating: { child: queued, generation: 1 },
+    };
+    let resolveCount = 0;
+    mocks.routedExit = async () => {
+      order.push('exit');
+      return { kind: 'exited', next: { kind: 'none' } };
+    };
+    mocks.consumeQueued = async () => {
+      order.push('consume');
+      return { kind: 'admitted', roundId, host: queued };
+    };
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          resolveCount += 1;
+          order.push(resolveCount === 1 ? 'resolve-host' : 'resolve-next');
+          return resolveCount === 1 ? routed : revalidating;
+        },
+      },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = host;
+
+    const result = await resumed.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true);
+
+    expect(order).toEqual(['resolve-host', 'exit', 'consume', 'resolve-next']);
+    expect(result).toMatchObject({ index: ALL_STEPS.findIndex((step) => step.name === 'acceptance_specs'), activeChild: { child: queued } });
+  });
+
+  it('surfaces a remediation PR when a resumed routed exit halts', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'routed exit needs remediation\n');
+    mocks.routedExit = async () => ({ kind: 'exit-halted', detail: 'routed exit needs remediation' });
+    const events = new ConductorEventEmitter();
+    const loopHalts: Array<{ reason: string; prUrl?: string }> = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push({ reason: event.reason, prUrl: event.prUrl });
+    });
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', resume: true, daemon: true, verifyArtifacts: false,
+      events, stepRunner: { run: vi.fn() },
+      escalateBuildFailure: async () => ({ prUrl: 'https://example.test/remediation/123' }),
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = host;
+
+    await expect(resumed.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    expect(loopHalts).toEqual([{ reason: 'routed exit needs remediation', prUrl: 'https://example.test/remediation/123' }]);
+  });
+
   it('does not halt or fabricate receipt accounting when a routing-eligible resume has no route records', async () => {
     const subject = await fixture();
     await expect(subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']))

@@ -5845,22 +5845,25 @@ export class Conductor {
   }
 
   /**
-   * Finish the narrow crash window between a routed host becoming green and
-   * the ordinary build-review closure.  The verdict overlay is deliberately
-   * consulted here: evidence from an earlier round must re-run, not exit.
+   * Complete a routed host exit from either the live build-review closure or
+   * the resumed parked boundary. The latter checks the verdict overlay so
+   * evidence from an earlier round must re-run, not exit.
    */
-  private async continueFinishedRoutedHostOnResume(
+  private async continueRoutedHostExit(
     state: ConductState,
     indexOf: (name: StepName) => number,
-  ): Promise<number | 'halt' | undefined> {
+    requireSatisfiedRegion = false,
+  ): Promise<{ readonly index: number; readonly activeChild?: ActiveChildLifecycleTarget } | 'halt' | undefined> {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (!slug || this.activeRegionChild === undefined) return undefined;
     const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
     if (execution.source !== 'routed-host' || execution.roundId === undefined || execution.target.child !== this.activeRegionChild) {
       return undefined;
     }
-    const verdicts = await this.readGateVerdictOverlay();
-    if (!CHILD_REGION_STEPS.every((step) => gateSatisfied(step, state, verdicts))) return undefined;
+    if (requireSatisfiedRegion) {
+      const verdicts = await this.readGateVerdictOverlay();
+      if (!CHILD_REGION_STEPS.every((step) => gateSatisfied(step, state, verdicts))) return undefined;
+    }
 
     const continued = await exitRoutedHostAndReconcile({
       worktree: this.projectRoot,
@@ -5878,8 +5881,13 @@ export class Conductor {
     });
     if (continued.kind === 'exit-halted') {
       const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
-      if (existing?.trim()) await this.emitLoopHalt(existing.trim());
-      else await this.haltChildRegionRefusal(continued.detail);
+      if (existing?.trim()) {
+        const body = existing.trim();
+        const prUrl = await this.surfaceRemediationPr(body);
+        await this.emitLoopHalt(body, prUrl);
+      } else {
+        await this.haltChildRegionRefusal(continued.detail);
+      }
       return 'halt';
     }
     if (continued.next.kind === 'unavailable') {
@@ -5892,18 +5900,67 @@ export class Conductor {
       return 'halt';
     }
 
-    // The exit may have admitted a following host.  Rebind the overlay before
-    // selecting its first region gate, exactly as the in-loop continuation.
-    const next = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+    let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
+    // Queue admission always wins over a return to whole-feature gates.
+    if (
+      continued.next.kind === 'deferred' ||
+      continued.next.kind === 'none' ||
+      continued.next.kind === 'aborted' ||
+      continued.next.kind === 'leaf-returned' ||
+      continued.next.kind === 'quiescent'
+    ) {
+      consumed = await consumeLowestQueued(this.projectRoot, slug);
+      if (consumed.kind === 'unavailable') {
+        await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
+        return 'halt';
+      }
+      if (consumed.kind === 'stalled') {
+        const stalled = await reconcileRounds(this.projectRoot, slug);
+        if (stalled.kind === 'stalled') {
+          const stall = await recordRoundStall(this.projectRoot, slug, stalled, this.events);
+          await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
+          return 'halt';
+        }
+        await this.haltChildRegionRefusal(consumed.detail ?? 'routing queue consumption stalled', 'mechanical');
+        return 'halt';
+      }
+      if (consumed.kind === 'admitted') {
+        const next = await this.resolveActiveChild(this.projectRoot, slug);
+        const nextExecution = resolveExecutionChild(next, slug);
+        if (nextExecution.source !== 'revalidating' && nextExecution.source !== 'routed-host') {
+          await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
+          return 'halt';
+        }
+        await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+        return { index: indexOf('acceptance_specs'), activeChild: nextExecution.target };
+      }
+    }
+    if (
+      (
+        continued.next.kind === 'none' ||
+        continued.next.kind === 'aborted' ||
+        continued.next.kind === 'leaf-returned' ||
+        continued.next.kind === 'quiescent'
+      ) &&
+      consumed?.kind === 'none' &&
+      !await routedRoundOpen(this.projectRoot, slug)
+    ) {
+      // returnToLeaf re-pends whole-feature gates in the root state file.
+      // Do not keep the former routed host's overlay or its CAS baseline.
+      await this.restoreWholeFeatureState(state);
+      return { index: indexOf('manual_test') };
+    }
+
+    // The exit may have admitted a following host. Rebind the overlay before
+    // selecting its first region gate.
+    const nextCursor = await this.resolveActiveChild(this.projectRoot, slug);
+    const next = resolveExecutionChild(nextCursor, slug);
     if (next.source === 'routed-host' || next.source === 'revalidating' || next.source === 'cursor') {
       await this.activateChildRegionState(state, next.target.child, next.target.isLeaf);
-      return indexOf('acceptance_specs');
+      return { index: indexOf('acceptance_specs'), activeChild: next.target };
     }
-    if (!await routedRoundOpen(this.projectRoot, slug)) {
-      await this.restoreWholeFeatureState(state);
-      return indexOf('manual_test');
-    }
-    return undefined;
+    await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(nextCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    return 'halt';
   }
 
   /**
@@ -15723,124 +15780,11 @@ export class Conductor {
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
-            const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
-            if (execution.source === 'routed-host' && execution.roundId !== undefined) {
-              const continued = await exitRoutedHostAndReconcile({
-                worktree: this.projectRoot,
-                slug,
-                roundId: execution.roundId,
-                host: execution.target.child,
-                events: this.events,
-                resolver: this.stepRunner.resolveRebaseConflict
-                  ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-                  : undefined,
-                resolverCap: resolveRebaseResolutionAttempts(this.config),
-                persist: (event) => persistOnActiveEventSpine(this.events, event),
-                exit: this.requestRoutedExit,
-                reconcile: reconcileRounds,
-              });
-              if (continued.kind === 'exit-halted') {
-                // requestRoutedExit supplies the durable diagnostic (including
-                // a restack HALT where appropriate); do not replace it with a
-                // generic conductor refusal.
-                // `.pipeline/HALT` itself, not the user-input marker
-                // `readHaltMarkerContent` reads.
-                const existingHalt = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
-                if (existingHalt?.trim()) {
-                  const body = existingHalt.trim();
-                  const prUrl = await this.surfaceRemediationPr(body);
-                  await this.emitLoopHalt(body, prUrl);
-                } else {
-                  await this.haltChildRegionRefusal(continued.detail);
-                }
-                return;
-              }
-              // A routed exit only settles its host. Reconcile immediately so
-              // the same loop iteration admits the next host, closes a round
-              // before queue consumption, or records the final leaf return.
-              const reconciled = continued.next;
-              if (reconciled.kind === 'unavailable') {
-                await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
-                return;
-              }
-              if (reconciled.kind === 'stalled') {
-                const stall = await recordRoundStall(this.projectRoot, slug, reconciled, this.events);
-                await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
-                return;
-              }
-              let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
-              // Queue admission always wins over a return to whole-feature
-              // gates. Reconciliation reports the final leaf return separately
-              // from a close that still has routed work, but every terminal
-              // result must still prove the queue empty before whole-feature
-              // validation may resume.
-              if (
-                reconciled.kind === 'deferred' ||
-                reconciled.kind === 'none' ||
-                reconciled.kind === 'aborted' ||
-                reconciled.kind === 'leaf-returned' ||
-                reconciled.kind === 'quiescent'
-              ) {
-                consumed = await consumeLowestQueued(this.projectRoot, slug);
-                if (consumed.kind === 'unavailable') {
-                  await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
-                  return;
-                }
-                if (consumed.kind === 'stalled') {
-                  const stalled = await reconcileRounds(this.projectRoot, slug);
-                  if (stalled.kind === 'stalled') {
-                    const stall = await recordRoundStall(this.projectRoot, slug, stalled, this.events);
-                    await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
-                    return;
-                  }
-                  await this.haltChildRegionRefusal(consumed.detail ?? 'routing queue consumption stalled', 'mechanical');
-                  return;
-                }
-                if (consumed.kind === 'admitted') {
-                  const next = await this.resolveActiveChild(this.projectRoot, slug);
-                  const nextExecution = resolveExecutionChild(next, slug);
-                  if (nextExecution.source !== 'revalidating' && nextExecution.source !== 'routed-host') {
-                    await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
-                    return;
-                  }
-                  activeChild = nextExecution.target;
-                  await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
-                  i = indexOf('acceptance_specs') - 1;
-                  continue;
-                }
-              }
-              if (
-                (
-                  reconciled.kind === 'none' ||
-                  reconciled.kind === 'aborted' ||
-                  reconciled.kind === 'leaf-returned' ||
-                  reconciled.kind === 'quiescent'
-                ) &&
-                consumed?.kind === 'none' &&
-                !await routedRoundOpen(this.projectRoot, slug)
-              ) {
-                // returnToLeaf re-pends whole-feature gates in the root state
-                // file.  Do not keep the former routed host's overlay or its
-                // CAS baseline while selecting those gates.
-                await this.restoreWholeFeatureState(state);
-                activeChild = undefined;
-                // `returnToLeaf` intentionally re-pends manual_test as well
-                // as the audit gates.  Re-enter at the first re-pended tail
-                // gate: prd_audit depends on manual_test, so jumping straight
-                // to it would halt on its own prerequisite before any
-                // whole-feature validation could resume.
-                i = indexOf('manual_test') - 1;
-                continue;
-              }
-              const next = await this.resolveActiveChild(this.projectRoot, slug);
-              const nextExecution = resolveExecutionChild(next, slug);
-              if (nextExecution.source !== 'cursor' && nextExecution.source !== 'routed-host' && nextExecution.source !== 'revalidating') {
-                await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
-                return;
-              }
-              activeChild = nextExecution.target;
-              await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
-              i = indexOf('acceptance_specs') - 1;
+            const routedExit = await this.continueRoutedHostExit(state, indexOf);
+            if (routedExit === 'halt') return;
+            if (routedExit !== undefined) {
+              activeChild = routedExit.activeChild;
+              i = routedExit.index - 1;
               continue;
             }
             const advanced = await this.advanceChildRegion(
@@ -15900,14 +15844,15 @@ export class Conductor {
             // the build-review closure advances the routed host. On resume the
             // selector reports the region as parked; that is not a stall when
             // this round's own evidence says the host is green.
-            const resumedExit = await this.continueFinishedRoutedHostOnResume(state, indexOf);
+            const resumedExit = await this.continueRoutedHostExit(state, indexOf, true);
             if (resumedExit === 'halt') {
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
               return;
             }
-            if (typeof resumedExit === 'number') {
-              i = resumedExit - 1;
+            if (resumedExit !== undefined) {
+              activeChild = resumedExit.activeChild;
+              i = resumedExit.index - 1;
               continue;
             }
             parkedForRouting = true;
