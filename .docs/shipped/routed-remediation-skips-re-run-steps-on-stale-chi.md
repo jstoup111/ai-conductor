@@ -4,13 +4,6 @@ spec_hash: 1212a7016b17277dcca16616195c9713eb442ae0b0e9dd38758d9e33da552bf7
 pr: https://github.com/jstoup111/ai-conductor/pull/3543
 shipped: 2026-10-30
 engine_version: 20261030T100118Z-079e48ea5f1d
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This is an unplanned whitespace-only edit outside every task; it degrades readability but not behavior."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
@@ -30,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","be0d1f1a-7783-43f3-a55f-a694e1b6589e","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 2
