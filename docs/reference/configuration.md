@@ -1622,10 +1622,11 @@ a routed round instead of appended to the leaf plan:
   `leaf branch <branch> is missing prerequisite paths: <paths>`.
 - **Parked routing work.** When the step selector stops with routed work awaiting admission, or
   completion is refused because a round is still open, the run does not finish as converged. The
-  engine removes any provisional `.pipeline/DONE` and records a stall whose cause is
+  engine records a stall whose cause is
   `parked <leaf-host|child|queue> <subject>: routed work is awaiting admission` or
-  `completion refused: a routed round remains open`. It then halts under the stall counting
-  below. An existing `.pipeline/HALT` is kept.
+  `completion refused: a routed round remains open`, then halts under the stall counting below. A
+  completion refusal also removes the provisional `.pipeline/DONE`. An existing `.pipeline/HALT` is
+  kept.
 - **Stalls.** When reconciliation cannot advance a round (an unreadable record, a refused
   compare-and-swap on advance, close, or leaf return, or a marker naming an unreadable round), the
   engine emits `routing_rounds_stalled` and halts with `routing rounds stalled: r<n> (<host>:
