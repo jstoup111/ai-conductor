@@ -123,6 +123,22 @@ describe('stack rounds close predicate (real local Git)', () => {
   });
 
   // Covers: task:5
+  it('refuses an open audit round with no pending hosts to drop without writes', async () => {
+    const subject = await fixture();
+    await replaceRound(subject, r4, (record) => ({
+      ...record,
+      hosts: { [c1]: 'restacked', [c2]: 'done' },
+    }));
+    const before = await routeRefs(subject);
+
+    await expect(checkRoundSupersession(subject.repo, slug, r4)).resolves.toMatchObject({
+      kind: 'refused', detail: expect.stringContaining(`routing round ${r4} has no pending hosts to drop`),
+    });
+
+    expect(await routeRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:5
   it('refuses the sole non-closed round and non-audit rounds without writes', async () => {
     const sole = await createSweepRepository('stack-rounds-close-sole-', cleanup);
     await sole.git(['commit', '-qm', 'initial']);

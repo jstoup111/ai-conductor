@@ -38,7 +38,7 @@ export type RoundSupersessionCheck =
     readonly kind: 'supersedable';
     readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
     readonly supersededBy: RoundId;
-    readonly droppedHosts: readonly ChildId[];
+    readonly droppedHosts: readonly [ChildId, ...ChildId[]];
     readonly findingIds: readonly string[];
   }
   | { readonly kind: 'refused'; readonly detail: string };
@@ -177,6 +177,9 @@ export async function checkRoundSupersession(
     }
     assertNever(state);
   }
+  if (droppedHosts.length === 0) {
+    return { kind: 'refused', detail: `routing round ${roundId} has no pending hosts to drop` };
+  }
 
   const readMarker = dependencies.readRepairMarker ?? readRepairMarker;
   const marker = await readMarker(worktree, slug, { git });
@@ -208,12 +211,13 @@ export async function checkRoundSupersession(
   }
 
   droppedHosts.sort((left, right) => left - right);
+  const nonemptyDroppedHosts = droppedHosts as [ChildId, ...ChildId[]];
   const dropped = new Set(droppedHosts);
   return {
     kind: 'supersedable',
     stored,
     supersededBy,
-    droppedHosts,
+    droppedHosts: nonemptyDroppedHosts,
     findingIds: stored.record.items.filter((item) => dropped.has(item.host)).map((item) => item.findingId),
   };
 }

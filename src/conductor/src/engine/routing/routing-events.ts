@@ -45,7 +45,7 @@ export function operatorRoundEvent(
 export function routingRoundSupersededEvent(
   record: RouteRecord,
   supersededBy: RoundId,
-  droppedHosts: readonly ChildId[],
+  droppedHosts: readonly [ChildId, ...ChildId[]],
   findingIds: readonly string[],
   reason: string,
   operator: string,
@@ -53,7 +53,7 @@ export function routingRoundSupersededEvent(
   return {
     type: 'routing_round_superseded', ...occurrence(), roundId: record.roundId,
     supersededBy, droppedHosts, findingIds, reason, operator,
-    child: Math.min(...droppedHosts) as ChildId,
+    child: droppedHosts[0],
   };
 }
 

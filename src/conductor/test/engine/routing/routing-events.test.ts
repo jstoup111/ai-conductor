@@ -56,6 +56,8 @@ describe('routing event constructors', () => {
     expect(event.eventId).not.toHaveLength(0);
     expect(event.occurredAt).toEqual(expect.any(String));
     expect(event.occurredAt).not.toHaveLength(0);
+    expect(Number.isFinite(event.child)).toBe(true);
+    expect(event.droppedHosts).toContain(event.child);
   });
 
   it('permits the canonical module and unrelated event syntax', () => {
