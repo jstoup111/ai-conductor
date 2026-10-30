@@ -290,7 +290,8 @@ describe('Conductor routed acceptance verify-green path', () => {
     }
   });
 
-  // Covers: task:8, rem-prd-audit-8
+  // Covers: task:8
+  // Covers: task:rem-prd-audit-8
   it('re-kicks a mechanical parked r5 halt into reconciliation and a conductor dispatch without operator action', async () => {
     const { root } = await routedFixture();
     const leaf = parseChildId(2)!;
