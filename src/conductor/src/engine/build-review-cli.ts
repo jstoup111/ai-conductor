@@ -911,7 +911,9 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
     if (!aggregateRead.ok) throw new Error('current build-review aggregate is unavailable');
     const aggregate = aggregateRead.aggregate;
-    if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
+    if (aggregate.lapId !== requestedLap) {
+      return refuse('requested-lap-not-current', `build-review record-reduced-coverage: refused for '${command.feature}'; lap '${requestedLap}' is not the current lap ('${aggregate.lapId}') in ${pipelineRelativePath(worktree, 'build-review.json', child)}.`);
+    }
     if (!isBuildReviewRubricId(rubric) && !aggregate.currentCustomRubrics?.includes(rubric)) {
       return refuse('unknown-rubric', `build-review record-reduced-coverage: '${rubric}' is not a known rubric on the current lap.`);
     }
@@ -944,9 +946,12 @@ export async function dispatchBuildReviewRecordReducedCoverage(
         stateRefusal = `the current '${rubric}' reduced-coverage fault changed`;
         return false;
       }
-      if (fault.cause !== 'projection-oversized' && fault.cause !== 'read-only-review-unavailable' && ((await readMechanicalFaults(worktree!, child)) ?? 0) < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
-        stateRefusal = 'the mechanical-fault allowance remains';
-        return false;
+      if (fault.cause !== 'projection-oversized' && fault.cause !== 'read-only-review-unavailable') {
+        const mechanicalFaults = (await readMechanicalFaults(worktree!, child)) ?? 0;
+        if (mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+          stateRefusal = `the mechanical-fault allowance remains (${mechanicalFaults} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} consumed in ${pipelineRelativePath(worktree!, 'kickback-ledger.json', child)})`;
+          return false;
+        }
       }
       const identity = fault.declaration === undefined
         ? { rubric: fault.rubric as BuildReviewRubricId, reason: fault.cause as BuildReviewInfrastructureFailureReason }
