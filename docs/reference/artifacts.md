@@ -546,8 +546,14 @@ interface GateVerdict {
   reason?: string;
   checkedAt: number;                              // epoch ms
   kickback?: { from: StepName; evidence: string };
+  routedRound?: string;                           // child-region verdicts only, e.g. "r2"
 }
 ```
+
+With [routed repair](configuration.md#stacked_prs) on, a child-region verdict written while that child
+hosts a routed round carries the round id from the repair marker. While the child hosts the round, a
+satisfied verdict without the current round id does not count, so the gate re-runs. A failed verdict
+always counts.
 
 The loop owns objective verdicts — it recomputes them from on-disk evidence after each step rather than
 trusting an agent's self-report. The only agent-authored writes are kickback invalidations, and those

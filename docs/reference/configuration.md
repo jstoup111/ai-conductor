@@ -1604,6 +1604,10 @@ a routed round instead of appended to the leaf plan:
   `prd_audit`, `architecture_review_as_built`, `manual_test`, and the custom gates between
   `build_review` and `finish`. Those gates re-run under their existing caps; the return records no
   kickback.
+- **Round-scoped evidence.** A host's child-region verdicts carry the round id (`routedRound`; see
+  [gate verdicts](artifacts.md#gate-verdicts)). Satisfied verdicts from an earlier round do not
+  satisfy the current one, so each re-pended region gate re-runs before the host can exit. On
+  resume, a host whose region gates all pass for the current round exits through the same path.
 - **Revalidation.** Every restack of a feature with the setting on queues the closed children whose
   gate verdicts it invalidated, at `refs/conductor/<slug>/revalidate`. Children are re-validated
   bottom-up, one `revalidate` round per child, re-running only the child's queued gates. A pass with
@@ -1616,6 +1620,12 @@ a routed round instead of appended to the leaf plan:
   `routing round limit r999 reached`, `routing round r<n> is already open; cannot admit r<m>`,
   `routing cannot read the sealed task-slice ownership envelope`, or
   `leaf branch <branch> is missing prerequisite paths: <paths>`.
+- **Parked routing work.** When the step selector stops with routed work awaiting admission, or
+  completion is refused because a round is still open, the run does not finish as converged. The
+  engine removes any provisional `.pipeline/DONE` and records a stall whose cause is
+  `parked <leaf-host|child|queue> <subject>: routed work is awaiting admission` or
+  `completion refused: a routed round remains open`. It then halts under the stall counting
+  below. An existing `.pipeline/HALT` is kept.
 - **Stalls.** When reconciliation cannot advance a round (an unreadable record, a refused
   compare-and-swap on advance, close, or leaf return, or a marker naming an unreadable round), the
   engine emits `routing_rounds_stalled` and halts with `routing rounds stalled: r<n> (<host>:
