@@ -849,17 +849,17 @@ describe('Conductor routed acceptance verify-green path', () => {
     }
   });
 
-  // Covers: task:3, task:4, task:5, task:6
-  it('masks only successful verdicts from another routed round, retaining this round and failed evidence', async () => {
+  // Covers: task:3
+  it('masks unstamped and old successful routed verdicts, but retains failed evidence and this-round evidence', async () => {
     const { root } = await routedFixture();
     mocks.routedRoundMarker = { host: 1, roundId: 'r5' };
     const gates = join(root, '.pipeline', 'children', '1', 'gates');
     await mkdir(gates, { recursive: true });
     await Promise.all([
-      writeFile(join(gates, 'build.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r4' })),
+      writeFile(join(gates, 'build.json'), JSON.stringify({ satisfied: true, checkedAt: 1 })),
       writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r5' })),
       writeFile(join(gates, 'build_review.json'), JSON.stringify({
-        satisfied: false, checkedAt: 1, routedRound: 'r4', kickback: { from: 'build', evidence: 'failed in r4' },
+        satisfied: false, checkedAt: 1, kickback: { from: 'build', evidence: 'failed before r5' },
       })),
     ]);
     const conductor = new Conductor({
@@ -878,6 +878,41 @@ describe('Conductor routed acceptance verify-green path', () => {
 
     expect(overlay.build).toBeUndefined();
     expect(overlay.test_suite).toMatchObject({ satisfied: true, routedRound: 'r5' });
-    expect(overlay.build_review).toMatchObject({ satisfied: false, routedRound: 'r4' });
+    expect(overlay.build_review).toMatchObject({ satisfied: false, kickback: { evidence: 'failed before r5' } });
+  });
+
+  // Covers: task:3
+  it('counts only current-round satisfied test_suite evidence while a routed host is active', async () => {
+    const { root } = await routedFixture();
+    mocks.routedRoundMarker = { host: 1, roundId: 'r5' };
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(), resetSession: vi.fn() }, acceptanceRedExec: vi.fn(),
+    }) as unknown as { activeRegionChild: typeof child; readGateVerdictOverlay: () => Promise<Record<string, { satisfied: boolean; routedRound?: string }>> };
+    conductor.activeRegionChild = child;
+    await writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r4' }));
+    expect((await conductor.readGateVerdictOverlay()).test_suite).toBeUndefined();
+    await writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 2, routedRound: 'r5' }));
+    await expect(conductor.readGateVerdictOverlay()).resolves.toMatchObject({ test_suite: { satisfied: true, routedRound: 'r5' } });
+  });
+
+  // Covers: task:3
+  it('does not mask satisfied verdicts outside an active routed host', async () => {
+    const { root } = await routedFixture();
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1 }));
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(), resetSession: vi.fn() }, acceptanceRedExec: vi.fn(),
+    }) as unknown as { activeRegionChild: typeof child; readGateVerdictOverlay: () => Promise<Record<string, { satisfied: boolean }>> };
+    conductor.activeRegionChild = child;
+    await expect(conductor.readGateVerdictOverlay()).resolves.toMatchObject({ test_suite: { satisfied: true } });
   });
 });
