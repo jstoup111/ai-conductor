@@ -81,8 +81,11 @@ const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
 // "You've hit your session limit and not logged in" classifies as session-limit,
 // not auth failure. Avoids false positives by requiring context beyond bare
 // "session limit" in prose.
-const SESSION_LIMIT_RE = /you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets/i;
-const PERIOD_LIMIT_RE = /you've hit your (?!session\b|usage\b)\S+ limit/i;
+// Anchored (#3545): the notice is the CLI's own message, so it must open the
+// trimmed terminal result text or a stderr line (see `isCliNotice`). A model
+// answer that quotes the wording mid-prose never classifies.
+const SESSION_LIMIT_RE = /^(?:you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets)/i;
+const PERIOD_LIMIT_RE = /^you've hit your (?!session\b|usage\b)\S+ limit/i;
 // Signatures indicating authentication failure — the daemon's OAuth token is
 // missing, stale, or invalid. Distinct from model unavailability (entitled
 // but token expired) or rate limiting (entitled but quota hit). Drives the
@@ -125,8 +128,19 @@ export const MODEL_UNAVAILABLE_RE =
 // Treated as model-unavailable so ModelAvailability ladders to the next model
 // with credits (a different model on the same account is unaffected), instead
 // of the step silently "completing" with no artifact and halting.
+// Anchored like SESSION_LIMIT_RE (#3545); the captured notice opens with "You're".
 export const OUT_OF_CREDITS_RE =
-  /out of usage credits|out of credits|run \/usage-credits|(?:^|\n)you've hit your monthly spend limit\. \/model to switch models\.(?:\n|$)/i;
+  /^(?:(?:you're )?out of (?:usage )?credits|run \/usage-credits|you've hit your monthly spend limit\. \/model to switch models\.(?:\n|$))/i;
+
+/**
+ * True when `re` (start-anchored, no multiline flag) matches a CLI-owned
+ * notice: the start of the trimmed terminal result text, or the start of a
+ * stderr line. Model-authored prose that merely quotes a notice never matches.
+ */
+function isCliNotice(re: RegExp, resultText: string, stderr = ''): boolean {
+  if (re.test(resultText.trim())) return true;
+  return stderr.split(/\r?\n/).some((line) => re.test(line.trimStart()));
+}
 
 /**
  * Result of parsing a rate-limit message.
@@ -234,7 +248,9 @@ export function parseRateLimitWaitSeconds(
 ): ParseRateLimitResult {
   const now = options?.now || new Date();
   try {
-    const deadlineCapSeconds = PERIOD_LIMIT_RE.test(output) ? 86400 : 3600;
+    const deadlineCapSeconds = output.split(/\r?\n/).some((line) => PERIOD_LIMIT_RE.test(line.trimStart()))
+      ? 86400
+      : 3600;
 
     // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
     const durationMatch = output.match(new RegExp(
@@ -435,12 +451,12 @@ function parseResetHour(hour: number, ampm?: string): number {
 
 /** Test helper: true if `output` matches the out-of-credits signature. */
 export function detectsOutOfCredits(output: string): boolean {
-  return OUT_OF_CREDITS_RE.test(output);
+  return isCliNotice(OUT_OF_CREDITS_RE, output);
 }
 
 /** Test helper: true if `output` matches the session-limit signature. */
 export function detectsSessionLimit(output: string): boolean {
-  return SESSION_LIMIT_RE.test(output);
+  return isCliNotice(SESSION_LIMIT_RE, output);
 }
 
 /** Test helper: true if `output` matches the auth-failure signature. */
@@ -859,8 +875,8 @@ export class ClaudeProvider implements LLMProvider {
     // 4. Rate limit (non-session): only on exit !== 0
     // 5. Auth failure: only on exit !== 0
 
-    const sessionLimit = SESSION_LIMIT_RE.test(output);
-    const outOfCredits = OUT_OF_CREDITS_RE.test(output);
+    const sessionLimit = isCliNotice(SESSION_LIMIT_RE, parsed.output, stderr);
+    const outOfCredits = isCliNotice(OUT_OF_CREDITS_RE, parsed.output, stderr);
     const modelUnavailable =
       outOfCredits || (exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output));
     const rateLimited = sessionLimit || (exitCode !== 0 && RATE_LIMIT_RE.test(output));

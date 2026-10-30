@@ -272,6 +272,66 @@ describe('ClaudeProvider', () => {
         });
       });
 
+      it('keeps a well-formed verdict a success when its prose quotes limit notices mid-text (#3545)', async () => {
+        const verdict = { version: 1, relationships: [] };
+        const quotedEvidence = [
+          'Story 2.3 is FIXABLE.',
+          "The test replays errorStream('429: Monthly usage limit reached') and asserts usageExhausted:true.",
+          'The incident report quotes "You\'ve hit your monthly spend limit. /model to switch models." verbatim.',
+        ].join('\n');
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: quotedEvidence,
+            structured_output: JSON.stringify(verdict),
+          }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
+
+        expect(result.success).toBe(true);
+        expect(result.rateLimited).toBeUndefined();
+        expect(result.modelUnavailable).toBeUndefined();
+        expect(result.waitSeconds).toBeUndefined();
+        expect(result.finalStructuredResult).toEqual(verdict);
+      });
+
+      it('still classifies a genuine limit notice opening the terminal result as rateLimited (#3545)', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: "You've hit your session limit · resets 3:20pm (America/New_York)",
+          }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(result.waitSeconds).toBeDefined();
+      });
+
+      it('still classifies a genuine limit notice on a stderr line as rateLimited (#3545)', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({ type: 'result', result: 'Partial answer.' }),
+          stderr: "warning: retrying request\nYou've hit your session limit · resets 3:20pm (America/New_York)",
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(result.waitSeconds).toBeDefined();
+      });
+
       it('passes the security descriptor schema through provider execution to Claude argv', async () => {
         const nativeSchema = BUILD_REVIEW_RUBRIC_REGISTRY.security.contract.output.jsonSchema;
         mockExeca.mockResolvedValue({
