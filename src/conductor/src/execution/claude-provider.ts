@@ -859,8 +859,14 @@ export class ClaudeProvider implements LLMProvider {
     // 4. Rate limit (non-session): only on exit !== 0
     // 5. Auth failure: only on exit !== 0
 
-    const sessionLimit = SESSION_LIMIT_RE.test(output);
-    const outOfCredits = OUT_OF_CREDITS_RE.test(output);
+    const structuredResult = requiresNativeSchema && exitCode === 0 && terminalResult
+      ? this.terminalStructuredResult(terminalResult)
+      : { kind: 'absent' as const };
+    // A valid structured result proves the session did its work, so limit
+    // wording in its text is model-authored (e.g. quoted evidence), not a notice.
+    const producedStructuredResult = structuredResult.kind === 'value';
+    const sessionLimit = !producedStructuredResult && SESSION_LIMIT_RE.test(output);
+    const outOfCredits = !producedStructuredResult && OUT_OF_CREDITS_RE.test(output);
     const modelUnavailable =
       outOfCredits || (exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output));
     const rateLimited = sessionLimit || (exitCode !== 0 && RATE_LIMIT_RE.test(output));
@@ -879,9 +885,6 @@ export class ClaudeProvider implements LLMProvider {
       deadline = parseResult.deadline;
     }
 
-    const structuredResult = requiresNativeSchema && exitCode === 0 && terminalResult
-      ? this.terminalStructuredResult(terminalResult)
-      : { kind: 'absent' as const };
     if (requiresNativeSchema && exitCode === 0 && structuredResult.kind !== 'value') {
       return {
         success: false,
