@@ -291,7 +291,10 @@ describe('Conductor routed acceptance verify-green path', () => {
     const { root } = await routedFixture();
     await prepareParkingRound(root, child, false);
     mocks.parkingQueue = true;
-    const advanceTail = vi.spyOn(Conductor.prototype as never, 'advanceTail').mockResolvedValue('parked' as never);
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
     persister.start();
@@ -311,7 +314,10 @@ describe('Conductor routed acceptance verify-green path', () => {
     await prepareParkingRound(root, child);
     const live = 'operator halt remains authoritative\nwith detail\n';
     await writeFile(join(root, '.pipeline', 'HALT'), live);
-    const advanceTail = vi.spyOn(Conductor.prototype as never, 'advanceTail').mockResolvedValue('parked' as never);
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
     try {
       await parkedConductor(root, new ConductorEventEmitter()).run();
     } finally {
@@ -343,7 +349,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     const { root } = await routedFixture();
     const events = new ConductorEventEmitter();
     const stalls: unknown[] = [];
-    events.on('routing_rounds_stalled', (event) => stalls.push(event));
+    events.on('routing_rounds_stalled', (event) => { stalls.push(event); });
     await parkedConductor(root, events).run();
     await expect(readFile(join(root, '.pipeline', 'DONE'), 'utf8')).resolves.toBe('gate-driven loop converged\n');
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
