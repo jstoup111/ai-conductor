@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { detectStackRoundsCommand, dispatchStackRoundsIfDetected } from '../../src/cli.js';
 
+// Covers: task:2
 const execFileP = promisify(execFile);
 const argv = (...args: string[]) => ['node', 'ai-conductor', 'stack', 'rounds', ...args];
 
