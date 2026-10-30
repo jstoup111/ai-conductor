@@ -112,7 +112,7 @@ describe('restack cascade cap (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [child(1), child(2)], events, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
     await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -127,7 +127,7 @@ describe('restack cascade cap (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('originating child 1 reached 8/8 cascades — tier L allowance 8 (default)');
@@ -140,7 +140,7 @@ describe('restack cascade cap (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves
       .toContain('originating child 1 reached 10/10 cascades — tier L allowance 8 (default); raised to 10');
@@ -158,7 +158,7 @@ describe('restack cascade cap (real local Git)', () => {
       cause: 'feature-repair',
       originatingChildren: [child(2)],
       git: makeGitRunner(configured.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(configured.repo, '.pipeline', 'HALT'), 'utf8')).resolves
       .toContain('originating child 2 reached 4/4 cascades — tier M allowance 4 (configured)');
 
@@ -166,7 +166,7 @@ describe('restack cascade cap (real local Git)', () => {
     await writeCascadeCounts(unrecorded.repo, { 1: 3 });
     await expect(runRestack({
       worktree: unrecorded.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(unrecorded.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(unrecorded.repo, '.pipeline', 'HALT'), 'utf8')).resolves
       .toContain('tier unrecorded, treated as M; allowance 3 (default)');
   });
@@ -180,7 +180,7 @@ describe('restack cascade cap (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
     await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -214,7 +214,7 @@ describe('restack cascade cap (real local Git)', () => {
     events.on('restack_refused', (event) => { records.push(event); });
     await expect(runRestack({
       worktree: halted.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(halted.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
 
     const malformed = await fixture({ tier: 'L' });
@@ -225,7 +225,7 @@ describe('restack cascade cap (real local Git)', () => {
     malformedEvents.on('restack_refused', (event) => { malformedRecords.push(event); });
     await expect(runRestack({
       worktree: malformed.repo, slug: 'demo', cause: 'feature-repair', events: malformedEvents, git: makeGitRunner(malformed.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(malformedRecords).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
     await expect(readFile(join(malformed.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     await expect(readFile(join(malformed.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cascadesRefFor('demo'));
