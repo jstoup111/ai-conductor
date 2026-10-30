@@ -43,17 +43,29 @@ async function buildExactRewriteMap(
   git: GitRunner,
   preImageBase: string,
   origHead: string,
+  postImageBase: string,
+  head: string,
   exactRewrites: ReadonlyMap<string, string>,
 ): Promise<RewriteMapResult> {
-  const map: Record<string, string> = {};
+  // A recorded resolver is authoritative only for the commits it names.  It
+  // intentionally omits ambiguous duplicate-subject commits, which still
+  // have ordinary patch identity and must be reconstructed like a clean
+  // replay.  Start with that reconstruction, then let the exact identities
+  // win (including empty and resolver-modified commits that have no patch-id
+  // counterpart).
+  const reconstructed = await buildRewriteMapForRanges(
+    git,
+    preImageBase,
+    origHead,
+    postImageBase,
+    head,
+  );
+  const map = { ...reconstructed.map };
   for (const [from, to] of exactRewrites) {
     map[from] = to;
     map[from.slice(0, SHORT_SHA_LEN)] = to;
   }
-  const preImage = await git(['rev-list', `${preImageBase}..${origHead}`]);
-  const residue = preImage.exitCode === 0
-    ? parseShaList(preImage.stdout).filter((sha) => map[sha] === undefined)
-    : [];
+  const residue = reconstructed.residue.filter((sha) => map[sha] === undefined);
   return { map, residue };
 }
 
@@ -491,7 +503,7 @@ export async function translateAfterRebase(
   const postImageBase = range?.postImageBase ?? onto;
   const { map, residue } = exactRewrites === undefined
     ? await buildRewriteMapForRanges(git, preImageBase, origHead, postImageBase, head, flatten)
-    : await buildExactRewriteMap(git, preImageBase, origHead, exactRewrites);
+    : await buildExactRewriteMap(git, preImageBase, origHead, postImageBase, head, exactRewrites);
 
   await persistRewriteMap(projectRoot, map);
   await applyMapToStores(projectRoot, map, range?.additionalPipelineDirs);
