@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-30T11:33:37.289Z
 Slug: done-step-with-an-unsatisfied-gate-verdict-loops-s
 Class: needs-human
 Halting step: unknown
