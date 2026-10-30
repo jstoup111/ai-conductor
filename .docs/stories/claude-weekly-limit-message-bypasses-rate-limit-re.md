@@ -25,14 +25,14 @@ of burning its retry budget and halting the feature.
 #### Negative Paths
 - Given the Claude CLI exits 1 with stdout `Error: ENOENT reading .docs/plans/x.md`, when the provider classifies the result, then `rateLimited` is `undefined` and `success` is `false`
 - Given the Claude CLI exits 0 with stdout `Discussion about weekly limit policies in documentation`, when the provider classifies the result, then `rateLimited` is `undefined` and `success` is `true`
-- Given a native-schema Claude dispatch exits 0 with a valid structured result whose result text quotes `429: Monthly usage limit reached`, when the provider classifies the result, then `success` is `true`, `rateLimited` and `modelUnavailable` are `undefined`, and the structured result is returned
+- Given the Claude CLI exits 0 with a terminal result whose prose quotes `429: Monthly usage limit reached` and `You've hit your monthly spend limit. /model to switch models.` after its first line, when the provider classifies the result, then `success` is `true` and `rateLimited` and `modelUnavailable` are `undefined`, because a limit notice classifies only at the start of the trimmed terminal result text or the start of a stderr line
 
 ### Done When
 - [ ] `detectsSessionLimit("You've hit your weekly limit · resets 9pm (America/New_York)")` returns `true`
 - [ ] A provider test replaying the verbatim #1006 stdout asserts `rateLimited === true`, `success === false`, and a `deadline` in the future relative to the injected clock
 - [ ] Provider tests for `daily`, `usage`, and `session` qualifiers assert `rateLimited === true`
 - [ ] Provider tests assert an ordinary non-zero-exit error and a prose mention of "weekly limit" both leave `rateLimited` undefined
-- [ ] A provider test with a valid native-schema structured result quoting a usage-limit message asserts `success === true` and `rateLimited` undefined, and a terminal limit notice with no structured result still asserts `rateLimited === true`
+- [ ] A provider test whose terminal result quotes limit notices mid-prose asserts `success === true` with `rateLimited` and `modelUnavailable` undefined, and tests with a genuine notice opening the terminal result and on a stderr line still assert `rateLimited === true`
 
 ## Story 2: Existing limit classifications keep their precedence
 
