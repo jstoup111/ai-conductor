@@ -1635,7 +1635,9 @@ export class Conductor {
       })({ prUrl, state, mode: opts.mode });
     };
 
-    const routedVerifyGreen = await (async () => {
+    const [routedRound, routedVerifyGreen] = await Promise.all([
+      this.routedRoundForActiveChild(state),
+      (async () => {
       try {
         const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
         if (!slug) return undefined;
@@ -1654,10 +1656,12 @@ export class Conductor {
           ? { roundId: execution.roundId, host: execution.target.child, headSha }
           : undefined;
       } catch { return undefined; }
-    })();
+      })(),
+    ]);
 
     return {
       ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+      ...(routedRound === undefined ? {} : { routedRound }),
       ...(routedVerifyGreen === undefined ? {} : { routedVerifyGreen }),
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
@@ -2085,9 +2089,9 @@ export class Conductor {
         publicationDisposition: {
           kind: 'human_required',
           reason: 'publication_coordinator_unavailable',
-        },
-      };
-    }
+      },
+    };
+  }
 
     const publicationDisposition = await this.finishPublication.advance({
       state,
@@ -2123,6 +2127,23 @@ export class Conductor {
       success: publicationDisposition.kind === 'complete',
       publicationDisposition,
     };
+  }
+
+  /** The active routed host is the only child allowed to retain round-scoped gate evidence. */
+  private async routedRoundForActiveChild(state?: ConductState): Promise<RoundId | undefined> {
+    if (this.config.stacked_prs?.route_whole_feature_fixes !== true || this.activeRegionChild === undefined) {
+      return undefined;
+    }
+    const slug = state?.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return undefined;
+    try {
+      const marker = await readRepairMarker(this.projectRoot, slug);
+      return marker.kind === 'marker' && marker.marker.host === this.activeRegionChild
+        ? marker.marker.roundId
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -2897,9 +2918,17 @@ export class Conductor {
     const verdicts = await readAllVerdicts(this.projectRoot);
     if (this.activeRegionChild === undefined) return verdicts;
 
+    // A routed host may carry successful evidence from an earlier lap.  That
+    // evidence cannot satisfy work which this round explicitly re-pended;
+    // only a verdict stamped by the current marker may do so.  Failed
+    // verdicts remain visible so their kickback continues to route the loop.
+    const routedRound = await this.routedRoundForActiveChild(this.persistedStateSnapshot);
+
     for (const step of CHILD_REGION_STEPS) {
       const verdict = await readVerdict(this.projectRoot, step, this.activeRegionChild);
-      if (verdict) verdicts[step] = verdict;
+      if (verdict && !(routedRound !== undefined && verdict.satisfied && verdict.routedRound !== routedRound)) {
+        verdicts[step] = verdict;
+      }
       else delete verdicts[step];
     }
     return verdicts;
@@ -16468,6 +16497,7 @@ export class Conductor {
           step.name,
           verdict,
           step.name === 'build' ? this.activeRegionChild : undefined,
+          { routedRound: step.name === 'build' ? await this.routedRoundForActiveChild(state) : undefined },
         );
       }
       await this.events.emit(this.stampGateTier(this.withActiveRegionChild({

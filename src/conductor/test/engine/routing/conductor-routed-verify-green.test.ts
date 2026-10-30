@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   revalidationRecord: undefined as undefined | import('../../../src/engine/routing/route-types.js').RouteRecord,
   observedRevalidationRecordKind: undefined as undefined | string,
   parkingQueue: false,
+  routedRoundMarker: undefined as undefined | { host: number; roundId: string },
 }));
 
 vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
@@ -31,7 +32,12 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
     ...actual,
     drainRoutingOutboxes: () => mocks.drainRoutingOutboxes(),
     readRepairMarker: (...args: Parameters<typeof actual.readRepairMarker>) =>
-      mocks.operatorRevalidation
+      mocks.routedRoundMarker !== undefined
+        ? Promise.resolve({
+            kind: 'marker', slug: 'demo', blob: 'a'.repeat(40),
+            marker: mocks.routedRoundMarker,
+          } as never)
+        : mocks.operatorRevalidation
         ? Promise.resolve({ kind: 'marker', slug: 'demo', blob: 'a'.repeat(40), marker: { host: 1, roundId: undefined } } as never)
         : actual.readRepairMarker(...args),
     readRouteRecord: (...args: Parameters<typeof actual.readRouteRecord>) =>
@@ -136,6 +142,7 @@ afterEach(async () => {
   mocks.revalidationRecord = undefined;
   mocks.observedRevalidationRecordKind = undefined;
   mocks.parkingQueue = false;
+  mocks.routedRoundMarker = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -795,5 +802,76 @@ describe('Conductor routed acceptance verify-green path', () => {
     // The leaf never closes and never runs verify-green, so its ordinary
     // acceptance_specs completion predicate applies.
     expect((await contextFor(parseChildId(2)!)).routedVerifyGreen).toBeUndefined();
+  });
+
+  // Covers: task:2
+  it.each([
+    ['enabled matching marker', true, { host: 1, roundId: 'r5' }, 'r5'],
+    ['flag off', false, { host: 1, roundId: 'r5' }, undefined],
+    ['no marker', true, undefined, undefined],
+    ['another host marker', true, { host: 2, roundId: 'r5' }, undefined],
+  ])('supplies routed-round stamps to every child-region gate only for an active host with a matching marker: %s', async (
+    _label,
+    routeWholeFeatureFixes,
+    marker,
+    expectedRound,
+  ) => {
+    const { root } = await routedFixture();
+    mocks.routedRoundMarker = marker;
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: routeWholeFeatureFixes } },
+      events: new ConductorEventEmitter(), stepRunner: runner, acceptanceRedExec: vi.fn(),
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: typeof child;
+      completionCtx: (state: Record<string, unknown>) => Promise<{ activeChild?: unknown; routedRound?: string }>;
+    };
+    privateConductor.activeRegionChild = child;
+
+    const context = await privateConductor.completionCtx({ feature_desc: 'demo' });
+
+    expect(context.activeChild).toBe(child);
+    if (expectedRound === undefined) {
+      expect(context).not.toHaveProperty('routedRound');
+    } else {
+      expect(context).toMatchObject({ routedRound: expectedRound });
+    }
+  });
+
+  // Covers: task:3, task:4, task:5, task:6
+  it('masks only successful verdicts from another routed round, retaining this round and failed evidence', async () => {
+    const { root } = await routedFixture();
+    mocks.routedRoundMarker = { host: 1, roundId: 'r5' };
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await Promise.all([
+      writeFile(join(gates, 'build.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r4' })),
+      writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r5' })),
+      writeFile(join(gates, 'build_review.json'), JSON.stringify({
+        satisfied: false, checkedAt: 1, routedRound: 'r4', kickback: { from: 'build', evidence: 'failed in r4' },
+      })),
+    ]);
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(), resetSession: vi.fn() }, acceptanceRedExec: vi.fn(),
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: typeof child;
+      readGateVerdictOverlay: () => Promise<Record<string, unknown>>;
+    };
+    privateConductor.activeRegionChild = child;
+
+    const overlay = await privateConductor.readGateVerdictOverlay();
+
+    expect(overlay.build).toBeUndefined();
+    expect(overlay.test_suite).toMatchObject({ satisfied: true, routedRound: 'r5' });
+    expect(overlay.build_review).toMatchObject({ satisfied: false, routedRound: 'r4' });
   });
 });
