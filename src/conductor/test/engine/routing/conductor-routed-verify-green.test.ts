@@ -90,6 +90,8 @@ import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
+import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
+import { readRawHaltClass, resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -163,12 +165,12 @@ async function routedFixture() {
   return { root };
 }
 
-function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner, host = child) {
+function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner, host = child, round = roundId) {
   const cursor = {
     kind: 'repair-pending' as const,
     child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
     branch: 'feat/daemon-demo', repairChildren: [host],
-    routedRepair: { child: host, roundId },
+    routedRepair: { child: host, roundId: round },
   };
   return new Conductor({
     projectRoot: root,
@@ -285,6 +287,42 @@ describe('Conductor routed acceptance verify-green path', () => {
     } finally {
       persister.stop();
     }
+  });
+
+  // Covers: task:8
+  it('re-kicks a mechanical parked r5 halt into reconciliation and a conductor dispatch without operator action', async () => {
+    const { root } = await routedFixture();
+    const leaf = parseChildId(2)!;
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'pending', build: 'skipped', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    await prepareParkingRound(root, leaf);
+    await writeFile(join(root, '.pipeline', 'HALT'), 'routing rounds stalled: r5; parked child awaiting admission\n');
+    await writeFile(join(root, '.pipeline', 'HALT.class'), 'mechanical');
+    await expect(resolveHaltRetention(() => readRawHaltClass(root))).resolves.toEqual({
+      haltClass: 'mechanical', retained: false,
+    });
+
+    // A mechanical halt is re-kickable, so its stale marker is cleared before
+    // preflight reconciles the still-open routed round.
+    await rm(join(root, '.pipeline', 'HALT'));
+    await rm(join(root, '.pipeline', 'HALT.class'));
+    mocks.reconcileRounds = async () => ({ kind: 'navigate-host', roundId: parseRoundId('r5')!, host: leaf });
+    await expect(runStackPreflight({
+      worktree: root,
+      slug: 'demo',
+      git: makeGitRunner(root),
+      reconcileRounds: async () => ({ kind: 'navigate-host', roundId: parseRoundId('r5')!, host: leaf }) as never,
+    })).resolves.toMatchObject({ kind: 'navigate-host', roundId: 'r5', host: leaf });
+
+    mocks.routedRoundMarker = { host: 2, roundId: 'r5' };
+    mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'verified', headSha: 'a'.repeat(40) });
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    await routedConductor(root, new ConductorEventEmitter(), runner, leaf, parseRoundId('r5')!).run();
+    expect(runner.run).toHaveBeenCalled();
   });
 
   // Covers: task:7
