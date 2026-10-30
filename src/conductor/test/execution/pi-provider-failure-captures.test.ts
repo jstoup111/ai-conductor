@@ -31,7 +31,8 @@ describe('Pi 1.0.0 failure captures', () => {
     const classified = [
       ...texts.map((text, index) => index === 0 ? text : parsePiJsonl(text).terminalAssistantErrorMessage ?? ''),
       parsePiJsonl(await readFile(new URL('../fixtures/pi-error-stop-stream.jsonl', import.meta.url), 'utf8')).terminalAssistantErrorMessage ?? '',
-      'Authentication failed for "anthropic". Credentials may have expired or network is unavailable.',
+      // print-mode's stderr for agent-session.js's unresolved-OAuth throw (ADR D1 source row; no E-row capture).
+      await fixture('pi-1.0.0-auth-failed-unresolved-oauth.stderr.txt'),
     ];
     for (const signature of PI_FAILURE_SIGNATURES) {
       expect(classified.some((text) => signature.pattern.test(text))).toBe(true);

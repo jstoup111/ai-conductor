@@ -1125,12 +1125,25 @@ describe('PiProvider captured failure classification', () => {
     }
   });
 
+  /** The E6 capture's retried error stops, then a terminal `stopReason: "stop"` text message. */
+  const e6EarlierErrorStopsThenStop = async (text: string) => {
+    const lines = (await readFixture('pi-1.0.0-e6-rate-limit.jsonl')).trim().split('\n');
+    const isAssistantEnd = (line: string) => {
+      const event = JSON.parse(line) as { type?: string; message?: { role?: string } };
+      return event.type === 'message_end' && event.message?.role === 'assistant';
+    };
+    const terminal = lines.length - 1 - [...lines].reverse().findIndex(isAssistantEnd);
+    const earlier = lines.slice(0, terminal);
+    expect(earlier.filter((line) => line.includes('"stopReason":"error"') && line.includes('429: {\\"message\\":\\"Rate limit reached for requests'))).toHaveLength(3);
+    return [...earlier, textStream(text), JSON.stringify({ type: 'agent_end', willRetry: false }), JSON.stringify({ type: 'auto_retry_end', success: true, attempt: 3 })].join('\n');
+  };
+
   it('uses a sanitized rate-limit result and classifies only terminal error stops', async () => {
     spawn.mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
       .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e9-server-error.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
       .mockResolvedValueOnce({ stdout: errorStream('upstream said 429: busy'), stderr: '', exitCode: 0 } as ExecaResult)
       .mockResolvedValueOnce({ stdout: textStream('HTTP 429: rate limit reached'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: textStream('completed after earlier errors'), stderr: '', exitCode: 0 } as ExecaResult);
+      .mockResolvedValueOnce({ stdout: await e6EarlierErrorStopsThenStop('completed after earlier errors'), stderr: '', exitCode: 0 } as ExecaResult);
     const rateLimited = await invoke();
     expect(rateLimited.output).toBe('Pi request was rate-limited by its upstream provider.');
     for (const forbidden of ['Rate limit reached for requests', 'rate_limit_exceeded', '{"message"']) expect(rateLimited.output).not.toContain(forbidden);

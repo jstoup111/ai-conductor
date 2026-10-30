@@ -1,2 +1,15 @@
+{"type":"session","version":3,"id":"pi-1.0.0-e6-session","timestamp":"2026-10-28T00:00:00.000Z","cwd":"/fixture"}
+{"type":"agent_start"}
 {"type":"message_end","message":{"role":"assistant","provider":"openai","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}}
-{"type":"agent_end"}
+{"type":"agent_end","willRetry":true,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}}
+{"type":"agent_end","willRetry":true,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"auto_retry_start","attempt":2,"maxAttempts":3,"delayMs":4000,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}}
+{"type":"agent_end","willRetry":true,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"auto_retry_start","attempt":3,"maxAttempts":3,"delayMs":8000,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}}
+{"type":"agent_end","willRetry":false,"errorMessage":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"auto_retry_end","success":false,"attempt":3,"finalError":"429: {\"message\":\"Rate limit reached for requests\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}"}
+{"type":"agent_settled"}
