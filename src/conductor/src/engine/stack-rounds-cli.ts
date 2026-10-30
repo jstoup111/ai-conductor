@@ -160,11 +160,11 @@ export async function checkRoundSupersession(
     switch (state) {
       case 'pending':
         droppedHosts.push(child);
-        break;
+        continue;
       case 'restacked':
       case 'done':
       case 'rerouted':
-        break;
+        continue;
       case 'admitted':
       case 'repairing':
       case 'reroute-moved':
@@ -172,9 +172,8 @@ export async function checkRoundSupersession(
       case 'abandoning':
       case 'abandoned':
         return { kind: 'refused', detail: `routing round ${roundId} host ${host} is ${state}` };
-      default:
-        return assertNever(state);
     }
+    assertNever(state);
   }
 
   const readMarker = dependencies.readRepairMarker ?? readRepairMarker;
