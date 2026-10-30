@@ -279,7 +279,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
           await runStackPreflight({
             worktree: worktree.path,
             slug: ITEM.slug,
-            events,
+            events: events ?? new ConductorEventEmitter(),
             git: makeGitRunner(worktree.path),
             reconcileRounds: async () => ({
               kind: 'stalled', detail: 'next-host admission refused',
@@ -361,7 +361,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
             daemon: true,
             verifyArtifacts: false,
             config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
-            events,
+            events: events ?? new ConductorEventEmitter(),
             stepRunner: { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) },
             acceptanceRedExec: vi.fn(),
             childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },

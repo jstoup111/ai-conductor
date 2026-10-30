@@ -86,12 +86,13 @@ import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound, recordRoundStall } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import type { HaltDisposition } from '../../../src/engine/halt-marker.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
-import { readRawHaltClass, resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
+import { clearMarker, readRawHaltClass, rekickSweep, resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -195,7 +196,7 @@ async function prepareParkingRound(
   host: NonNullable<ReturnType<typeof parseChildId>>,
   admit = true,
   roundId = parseRoundId('r5')!,
-  kind: RouteRecord['kind'] = 'audit',
+  kind: 'audit' | 'operator' = 'audit',
 ) {
   const git = makeGitRunner(root);
   await git(['init', '-q', '-b', 'feat/daemon-demo']);
@@ -240,7 +241,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     await Promise.all(['test_suite', 'build_review'].map((step) =>
       writeFile(join(root, '.pipeline', 'children', '2', 'gates', `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
     const revalidate = parseRoundId('r6')!;
-    await prepareParkingRound(root, host, true, revalidate, 'revalidate');
+    await prepareParkingRound(root, host, true, revalidate);
     const conductor = new Conductor({
       projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
       fromStep: 'test_suite', mode: 'auto', daemon: true, verifyArtifacts: false,
@@ -306,10 +307,19 @@ describe('Conductor routed acceptance verify-green path', () => {
       haltClass: 'mechanical', retained: false,
     });
 
-    // A mechanical halt is re-kickable, so its stale marker is cleared before
-    // preflight reconciles the still-open routed round.
-    await rm(join(root, '.pipeline', 'HALT'));
-    await rm(join(root, '.pipeline', 'HALT.class'));
+    // The actual re-kick sweep, rather than an operator deleting the files,
+    // clears the retryable halt and leaves the durable dispatch sentinel.
+    await expect(rekickSweep({
+      listHaltedWorktrees: async () => ['demo'],
+      readHaltReason: async () => readFile(join(root, '.pipeline', 'HALT'), 'utf8'),
+      readHaltClass: async () => (await readRawHaltClass(root)) as HaltDisposition,
+      hasRebaseInProgress: async () => false,
+      abortRebase: async () => {},
+      clearMarker: async () => clearMarker(root),
+      lastRekickSha: new Map(),
+    }, 'a'.repeat(40))).resolves.toEqual({ cleared: ['demo'], skipped: [] });
+    await expect(readFile(join(root, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('rekick\n');
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     mocks.reconcileRounds = async () => ({ kind: 'navigate-host', roundId: parseRoundId('r5')!, host: leaf });
     await expect(runStackPreflight({
       worktree: root,
