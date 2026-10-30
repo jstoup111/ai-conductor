@@ -360,3 +360,12 @@ Task 7 ──► Task 9 ──► Task 10
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-8: Add a test that resolveHaltRetention returns retained:false over a mechanical parked HALT for r5, and that after the re-kick a runStackPreflight whose reconciliation admits, resumes or exits r5 is followed by a conductor dispatch that runs a step or closes the round with no operator action (conductor-routed-verify-green.test.ts / daemon-runner.test.ts); fix only stopParkedForRouting if the test exposes a gap
+**Gate:** prd-audit
+**Rationale:** This is a missing test, not a design gap. The audit marks S4.4 FIXABLE: the conductor already writes a mechanical HALT on a parked stop, but no test follows the daemon re-kick path. Task 8's third done-when already covers that path (resolveHaltRetention returns retained:false, then runStackPreflight reconciliation admits, resumes or exits r5, then a dispatch runs a step or closes the round), and its Steps allow test-first work plus a fix in stopParkedForRouting if the test exposes a gap. No architecture or product decision is needed. Confidence 90% (verified against .pipeline/prd-audit.md and plan Task 8).
+**Criterion:** S4.4
+**Parent task:** 8
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-8 is committed and its targeted tests pass.
