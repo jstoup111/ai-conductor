@@ -4,6 +4,43 @@ spec_hash: cfef5080ac3c42b202a76fc92e7ce308cc721d2ac05f717e23c3da8563cc121e
 pr: https://github.com/jstoup111/ai-conductor/pull/3533
 shipped: 2026-10-31
 engine_version: 20261031T181032Z-1677e5b98206
+findings:
+  - gate: architecture_review_as_built
+    finding: "as-built:af950c08-9055-4390-92c1-aa00c25f5ec2:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-28-as-built-finding-reconciliation decision 6"
+    outcome: remediated
+    summary: "Verified, 99% confidence: DESIGN verdicts halt without recording their findings or reconciliation events at both conductor.ts:9842 (validation group) and conductor.ts:15046 (serial), under src/conductor/src/engine/. The only needs-human recording caller is planner-halt handling at conductor.ts:5218, which DESIGN verdicts bypass. Wire recording of every verdict finding before both halts."
+  - gate: architecture_review_as_built
+    finding: "as-built:af950c08-9055-4390-92c1-aa00c25f5ec2:2"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-28-as-built-finding-reconciliation decision 6"
+    outcome: remediated
+    summary: "Verified, 99% confidence: src/conductor/src/engine/conductor.ts:1353 resolves cases only for literal APPROVED, leaving them open after APPROVED WITH DRIFT NOTES or delivered PLAN_GAP, both successful gate outcomes. The early return at :1343 also skips settlement whenever pending findings are empty. Resolve durable open cases on every authoritative gate pass independently of pending-context presence. These omissions also contradict the approved diagram's gate-pass edge."
+  - gate: architecture_review_as_built
+    finding: "as-built:af950c08-9055-4390-92c1-aa00c25f5ec2:3"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-28-as-built-finding-reconciliation decision 7"
+    outcome: remediated
+    summary: "Verified, 99% confidence: src/conductor/src/engine/conductor.ts:4188 builds the next as-built projection without draining the case-store outbox; remediation-projection.ts:427 reads the store without delivery. Drains occur only later during recording or settlement. After a crash, projection failure or rejected planning can leave recorded events undelivered. Drain through emitOrThrow before the next as-built projection."
+  - gate: architecture_review_as_built
+    finding: "as-built:af950c08-9055-4390-92c1-aa00c25f5ec2:4"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-28-as-built-finding-reconciliation decision 6"
+    outcome: remediated
+    summary: "Verified, 98% confidence: a mixed append-and-halt plan can successfully append at src/conductor/src/engine/conductor.ts:4922, then record only halt dispositions and return at :5208–5224. This bypasses reconciliation at :5406–5428 for successfully appended findings, losing their durable sources and events. Preserve recording for successful appends when a sibling disposition halts."
+  - gate: architecture_review_as_built
+    finding: "as-built:b047f951-e3c6-481e-b5d8-6663f2eafc54:1"
+    class: REMEDIABLE
+    governing_clause: "Task 12"
+    outcome: remediated
+    summary: "Verified, 99% confidence: new terminal recording calls at src/conductor/src/engine/conductor.ts:9897 and :15119 also run after rejected or missing gap plans return kind 'none' at :4341. They create needs-human cases and reconciliation events despite task 12 requiring no recording for those rounds. Restrict fallback recording to DESIGN verdicts; preserve explicit planner-halt recording. Both violating sites were introduced by the prior-finding repair."
+  - gate: architecture_review_as_built
+    finding: "as-built:b047f951-e3c6-481e-b5d8-6663f2eafc54:2"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-28-as-built-finding-reconciliation decision 6"
+    outcome: remediated
+    summary: "Verified, 99% confidence: the new mixed-halt recording at src/conductor/src/engine/conductor.ts:5268–5277 includes existing-task bindings merely resolved at :4737. The branch returns before admitAndRestageRepair at :5419, yet records their sources/events and can reopen or increment cases. D6 requires successful append or binding before recording. Preserve successful append recording while excluding bindings whose admission/restage has not succeeded."
 ---
 
 ## Cost
