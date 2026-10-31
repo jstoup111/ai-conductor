@@ -60,6 +60,35 @@ describe('routing event constructors', () => {
     expect(event.droppedHosts).toContain(event.child);
   });
 
+  // Covers: task:11
+  it('uses the current host when supersession drops no hosts', () => {
+    const record = {
+      roundId: parseRoundId('r2')!,
+      hosts: { [parseChildId(1)!]: 'restacked', [parseChildId(2)!]: 'restacked' },
+      currentHostIndex: 1,
+    } as RouteRecord;
+
+    const noDrops = routingRoundSupersededEvent(
+      record,
+      parseRoundId('r3')!,
+      [],
+      [],
+      'already restacked',
+      'operator@example.test',
+    );
+    const dropped = routingRoundSupersededEvent(
+      record,
+      parseRoundId('r3')!,
+      [parseChildId(2)!, parseChildId(3)!],
+      [],
+      'pending hosts',
+      'operator@example.test',
+    );
+
+    expect(noDrops).toMatchObject({ droppedHosts: [], child: parseChildId(2)! });
+    expect(dropped).toMatchObject({ droppedHosts: [2, 3], child: parseChildId(2)! });
+  });
+
   it('permits the canonical module and unrelated event syntax', () => {
     expect(routingEventLiteralViolations([
       { path: CANONICAL_ROUTING_EVENTS_MODULE, source: "return { type: 'remediation_routed' };" },

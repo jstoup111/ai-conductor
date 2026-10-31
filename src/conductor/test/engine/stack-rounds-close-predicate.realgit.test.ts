@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { CHILD_REGION_STEPS, parseChildId } from '../../src/engine/child-context.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
-import { checkRoundSupersession } from '../../src/engine/stack-rounds-cli.js';
+import { checkRoundSupersession, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
@@ -122,20 +122,34 @@ describe('stack rounds close predicate (real local Git)', () => {
     expect(await routeRefs(subject)).toBe(before);
   });
 
-  // Covers: task:5
-  it('refuses an open audit round with no pending hosts to drop without writes', async () => {
-    const subject = await fixture();
-    await replaceRound(subject, r4, (record) => ({
-      ...record,
-      hosts: { [c1]: 'restacked', [c2]: 'done' },
-    }));
+  // Covers: task:11
+  it('closes an all-restacked audit round behind a marked later round', async () => {
+    const subject = await createSweepRepository('stack-rounds-close-all-restacked-', cleanup);
+    await subject.git(['commit', '-qm', 'initial']);
+    await openAudit(subject, r2, { [c1]: 'restacked', [c2]: 'restacked' }, []);
+    await openAudit(subject, r3, { [c1]: 'repairing' }, []);
+    await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r3 }));
     const before = await routeRefs(subject);
 
-    await expect(checkRoundSupersession(subject.repo, slug, r4)).resolves.toMatchObject({
-      kind: 'refused', detail: expect.stringContaining(`routing round ${r4} has no pending hosts to drop`),
+    const checked = await checkRoundSupersession(subject.repo, slug, r2);
+    expect(checked).toMatchObject({
+      kind: 'supersedable', supersededBy: r3, droppedHosts: [], findingIds: [],
     });
-
     expect(await routeRefs(subject)).toBe(before);
+
+    if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+    await expect(supersedeRound({
+      worktree: subject.repo, slug, checked, reason: 'all hosts restacked', operator: 'operator',
+    })).resolves.toMatchObject({
+      kind: 'superseded', event: { droppedHosts: [], child: c1 },
+    });
+    await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({
+      kind: 'record', record: {
+        phase: 'closed', hosts: { [c1]: 'restacked', [c2]: 'restacked' }, outbox: [
+          { event: { type: 'routing_round_superseded', droppedHosts: [], child: c1 } },
+        ],
+      },
+    });
   });
 
   // Covers: task:5

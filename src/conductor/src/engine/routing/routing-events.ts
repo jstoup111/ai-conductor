@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { ConductorEvent } from '../../types/events.js';
 import type { ChildId } from '../child-context.js';
-import type { HostState, RouteRecord, RoundId } from './route-types.js';
+import { currentHostOf, type HostState, type RouteRecord, type RoundId } from './route-types.js';
 import type { CommitSha } from '../restack/restack-types.js';
 
 function occurrence(): { readonly eventId: string; readonly occurredAt: string } {
@@ -45,7 +45,7 @@ export function operatorRoundEvent(
 export function routingRoundSupersededEvent(
   record: RouteRecord,
   supersededBy: RoundId,
-  droppedHosts: readonly [ChildId, ...ChildId[]],
+  droppedHosts: readonly ChildId[],
   findingIds: readonly string[],
   reason: string,
   operator: string,
@@ -53,7 +53,7 @@ export function routingRoundSupersededEvent(
   return {
     type: 'routing_round_superseded', ...occurrence(), roundId: record.roundId,
     supersededBy, droppedHosts, findingIds, reason, operator,
-    child: droppedHosts[0],
+    child: droppedHosts[0] ?? currentHostOf(record)!,
   };
 }
 
