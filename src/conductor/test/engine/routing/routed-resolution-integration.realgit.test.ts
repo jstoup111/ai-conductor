@@ -26,6 +26,7 @@ function child(value: number) {
 }
 
 describe('recorded-resolution restack consumption (real local Git)', () => {
+  // Covers: task:rem-prd-audit-14
   it('reconstructs duplicate-subject child commits by patch-id, then runs child 2 revalidation', async () => {
     const subject = await createSweepRepository('restack-resolution-consume-', cleanup);
     const git = makeGitRunner(subject.repo);
