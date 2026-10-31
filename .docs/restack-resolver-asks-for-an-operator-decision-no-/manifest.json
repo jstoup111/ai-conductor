@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "restack-resolver-asks-for-an-operator-decision-no-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-31-restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-25-operator-recorded-restack-conflict-resolution.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-31-operator-decision-for-stacked-restack-conflicts.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/restack-resolver-asks-for-an-operator-decision-no-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/restack-resolver-asks-for-an-operator-decision-no-.md"
+    }
+  ]
+}
