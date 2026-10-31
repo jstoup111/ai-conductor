@@ -279,8 +279,8 @@ describe('runRestack (real local Git)', () => {
     });
   });
 
-  // Covers: task:rem-prd-audit-R15
-  it('uses the sealed highest position for an unentered leaf when checkout differs from the cursor', async () => {
+  // Covers: task:7, task:rem-prd-audit-R15
+  it('maps an unentered pre-region halt-record leaf to the advanced default when checkout differs from the cursor', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-executor-unentered-leaf-'));
     repositories.push(repo);
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -297,13 +297,6 @@ describe('runRestack (real local Git)', () => {
     await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
     await git(['add', '.gitignore']);
     await commit('base', 'base.txt', 'base\n');
-    await git(['checkout', '-qb', 'feat/daemon-demo']);
-    const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
-    await git(['checkout', '-qb', 'feat/c1/demo']);
-    await commit('child work', 'child.txt', 'child\n');
-    await git(['checkout', '-q', 'main']);
-    const advanced = await commit('advance', 'base.txt', 'advanced\n');
-    await git(['checkout', '-q', 'feat/daemon-demo']);
     await writeSliceTopologyFixture(repo, {
       version: 1,
       slug: 'demo',
@@ -313,6 +306,13 @@ describe('runRestack (real local Git)', () => {
       sliceMembership: { taskSlices: { '1': 1, '2': 3, '3': 5 }, titles: ['Child 1', 'Child 3', 'Leaf 5'] },
       storyOwnership: { S1: 1, S2: 3, S3: 5 },
     }, envelopeFilesystem);
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
+    await git(['checkout', '-qb', 'feat/c1/demo']);
+    await commit('child work', 'child.txt', 'child\n');
+    await git(['checkout', '-q', 'main']);
+    const advanced = await commit('advance', 'base.txt', 'advanced\n');
+    await git(['checkout', '-q', 'feat/daemon-demo']);
     await writeFile(join(repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
       evidenceStamps: { halted: { sha: haltRecord } },
     }));
@@ -330,9 +330,8 @@ describe('runRestack (real local Git)', () => {
       git(['rev-parse', 'feat/c1/demo']).then((result) => result.stdout.trim()),
       git(['rev-parse', 'feat/daemon-demo']).then((result) => result.stdout.trim()),
     ]);
-    expect(newLeaf).not.toBe(newChild);
-    expect(newLeaf).not.toBe(haltRecord);
-    expect((await git(['show', '-s', '--format=%s', newLeaf])).stdout.trim()).toBe('halt record');
+    expect(newLeaf).toBe(advanced);
+    expect(newChild).not.toBe(newLeaf);
     expect((await git(['merge-base', '--is-ancestor', advanced, newLeaf])).stdout).toBe('');
     expect((await git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newLeaf);
     await expect(readFile(join(repo, '.pipeline', 'task-evidence.json'), 'utf8')).resolves.toContain(newLeaf);
