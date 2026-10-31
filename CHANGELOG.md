@@ -64,6 +64,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can identify committed plans with unresolved Stories references through a read-only daemon diagnostic. ([implementation PR #3534](https://github.com/jstoup111/ai-conductor/pull/3534)).
 - Operators inspect and safely recover wedged routed stack rounds. ([implementation PR #3542](https://github.com/jstoup111/ai-conductor/pull/3542)).
 - Operators can record and resume a repaired stacked-restack conflict. ([implementation PR #3522](https://github.com/jstoup111/ai-conductor/pull/3522)).
+- Pi runs classify authentication and usage failures so recovery is actionable. ([implementation PR #3532](https://github.com/jstoup111/ai-conductor/pull/3532)).
 
 ### Changed
 
@@ -224,6 +225,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Claude limit notices are recognized only when the CLI itself prints them, so a step whose output quotes a usage-limit or spend-limit message is no longer misread as rate-limited and re-run indefinitely. ([implementation PR #3546](https://github.com/jstoup111/ai-conductor/pull/3546)).
 - Self-host builds now halt clearly when a completed rebase leaves a gate verdict stale. ([implementation PR #3538](https://github.com/jstoup111/ai-conductor/pull/3538)).
 - Routed remediation now re-runs stale child-region gates before allowing completion. ([implementation PR #3543](https://github.com/jstoup111/ai-conductor/pull/3543)).
+- Stacked feature restacks preserve the newest durable halt record. ([implementation PR #3553](https://github.com/jstoup111/ai-conductor/pull/3553)).
 
 ## Migration
 
