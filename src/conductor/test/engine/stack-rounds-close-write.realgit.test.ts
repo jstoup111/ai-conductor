@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
-import type { GitRunner } from '../../src/engine/rebase.js';
+import type { GitResult, GitRunner } from '../../src/engine/rebase.js';
 import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
@@ -62,7 +62,8 @@ it('reports a failed write, rather than contention, when update-ref fails withou
   if (checked.kind !== 'supersedable') throw new Error(checked.detail);
   const git: GitRunner = async (args, options) => {
     if (args[0] === 'update-ref' && args[1] === '--stdin') return { exitCode: 1, stdout: '', stderr: 'disk write failed' };
-    return subject.git(args, options);
+    const result = await subject.git(args, options?.env);
+    return { exitCode: 0, ...result } satisfies GitResult;
   };
 
   await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: 'newer round', operator: 'operator', git }))
