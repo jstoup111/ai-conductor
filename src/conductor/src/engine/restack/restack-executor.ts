@@ -733,7 +733,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         parent = adopted;
         continue;
       }
-      if (options.cause === 'feature-repair') {
+      {
         const recorded = await consumeRecordedResolution({
           slug: options.slug, range, parent, committer: journal.journal.committer, git,
           replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
@@ -808,6 +808,21 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const deliveredDecision = recordedDecision.kind === 'decision' && decisionMatchesRange(recordedDecision.decision, range)
           ? recordedDecision
           : undefined;
+        const decisionDiagnostic = recordedDecision.kind === 'unreadable'
+          ? `unreadable operator decision at ${decisionRefFor(options.slug, range.child)}`
+          : recordedDecision.kind === 'decision'
+            ? `stale operator decision: ${recordedDecision.decision.answer}`
+            : undefined;
+        if (recordedDecision.kind === 'decision' && deliveredDecision === undefined) {
+          await options.events?.emit({
+            type: 'restack_decision',
+            action: 'stale',
+            child: range.child,
+            commit: recordedDecision.decision.commit,
+            paths: [...recordedDecision.decision.paths],
+            opId: journal.journal.opId,
+          });
+        }
         if (deliveredDecision !== undefined) {
           await options.events?.emit({
             type: 'restack_decision',
@@ -851,6 +866,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
           const detail = [
             ...(deliveredDecision === undefined ? [] : [`operator decision applied: ${deliveredDecision.decision.answer}`]),
+            ...(decisionDiagnostic === undefined ? [] : [decisionDiagnostic]),
             ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
           ].join('\n') || undefined;
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, parent, 'conflict', detail, resolution.candidates);

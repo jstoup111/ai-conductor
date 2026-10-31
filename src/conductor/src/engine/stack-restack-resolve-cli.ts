@@ -50,6 +50,8 @@ export interface StackRestackResolveDeps {
   resolveOperator?: (root: string) => Promise<string | undefined>;
   appendEvent?: (worktree: string, event: Extract<ConductorEvent, { type: 'restack_resolution' | 'restack_decision' }>) => Promise<void>;
   clearHalt?: typeof clearHaltAtomically;
+  /** Local-Git seam for the answer transaction's compare-and-swap boundary. */
+  git?: GitRunner;
 }
 
 async function appendRecordedResolution(worktree: string, event: Extract<ConductorEvent, { type: 'restack_resolution' | 'restack_decision' }>, append?: StackRestackResolveDeps['appendEvent']): Promise<void> {
@@ -80,7 +82,7 @@ export async function dispatchStackRestackResolve(command: { slug: string; child
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack restack-resolve');
   if (acquired.kind !== 'acquired') { print(`stack restack-resolve: refused — ${formatFeatureDispatchLeaseRefusal(acquired)}`); return 1; }
   try {
-    const git = makeGitRunner(worktree);
+    const git = deps.git ?? makeGitRunner(worktree);
     if (command.decision !== undefined) {
       if (!await hasDurableChildState(worktree, command.slug, { git })) { print('stack restack-resolve: refused — feature is not stacked'); return 1; }
       const stored = await readConflictRecord(worktree, command.slug, { git });
@@ -92,7 +94,9 @@ export async function dispatchStackRestackResolve(command: { slug: string; child
       if (!operator?.trim()) { print('stack restack-resolve: refused — no approved operator identity is available'); return 1; }
       const recorded = await recordAnswer(worktree, command.slug, { kind: 'decision', decision: { child, oldParent: stored.record.oldParent, oldTip: stored.record.oldTip, commit: stored.record.commit, paths: stored.record.paths, answer: command.decision, operator: operator.trim() } }, { git });
       if (recorded.kind !== 'updated') { print('stack restack-resolve: refused — could not record decision'); return 1; }
-      try { await appendRecordedResolution(worktree, { type: 'restack_decision', opId: stored.record.opId, child, action: 'recorded', commit: stored.record.commit, paths: [...stored.record.paths], operator: operator.trim() }, deps.appendEvent); }
+      const eventOperator = await (deps.resolveOperator ?? resolveMachineOperatorIdentity)(root);
+      if (!eventOperator?.trim()) { print('stack restack-resolve: recorded but could not resolve operator identity: no approved operator identity is available'); return 1; }
+      try { await appendRecordedResolution(worktree, { type: 'restack_decision', opId: stored.record.opId, child, action: 'recorded', commit: stored.record.commit, paths: [...stored.record.paths], operator: eventOperator.trim() }, deps.appendEvent); }
       catch (error) { print(`stack restack-resolve: recorded but could not append decision event: ${String(error)}`); return 1; }
       try { await (deps.clearHalt ?? clearHaltAtomically)(worktree); }
       catch (error) { print(`stack restack-resolve: recorded but could not clear HALT: ${String(error)}`); return 1; }

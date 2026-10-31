@@ -27,7 +27,13 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { replayChildRange, RemBlockBodyMismatchError } from './restack-replay.js';
-import { consumeRecordedResolution } from './restack-conflict-record.js';
+import {
+  consumeRecordedResolution,
+  decisionMatchesRange,
+  decisionRefFor,
+  readConflictRecord,
+  readRestackDecision,
+} from './restack-conflict-record.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
@@ -507,7 +513,7 @@ async function resumePlanned(
       parent = adopted;
       continue;
     }
-    if (current.journal.cause === 'feature-repair') {
+    {
       const recorded = await consumeRecordedResolution({
         slug: current.slug, range, parent, committer: current.journal.committer, git,
         replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
@@ -555,6 +561,37 @@ async function resumePlanned(
       if (!conflict) throw error;
       const merge = await mergeInRange(git, range);
       if (merge) return { kind: 'flatten-refused', journal: current, range, merge };
+      const recordedDecision = await readRestackDecision(worktree, current.slug, range.child, { git });
+      const deliveredDecision = recordedDecision.kind === 'decision' && decisionMatchesRange(recordedDecision.decision, range)
+        ? recordedDecision
+        : undefined;
+      const decisionDiagnostic = recordedDecision.kind === 'unreadable'
+        ? `unreadable operator decision at ${decisionRefFor(current.slug, range.child)}`
+        : recordedDecision.kind === 'decision'
+          ? `stale operator decision: ${recordedDecision.decision.answer}`
+          : undefined;
+      if (recordedDecision.kind === 'decision' && deliveredDecision === undefined) {
+        await options.events?.emit({
+          type: 'restack_decision', action: 'stale', child: range.child,
+          commit: recordedDecision.decision.commit, paths: [...recordedDecision.decision.paths], opId: current.journal.opId,
+        });
+      }
+      const conflictRecord = deliveredDecision === undefined
+        ? undefined
+        : await readConflictRecord(worktree, current.slug, { git });
+      const conflictParent = deliveredDecision === undefined
+        ? undefined
+        : await runGit(git, ['rev-parse', '-q', '--verify', `refs/conductor/${current.slug}/restack/conflict/parent`]);
+      const deliveredConflict = conflictRecord?.kind === 'record' && conflictParent?.exitCode === 0
+        ? parseCommitSha(conflictParent.stdout.trim())
+        : undefined;
+      if (deliveredDecision !== undefined && (!deliveredConflict || conflictRecord?.kind !== 'record')) return { kind: 'unavailable' };
+      if (deliveredDecision !== undefined) {
+        await options.events?.emit({
+          type: 'restack_decision', action: 'applied', child: range.child,
+          commit: deliveredDecision.decision.commit, paths: [...deliveredDecision.decision.paths], opId: current.journal.opId,
+        });
+      }
       const resolution = await resolveRestackConflict({
         worktree,
         range,
@@ -564,6 +601,13 @@ async function resumePlanned(
         haltRecordSlug: current.slug,
         resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
         cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
+        ...(deliveredDecision === undefined ? {} : {
+          operatorDecision: {
+            answer: deliveredDecision.decision.answer,
+            commit: deliveredDecision.decision.commit,
+            paths: deliveredDecision.decision.paths,
+          },
+        }),
         git,
       });
       if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
@@ -575,7 +619,11 @@ async function resumePlanned(
           candidateSubjects: await replayCandidateSubjects(git, resolution.candidates),
           commit: conflict.commit,
           paths: conflict.paths,
-          ...('reason' in resolution.outcome ? { detail: resolution.outcome.reason } : {}),
+          detail: [
+            ...(deliveredDecision === undefined ? [] : [`operator decision applied: ${deliveredDecision.decision.answer}`]),
+            ...(decisionDiagnostic === undefined ? [] : [decisionDiagnostic]),
+            ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
+          ].join('\n') || undefined,
         };
       }
       const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
@@ -590,7 +638,12 @@ async function resumePlanned(
         'resolved',
         resolution.tip,
         resolution.rewrites,
-        { git },
+        {
+          git,
+          ...(deliveredDecision === undefined ? {} : { deliveredDecision: {
+            child: range.child, blob: deliveredDecision.blob, record: conflictRecord!.blob, parent: deliveredConflict!,
+          } }),
+        },
       );
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
       current = updated.journal;

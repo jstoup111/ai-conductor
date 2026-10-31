@@ -1,4 +1,4 @@
-// Covers: task:10, task:13
+// Covers: task:10, task:13, task:15
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -89,6 +89,69 @@ async function childThreeConflictFixture() {
 }
 
 describe('restack decision delivery (real local Git)', () => {
+  // Covers: task:15
+  it('preserves the pre-decision conflict hand-off when no decision or resolution is recorded', async () => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'no decision supplied' }));
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
+      .resolves.toMatchObject({ kind: 'halted' });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(resolver.mock.calls[0]![0]).not.toHaveProperty('operatorDecision');
+    const conflict = await readConflictRecord(subject.repo, 'demo', { git: subject.git });
+    if (conflict.kind !== 'record') throw new Error('expected recorded conflict');
+    const halt = await readFile(join(subject.repo, '.pipeline/HALT'), 'utf8');
+    const preDecisionConflictHalt = [
+      `restack conflict child ${child}`,
+      `commit ${conflict.record.commit}; paths: ${conflict.record.paths.join(', ')}`,
+      'no decision supplied',
+      `Restack-Conflict: ${child} ${conflict.record.opId}`,
+      `git switch -c restack-resolve/demo/c${child} ${conflict.record.oldTip}`,
+      `git rebase --onto ${conflict.record.newParent} ${conflict.record.oldParent}`,
+      `ai-conductor stack restack-resolve --slug demo --child ${child} --tip <sha>`,
+    ].join('\n');
+    expect(halt).toBe(`${preDecisionConflictHalt}\nai-conductor stack restack-resolve --slug demo --child ${child} --decision "<answer>"\n`);
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+    expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
+  });
+
+  // Covers: task:15
+  it('keeps the applied refs, journal lifecycle, and events on the pre-decision path', async () => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const resolver = vi.fn(async ({ projectRoot, environment }) => {
+      await writeFile(join(projectRoot, 'two.txt'), 'two\nrouted\n');
+      const local = makeGitRunner(projectRoot);
+      await local(['add', 'two.txt'], { env: environment });
+      await local(['rebase', '--continue'], { env: environment });
+      return { resolved: true as const };
+    });
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
+      .resolves.toEqual({ kind: 'restacked' });
+
+    expect(resolver.mock.calls[0]![0]).not.toHaveProperty('operatorDecision');
+    const appliedRefs = (await subject.git(['for-each-ref', '--format=%(refname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/']))
+      .stdout.trim().split('\n').filter(Boolean);
+    expect(appliedRefs).toEqual([
+      'refs/conductor/demo/closed/c1',
+      'refs/conductor/demo/closed/c2',
+      'refs/heads/feat/c1/demo',
+      'refs/heads/feat/c2/demo',
+      'refs/heads/feat/daemon-demo',
+    ]);
+    await expect(readRestackJournal(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'missing' });
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+    expect(eventLines.map((event: { type: string }) => event.type)).toEqual(['restack_planned', 'restack_applied']);
+    expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
+  });
+
   it('delivers a matching decision, journals it, then deletes it only with the applied move', async () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();
@@ -157,6 +220,55 @@ describe('restack decision delivery (real local Git)', () => {
       .resolves.toMatchObject({ stdout: featureRefs.stdout });
     await expect(subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/closed/']))
       .resolves.toMatchObject({ stdout: closedRefs.stdout });
+  });
+
+  // Covers: task:14
+  it('reports a stale decision without delivering it to the resolver', async () => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
+    persister.start();
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events,
+      resolver: async () => ({ resolved: false as const, reason: 'initial operator choice' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const conflict = await readConflictRecord(subject.repo, 'demo', { git: subject.git });
+    if (conflict.kind !== 'record') throw new Error('expected initial conflict record');
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision: {
+      child, oldParent: conflict.record.oldParent, oldTip: subject.closedOne,
+      commit: conflict.record.commit, paths: conflict.record.paths,
+      answer: "keep upstream's resolveReviewScope seam", operator: 'operator@example.test',
+    } }, { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'resolver needs a current answer' }));
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
+      .resolves.toMatchObject({ kind: 'halted' });
+
+    expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
+    const halt = await readFile(join(subject.repo, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain("stale operator decision: keep upstream's resolveReviewScope seam");
+    expect(halt).toContain('--tip <sha>');
+    expect(halt).toContain('--decision "<answer>"');
+    const eventsWritten = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    expect(eventsWritten).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'stale', child }));
+  });
+
+  // Covers: task:14
+  it('reports an unreadable decision without delivering it to the resolver', async () => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events,
+      resolver: async () => ({ resolved: false as const, reason: 'initial operator choice' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const malformed = (await subject.git(['hash-object', '-w', '--stdin'], { input: '{not json' })).stdout.trim();
+    await subject.git(['update-ref', 'refs/conductor/demo/restack/decision/c2', malformed]);
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'resolver needs a readable answer' }));
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
+      .resolves.toMatchObject({ kind: 'halted' });
+
+    expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
+    await expect(readFile(join(subject.repo, '.pipeline/HALT'), 'utf8'))
+      .resolves.toContain('unreadable operator decision at refs/conductor/demo/restack/decision/c2');
   });
 
   // Covers: task:13
