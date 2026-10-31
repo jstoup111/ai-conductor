@@ -258,6 +258,7 @@ describe('remediation projection', () => {
   });
 
   // Covers: task:3
+  // Covers: task:rem-prd-audit-rem-vg-undeclared-repair-needs-human
   it('fails closed for an undeclared repair task or unreadable as-built case store', async () => {
     const undeclared = await fixture();
     await Promise.all([writeAsBuiltVerdict(undeclared), writeAsBuiltCases(undeclared)]);

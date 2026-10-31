@@ -7327,6 +7327,7 @@ describe('engine/conductor', () => {
       };
     }
 
+    // Covers: task:rem-prd-audit-rem-vg-undeclared-repair-needs-human
     it('dispatches an empty prior-case list, but halts needs-human before dispatch for every prior-case preparation fault', async () => {
       const empty = await runBlockedAsBuilt();
       expect(empty.remediateRequests).toHaveLength(1);
