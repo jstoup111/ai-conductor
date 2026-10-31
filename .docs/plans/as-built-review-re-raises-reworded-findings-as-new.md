@@ -521,3 +521,13 @@ Task 1 ─┬─> Task 2 ──────────────────�
 **Done when:**
 - adr-2026-10-28-as-built-finding-reconciliation decision 6 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg-mixed-halt-exclude-unadmitted-bindings is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-55e7747c-1e45-46e1-a4b6-a942a2da25c5: conductor.ts planRemediation append-budget catch (~4970-4975): revert haltClass from 'mechanical' to base 'needs-human' for an unreadable kickback ledger; in test/prd-audit-kickback.test.ts 'does not append or record cap evidence when the participating gate ledger entry is unreadable' (~3011-3016) restore the expectation haltClass 'needs-human'; change nothing else
+**Gate:** prd-audit
+**Rationale:** Removal-only rework of refused behavior (verified by reading the tree): src/conductor/src/engine/conductor.ts:4970-4975, the catch around the prd_audit/architecture_review_as_built append-budget read, still returns haltClass 'mechanical' for an unreadable kickback ledger. test/prd-audit-kickback.test.ts:3014 still expects 'mechanical' for "kickback ledger gate 'prd_audit' is unreadable". Per the recorded decision, reverting both lines to base 'needs-human' removes the refused flip and adds no behavior. Leave the whole-ledger-unreadable expectation near :3036 and conductor-kickback-ledger.test.ts unchanged; they are already back at base.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 55e7747c-1e45-46e1-a4b6-a942a2da25c5 r2)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 55e7747c-1e45-46e1-a4b6-a942a2da25c5 r2) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-55e7747c-1e45-46e1-a4b6-a942a2da25c5 is committed and its targeted tests pass.
