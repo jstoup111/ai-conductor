@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"},\"request_id\":\"req_011CgUU8ag6NK3M6kEMhoWvU\"}"}}
+{"type":"agent_end"}

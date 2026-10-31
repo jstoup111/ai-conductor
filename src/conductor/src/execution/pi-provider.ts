@@ -134,6 +134,24 @@ export async function resolvePiSkill(
 export const PI_MODEL_UNAVAILABLE_RE =
   /^Error: Model "[^"\r\n]+" not found\. Use --list-models to see available models\.$/;
 
+export const PI_FAILURE_SIGNATURES = Object.freeze([
+  { kind: 'auth', state: 'missing', pattern: /^No API key found for /m },
+  { kind: 'auth', state: 'missing', pattern: /^No API key for provider: /m },
+  { kind: 'auth', state: 'unusable', pattern: /^Authentication failed for "/m },
+  { kind: 'auth', state: 'unusable', pattern: /^OAuth refresh failed for /m },
+  { kind: 'auth', state: 'unusable', pattern: /^401(?:: | )/m },
+  { kind: 'limit', pattern: /^429(?:: | )/m },
+] as const);
+
+export const PI_QUOTA_VOCABULARY_RE = /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing|subscription_sharing_usage_limit_exceeded/i;
+
+function classifyPiFailure(text: string): 'usage-exhausted' | 'rate-limited' | { auth: 'missing' | 'unusable' } | undefined {
+  const limit = PI_FAILURE_SIGNATURES.find((signature) => signature.kind === 'limit');
+  if (limit?.pattern.test(text)) return PI_QUOTA_VOCABULARY_RE.test(text) ? 'usage-exhausted' : 'rate-limited';
+  const auth = PI_FAILURE_SIGNATURES.find((signature) => signature.kind === 'auth' && signature.pattern.test(text));
+  return auth?.kind === 'auth' ? { auth: auth.state } : undefined;
+}
+
 export type PiModelIdParseFailureReason =
   | 'missing-separator'
   | 'empty-provider'
@@ -729,6 +747,26 @@ export class PiProvider implements LLMProvider {
         gitGuardInstalled: guardDir !== null,
       };
     }
+    const classifiedText = exitCode === 0 && parsed.terminalAssistantStopReason === 'error'
+      ? parsed.terminalAssistantErrorMessage ?? ''
+      : exitCode !== 0 ? stderr : '';
+    const classification = classifyPiFailure(classifiedText);
+    if (classification !== undefined) {
+      const common = { success: false as const, exitCode, ...failedUsage, gitGuardInstalled: guardDir !== null };
+      if (classification === 'usage-exhausted') return {
+        ...common, output: `${piDisplayName()} upstream provider usage is exhausted.`,
+        rateLimited: true, usageExhausted: true, waitSeconds: 3600,
+      };
+      if (classification === 'rate-limited') return {
+        ...common, output: `${piDisplayName()} request was rate-limited by its upstream provider.`, rateLimited: true,
+      };
+      return {
+        ...common,
+        output: `${piDisplayName()} authentication failed: the upstream provider credential is missing or was rejected.`,
+        authFailure: true,
+        authentication: { provider: 'pi', source: 'cached-login', state: classification.auth },
+      };
+    }
     if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
       return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1, ...failedUsage, gitGuardInstalled: guardDir !== null };
     }
@@ -744,8 +782,6 @@ export class PiProvider implements LLMProvider {
     }
 
     const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
-    // Pi authentication and rate-limit diagnostics do not have a verified,
-    // stable signature yet, so they deliberately remain ordinary step failures.
     const modelUnavailable = exitCode !== 0 && PI_MODEL_UNAVAILABLE_RE.test(stderr);
     const genericUnclassifiedFailure = exitCode !== 0 && !modelUnavailable;
     if (genericUnclassifiedFailure) {

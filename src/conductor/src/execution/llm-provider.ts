@@ -42,7 +42,7 @@ export type UnrelatedHealth = 'degraded';
  * output and credential material deliberately have no representation here.
  */
 interface AuthenticationReadinessBase {
-  provider: ProviderWith<'readiness'>['id'];
+  provider: ProviderWith<'readiness'>['id'] | ProviderWith<'credentialFileRecovery'>['id'];
   source: AuthenticationSource;
 }
 
