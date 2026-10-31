@@ -401,7 +401,10 @@ async function projectActiveTasks(
   worktree: string,
   request: RemediationProjectionRequest,
   ownerTaskIds: ReadonlySet<string>,
-): Promise<{ readonly ok: true; readonly tasks: readonly RemediationProjectionTask[] } | { readonly ok: false; readonly detail: string }> {
+): Promise<
+  | { readonly ok: true; readonly tasks: readonly RemediationProjectionTask[] }
+  | { readonly ok: false; readonly detail: string; readonly missingTaskId?: string }
+> {
   if (ownerTaskIds.size === 0) return { ok: true, tasks: [] };
 
   const plan = await readActivePlanText(worktree, request.activePlanPath, request.featureDesc);
@@ -412,7 +415,9 @@ async function projectActiveTasks(
   const tasks: RemediationProjectionTask[] = [];
   for (const id of [...ownerTaskIds].sort((left, right) => left.localeCompare(right))) {
     const title = titles.get(id);
-    if (title === undefined) return { ok: false, detail: `active plan does not declare owning task ${id}` };
+    if (title === undefined) {
+      return { ok: false, detail: `active plan does not declare owning task ${id}`, missingTaskId: id };
+    }
     tasks.push({ id, title, doneWhen: doneWhen.get(id) ?? [] });
   }
   return { ok: true, tasks };
@@ -555,7 +560,18 @@ export async function buildRemediationProjection(
   ]);
   if (pending.kind === 'unreadable') return preparationFault('kickback ledger', pending.reason);
   if (ledger.kind === 'unreadable') return preparationFault('kickback ledger', ledger.reason);
-  if (!taskContext.ok) return preparationFault('active plan', taskContext.detail);
+  if (!taskContext.ok) {
+    // A repair-task id recorded in prior as-built history is operator-owned
+    // context.  Its disappearance is not a generic plan parse failure: the
+    // next repair cannot safely decide whether that prior case was superseded.
+    const isMissingPriorAsBuiltRepair = priorCases !== undefined && priorCases.ok &&
+      taskContext.missingTaskId !== undefined && priorCases.repairTaskIds.has(taskContext.missingTaskId);
+    return preparationFault(
+      'active plan',
+      taskContext.detail,
+      isMissingPriorAsBuiltRepair ? { dimension: 'prior-as-built-cases' } : {},
+    );
+  }
   if (!evidence.ok) {
     return preparationFault(
       request.source === 'build-stall' ? 'build-stall question' : 'finish test failures',

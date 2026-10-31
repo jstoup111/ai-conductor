@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1, task:rem-prd-audit-rem-vg-design-halt-join, task:rem-as-built-rem-vg-design-halt-serial, task:rem-as-built-rem-vg-resolve-on-gate-pass, task:rem-as-built-rem-vg-drain-before-projection, task:rem-as-built-rem-vg-mixed-append-halt
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1, task:rem-prd-audit-rem-vg-design-halt-join, task:rem-as-built-rem-vg-design-halt-serial, task:rem-as-built-rem-vg-resolve-on-gate-pass, task:rem-as-built-rem-vg-drain-before-projection, task:rem-as-built-rem-vg-mixed-append-halt, task:rem-prd-audit-rem-vg-reconciliation-invalid-exhaustion-test, task:rem-prd-audit-rem-vg-unapplied-plan-no-case-test
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm,} from 'fs/promises';
 import { join } from 'path';
@@ -43,6 +43,14 @@ vi.mock('../../src/engine/kickback-ledger.js', async (importOriginal) => {
     ...actual,
     creditKickbackGateLaps: vi.fn(actual.creditKickbackGateLaps),
   };
+});
+vi.mock('../../src/engine/remediation-task-append.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/remediation-task-append.js')>();
+  return { ...actual, appendConductorRemediationTasks: vi.fn(actual.appendConductorRemediationTasks) };
+});
+vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/repair-restage.js')>();
+  return { ...actual, admitAndRestageRepair: vi.fn(actual.admitAndRestageRepair) };
 });
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
@@ -99,6 +107,8 @@ import { validateRemediationPlan, REMEDIATION_PLAN_CONTRACT_VERSION } from '../.
 import { appendRemediationTasks } from '../../src/engine/remediation-append.js';
 import { recordAsBuiltReconciliation } from '../../src/engine/as-built-case-reconciliation.js';
 import * as parkMarker from '../../src/engine/park-marker.js';
+import * as remediationTaskAppend from '../../src/engine/remediation-task-append.js';
+import * as repairRestage from '../../src/engine/repair-restage.js';
 
 import type {
   InvokeOptions,
@@ -2061,6 +2071,120 @@ describe('engine/conductor', () => {
       await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     });
 
+    it('does not create an as-built case or reconciliation event when a remediable serial round exhausts without a plan', async () => {
+      await seedSerialAsBuiltState();
+      const reconciled: unknown[] = [];
+      events.on('as_built_finding_reconciled', (event) => {
+        if (event.type === 'as_built_finding_reconciled') reconciled.push(event);
+      });
+
+      await serialRun({ run: vi.fn(async (step, _state, options) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+        }
+        // Every remediate attempt deliberately leaves no typed plan. The
+        // terminal HALT must not turn an unadmitted repair into case history.
+        return { success: true };
+      }) });
+
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('remediation did not route');
+      await expect(readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(reconciled).toEqual([]);
+    });
+
+    it('keeps rejected reconciliation plans out of as-built history after planner exhaustion', async () => {
+      await seedSerialAsBuiltState();
+      const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+      persister.start();
+      const reconciled: unknown[] = [];
+      events.on('as_built_finding_reconciled', (event) => {
+        if (event.type === 'as_built_finding_reconciled') reconciled.push(event);
+      });
+      let remediateCalls = 0;
+
+      try {
+        await serialRun({ run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+          } else if (step === 'remediate') {
+            remediateCalls += 1;
+            return { success: false, output: 'structured-result-rejected: reconciliation field must name a prior case' };
+          }
+          return { success: true };
+        }) });
+      } finally {
+        persister.stop();
+      }
+
+      expect(remediateCalls).toBe(1);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('reconciliation field');
+      await expect(readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), 'utf8')).resolves.not.toContain('rem-as-built-');
+      expect(reconciled).toEqual([]);
+      const ledger = await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8').catch(() => '');
+      expect(ledger).not.toContain('as_built_finding_reconciled');
+    });
+
+    it.each([
+      ['a rejected plan', async (_options: StepRunOptions | undefined) =>
+        ({ success: false, output: 'structured-result-rejected: reconciliation field must name a prior case' })],
+      ['a missing plan', async (_options: StepRunOptions | undefined) => ({ success: true })],
+      ['a failed append', async (options: StepRunOptions | undefined) => {
+        vi.mocked(remediationTaskAppend.appendConductorRemediationTasks)
+          .mockResolvedValueOnce({ success: false, error: 'fixture append failure' });
+        await persistFixtureProjectedRemediationPlan(dir, options, [
+          { id: '1', disposition: 'build', category: null, rationale: 'Append the guard.', tasks: [{ id: 'guard', title: 'Append the guard' }] },
+        ]);
+        return { success: true };
+      }],
+      ['a failed existing-task admission', async (options: StepRunOptions | undefined) => {
+        vi.mocked(repairRestage.admitAndRestageRepair)
+          .mockResolvedValueOnce({ kind: 'failed', detail: 'fixture restage failure' });
+        await persistFixtureProjectedRemediationPlan(dir, options, [
+          { id: '1', disposition: 'existing-task', category: null, rationale: 'Reuse task one.', tasks: [], boundTaskIds: ['1'], reconciliation: { relation: 'same', priorCaseId: 'seeded-unapplied-case', reason: 'Same finding.' } },
+        ]);
+        return { success: true };
+      }],
+    ])('does not record a case or event for %s', async (_name, remediate) => {
+      await seedSerialAsBuiltState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const seededCase = {
+        id: 'seeded-unapplied-case', domain: 'as_built',
+        sources: [{ findingId: 'prior-unapplied', attemptId: 'prior', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Prior finding.', relation: 'new', reason: 'Previously admitted.' }],
+        status: 'open', repairTaskIds: ['1'], recurrenceCount: 2,
+      };
+      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+        cases: [], prdWideningCases: [], suppressions: [], outbox: [], asBuiltCases: [seededCase],
+      }), 'utf8');
+      const before = await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8');
+      const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+      persister.start();
+      const reconciled: unknown[] = [];
+      events.on('as_built_finding_reconciled', (event) => {
+        if (event.type === 'as_built_finding_reconciled') reconciled.push(event);
+      });
+
+      try {
+        await serialRun({ run: vi.fn(async (step, _state, options) => {
+          if (step === 'architecture_review_as_built') {
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture('Reuse task one.'));
+          } else if (step === 'remediate') {
+            return remediate(options);
+          }
+          return { success: true };
+        }) });
+      } finally {
+        persister.stop();
+      }
+
+      expect(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')).toBe(before);
+      expect(reconciled).toEqual([]);
+      const eventsPath = join(dir, '.pipeline', 'events.jsonl');
+      const ledger = await readFile(eventsPath, 'utf8').catch(() => '');
+      expect(ledger).not.toContain('as_built_finding_reconciled');
+    });
+
     it.each([
       ['APPROVED WITH DRIFT NOTES', { verdict: 'APPROVED WITH DRIFT NOTES' as const, driftNotes: [{ note: 'Documented harmless drift.' }] }],
       ['APPROVED with no pending findings', { verdict: 'APPROVED' as const, driftNotes: [] }],
@@ -2154,6 +2278,59 @@ describe('engine/conductor', () => {
         { findingId: expect.stringMatching(/:1$/), outcome: 'new' },
         { findingId: expect.stringMatching(/:2$/), outcome: 'needs-human' },
       ]);
+    });
+
+    it('does not reconcile an existing-task binding when a sibling halt prevents its admission', async () => {
+      await seedSerialAsBuiltState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const seededBoundCase = {
+        // Keep the store's canonical key order so byte equality proves this
+        // particular record was not reopened or given a new source.
+        id: 'seeded-bound-case', domain: 'as_built',
+        sources: [{
+          findingId: 'prior-bound-finding', attemptId: 'prior', class: 'REMEDIABLE',
+          reference: { kind: 'plan-task', taskId: '1' }, summary: 'Reuse task one.',
+          relation: 'new', reason: 'Previously admitted.',
+        }], status: 'open', repairTaskIds: ['1'], recurrenceCount: 3,
+      };
+      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+        cases: [], prdWideningCases: [], suppressions: [], outbox: [], asBuiltCases: [seededBoundCase],
+      }), 'utf8');
+      const seededSerialization = JSON.stringify(seededBoundCase);
+      const eventsSeen: string[] = [];
+      events.on('as_built_finding_reconciled', (event) => {
+        if (event.type === 'as_built_finding_reconciled') eventsSeen.push(event.findingId);
+      });
+      await serialRun({ run: vi.fn(async (step, _state, options) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, options?.runId, {
+            version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+            findings: [
+              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Reuse task one.' },
+              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Needs a decision.' },
+            ],
+            violations: 'Mixed remediation disposition.', resolution: 'Decide the second finding.',
+          });
+        } else if (step === 'remediate') {
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            {
+              id: '1', disposition: 'existing-task', category: null, rationale: 'Task one owns it.', tasks: [], boundTaskIds: ['1'],
+              reconciliation: { relation: 'same', priorCaseId: 'seeded-bound-case', reason: 'Same prior finding.' },
+            },
+            { id: '2', disposition: 'halt', category: 'architectural-clarity', rationale: 'Decision required.', tasks: [] },
+          ]);
+        }
+        return { success: true };
+      }) });
+
+      const cases = await readAsBuiltCases();
+      expect(cases).toHaveLength(2);
+      expect(JSON.stringify(cases.find((record) => record.repairTaskIds[0] === '1'))).toBe(seededSerialization);
+      expect(cases).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ summary: 'Needs a decision.' })] }),
+      ]));
+      expect(eventsSeen).toEqual([expect.stringMatching(/:2$/)]);
     });
   });
 
@@ -7169,9 +7346,7 @@ describe('engine/conductor', () => {
         () => writeCaseStore(['rem-as-built-missing']),
       );
       expect(undeclaredRepair.remediateRequests).toEqual([]);
-      // The missing task is a plan-context validation fault, not a corrupt or
-      // oversized prior-case payload. It retains the default mechanical class.
-      expect(undeclaredRepair.haltClass).toBe('mechanical');
+      expect(undeclaredRepair.haltClass).toBe('needs-human');
       expect(undeclaredRepair.halt).toContain('rem-as-built-missing');
 
       const unreadable = await runBlockedAsBuilt(async () => {
