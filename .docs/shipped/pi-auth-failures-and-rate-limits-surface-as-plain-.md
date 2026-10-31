@@ -4,6 +4,13 @@ spec_hash: caa6771a873f9f01f34fdd61adb0c11a69bff9a0f9d34face60778488128017b
 pr: https://github.com/jstoup111/ai-conductor/pull/3532
 shipped: 2026-10-31
 engine_version: 20261031T092626Z-5ecd86e21e59
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "No plan task covers these two unrelated test files. They de-flake pre-existing tests: one race and one probabilistic UUID match. Production behavior is unchanged and nothing is user-visible."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
