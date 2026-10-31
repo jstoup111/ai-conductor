@@ -2992,6 +2992,9 @@ export class DefaultStepRunner implements StepRunner {
       'captured source intent and upstream intent before continuing. At the first semantic ' +
       'ambiguity, HALT this attempt and return a false result with the missing decision; ' +
       'do not replace that workflow with a condensed procedure.\n' +
+      (ctx.operatorDecision
+        ? `Operator decision for commit ${ctx.operatorDecision.commit} on ${ctx.operatorDecision.paths.join(', ')}: ${ctx.operatorDecision.answer}. Apply this decision; do not escalate the same question again.\n`
+        : '') +
       (ctx.supersessionJudgement
         ? 'Sweep Test-Only Judgement is in force. A successful final JSON must include verdict: { choice: "superseded" | "merged" | "source", rationale: string, superseded: string[] }.\n'
         : '') +

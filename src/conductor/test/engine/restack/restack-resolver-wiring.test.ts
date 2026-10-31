@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-R14
+// Covers: task:9
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -10,6 +10,13 @@ async function source(path: string): Promise<string> {
 }
 
 describe('restack resolver production wiring', () => {
+  it('passes an operator decision through the restack resolver context', async () => {
+    const resolver = await source('restack/restack-resolver.ts');
+
+    expect(resolver).toContain('readonly operatorDecision?: { answer: string; commit: string; paths: readonly string[] }');
+    expect(resolver).toContain('options.resolver({ ...context, environment, operatorDecision: options.operatorDecision })');
+  });
+
   it('forwards the provider resolver and configured cap through every replay entry point', async () => {
     const [executor, conductor, rekick, preflight, recovery, routedExit] = await Promise.all([
       source('restack/restack-executor.ts'),
