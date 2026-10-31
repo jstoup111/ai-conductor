@@ -41,6 +41,7 @@ import {
 } from './restack-executor.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
+import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { routedRoundOpen } from '../routing/round-admission.js';
@@ -347,11 +348,16 @@ async function unenteredLeafOwner(
   git: GitRunner,
 ): Promise<{ readonly child: ChildId; readonly rewritten: CommitSha } | undefined> {
   if (range.kind !== 'leaf-unentered') return undefined;
-  const rewrittenMatches = journal.journal.children.flatMap((entry) => {
-    if (entry.child === range.child) return [];
-    const rewritten = entry.rewrites?.find((rewrite) => rewrite.from === range.oldTip)?.to;
-    return rewritten === undefined ? [] : [{ child: entry.child, rewritten }];
-  });
+  const exactRewrites = new Map(journal.journal.children
+    .filter((entry) => entry.child !== range.child)
+    .map((entry) => [entry.child, new Map(entry.rewrites?.map(({ from, to }) => [from, to]))] as const));
+  const consumed = journal.journal.consumedResolution;
+  const consumedRange = consumed === undefined ? undefined : journal.journal.ranges.find((candidate) => candidate.child === consumed.child);
+  const consumedTip = consumedRange === undefined ? undefined : await resolveSha(git, stagingRefFor(journal.slug, consumedRange.child));
+  const correspondences: readonly ConsumedTipCorrespondence[] = consumedRange === undefined || consumedTip === undefined || consumed === undefined
+    ? []
+    : [{ child: consumedRange.child, oldParent: consumedRange.oldParent, oldTip: consumedRange.oldTip, newParent: consumed.parent, tip: consumedTip }];
+  const rewrittenMatches = (await resolveUnenteredLeafOwner(git, range.oldTip, exactRewrites, correspondences)).matches;
   if (rewrittenMatches.length > 0) return rewrittenMatches.length === 1 ? rewrittenMatches[0] : undefined;
   if (journal.journal.cause !== 'feature-repair') return undefined;
   // Every child through the highest origin is adopted unchanged, whether or
