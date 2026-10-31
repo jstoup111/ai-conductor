@@ -378,3 +378,35 @@ Task 1 → Task 2 → Task 3 → Task 4 ─┐
 - [ ] No terminal catch-all validation task.
 - [ ] Dependencies are explicit and acyclic.
 - [ ] Task 7 rewrites only expectations that the D2 amendment supersedes; Task 3 and Task 6 rewrite the tests asserting the replaced upper-child and whole-conflict rules.
+
+### Task rem-as-built-R1: src/conductor/src/engine/restack/restack-ownership.ts + halt-record-bookkeeping.ts: export ownedPaths unchanged and compute rangeTouchedRecord in carryNewestHaltRecord from ownedPaths (honoring q-carried merge exclusions) instead of the raw range diff in rangeTouchesPath
+**Gate:** as-built
+**Rationale:** Verified (95%): halt-record-bookkeeping.ts rangeTouchesPath uses a raw `git diff oldParent oldTip`, but the approved plan Task 2 step 3 explicitly requires exporting `ownedPaths` from restack-ownership.ts unchanged and using it for rangeTouchedRecord, and Task 2's done-when names the q-carried-merge case (record arrives only via a q-carried merge, parent record older => added false, checkPathOwnership accepted). Approved ADR D2 stays authoritative; this is conforming implementation drift admitted by Task 2, so BUILD, not architecture_review.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: src/conductor/test/engine/restack/halt-record-bookkeeping.realgit.test.ts: add the Task 2 real-git case where the record changes only via a q-carried merge and the new parent's record is older — assert added false, tip keeps the parent's record, and checkPathOwnership returns accepted (RED before R1)
+**Gate:** as-built
+**Rationale:** Verified (95%): halt-record-bookkeeping.ts rangeTouchesPath uses a raw `git diff oldParent oldTip`, but the approved plan Task 2 step 3 explicitly requires exporting `ownedPaths` from restack-ownership.ts unchanged and using it for rangeTouchedRecord, and Task 2's done-when names the q-carried-merge case (record arrives only via a q-carried merge, parent record older => added false, checkPathOwnership accepted). Approved ADR D2 stays authoritative; this is conforming implementation drift admitted by Task 2, so BUILD, not architecture_review.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: src/conductor/src/engine/restack/halt-record-bookkeeping.ts: commit the bookkeeping tip with message exactly `halt record: <slug>\n` (drop withDaemonCoAuthorTrailer and its now-unused import)
+**Gate:** as-built
+**Rationale:** Verified (97%): carryNewestHaltRecord passes `withDaemonCoAuthorTrailer(`halt record: ${slug}\n`)` to commit-tree, while approved plan Task 2's done-when requires the full message (`git log -1 --format=%B`) be exactly `halt record: demo` with no trailer, matching ADR D2's exact-subject requirement so the bookkeeping commit SHA is reproducible from the journal stamp. Clear implementation drift admitted by Task 2; BUILD.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: src/conductor/test/engine/restack/halt-record-bookkeeping.realgit.test.ts: assert the full `%B` message equals `halt record: demo` with no trailer even when a daemon bot co-author identity resolves, and that two runs with the same stamp produce the same commit SHA (RED before R3)
+**Gate:** as-built
+**Rationale:** Verified (97%): carryNewestHaltRecord passes `withDaemonCoAuthorTrailer(`halt record: ${slug}\n`)` to commit-tree, while approved plan Task 2's done-when requires the full message (`git log -1 --format=%B`) be exactly `halt record: demo` with no trailer, matching ADR D2's exact-subject requirement so the bookkeeping commit SHA is reproducible from the journal stamp. Clear implementation drift admitted by Task 2; BUILD.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.

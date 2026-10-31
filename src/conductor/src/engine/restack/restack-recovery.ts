@@ -42,6 +42,7 @@ import {
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
+import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { routedRoundOpen } from '../routing/round-admission.js';
@@ -441,14 +442,15 @@ interface ReplayConflict {
 }
 
 /** Match executor conflict diagnosis before handing the exact range to the resolver. */
-async function replayConflict(git: GitRunner, error: unknown): Promise<ReplayConflict | undefined> {
+async function replayConflict(git: GitRunner, slug: string, error: unknown): Promise<ReplayConflict | undefined> {
   const message = error instanceof Error ? error.message : String(error);
   const matched = /^merge-tree failed for ([0-9a-f]{40}|[0-9a-f]{64}):/m.exec(message);
   const commit = matched === null ? undefined : parseCommitSha(matched[1]!);
   if (!commit) return undefined;
   const changed = await runGit(git, ['diff', '--no-renames', '--name-only', `${commit}^`, commit]);
   if (changed?.exitCode !== 0) throw new Error(`cannot determine conflicted paths for ${commit}`);
-  const paths = [...new Set((changed?.stdout ?? '').split('\n').map((path) => path.trim()).filter(Boolean))]
+  const haltRecordPath = haltRecordPathFor(slug);
+  const paths = [...new Set((changed?.stdout ?? '').split('\n').map((path) => path.trim()).filter((path) => path && path !== haltRecordPath))]
     .sort((left, right) => left.localeCompare(right));
   return { commit, paths };
 }
@@ -537,6 +539,7 @@ async function resumePlanned(
       replay = await replayChildRange(range, parent, current.journal.committer, git, {
         comparisonCommits: current.journal.comparisonCommits,
         appendOnlyRemUnion: current.journal.routed !== undefined,
+        haltRecordSlug: current.slug,
       });
     } catch (error) {
       if (error instanceof RemBlockBodyMismatchError) {
@@ -548,7 +551,7 @@ async function resumePlanned(
           commit: error.commit, paths: [error.path], detail: `remediation block body mismatch: ${error.remId}`,
         };
       }
-      const conflict = await replayConflict(git, error);
+      const conflict = await replayConflict(git, current.slug, error);
       if (!conflict) throw error;
       const merge = await mergeInRange(git, range);
       if (merge) return { kind: 'flatten-refused', journal: current, range, merge };
@@ -558,6 +561,7 @@ async function resumePlanned(
         newParent: parent,
         stamp: current.journal.committer,
         comparisonCommits: current.journal.comparisonCommits,
+        haltRecordSlug: current.slug,
         resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
         cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
         git,

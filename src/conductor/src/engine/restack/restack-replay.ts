@@ -5,6 +5,7 @@ import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 import { unionRemBlocks } from '../routing/rem-block-merge.js';
+import { carryNewestHaltRecord, haltRecordPathFor, haltRecordTree, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
 
 /** A deterministic append-only plan conflict that must halt without an LLM resolver. */
 export class RemBlockBodyMismatchError extends Error {
@@ -38,6 +39,10 @@ export interface ReplayChildRangeOptions {
   readonly comparisonCommits?: readonly CommitSha[];
   /** The append-only plan union is reserved for a journalled routed repair. */
   readonly appendOnlyRemUnion?: boolean;
+  /** Omit and pin this feature's halt record while replaying ordinary commits. */
+  readonly haltRecordSlug?: string;
+  /** Whether the range owns this feature's halt record after carried-merge normalization. */
+  readonly haltRecordOwned?: boolean;
 }
 
 interface AuthorIdentity {
@@ -126,33 +131,17 @@ function isHaltRecordPath(path: string): boolean {
   return /^\.docs\/halted\/[^/]+\.md$/.test(path);
 }
 
-async function upperChildHaltRecordTree(
+async function pinnedHaltRecordTree(
   git: GitRunner,
   mergeTreeOutput: string,
   commit: CommitSha,
+  source: CommitSha,
   path: string,
 ): Promise<CommitSha> {
   const mergedTree = requiredSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
-  const upper = await git(['ls-tree', commit, '--', path]);
-  if (upper.exitCode !== 0) throw new Error(`could not read halt record from ${commit}: ${upper.stderr}`);
-  const entry = upper.stdout.trim();
-  const match = entry.match(/^(\d+)\s+(blob)\s+([0-9a-f]{40,64})\t/);
-  const indexDirectory = await mkdtemp(join(tmpdir(), 'restack-halt-record-index-'));
-  const indexPath = join(indexDirectory, 'index');
-  const env = { GIT_INDEX_FILE: indexPath };
-  try {
-    const read = await git(['read-tree', mergedTree], { env });
-    if (read.exitCode !== 0) throw new Error(`could not load merged tree for ${commit}: ${read.stderr}`);
-    const update = match
-      ? await git(['update-index', '--add', '--cacheinfo', `${match[1]},${match[3]},${path}`], { env })
-      : await git(['update-index', '--force-remove', path], { env });
-    if (update.exitCode !== 0) throw new Error(`could not select upper halt record from ${commit}: ${update.stderr}`);
-    const written = await git(['write-tree'], { env });
-    if (written.exitCode !== 0) throw new Error(`could not write halt-record tree for ${commit}: ${written.stderr}`);
-    return requiredSha(written.stdout, `halt-record tree for ${commit}`);
-  } finally {
-    await rm(indexDirectory, { recursive: true, force: true });
-  }
+  const record = await haltRecordTree(git, source, path, { kind: 'read' });
+  const tree = await haltRecordTree(git, mergedTree, path, { kind: 'write', record });
+  return requiredSha(tree, `halt-record tree for ${commit}`);
 }
 
 async function textAt(git: GitRunner, revision: string, path: string): Promise<string | undefined> {
@@ -228,6 +217,7 @@ export async function replayChildRange(
   let accumulator = newParent;
 
   for (const commit of await commitsInFirstParentRange(git, range)) {
+    if (options.haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, options.haltRecordSlug, git)) continue;
     // Only patches newly introduced by this operation are already carried.
     // A matching patch in the stack itself (for example a child re-applying a
     // reverted parent change) must remain part of that child's history.
@@ -258,14 +248,17 @@ export async function replayChildRange(
       messageOf(git, commit),
     ]);
     const paths = merged.exitCode === 1 ? conflictPaths(merged.stdout, merged.stderr) : [];
+    const haltPath = options.haltRecordSlug === undefined ? undefined : haltRecordPathFor(options.haltRecordSlug);
+    const pinsHaltRecord = paths.length === 1 && isHaltRecordPath(paths[0]!);
+    const pinSource = paths[0] === haltPath ? accumulator : commit;
     const remUnionTree = options.appendOnlyRemUnion === true && merged.exitCode === 1 && paths.length === 1
       ? await unionPlanConflictTree(git, merged.stdout, commit, accumulator, paths[0]!)
       : undefined;
-    if (merged.exitCode !== 0 && !(merged.exitCode === 1 && (remUnionTree !== undefined || (paths.length === 1 && isHaltRecordPath(paths[0]!))))) {
+    if (merged.exitCode !== 0 && !(merged.exitCode === 1 && (remUnionTree !== undefined || pinsHaltRecord))) {
       throw new Error(`merge-tree failed for ${commit}: ${merged.stderr}`);
     }
-    const mergedTree = remUnionTree ?? (paths.length === 1 && isHaltRecordPath(paths[0]!)
-      ? await upperChildHaltRecordTree(git, merged.stdout, commit, paths[0]!)
+    const mergedTree = remUnionTree ?? (pinsHaltRecord
+      ? await pinnedHaltRecordTree(git, merged.stdout, commit, pinSource, paths[0]!)
       : requiredSha(merged.stdout, `merge-tree for ${commit}`));
 
     // Rebase drops a newly-empty patch, but evidence commits that began empty
@@ -285,6 +278,12 @@ export async function replayChildRange(
     const rewritten = requiredSha(result.stdout, `commit-tree for ${commit}`);
     rewrites.set(commit, rewritten);
     accumulator = rewritten;
+  }
+
+  if (options.haltRecordSlug !== undefined) {
+    const carried = await carryNewestHaltRecord(range, newParent, options.haltRecordSlug, accumulator, stamp, options.haltRecordOwned, git);
+    accumulator = carried.tip;
+    await mapOmittedHaltRecordCommits(range, options.haltRecordSlug, newParent, accumulator, rewrites, git);
   }
 
   return {

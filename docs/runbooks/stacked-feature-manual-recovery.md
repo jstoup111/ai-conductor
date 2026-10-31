@@ -323,7 +323,24 @@ current, clear the HALT and the next resume tries the resolver.
 [A stacked restack halted](stalled-or-stuck-feature.md#a-stacked-restack-halted), then clear.
 
 **Halt-record-only commits.** The engine commits `.docs/halted/<slug>.md` on the checked-out child
-branch at every halt. A later restack replays those commits onto a branch carrying a newer record:
+branch at every halt. Current engines treat that record as bookkeeping during a restack, on both the
+plumbing replay and the `git rebase` resolver fallback:
+
+- A non-merge commit whose only changed path is the feature's halt record is not replayed and
+  never reaches the resolver. Its rewrite entry points at the nearest earlier rewritten commit (or
+  the new parent), or at the final tip when no later commit was rewritten, so an unentered leaf
+  still moves.
+- The rebuilt tip keeps the newer record. The child's record wins only when the child owns the
+  path and its `Resolved at:` (or `Halted at:`) time is strictly later than the new parent's;
+  ties and unparseable times keep the parent's record.
+- When the replayed tip's record differs from the winner, the engine appends one commit whose
+  message is exactly `halt record: <slug>`, stamped with the journal's committer identity so a
+  recovered replay reproduces the same SHA.
+
+A `halt record: <slug>` commit in a rebuilt child's history is expected; do not remove it.
+
+**Older engines.** Before #3451, a restack replayed those commits onto a branch carrying a newer
+record and escalated:
 
 ```text
 replay commit <sha>; .docs/halted/<slug>.md whole record (...); ... Keeping upstream empties these
@@ -332,9 +349,10 @@ content absent'. ... Missing decision: whether halt-record-only replay commits s
 verbatim (overwriting the newer upstream record) or treated as superseded
 ```
 
-Tracked as [#3451](https://github.com/jstoup111/ai-conductor/issues/3451). The halt record is
-engine bookkeeping, so the fix is to make the upstream child's copy match what the downstream
-child's commits were made against. Then the replay applies cleanly and no commit empties.
+Fixed by [#3451](https://github.com/jstoup111/ai-conductor/issues/3451). Once a fixed engine is
+current, clear the HALT and the next restack handles the record. Only if you must recover on an
+older engine, make the upstream child's copy match what the downstream child's commits were made
+against. Then the replay applies cleanly and no commit empties.
 
 Terms: child **K** carries the newer halt records, child **K+1** is the downstream child being
 replayed, and `<oldParent>` is the K+1 base the restack replays from. That is the K closure tip
