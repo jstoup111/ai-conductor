@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { installDaemonBotCoAuthor } from '../../../src/engine/bot-co-author.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import {
@@ -24,6 +25,7 @@ const stamp: CommitterStamp = {
 };
 
 afterEach(async () => {
+  installDaemonBotCoAuthor(undefined);
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
 });
 
@@ -91,18 +93,26 @@ describe('halt-record bookkeeping (real local Git)', () => {
     await expect(isHaltRecordOnlyCommit(merge, 'demo', subject.runner)).resolves.toBe(false);
   });
 
-  it('adds one stamped, trailer-free commit carrying the newer range record', async () => {
+  it('adds one stamped, reproducible, trailer-free commit carrying the newer range record despite a daemon bot identity', async () => {
     const subject = await fixture();
     await subject.git(['checkout', '-qb', 'range']);
     const oldParent = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
     const oldTip = await subject.commit('newer halt', { '.docs/halted/demo.md': 'Halted at: 2031-01-01T00:00:00.000Z\n' });
     await subject.git(['checkout', '-qb', 'parent', subject.base]);
     const newParent = await subject.commit('older halt', { '.docs/halted/demo.md': 'Halted at: 2030-01-01T00:00:00.000Z\n' });
+    const trailer = 'Co-authored-by: conductor-bot <4242+conductor-bot@users.noreply.github.com>';
+    installDaemonBotCoAuthor({
+      prepare: async () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
+      current: () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
+    });
     const carried = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
+    const carriedAgain = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
 
     expect(carried.added).toBe(true);
+    expect(carriedAgain).toEqual(carried);
     expect((await subject.git(['rev-parse', `${carried.tip}^`])).stdout.trim()).toBe(newParent);
     expect((await subject.git(['log', '-1', '--format=%B', carried.tip])).stdout).toBe('halt record: demo\n\n');
+    expect((await subject.git(['log', '-1', '--format=%B', carried.tip])).stdout).not.toContain(trailer);
     expect((await subject.git(['show', '-s', '--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI', carried.tip])).stdout.trim())
       .toBe(`${stamp.name}\x00${stamp.email}\x00${stamp.date}\x00${stamp.name}\x00${stamp.email}\x00${stamp.date}`);
     expect((await subject.git(['diff-tree', '--no-commit-id', '--name-only', '-r', carried.tip])).stdout.trim()).toBe('.docs/halted/demo.md');
@@ -150,21 +160,27 @@ describe('halt-record bookkeeping (real local Git)', () => {
     expect(rewrites.get(trailing)).toBe(finalTip);
   });
 
-  it('uses range ownership so a q-carried merge record path does not require a bookkeeping commit', async () => {
+  it('uses range ownership so a q-carried merge record path does not replace an older new-parent record', async () => {
     const subject = await fixture();
     await subject.git(['checkout', '-qb', 'range']);
     const oldParent = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
     await subject.commit('range work', { 'src/a.ts': 'a\n' });
     await subject.git(['checkout', '-qb', 'side', subject.base]);
-    const side = await subject.commit('older parent record', { '.docs/halted/demo.md': 'Halted at: 2030-01-01T00:00:00.000Z\n' });
+    const side = await subject.commit('newer carried record', {
+      '.docs/halted/demo.md': 'Halted at: 2031-01-01T00:00:00.000Z\n',
+    });
     await subject.git(['checkout', '-q', 'range']);
-    await subject.git(['merge', '--no-ff', '-qm', 'automatic carried merge', side]);
+    await subject.git(['merge', '--no-ff', '--no-commit', side]);
+    await subject.write('hand.txt', 'hand resolution\n');
+    await subject.git(['add', '.']);
+    await subject.git(['commit', '-qm', 'q-carried merge with hand resolution']);
     const oldTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
     await subject.git(['checkout', '-qb', 'parent', side]);
-    const newParent = await subject.commit('parent advance', { 'parent.txt': 'parent\n' });
+    const newParent = await subject.commit('older parent record', { '.docs/halted/demo.md': 'Halted at: 2030-01-01T00:00:00.000Z\n' });
     const carried = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
 
     expect(carried).toEqual({ added: false, tip: newParent });
+    await expect(recordAt(subject, carried.tip)).resolves.toBe(await recordAt(subject, newParent));
     await expect(checkPathOwnership(range(oldParent, oldTip), newParent, carried.tip, subject.runner)).resolves.toEqual({ kind: 'accepted' });
   });
 
