@@ -6958,7 +6958,9 @@ describe('engine/conductor', () => {
         () => writeCaseStore(['rem-as-built-missing']),
       );
       expect(undeclaredRepair.remediateRequests).toEqual([]);
-      expect(undeclaredRepair.haltClass).toBe('needs-human');
+      // The missing task is a plan-context validation fault, not a corrupt or
+      // oversized prior-case payload. It retains the default mechanical class.
+      expect(undeclaredRepair.haltClass).toBe('mechanical');
       expect(undeclaredRepair.halt).toContain('rem-as-built-missing');
 
       const unreadable = await runBlockedAsBuilt(async () => {

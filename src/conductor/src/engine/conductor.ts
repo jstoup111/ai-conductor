@@ -4284,7 +4284,12 @@ export class Conductor {
       const bounds = actual === undefined || limit === undefined
         ? ''
         : ` (actual ${actual}, limit ${limit})`;
-      const haltClass = dimension === 'prior-as-built-cases' ? 'needs-human' : 'mechanical';
+      // Only the operator-owned as-built history can require a human decision.
+      // Every other projection input fault is a mechanical validator failure,
+      // including PRD-only ledger and artifact faults.
+      const haltClass = dimension === 'prior-as-built-cases' || source === 'remediation case store'
+        ? 'needs-human'
+        : 'mechanical';
       return this.haltForRemediationValidatorFault(
         state,
         hintSource,
