@@ -9,6 +9,7 @@ import type { StackRoundsDispatch } from '../types/cli.js';
 import {
   readRepairMarker,
   readRouteRecord,
+  type StoredRouteRecord,
   writeRoutingTransaction,
   type ReadRepairMarkerResult,
   type ReadRouteRecordResult,
@@ -38,6 +39,7 @@ export type RoundSupersessionCheck =
     readonly kind: 'supersedable';
     readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
     readonly supersededBy: RoundId;
+    readonly survivor: StoredRouteRecord;
     readonly droppedHosts: readonly ChildId[];
     readonly findingIds: readonly string[];
   }
@@ -74,6 +76,7 @@ export async function supersedeRound(input: SupersedeRoundInput): Promise<Supers
   const record = withOutboxEvent({ ...checked.stored.record, phase: 'closed', hosts }, event);
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: checked.stored, record },
+    { kind: 'verify-ref', ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob },
   ], { ...(input.git === undefined ? {} : { git: input.git }) });
   if (wrote.kind === 'updated') return { kind: 'superseded', event };
   const detail = wrote.kind === 'cas-failed'
@@ -193,16 +196,16 @@ export async function checkRoundSupersession(
     .map((ref) => parseRoundId(ref.slice(`refs/conductor/${slug}/routes/`.length)))
     .filter((id): id is RoundId => id !== undefined)
     .sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
-  let supersededBy: RoundId | undefined;
+  let survivor: StoredRouteRecord | undefined;
   for (const otherRoundId of roundIds) {
     if (otherRoundId === roundId) continue;
     const other = await readRecord(worktree, slug, otherRoundId, { git });
     if (other.kind !== 'record') {
       return { kind: 'refused', detail: `other routing round ${otherRoundId} is ${other.kind === 'absent' ? 'missing' : 'unreadable'}` };
     }
-    if (supersededBy === undefined && other.record.phase !== 'closed') supersededBy = otherRoundId;
+    if (survivor === undefined && other.record.phase !== 'closed') survivor = other;
   }
-  if (supersededBy === undefined) {
+  if (survivor === undefined) {
     return { kind: 'refused', detail: `closing sole non-closed round ${roundId} would skip the leaf return` };
   }
 
@@ -211,7 +214,8 @@ export async function checkRoundSupersession(
   return {
     kind: 'supersedable',
     stored,
-    supersededBy,
+    supersededBy: survivor.record.roundId,
+    survivor,
     droppedHosts,
     findingIds: stored.record.items.filter((item) => dropped.has(item.host)).map((item) => item.findingId),
   };

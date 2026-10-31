@@ -25,7 +25,9 @@ describe('stack rounds CLI', () => {
     const checked = {
       kind: 'supersedable' as const,
       stored: { kind: 'record' as const, slug: 'demo', blob: 'a'.repeat(40), record: { roundId: r4 } },
-      supersededBy: parseRoundId('r5')!, droppedHosts: [2], findingIds: ['f-2'],
+      supersededBy: parseRoundId('r5')!,
+      survivor: { kind: 'record' as const, slug: 'demo', blob: 'b'.repeat(40), record: { roundId: parseRoundId('r5')! } },
+      droppedHosts: [2], findingIds: ['f-2'],
     };
     const code = await dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug: 'demo', roundId: 'r4', reason: '  newer round  ' }, {
       cwd: '/tmp', resolveMainRoot: async () => '/tmp', resolveWorktree: async () => '/tmp',

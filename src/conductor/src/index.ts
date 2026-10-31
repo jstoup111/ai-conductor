@@ -90,7 +90,7 @@ import {
   detectHaltClearCommand,
   detectKickbackBudgetCommand,
   detectStackLandCommand,
-  detectStackRoundsCommand,
+  dispatchStackRoundsIfDetected,
   detectStackOwnersCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
@@ -863,6 +863,16 @@ export async function dispatchCliEntry(input: {
 
 // --- Main ---
 
+export async function dispatchStackRoundsCliEntry(
+  argv: readonly string[],
+  dispatch: typeof dispatchStackRoundsCommand = dispatchStackRoundsCommand,
+): Promise<boolean> {
+  const stackRoundsCode = await dispatchStackRoundsIfDetected(argv, dispatch);
+  if (stackRoundsCode === null) return false;
+  process.exitCode = stackRoundsCode;
+  return true;
+}
+
 async function dispatchCliCommand(): Promise<void> {
   // Private child entrypoint. It intentionally is not registered in the
   // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
@@ -995,11 +1005,7 @@ async function dispatchCliCommand(): Promise<void> {
     return;
   }
 
-  const stackRoundsCmd = detectStackRoundsCommand(process.argv);
-  if (stackRoundsCmd) {
-    process.exitCode = await dispatchStackRoundsCommand(stackRoundsCmd);
-    return;
-  }
+  if (await dispatchStackRoundsCliEntry(process.argv)) return;
 
   const stackOwnersCmd = detectStackOwnersCommand(process.argv);
   if (stackOwnersCmd) {
