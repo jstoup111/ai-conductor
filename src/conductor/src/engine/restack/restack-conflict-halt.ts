@@ -24,42 +24,38 @@ interface HaltRecordedRestackConflictOptions {
 }
 
 /**
- * Persist feature-repair conflict context, then write the matching operator
- * halt. Executor and recovery both arrive here only after their journal has
- * been aborted and the conflict occurrence has been emitted.
+ * Persist conflict context, then write the matching operator halt. Executor
+ * and recovery both arrive here only after their journal has been aborted and
+ * the conflict occurrence has been emitted.
  */
 export async function haltRecordedRestackConflict(options: HaltRecordedRestackConflictOptions): Promise<void> {
   const { journal, range } = options;
   let recordFailure = '';
-  if (journal.journal.cause === 'feature-repair') {
-    try {
-      const tree = await options.git(['rev-parse', '--verify', `${options.replayParent}^{tree}`]);
-      const replayParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
-      if (!replayParentTree) throw new Error('cannot read replay parent tree');
-      const written = await writeConflictRecord(options.worktree, options.slug, {
-        opId: journal.journal.opId,
-        child: range.child,
-        oldParent: range.oldParent,
-        oldTip: range.oldTip,
-        newParent: options.replayParent,
-        newParentTree: replayParentTree,
-        candidateSubjects: options.candidateSubjects,
-        commit: options.commit,
-        paths: options.paths,
-      }, { git: options.git });
-      if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
-    } catch (error) {
-      recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
-    }
+  try {
+    const tree = await options.git(['rev-parse', '--verify', `${options.replayParent}^{tree}`]);
+    const replayParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+    if (!replayParentTree) throw new Error('cannot read replay parent tree');
+    const written = await writeConflictRecord(options.worktree, options.slug, {
+      opId: journal.journal.opId,
+      child: range.child,
+      oldParent: range.oldParent,
+      oldTip: range.oldTip,
+      newParent: options.replayParent,
+      newParentTree: replayParentTree,
+      candidateSubjects: options.candidateSubjects,
+      commit: options.commit,
+      paths: options.paths,
+    }, { git: options.git });
+    if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
+  } catch (error) {
+    recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
   }
   await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events,
-    journal.journal.cause === 'feature-repair'
-      ? {
-        slug: options.slug,
-        opId: journal.journal.opId,
-        oldTip: range.oldTip,
-        newParent: options.replayParent,
-        oldParent: range.oldParent,
-      }
-      : undefined);
+    {
+      slug: options.slug,
+      opId: journal.journal.opId,
+      oldTip: range.oldTip,
+      newParent: options.replayParent,
+      oldParent: range.oldParent,
+    });
 }
