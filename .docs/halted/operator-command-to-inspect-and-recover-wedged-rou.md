@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-31T08:39:40.934Z
 Slug: operator-command-to-inspect-and-recover-wedged-rou
 Class: needs-human
 Halting step: unknown
