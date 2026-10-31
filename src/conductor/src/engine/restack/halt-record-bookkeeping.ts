@@ -30,11 +30,11 @@ export function haltRecordTime(text: string | undefined): Date | undefined {
 /** Choose the newer halt record, retaining the parent record for ties or uncertainty. */
 export function chooseHaltRecord(parentText: string | undefined, rangeText: string | undefined): 'parent' | 'range' {
   if (rangeText === undefined) return 'parent';
+  const rangeTime = haltRecordTime(rangeText);
+  if (rangeTime === undefined) return 'parent';
   if (parentText === undefined) return 'range';
 
   const parentTime = haltRecordTime(parentText);
-  const rangeTime = haltRecordTime(rangeText);
-  if (rangeTime === undefined) return 'parent';
   if (parentTime === undefined) return 'range';
   return rangeTime > parentTime ? 'range' : 'parent';
 }

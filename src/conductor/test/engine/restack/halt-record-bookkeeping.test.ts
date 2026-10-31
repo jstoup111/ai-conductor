@@ -56,6 +56,7 @@ describe('halt record bookkeeping', () => {
 
   it('keeps the parent when the range record is absent', () => {
     expect(chooseHaltRecord(haltedRecord('2026-10-26T12:00:00.000Z'), undefined)).toBe('parent');
+    expect(chooseHaltRecord(undefined, 'Halted at: not-a-time\n')).toBe('parent');
   });
 
   it('prefers Resolved at over Halted at and returns the halt-record path', () => {
