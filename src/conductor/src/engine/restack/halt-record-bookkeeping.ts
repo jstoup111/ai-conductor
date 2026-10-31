@@ -37,9 +37,12 @@ export function haltRecordTime(text: string | undefined): Date | undefined {
 /** Choose the newer halt record, retaining the parent record for ties or uncertainty. */
 export function chooseHaltRecord(parentText: string | undefined, rangeText: string | undefined): 'parent' | 'range' {
   if (rangeText === undefined) return 'parent';
+  // A child-owned record must survive when its rebuilt parent has no record,
+  // even if a legacy record lacks a parseable timestamp. There is no parent
+  // candidate to prefer in that case.
+  if (parentText === undefined) return 'range';
   const rangeTime = haltRecordTime(rangeText);
   if (rangeTime === undefined) return 'parent';
-  if (parentText === undefined) return 'range';
 
   const parentTime = haltRecordTime(parentText);
   if (parentTime === undefined) return 'range';

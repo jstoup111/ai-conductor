@@ -124,7 +124,7 @@ describe('replayChildRange halt-record conflicts (real local Git)', () => {
       const replayedOne = await replayFirstChild(fixture);
       const replayedTwo = await replayChildRange(fixture.childTwo, replayedOne.tip, stamp, makeGitRunner(fixture.repo), { haltRecordSlug: 'demo' });
       const git = (args: string[]) => execFile('git', args, { cwd: fixture.repo });
-      await expect(git(['log', '--format=%s', `${fixture.newParent}..${replayedTwo.tip}`])).resolves.toMatchObject({ stdout: 'child 2 work\nchild 1 closure\n' });
+      await expect(git(['log', '--format=%s', `${fixture.newParent}..${replayedTwo.tip}`])).resolves.toMatchObject({ stdout: 'child 2 work\nhalt record: demo\nchild 1 closure\n' });
       expect(replayedOne.rewrites.size).toBe(2);
       expect(replayedTwo.rewrites.size).toBe(2);
       expect(replayedOne.rewrites.get(fixture.lowerHalt)).toBe(replayedOne.tip);
