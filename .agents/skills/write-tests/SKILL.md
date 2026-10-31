@@ -122,6 +122,15 @@ The ordinary suite must finish in under five minutes. The expected healthy range
 5. Fix the inconsistent authority or fixture boundary.
 6. Run the formerly failing files together; isolation-only success is insufficient.
 
+## What is already mechanized — point at it, do not restate it
+
+- `AI_CONDUCTOR_NO_REAL_EXEC` in `src/conductor/test/setup.ts` is a partial backstop for the §4 external-boundary rules: it covers only daemon launch, the pr-labels gh/git seam, and the engineer directory.
+- The suite leak guards `tmpdir-leak-guard.ts`, `pipeline-leak-guard.ts`, `signals-leak-guard.ts`, `park-leak-guard.ts`, and `tmux-leak-guard.ts` under `src/conductor/test/` are a partial backstop for the §6 cleanup rules: they detect leaks after the run.
+- The default `vitest.config.ts` exclusion of `test/smoke/**`, `*.smoke.test.ts`, and `*.e2e.test.ts` is a partial backstop for §1 smoke and e2e placement: it excludes by name but cannot classify a test.
+- The CI `typecheck:test` and `lint` jobs in `.github/workflows/ci.yml` back §8.
+
+Each backstop is partial, so the rule it backs remains binding.
+
 ## Completion checklist
 
 - The test proves one named behavior at the narrowest credible level.
