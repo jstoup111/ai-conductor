@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parseChildId, type ChildId } from './child-context.js';
 import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { hasDurableChildState } from './child-cursor.js';
+import { loadConfig } from './config.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { clearHaltAtomically } from './rewind.js';
 import { missingCandidateSubjects, readConflictRecord, recordAnswer } from './restack/restack-conflict-record.js';
@@ -44,6 +45,7 @@ export interface StackRestackResolveDeps {
   print?: (message: string) => void;
   resolveMainRoot?: (cwd: string) => Promise<string>;
   resolveWorktree?: (slug: string, options: { cwd?: string; resolveMainRoot?: (cwd: string) => Promise<string> }) => Promise<string | undefined>;
+  loadConfig?: typeof loadConfig;
   acquireLease?: typeof acquireFeatureDispatchLease;
   resolveOperator?: (root: string) => Promise<string | undefined>;
   appendEvent?: (worktree: string, event: Extract<ConductorEvent, { type: 'restack_resolution' | 'restack_decision' }>) => Promise<void>;
@@ -60,11 +62,21 @@ async function appendRecordedResolution(worktree: string, event: Extract<Conduct
 
 export async function dispatchStackRestackResolve(command: { slug: string; child: string; tip?: string; decision?: string }, deps: StackRestackResolveDeps = {}): Promise<number> {
   const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
+  if ((command.tip === undefined) === (command.decision === undefined)) {
+    print('stack restack-resolve: refused — supply exactly one of --tip or --decision'); return 1;
+  }
+  if (command.decision !== undefined && (command.decision.length === 0 || command.decision.length > 4_000)) {
+    print('stack restack-resolve: refused — decision answer length must be between 1 and 4000 characters'); return 1;
+  }
   const child = parseChildId(Number(command.child));
   if (!child) { print('stack restack-resolve: refused — invalid child'); return 1; }
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
   const worktree = await (deps.resolveWorktree ?? resolveCliFeatureWorktree)(command.slug, { cwd: deps.cwd ?? process.cwd(), resolveMainRoot: deps.resolveMainRoot });
   if (!worktree) { print(`stack restack-resolve: refused — feature '${command.slug}' is unavailable.`); return 1; }
+  const config = await (deps.loadConfig ?? loadConfig)(worktree);
+  if (config.ok && config.config.stacked_prs?.enabled === false) {
+    print('stack restack-resolve: refused — feature is not stacked'); return 1;
+  }
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack restack-resolve');
   if (acquired.kind !== 'acquired') { print(`stack restack-resolve: refused — ${formatFeatureDispatchLeaseRefusal(acquired)}`); return 1; }
   try {
@@ -86,7 +98,6 @@ export async function dispatchStackRestackResolve(command: { slug: string; child
       catch (error) { print(`stack restack-resolve: recorded but could not clear HALT: ${String(error)}`); return 1; }
       print(`stack restack-resolve: recorded decision for child ${child}`); return 0;
     }
-    if (command.tip === undefined) { print('stack restack-resolve: refused — supply exactly one of --tip or --decision'); return 1; }
     const checked = await checkRestackResolution(worktree, command.slug, child, command.tip, { git });
     if (checked.kind === 'refused') { print(`stack restack-resolve: refused — ${checked.detail}`); return 1; }
     const stored = await readConflictRecord(worktree, command.slug, { git });

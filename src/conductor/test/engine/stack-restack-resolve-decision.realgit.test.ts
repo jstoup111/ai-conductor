@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:7
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,6 +77,16 @@ function deps(repo: string, output: string[]) {
   };
 }
 
+async function snapshot(subject: Awaited<ReturnType<typeof fixture>>) {
+  const read = async (path: string) => readFile(join(subject.repo, path), 'utf8').catch(() => undefined);
+  return {
+    refs: (await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout,
+    events: await read('.pipeline/events.jsonl'),
+    halt: await read('.pipeline/HALT'),
+    haltClass: await read('.pipeline/HALT.class'),
+  };
+}
+
 afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
 });
@@ -131,5 +141,79 @@ describe('stack restack-resolve --decision (real local Git)', () => {
     await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--tip', subject.commit), deps(subject.repo, []))).resolves.toBe(0);
     await expect(readRestackDecision(subject.repo, 'demo', child(2))).resolves.toEqual({ kind: 'missing' });
     await expect(subject.git(['rev-parse', resolutionRefFor('demo', child(2))])).resolves.toMatchObject({ stdout: `${subject.commit}\n` });
+  });
+
+  it.each([
+    ['both --tip and --decision', ['--slug', 'demo', '--child', '2', '--tip', 'a'.repeat(40), '--decision', 'answer']],
+    ['neither --tip nor --decision', ['--slug', 'demo', '--child', '2']],
+  ])('refuses %s without changing durable state', async (_label, args) => {
+    const subject = await fixture();
+    const before = await snapshot(subject);
+    const output: string[] = [];
+    const parsed = detectStackRestackResolveCommand(['node', 'ai-conductor', 'stack', 'restack-resolve', ...args]);
+    expect(parsed).not.toBeNull();
+
+    await expect(dispatchStackRestackResolve(parsed!, deps(subject.repo, output))).resolves.toBe(1);
+    expect(output).toEqual([expect.stringMatching(/^stack restack-resolve: refused — supply exactly one of --tip or --decision$/)]);
+    await expect(snapshot(subject)).resolves.toEqual(before);
+  });
+
+  it.each(['', 'a'.repeat(4_001)])('refuses an answer outside the supported length without changing durable state', async (answer) => {
+    const subject = await fixture();
+    const before = await snapshot(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--decision', answer), deps(subject.repo, output))).resolves.toBe(1);
+    expect(output).toEqual([expect.stringMatching(/^stack restack-resolve: refused — decision answer length must be between 1 and 4000 characters$/)]);
+    await expect(snapshot(subject)).resolves.toEqual(before);
+  });
+
+  it('refuses a decision for a different recorded child without changing durable state', async () => {
+    const subject = await fixture();
+    const before = await snapshot(subject);
+    const output: string[] = [];
+    const record = { ...subject.record, child: child(3) };
+    await expect(writeConflictRecord(subject.repo, 'demo', record)).resolves.toEqual({ kind: 'updated' });
+    const afterRecord = await snapshot(subject);
+
+    await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--decision', 'answer'), deps(subject.repo, output))).resolves.toBe(1);
+    expect(output).toEqual(['stack restack-resolve: refused — record names child 3']);
+    await expect(snapshot(subject)).resolves.toEqual(afterRecord);
+    expect(afterRecord.refs).not.toBe(before.refs);
+  });
+
+  it('refuses when no matching conflict halt is live without changing durable state', async () => {
+    const subject = await fixture();
+    await rm(join(subject.repo, '.pipeline', 'HALT'));
+    const before = await snapshot(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--decision', 'answer'), deps(subject.repo, output))).resolves.toBe(1);
+    expect(output).toEqual(['stack restack-resolve: refused — no matching restack-conflict halt is live']);
+    await expect(snapshot(subject)).resolves.toEqual(before);
+  });
+
+  it('refuses a decision for a flat feature without changing durable state', async () => {
+    const subject = await fixture();
+    await subject.git(['update-ref', '-d', 'refs/conductor/demo/restack/conflict/record']);
+    await subject.git(['update-ref', '-d', 'refs/conductor/demo/restack/conflict/parent']);
+    const before = await snapshot(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--decision', 'answer'), deps(subject.repo, output))).resolves.toBe(1);
+    expect(output).toEqual(['stack restack-resolve: refused — feature is not stacked']);
+    await expect(snapshot(subject)).resolves.toEqual(before);
+  });
+
+  it('refuses a decision when stacked pull requests are disabled without changing durable state', async () => {
+    const subject = await fixture();
+    await mkdir(join(subject.repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(subject.repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: false\n');
+    const before = await snapshot(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--decision', 'answer'), deps(subject.repo, output))).resolves.toBe(1);
+    expect(output).toEqual(['stack restack-resolve: refused — feature is not stacked']);
+    await expect(snapshot(subject)).resolves.toEqual(before);
   });
 });

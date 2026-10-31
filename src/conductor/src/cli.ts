@@ -485,8 +485,11 @@ export function detectStackRestackResolveCommand(argv: readonly string[]): Stack
   }
   const slug = values.get('--slug'); const child = values.get('--child');
   const tip = values.get('--tip'); const decision = values.get('--decision');
-  if (!slug || !child || (tip === undefined) === (decision === undefined) || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
-  return { kind: 'stack-restack-resolve', slug, child, ...(tip === undefined ? { decision } : { tip }) };
+  // Preserve a well-formed command with an invalid answer shape so the
+  // dispatcher can issue its durable, side-effect-free refusal rather than
+  // falling through to the foreground pipeline.
+  if (!slug || !child || values.size < 2 || slug.includes('/') || slug === '.' || slug === '..') return null;
+  return { kind: 'stack-restack-resolve', slug, child, ...(tip === undefined ? {} : { tip }), ...(decision === undefined ? {} : { decision }) };
 }
 
 /** Parse the open, declaration, and abandon grammars. */
