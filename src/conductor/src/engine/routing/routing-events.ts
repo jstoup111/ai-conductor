@@ -53,7 +53,10 @@ export function routingRoundSupersededEvent(
   return {
     type: 'routing_round_superseded', ...occurrence(), roundId: record.roundId,
     supersededBy, droppedHosts, findingIds, reason, operator,
-    child: droppedHosts[0] ?? currentHostOf(record)!,
+    child: droppedHosts.reduce<ChildId | undefined>(
+      (lowest, host) => lowest === undefined || host < lowest ? host : lowest,
+      undefined,
+    ) ?? currentHostOf(record)!,
   };
 }
 

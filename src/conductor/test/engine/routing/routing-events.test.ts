@@ -89,6 +89,20 @@ describe('routing event constructors', () => {
     expect(dropped).toMatchObject({ droppedHosts: [2, 3], child: parseChildId(2)! });
   });
 
+  it('uses the lowest dropped host while preserving an unsorted dropped-host list', () => {
+    const droppedHosts = [parseChildId(3)!, parseChildId(2)!, parseChildId(4)!];
+    const event = routingRoundSupersededEvent(
+      { roundId: parseRoundId('r4')! } as RouteRecord,
+      parseRoundId('r5')!,
+      droppedHosts,
+      ['finding-3', 'finding-2', 'finding-4'],
+      'stale audit round',
+      'operator@example.test',
+    );
+
+    expect(event).toMatchObject({ droppedHosts: [3, 2, 4], child: parseChildId(2)! });
+  });
+
   it('permits the canonical module and unrelated event syntax', () => {
     expect(routingEventLiteralViolations([
       { path: CANONICAL_ROUTING_EVENTS_MODULE, source: "return { type: 'remediation_routed' };" },
