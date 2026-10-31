@@ -3011,7 +3011,7 @@ describe('prd_audit kickback', () => {
 
     expect(fixture.outcome).toMatchObject({
       kind: 'halt',
-      haltClass: 'needs-human',
+      haltClass: 'mechanical',
       detail: "kickback ledger gate 'prd_audit' is unreadable",
     });
     await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
@@ -3036,7 +3036,7 @@ describe('prd_audit kickback', () => {
 
     expect(fixture.outcome).toMatchObject({
       kind: 'halt',
-      haltClass: 'needs-human',
+      haltClass: 'mechanical',
       detail: expect.stringContaining('kickback ledger is unreadable'),
     });
     await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
