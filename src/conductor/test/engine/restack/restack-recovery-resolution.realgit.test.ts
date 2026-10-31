@@ -229,7 +229,8 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
       operatorDecision: expect.objectContaining({ answer: 'keep upstream' }),
     }));
-    const persisted = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(JSON.parse);
+    const persisted = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8'))
+      .split('\n').filter(Boolean).map((line) => JSON.parse(line));
     expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child: subject.second }));
     await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/decision/c2'])).rejects.toMatchObject({ code: 1 });
     const resolved = (await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim();
