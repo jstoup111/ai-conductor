@@ -5035,7 +5035,7 @@ export class Conductor {
       } catch (error) {
         return {
           kind: 'halt',
-          haltClass: 'mechanical',
+          haltClass: 'needs-human',
           detail: error instanceof Error ? error.message : 'kickback ledger is unreadable',
         };
       }
