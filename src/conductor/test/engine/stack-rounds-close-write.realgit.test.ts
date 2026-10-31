@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:rem-prd-audit-8
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -91,7 +91,7 @@ it('keeps the target open without an event when its checked survivor closes befo
   });
 });
 
-it('refuses the second of two closes based on snapshots taken before either lease write', async () => {
+it('refuses r5 after r4 closes when both pre-lease checks cite the other round', async () => {
   const subject = await createSweepRepository('stack-rounds-close-dispatch-race-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
   await openAudit(subject, r4, { [c1]: 'restacked', [c2]: 'pending' }, []);
