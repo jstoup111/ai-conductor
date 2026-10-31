@@ -58,6 +58,16 @@ it('declares one persistent sink row for each stack event', () => {
   }
 });
 
+it('declares restack decisions as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.restack_decision).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('restack_decision');
+});
+
 it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
   expect(EVENT_SINKS.remediation_closure_judged).toEqual({
     render: false,
@@ -416,6 +426,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_applied',
   'restack_conflict',
   'restack_resolution',
+  'restack_decision',
   'restack_refused',
   'restack_recovered',
   'push_lease_refused',
