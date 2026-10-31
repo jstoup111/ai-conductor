@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 
-import { detectStackRoundsCommand, dispatchStackRoundsIfDetected } from '../../src/cli.js';
+import { detectStackRoundsCommand } from '../../src/cli.js';
+import { dispatchStackRoundsCliEntry } from '../../src/index.js';
 
 // Covers: task:2
 const execFileP = promisify(execFile);
@@ -45,7 +46,7 @@ describe('stack rounds command detection', () => {
       const refsBefore = (await execFileP('git', ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/'], { cwd: root })).stdout;
       const dispatch = vi.fn().mockResolvedValue(0);
 
-      await expect(dispatchStackRoundsIfDetected(rejectedArgv, dispatch)).resolves.toBeNull();
+      await expect(dispatchStackRoundsCliEntry(rejectedArgv, dispatch)).resolves.toBe(false);
 
       expect(dispatch).not.toHaveBeenCalled();
       await expect(execFileP('git', ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/'], { cwd: root }))

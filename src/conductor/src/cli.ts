@@ -522,10 +522,9 @@ export function detectStackRoundsCommand(argv: readonly string[]): StackRoundsDi
  * A rejected vector must never reach a stack-rounds dispatcher.
  */
 export async function dispatchStackRoundsIfDetected(
-  argv: readonly string[],
+  command: StackRoundsDispatch | null,
   dispatch: (command: StackRoundsDispatch) => Promise<number> | number,
 ): Promise<number | null> {
-  const command = detectStackRoundsCommand(argv);
   return command === null ? null : dispatch(command);
 }
 
