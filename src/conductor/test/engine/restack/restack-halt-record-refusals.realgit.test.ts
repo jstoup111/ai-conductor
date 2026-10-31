@@ -49,7 +49,7 @@ describe('halt-record bookkeeping preserves restack refusals (real local Git)', 
     const before = await stackRefs(subject);
 
     await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('replay-mismatch');
@@ -82,7 +82,7 @@ describe('halt-record bookkeeping preserves restack refusals (real local Git)', 
     };
 
     await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault, git: makeGitRunner(subject.repo), resolver, resolverCap: 1 }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('feature commit(s) lost during resolution: C2');
@@ -122,7 +122,7 @@ describe('halt-record bookkeeping preserves restack refusals (real local Git)', 
     const before = await stackRefs(subject);
 
     await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('flatten_refused');
