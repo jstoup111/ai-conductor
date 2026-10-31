@@ -1888,8 +1888,16 @@ describe('engine/conductor', () => {
       ]);
 
       const rejected = validateRemediationPlan({ version: REMEDIATION_PLAN_CONTRACT_VERSION, dispositions: [
-        { reference: { kind: 'as-built-finding', id: 'first' }, disposition: 'existing-task', category: null, rationale: 'Bind sibling.', tasks: [], boundTaskIds: ['2'] },
-        { reference: { kind: 'as-built-finding', id: 'second' }, disposition: 'existing-task', category: null, rationale: 'Repair second.', tasks: [], boundTaskIds: ['2'] },
+        {
+          reference: { kind: 'as-built-finding', id: 'first' }, disposition: 'existing-task', category: null,
+          rationale: 'Bind sibling.', tasks: [], boundTaskIds: ['2'],
+          reconciliation: { relation: 'new', reason: 'This is a newly observed finding.' },
+        },
+        {
+          reference: { kind: 'as-built-finding', id: 'second' }, disposition: 'existing-task', category: null,
+          rationale: 'Repair second.', tasks: [], boundTaskIds: ['2'],
+          reconciliation: { relation: 'new', reason: 'This is a newly observed finding.' },
+        },
       ] }, {
         version: 2,
         source: 'as-built',
@@ -1913,7 +1921,14 @@ describe('engine/conductor', () => {
           haltCategories: artifactModule.REMEDIATION_HALT_CATEGORIES,
         },
       } satisfies RemediationProjection);
-      expect(rejected).toMatchObject({ kind: 'rejected' });
+      expect(rejected).toMatchObject({
+        kind: 'rejected',
+        diagnostics: [
+          'dispositions[0].boundTaskIds must not bind non-owner task 2; owner is 1',
+          'dispositions missing required reference as-built-finding:first',
+        ],
+        rejected: [{ gapId: 'first', disposition: '2', accepted: ['1'], field: 'boundTaskIds' }],
+      });
     });
 
     it('halts a mixed as-built group report with every finding listed and re-runs the refused gate after HALT clears', async () => {
