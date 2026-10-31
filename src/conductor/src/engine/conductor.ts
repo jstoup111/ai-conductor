@@ -5266,11 +5266,15 @@ export class Conductor {
     // plan (some fixes + one halt) still surfaces the halt rather than
     // routing around it and losing the halt detail entirely.
     if (halts.length > 0) {
+      // A halt exits before existing-task bindings can be admitted and
+      // restaged.  Only successfully appended repairs have crossed an
+      // admission boundary at this point, so never reconcile those merely
+      // resolved bindings into durable as-built history.
       const reconciled = this.asBuiltReconciliationResults(
         typedPlan.value.dispositions,
         asBuiltRecordedFindings,
         asBuiltAttemptId,
-        resolvedExistingTaskIdsByGapId,
+        new Map(),
         appendedTaskIdsByGapId,
       );
       const reconciliationFault = await this.recordAsBuiltReconciliationResults(reconciled);
@@ -9894,16 +9898,18 @@ export class Conductor {
                     asBuiltOutcome.kind === 'invalid'
                     ? renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings)
                     : '');
-                const recordingFault = await this.recordAsBuiltNeedsHumanFindings(
-                  (asBuiltOutcome.findings ?? []).map((finding) => ({
-                    findingId: finding.id,
-                    attemptId: this.currentRunId ?? 'unknown-attempt',
-                    class: finding.class,
-                    reference: finding.reference,
-                    summary: finding.summary,
-                  })),
-                  reason,
-                );
+                const recordingFault = asBuiltOutcome.kind === 'blocked-design'
+                  ? await this.recordAsBuiltNeedsHumanFindings(
+                    (asBuiltOutcome.findings ?? []).map((finding) => ({
+                      findingId: finding.id,
+                      attemptId: this.currentRunId ?? 'unknown-attempt',
+                      class: finding.class,
+                      reference: finding.reference,
+                      summary: finding.summary,
+                    })),
+                    reason,
+                  )
+                  : undefined;
                 if (recordingFault !== undefined) {
                   await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
                   await closeClassifiedPassingMembers();
@@ -15116,16 +15122,18 @@ export class Conductor {
                   ? ` — remediation did not route: ${remediableNoPlanReason}`
                   : '') +
                 renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
-              const recordingFault = await this.recordAsBuiltNeedsHumanFindings(
-                (asBuiltOutcome.findings ?? []).map((finding) => ({
-                  findingId: finding.id,
-                  attemptId: this.currentRunId ?? 'unknown-attempt',
-                  class: finding.class,
-                  reference: finding.reference,
-                  summary: finding.summary,
-                })),
-                reason,
-              );
+              const recordingFault = asBuiltOutcome.kind === 'blocked-design'
+                ? await this.recordAsBuiltNeedsHumanFindings(
+                  (asBuiltOutcome.findings ?? []).map((finding) => ({
+                    findingId: finding.id,
+                    attemptId: this.currentRunId ?? 'unknown-attempt',
+                    class: finding.class,
+                    reference: finding.reference,
+                    summary: finding.summary,
+                  })),
+                  reason,
+                )
+                : undefined;
               if (recordingFault !== undefined) {
                 await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
