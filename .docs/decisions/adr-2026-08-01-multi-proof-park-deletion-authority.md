@@ -66,6 +66,8 @@ branches. Rejected on cost/benefit, not on correctness.
 
    > **Amended 2026-10-17 by #2945:** A third proof, **stack-member identity**, authorizes deleting a stacked feature's local child branch `feat/c<k>/<slug>`, and only from shipped-record teardown or reclaim. The proof holds when the member PR is merged, its squash commit is an ancestor of `origin/main`, and the local tip equals that PR's `headRefOid`. The delete is a compare-and-swap with that tip as the expected value. The shipped record on main stays a precondition, not an authority, and park still never deletes a child branch (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12).
 
+   > **Amended 2026-10-31 by spec `a-partial-stack-merge-or-mid-stack-push-halts-the-` (operator decision, composer DECIDE):** The stack-member identity proof no longer requires the local tip to equal `headRefOid`. Every local commit must be reachable from the recorded `pushed/<branch>` tip or from the merged PR's `headRefOid`, or else be a halt-record-only commit for the slug. The delete is a compare-and-swap on the local tip that the proof read. This changes an existing proof rather than adding a fourth, as decision 2 requires. The pushed-tip ref is engine-written only after a confirmed push (`push-lease.ts`), so a commit it reaches did reach the member PR. Detail is in `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12.
+
 2. **Adding a proof to the set is an ADR-level change.** Any future proof must be recorded here
    before it ships. #1185 shipping a second authority without amending the ADR is the failure this
    clause prevents from recurring.
