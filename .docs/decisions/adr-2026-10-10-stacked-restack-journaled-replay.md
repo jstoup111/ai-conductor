@@ -432,6 +432,8 @@ Operator decisions (2026-10-10):
 > omitted halt-record-only commits are not reported as lost. A resolved tip gets the same
 > newest-record bookkeeping commit as a replayed one before the path-ownership check.
 
+> **Amended 2026-10-31 by #3478:** An unresolved `base-refresh` conflict also writes the conflict record and recipe. An operator can answer the resolver's missing decision with `ai-conductor stack restack-resolve --decision`. The next restack passes that decision to this decision's resolver primitive as `operatorDecision` when the child and range match. The FR-8, FR-9 and path-ownership guards still apply to the result (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts).
+
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
      1. journal recovery;
