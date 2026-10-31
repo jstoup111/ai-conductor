@@ -1340,17 +1340,21 @@ export class Conductor {
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
     const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
     if (unreadable) return unreadable;
-    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const stored = await readAsBuiltVerdict(this.projectRoot);
     if (stored.kind !== 'present') {
       return stored.kind === 'unreadable'
         ? `as-built verdict artifact could not be read for recorded-findings projection: ${stored.reason}`
         : 'as-built verdict artifact is absent for recorded-findings projection';
     }
-    // Only a fresh, authoritative APPROVED as-built verdict closes history.
+    // Every authoritative gate pass closes history, including a delivered
+    // PLAN_GAP. Pending display findings are independent of this settlement.
     // A blocked verdict (even one that restates resolved cases) must continue
     // through ordinary remediation and never derives approval from the store.
-    if (stored.value.verdict.verdict === 'APPROVED') {
+    if (
+      stored.value.verdict.verdict === 'APPROVED' ||
+      stored.value.verdict.verdict === 'APPROVED WITH DRIFT NOTES' ||
+      (stored.value.verdict.verdict === 'PLAN_GAP' && stored.value.verdict.outcomeDelivered)
+    ) {
       const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
       // Legacy in-memory fixtures can exercise gate routing without a Git
       // feature identity. Production remediation always has one; absent
@@ -1367,6 +1371,7 @@ export class Conductor {
         await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
       }
     }
+    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const recordedFindings: RecordedAsBuiltFinding[] = [...this.pendingAsBuiltRemediationFindings.values()]
       .map((finding) => ({
         id: finding.finding,
@@ -4185,6 +4190,18 @@ export class Conductor {
         };
       }
     }
+    // Re-deliver crash-left reconciliation events before the planner sees the
+    // same durable case history. This keeps the event spine's at-least-once
+    // handoff ahead of the next as-built projection.
+    if (remediationEvidenceSources.some((source) => source.gate === 'architecture_review_as_built')) {
+      const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+      if (feature) {
+        const store = new RemediationCaseStore(this.projectRoot, {
+          version: 'v1', repository: feature.repository, feature: feature.feature,
+        });
+        await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      }
+    }
     const projectionResult = await buildRemediationProjection(this.projectRoot, {
       source: remediationProjectionSource(hintSource.source),
       activePlanPath: await this.getActivePlanPath() ?? undefined,
@@ -4202,12 +4219,13 @@ export class Conductor {
       const bounds = actual === undefined || limit === undefined
         ? ''
         : ` (actual ${actual}, limit ${limit})`;
+      const haltClass = dimension === 'prior-as-built-cases' ? 'needs-human' : 'mechanical';
       return this.haltForRemediationValidatorFault(
         state,
         hintSource,
         `remediation projection input fault: source ${source}` +
           `${dimension === undefined ? '' : `, dimension ${dimension}`}${bounds}: ${detail}`,
-        'needs-human',
+        haltClass,
       );
     }
     const remediateModelPolicy = this.modelPolicyForStep('remediate');
@@ -4904,7 +4922,7 @@ export class Conductor {
       } catch (error) {
         return {
           kind: 'halt',
-          haltClass: 'needs-human',
+          haltClass: 'mechanical',
           detail: error instanceof Error ? error.message : 'kickback ledger is unreadable',
         };
       }
@@ -5205,6 +5223,29 @@ export class Conductor {
     // plan (some fixes + one halt) still surfaces the halt rather than
     // routing around it and losing the halt detail entirely.
     if (halts.length > 0) {
+      const reconciled = typedPlan.value.dispositions.flatMap((disposition): AsBuiltReconciliationResult[] => {
+        if (disposition.reference.kind !== 'as-built-finding' || disposition.disposition === 'halt' || !disposition.reconciliation) return [];
+        const finding = asBuiltRecordedFindings.get(disposition.reference.id);
+        if (finding === undefined) return [];
+        const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+          ? resolvedExistingTaskIdsByGapId.get(disposition.reference.id)
+          : appendedTaskIdsByGapId?.get(disposition.reference.id);
+        if (repairTaskIds === undefined) return [];
+        return [{
+          source: {
+            findingId: finding.finding, attemptId: asBuiltAttemptId ?? this.currentRunId ?? 'unknown-attempt',
+            class: finding.class, ...(finding.reference === undefined ? {} : { reference: finding.reference }),
+            summary: finding.summary,
+          },
+          relation: disposition.reconciliation.relation,
+          reason: disposition.reconciliation.reason,
+          ...(disposition.reconciliation.priorCaseId === undefined
+            ? {} : { priorCaseId: disposition.reconciliation.priorCaseId }),
+          repairTaskIds,
+        }];
+      });
+      const reconciliationFault = await this.recordAsBuiltReconciliationResults(reconciled);
+      if (reconciliationFault !== undefined) return { kind: 'halt', haltClass: 'needs-human', detail: reconciliationFault };
       const plannerHaltFindings = typedPlan.value.dispositions.flatMap((disposition): AsBuiltCaseFinding[] => {
         if (disposition.reference.kind !== 'as-built-finding' || disposition.disposition !== 'halt') return [];
         const finding = asBuiltRecordedFindings.get(disposition.reference.id);
@@ -9839,6 +9880,24 @@ export class Conductor {
                     asBuiltOutcome.kind === 'invalid'
                     ? renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings)
                     : '');
+                const recordingFault = await this.recordAsBuiltNeedsHumanFindings(
+                  (asBuiltOutcome.findings ?? []).map((finding) => ({
+                    findingId: finding.id,
+                    attemptId: this.currentRunId ?? 'unknown-attempt',
+                    class: finding.class,
+                    reference: finding.reference,
+                    summary: finding.summary,
+                  })),
+                  reason,
+                );
+                if (recordingFault !== undefined) {
+                  await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                  await closeClassifiedPassingMembers();
+                  await this.emitLoopHalt(recordingFault);
+                  process.off('SIGINT', sigintHandler);
+                  if (!this.daemon) process.off('SIGTERM', sigterm);
+                  return;
+                }
                 await this.writeHaltMarker(
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
@@ -15043,6 +15102,25 @@ export class Conductor {
                   ? ` — remediation did not route: ${remediableNoPlanReason}`
                   : '') +
                 renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
+              const recordingFault = await this.recordAsBuiltNeedsHumanFindings(
+                (asBuiltOutcome.findings ?? []).map((finding) => ({
+                  findingId: finding.id,
+                  attemptId: this.currentRunId ?? 'unknown-attempt',
+                  class: finding.class,
+                  reference: finding.reference,
+                  summary: finding.summary,
+                })),
+                reason,
+              );
+              if (recordingFault !== undefined) {
+                await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(recordingFault);
+                await this.emitLoopHalt(recordingFault, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               await this.writeHaltMarker(
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',

@@ -166,7 +166,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
 
       const { outcome } = await runPrdAuditGrowthRemediation(dir);
 
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
       expect(outcome.detail).toMatch(/kickback ledger/i);
 
       const plan = await readFile(join(dir, '.docs', 'plans', 'feature.md'), 'utf8');
