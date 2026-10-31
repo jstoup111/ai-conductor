@@ -660,7 +660,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     if (advisories === undefined) throw new Error('current advisory findings are invalid');
     const carriedSources = carriedSourceFindings(cases, records);
     const operatorResolvedCases = operatorResolvedCaseFindings(cases);
-    const pendingOutbox = caseRead.state.version === 'v3' ? caseRead.state.outbox : [];
+    const pendingOutbox = caseRead.state.version === 'v1' || caseRead.state.version === 'v2' ? [] : caseRead.state.outbox;
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
     // Uncovered coverage projections are engine-routing-only. The operator
     // already sees coverage through the rendered failures and reduced-coverage

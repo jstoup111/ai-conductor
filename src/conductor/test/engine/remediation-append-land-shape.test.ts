@@ -64,6 +64,7 @@ describe('remediation append land shape', () => {
       expect(criterionBound).toEqual({
         success: true,
         appendedIds: ['rem-prd-audit-criterion'],
+        appendedIdsByGapId: new Map([['criterion-gap', ['rem-prd-audit-criterion']]]),
       });
 
       const bare = await appendRemediationTasks(

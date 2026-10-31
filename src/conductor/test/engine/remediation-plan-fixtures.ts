@@ -131,6 +131,7 @@ export async function persistFixtureProjectedRemediationPlan(
     readonly rationale: string;
     readonly tasks: readonly { readonly id: string; readonly title: string }[];
     readonly boundTaskIds?: readonly string[];
+    readonly reconciliation?: { readonly relation: 'same' | 'recurrence' | 'materially-changed' | 'new'; readonly priorCaseId?: string; readonly reason: string };
   }[],
 ): Promise<void> {
   const request = options?.remediationRequest;
@@ -151,6 +152,9 @@ export async function persistFixtureProjectedRemediationPlan(
         rationale: disposition.rationale,
         tasks: disposition.tasks.map(({ id, title }) => ({ id, title })),
         boundTaskIds: disposition.boundTaskIds ?? [],
+        ...(reference.kind === 'as-built-finding'
+          ? { reconciliation: disposition.reconciliation ?? { relation: 'new', reason: 'Fixture finding has no prior case.' } }
+          : {}),
       };
     }
     const untypedKind = request.projection.source === 'build-stall' ? 'stall'

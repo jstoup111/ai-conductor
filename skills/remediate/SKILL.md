@@ -57,6 +57,22 @@ effect. Do not create BUILD work, amend a plan, write a remediation artifact, or
 from markdown/prose. For every other mode, including `build_review` `case-v1`/`case-v2` and legacy gap
 planning, skip this branch and follow the existing instructions unchanged.
 
+## As-built gap-plan reconciliation
+
+When the engine supplies `priorAsBuiltCases` in an ordinary gap-plan projection, every
+as-built finding disposition must include its engine-owned `reconciliation`. Judge the
+supplied evidence, not wording alone: use `same` for the same unresolved case,
+`recurrence` when an earlier repair recurred, `materially-changed` when the prior case
+is relevant but the failure is materially different, and `new` when no prior case fits.
+
+`same` and `recurrence` name the supplied `priorCaseId`. They may only use
+`existing-task` (binding at least one repair task from that case, plus a cited owner
+task when present) or `halt`; they never append replacement work. `materially-changed`
+names its prior case but plans a new repair under normal admission. `new` has no prior
+case id and follows normal admission. Supply a specific non-empty reason for every
+relation. The engine validates and persists these fields; do not create case ids,
+event records, or a parallel reconciliation artifact.
+
 ## Engine-selected refusal-rework mode
 
 Use this branch **only when the engine-stamped dispatch context carries refusal evidence** for a

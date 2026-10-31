@@ -316,6 +316,7 @@ const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
 ]);
 const REMEDIATION_CASE_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
   'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
+  'as_built_finding_reconciled',
 ]);
 
 /** Producer observations and at-least-once lifecycle events are replay-deduplicated; ordinary events still append. */

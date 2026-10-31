@@ -333,7 +333,7 @@ describe('typed PRD widening routing', () => {
     const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
     const caseStore = new RemediationCaseStore(projectRoot, feature);
     const before = await caseStore.read();
-    if (!before.ok || before.state.version !== 'v3') throw new Error('expected original widening case');
+    if (!before.ok || before.state.version !== 'v4') throw new Error('expected original widening case');
     const originalCaseId = before.state.prdWideningCases[0]!.id;
     const state = { session_started_at: Date.now(), feature_desc: feature.feature } as ConductState;
     const runner: StepRunner = {
@@ -396,7 +396,7 @@ describe('typed PRD widening routing', () => {
     const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
     const caseStore = new RemediationCaseStore(projectRoot, feature);
     const original = await caseStore.read();
-    if (!original.ok || original.state.version !== 'v3') throw new Error('missing fixture');
+    if (!original.ok || original.state.version !== 'v4') throw new Error('missing fixture');
     const caseId = original.state.prdWideningCases[0]!.id;
     const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
     await writeFile(clearPath, (await readFile(clearPath, 'utf8')).replace('"accept"', '"refuse"'));
@@ -502,7 +502,7 @@ describe('typed PRD widening routing', () => {
       version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
     });
     const stored = await caseStore.read();
-    if (!stored.ok || stored.state.version !== 'v3') throw new Error('expected v3 fixture store');
+    if (!stored.ok || stored.state.version !== 'v4') throw new Error('expected v4 fixture store');
     const originalCaseId = stored.state.prdWideningCases[0]!.id;
     const state = { session_started_at: Date.now(), feature_desc: 'prd-widening-routing' } as ConductState;
     const runner: StepRunner = {
@@ -550,7 +550,7 @@ describe('typed PRD widening routing', () => {
       version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
     });
     const stored = await caseStore.read();
-    if (!stored.ok || stored.state.version !== 'v3') throw new Error('expected v3 fixture store');
+    if (!stored.ok || stored.state.version !== 'v4') throw new Error('expected v4 fixture store');
     const originalCaseId = stored.state.prdWideningCases[0]!.id;
     const state = { session_started_at: Date.now(), feature_desc: 'prd-widening-routing' } as ConductState;
     const runner: StepRunner = {
@@ -581,7 +581,7 @@ describe('typed PRD widening routing', () => {
     const stored = await new RemediationCaseStore(projectRoot, {
       version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
     }).read();
-    if (!stored.ok || stored.state.version !== 'v3') throw new Error('expected v3 fixture store');
+    if (!stored.ok || stored.state.version !== 'v4') throw new Error('expected v4 fixture store');
     const originalCaseId = stored.state.prdWideningCases[0]!.id;
     const state = { session_started_at: Date.now(), feature_desc: 'prd-widening-routing' } as ConductState;
     const runner: StepRunner = {
@@ -708,7 +708,7 @@ describe('typed PRD widening routing', () => {
       version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
     });
     const stored = await caseStore.read();
-    if (!stored.ok || stored.state.version !== 'v3') throw new Error('expected v3 fixture store');
+    if (!stored.ok || stored.state.version !== 'v4') throw new Error('expected v4 fixture store');
     const originalCaseId = stored.state.prdWideningCases[0]!.id;
     const state = { session_started_at: Date.now(), feature_desc: 'prd-widening-routing' } as ConductState;
     const runner: StepRunner = {

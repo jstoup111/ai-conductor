@@ -2717,7 +2717,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(first).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N'] } });
     const state = await store.read();
     if (!state.ok) throw new Error(state.reason);
-    expect(state.state.version).toBe('v3');
+    expect(state.state.version).toBe('v4');
     expect(state.state.cases.find((record) => record.id === 'N')).toMatchObject({
       disposition: 'act', resolution: 'open', recurrenceOf: ['case-R'],
       sources: [expect.objectContaining({ sourceId, outcome: 'acted' })],

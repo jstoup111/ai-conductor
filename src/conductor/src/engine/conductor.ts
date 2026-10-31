@@ -56,6 +56,7 @@ import {
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
 import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { recordAsBuiltNeedsHuman, recordAsBuiltReconciliation, resolveOpenAsBuiltCases, type AsBuiltCaseFinding, type AsBuiltReconciliationResult } from './as-built-case-reconciliation.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
@@ -82,6 +83,7 @@ import {
   type RemediationProjectionLimits,
 } from './remediation-projection.js';
 import { readTypedRemediationPlan } from './remediation-plan-store.js';
+import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
@@ -1340,13 +1342,43 @@ export class Conductor {
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
     const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
     if (unreadable) return unreadable;
-    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const stored = await readAsBuiltVerdict(this.projectRoot);
     if (stored.kind !== 'present') {
+      // A runner-success-only flow (notably verification-off unit fixtures)
+      // has no authoritative as-built result to settle.  With no accepted
+      // repair awaiting projection, that is a no-op rather than a failed
+      // projection; a pending repair still fails closed below.
+      if (stored.kind === 'absent' && this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
       return stored.kind === 'unreadable'
         ? `as-built verdict artifact could not be read for recorded-findings projection: ${stored.reason}`
         : 'as-built verdict artifact is absent for recorded-findings projection';
     }
+    // Every authoritative gate pass closes history, including a delivered
+    // PLAN_GAP. Pending display findings are independent of this settlement.
+    // A blocked verdict (even one that restates resolved cases) must continue
+    // through ordinary remediation and never derives approval from the store.
+    if (
+      stored.value.verdict.verdict === 'APPROVED' ||
+      stored.value.verdict.verdict === 'APPROVED WITH DRIFT NOTES' ||
+      (stored.value.verdict.verdict === 'PLAN_GAP' && stored.value.verdict.outcomeDelivered)
+    ) {
+      const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+      // Legacy in-memory fixtures can exercise gate routing without a Git
+      // feature identity. Production remediation always has one; absent
+      // identity here leaves the historical gate behavior unchanged.
+      if (feature) {
+        const store = new RemediationCaseStore(this.projectRoot, {
+          version: 'v1', repository: feature.repository, feature: feature.feature,
+        });
+        const settled = await store.mutate(async (caseState) => {
+          const result = resolveOpenAsBuiltCases(caseState);
+          return { value: undefined, nextState: result.state };
+        });
+        if (!settled.ok) return `remediation case store write fault while resolving as-built cases: ${settled.reason}`;
+        await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      }
+    }
+    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const recordedFindings: RecordedAsBuiltFinding[] = [...this.pendingAsBuiltRemediationFindings.values()]
       .map((finding) => ({
         id: finding.finding,
@@ -1367,6 +1399,83 @@ export class Conductor {
     }
     await this.clearPendingAsBuiltRemediationFindings();
     this.pendingAsBuiltRemediationFindings.clear();
+    return undefined;
+  }
+
+  /** Atomically record accepted as-built reconciliation before BUILD can dispatch. */
+  private async recordAsBuiltReconciliationResults(
+    results: readonly AsBuiltReconciliationResult[],
+  ): Promise<string | undefined> {
+    if (results.length === 0) return undefined;
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) return undefined;
+    const store = new RemediationCaseStore(this.projectRoot, {
+      version: 'v1', repository: feature.repository, feature: feature.feature,
+    });
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    const written = await store.mutate(async (caseState) => {
+      const recorded = recordAsBuiltReconciliation(caseState, { results });
+      return { value: undefined, nextState: recorded.state };
+    });
+    if (!written.ok) return `remediation case store write fault: ${written.reason}`;
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    return undefined;
+  }
+
+  /** Project admitted, repair-bearing as-built dispositions into case-store results. */
+  private asBuiltReconciliationResults(
+    dispositions: readonly AcceptedRemediationPlanDisposition[],
+    findings: ReadonlyMap<string, RecordedAsBuiltRemediationFinding>,
+    attemptId: string | undefined,
+    existingTaskIdsByFindingId: ReadonlyMap<string, readonly string[]>,
+    appendedTaskIdsByFindingId: ReadonlyMap<string, readonly string[]> | undefined,
+  ): AsBuiltReconciliationResult[] {
+    return dispositions.flatMap((disposition): AsBuiltReconciliationResult[] => {
+      if (
+        disposition.reference.kind !== 'as-built-finding' ||
+        disposition.disposition === 'halt' ||
+        !disposition.reconciliation
+      ) return [];
+      const finding = findings.get(disposition.reference.id);
+      if (finding === undefined) return [];
+      const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+        ? existingTaskIdsByFindingId.get(disposition.reference.id)
+        : appendedTaskIdsByFindingId?.get(disposition.reference.id);
+      if (repairTaskIds === undefined) return [];
+      return [{
+        source: {
+          findingId: finding.finding,
+          attemptId: attemptId ?? this.currentRunId ?? 'unknown-attempt',
+          class: finding.class,
+          ...(finding.reference === undefined ? {} : { reference: finding.reference }),
+          summary: finding.summary,
+        },
+        relation: disposition.reconciliation.relation,
+        reason: disposition.reconciliation.reason,
+        ...(disposition.reconciliation.priorCaseId === undefined
+          ? {} : { priorCaseId: disposition.reconciliation.priorCaseId }),
+        repairTaskIds,
+      }];
+    });
+  }
+
+  /** Persist terminal DESIGN/planner outcomes before their needs-human halt. */
+  private async recordAsBuiltNeedsHumanFindings(
+    findings: readonly AsBuiltCaseFinding[], reason: string,
+  ): Promise<string | undefined> {
+    if (findings.length === 0) return undefined;
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) return undefined;
+    const store = new RemediationCaseStore(this.projectRoot, {
+      version: 'v1', repository: feature.repository, feature: feature.feature,
+    });
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    const written = await store.mutate(async (caseState) => {
+      const recorded = recordAsBuiltNeedsHuman(caseState, { findings, reason });
+      return { value: undefined, nextState: recorded.state };
+    });
+    if (!written.ok) return `remediation case store write fault: ${written.reason}`;
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
     return undefined;
   }
 
@@ -4154,6 +4263,18 @@ export class Conductor {
         };
       }
     }
+    // Re-deliver crash-left reconciliation events before the planner sees the
+    // same durable case history. This keeps the event spine's at-least-once
+    // handoff ahead of the next as-built projection.
+    if (remediationEvidenceSources.some((source) => source.gate === 'architecture_review_as_built')) {
+      const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+      if (feature) {
+        const store = new RemediationCaseStore(this.projectRoot, {
+          version: 'v1', repository: feature.repository, feature: feature.feature,
+        });
+        await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      }
+    }
     const projectionResult = await buildRemediationProjection(this.projectRoot, {
       source: remediationProjectionSource(hintSource.source),
       activePlanPath: await this.getActivePlanPath() ?? undefined,
@@ -4171,11 +4292,18 @@ export class Conductor {
       const bounds = actual === undefined || limit === undefined
         ? ''
         : ` (actual ${actual}, limit ${limit})`;
+      // Only the operator-owned as-built history can require a human decision.
+      // Every other projection input fault is a mechanical validator failure,
+      // including PRD-only ledger and artifact faults.
+      const haltClass = dimension === 'prior-as-built-cases' || source === 'remediation case store'
+        ? 'needs-human'
+        : 'mechanical';
       return this.haltForRemediationValidatorFault(
         state,
         hintSource,
         `remediation projection input fault: source ${source}` +
           `${dimension === undefined ? '' : `, dimension ${dimension}`}${bounds}: ${detail}`,
+        haltClass,
       );
     }
     const remediateModelPolicy = this.modelPolicyForStep('remediate');
@@ -4409,6 +4537,7 @@ export class Conductor {
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
     let asBuiltValidated = false;
+    let asBuiltAttemptId: string | undefined;
     let activePlanText = '';
     let asBuiltTypedFindings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined;
     if (planPath && prdAuditRemediation && prdAuditVerdict) {
@@ -4454,6 +4583,7 @@ export class Conductor {
           }
         } else {
           asBuiltTypedFindings = stored.value.verdict.findings;
+          asBuiltAttemptId = stored.value.attemptId;
           for (const finding of stored.value.verdict.findings) {
             if (finding.class !== 'REMEDIABLE') continue;
             const resolution = typedAsBuiltResolution(finding.reference);
@@ -4844,6 +4974,7 @@ export class Conductor {
 
     let prdAuditBudget: RemediationGateAppendBudget | undefined;
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
+    let appendedTaskIdsByGapId: ReadonlyMap<string, readonly string[]> | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       try {
         prdAuditBudget = prdAuditCapEnforced
@@ -4869,7 +5000,7 @@ export class Conductor {
       } catch (error) {
         return {
           kind: 'halt',
-          haltClass: 'needs-human',
+          haltClass: 'mechanical',
           detail: error instanceof Error ? error.message : 'kickback ledger is unreadable',
         };
       }
@@ -4887,6 +5018,7 @@ export class Conductor {
         if (appendResult.success) {
           appendAttempted = true;
           appendedTaskIds = appendResult.appendedIds;
+          appendedTaskIdsByGapId = appendResult.appendedIdsByGapId;
           const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
           if (unreadable) {
             return { kind: 'halt', haltClass: 'needs-human', detail: unreadable };
@@ -5171,9 +5303,34 @@ export class Conductor {
     // plan (some fixes + one halt) still surfaces the halt rather than
     // routing around it and losing the halt detail entirely.
     if (halts.length > 0) {
+      // A halt exits before existing-task bindings can be admitted and
+      // restaged.  Only successfully appended repairs have crossed an
+      // admission boundary at this point, so never reconcile those merely
+      // resolved bindings into durable as-built history.
+      const reconciled = this.asBuiltReconciliationResults(
+        typedPlan.value.dispositions,
+        asBuiltRecordedFindings,
+        asBuiltAttemptId,
+        new Map(),
+        appendedTaskIdsByGapId,
+      );
+      const reconciliationFault = await this.recordAsBuiltReconciliationResults(reconciled);
+      if (reconciliationFault !== undefined) return { kind: 'halt', haltClass: 'needs-human', detail: reconciliationFault };
+      const plannerHaltFindings = typedPlan.value.dispositions.flatMap((disposition): AsBuiltCaseFinding[] => {
+        if (disposition.reference.kind !== 'as-built-finding' || disposition.disposition !== 'halt') return [];
+        const finding = asBuiltRecordedFindings.get(disposition.reference.id);
+        return finding === undefined ? [] : [{
+          findingId: finding.finding, attemptId: asBuiltAttemptId ?? this.currentRunId ?? 'unknown-attempt',
+          class: finding.class, ...(finding.reference === undefined ? {} : { reference: finding.reference }),
+          summary: finding.summary,
+        }];
+      });
+      const plannerHaltReason = halts.map((gap) => `${gap.id} (${gap.category}: ${gap.rationale})`).join('; ');
+      const recordingFault = await this.recordAsBuiltNeedsHumanFindings(plannerHaltFindings, plannerHaltReason);
+      if (recordingFault !== undefined) return { kind: 'halt', haltClass: 'needs-human', detail: recordingFault };
       return {
         kind: 'halt',
-        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
+        detail: plannerHaltReason + droppedSuffix,
       };
     }
     if (fixes.length > 0 && routedFixes.length === 0) {
@@ -5353,6 +5510,21 @@ export class Conductor {
             resolvedCount: admittedBaseline.resolvedCount ?? admission.baseline.resolvedCount,
           });
         }
+      }
+      // The append/restage transaction is the admission boundary.  Do not
+      // write a case for rejected, missing, failed-append, or failed-restage
+      // plans; a durable source means the repair was actually admitted.
+      const reconciled = this.asBuiltReconciliationResults(
+        typedPlan.value.dispositions,
+        asBuiltRecordedFindings,
+        asBuiltAttemptId,
+        resolvedExistingTaskIdsByGapId,
+        appendedTaskIdsByGapId,
+      );
+      const recordingFault = await this.recordAsBuiltReconciliationResults(reconciled);
+      if (recordingFault !== undefined) {
+        await reportRefusal(recordingFault);
+        return { kind: 'halt', haltClass: 'needs-human', detail: recordingFault };
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -6044,9 +6216,13 @@ export class Conductor {
   }
 
   /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
-  private async haltForValidatorFault(state: ConductState, reason: string): Promise<void> {
+  private async haltForValidatorFault(
+    state: ConductState,
+    reason: string,
+    haltClass: 'mechanical' | 'needs-human' = 'mechanical',
+  ): Promise<void> {
     await this.closeOpenExecutions();
-    await this.writeHaltMarker(reason + '\n', 'mechanical');
+    await this.writeHaltMarker(reason + '\n', haltClass);
     await this.persistPendingStateChanges(state, 'persist conductor transition');
     await this.emitLoopHalt(reason);
   }
@@ -6060,10 +6236,11 @@ export class Conductor {
     state: ConductState,
     hintSource: RemediationHintSource,
     detail: string,
+    haltClass: 'mechanical' | 'needs-human' = 'mechanical',
   ): Promise<{
     kind: 'halt';
     detail: string;
-    haltClass: 'mechanical';
+    haltClass: 'mechanical' | 'needs-human';
   }> {
     const stallEvidence = hintSource.source === 'build-stall' ||
       hintSource.source === 'build_stall' ||
@@ -6076,8 +6253,8 @@ export class Conductor {
     const reason = stallQuestion === null || stallQuestion === undefined || stallQuestion === ''
       ? detail
       : `${stallQuestion}\n\n${detail}`;
-    await this.haltForValidatorFault(state, reason);
-    return { kind: 'halt', detail: reason, haltClass: 'mechanical' };
+    await this.haltForValidatorFault(state, reason, haltClass);
+    return { kind: 'halt', detail: reason, haltClass };
   }
 
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */
@@ -9927,6 +10104,26 @@ export class Conductor {
                     asBuiltOutcome.kind === 'invalid'
                     ? renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings)
                     : '');
+                const recordingFault = asBuiltOutcome.kind === 'blocked-design'
+                  ? await this.recordAsBuiltNeedsHumanFindings(
+                    (asBuiltOutcome.findings ?? []).map((finding) => ({
+                      findingId: finding.id,
+                      attemptId: this.currentRunId ?? 'unknown-attempt',
+                      class: finding.class,
+                      reference: finding.reference,
+                      summary: finding.summary,
+                    })),
+                    reason,
+                  )
+                  : undefined;
+                if (recordingFault !== undefined) {
+                  await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                  await closeClassifiedPassingMembers();
+                  await this.emitLoopHalt(recordingFault);
+                  process.off('SIGINT', sigintHandler);
+                  if (!this.daemon) process.off('SIGTERM', sigterm);
+                  return;
+                }
                 await this.writeHaltMarker(
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
@@ -15132,6 +15329,27 @@ export class Conductor {
                   ? ` — remediation did not route: ${remediableNoPlanReason}`
                   : '') +
                 renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
+              const recordingFault = asBuiltOutcome.kind === 'blocked-design'
+                ? await this.recordAsBuiltNeedsHumanFindings(
+                  (asBuiltOutcome.findings ?? []).map((finding) => ({
+                    findingId: finding.id,
+                    attemptId: this.currentRunId ?? 'unknown-attempt',
+                    class: finding.class,
+                    reference: finding.reference,
+                    summary: finding.summary,
+                  })),
+                  reason,
+                )
+                : undefined;
+              if (recordingFault !== undefined) {
+                await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(recordingFault);
+                await this.emitLoopHalt(recordingFault, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               await this.writeHaltMarker(
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
