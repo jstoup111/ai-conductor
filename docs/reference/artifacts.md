@@ -867,7 +867,8 @@ it. Stacked builds also persist `child_started`, `child_closed` (with the closur
 when a reseal changes a story's owner without moving a task; and the restack events
 `restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
 `wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
-(`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). Routed repair adds
+(`reason`, optional `detail`), `restack_recovered` (`opId`, `fromState`), and `restack_resolution`
+(`opId`, `child`, `action` of `recorded` or `consumed`, `tip`, optional `operator`). Routed repair adds
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
 `phase`, `credit`), `routing_rounds_stalled` (`rounds` of `roundId`/`readable`/`unsettledHosts`, `detail`,

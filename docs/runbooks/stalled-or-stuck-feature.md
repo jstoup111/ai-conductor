@@ -1318,6 +1318,10 @@ git rebase --onto <new-parent> <old-parent>
 ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
 ```
 
+On success the command clears the HALT, and the next restack applies the recorded tip. For
+validation rules and refusals, see
+[restack conflict resolution](../reference/cli.md#restack-conflict-resolution).
+
 **Recovery:**
 
 - **`cascade-cap`:** if more repairs are justified, authorize them with the child the HALT names:

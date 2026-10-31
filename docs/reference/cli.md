@@ -6,17 +6,6 @@ nav_order: 2
 
 # `ai-conductor` CLI reference
 
-## `ai-conductor stack restack-resolve`
-
-```bash
-ai-conductor stack restack-resolve --slug <feature> --child <k> --tip <resolved-tip>
-```
-
-Records a scratch-branch resolution for a live `Restack-Conflict` HALT, emits the durable
-`restack_resolution` event, then clears that matching HALT. The command refuses a non-stacked
-feature, stale/mismatched conflict data, a resolution with unowned paths or merges, or a feature
-currently held by another dispatch lease.
-
 Every command, subcommand, flag, and exit code of the `ai-conductor` engine. Commands are grouped
 operator-first: the ones you type, then the ones the engine invokes on your behalf.
 
@@ -1711,6 +1700,27 @@ daemon then resumes the host through the routed exit. `--done` is for `stack lan
 With `stacked_prs.route_whole_feature_fixes: false`, `stack owners`, `stack land`, `stack rounds`,
 and the closed-child rewind refuse; `stack rounds` also refuses a feature without durable child state; see [child-by-child build](configuration.md#child-by-child-build).
 See [Per-child selection](#per-child-selection---child).
+
+### Restack conflict resolution
+
+When a `restack conflict child <k>` HALT carries a `Restack-Conflict: <k> <op-id>` line, rebase the
+child on the scratch branch the HALT names, then record the resolved tip:
+
+```bash
+ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
+```
+
+The command acquires the feature dispatch lease, then validates the tip against the recorded
+conflict: the feature is stacked, the live HALT names the same child and operation, the tip descends
+from the recorded new parent, contains every candidate commit subject, has no merge commits, and
+touches only paths child `<k>` owns. On success it writes
+`refs/conductor/<slug>/restack/resolution/c<k>`, appends a `restack_resolution` event with
+`action: recorded` and the operator identity, clears the HALT, and exits `0`. The next restack uses
+the recorded tip for that child instead of replaying the conflicted range, emits
+`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs. A
+refusal prints `stack restack-resolve: refused — <detail>` and exits `1`. A failure after the ref is
+written prints `stack restack-resolve: recorded but could not …`, exits `1`, and leaves the HALT in
+place.
 
 ## `ai-conductor reseal`
 
