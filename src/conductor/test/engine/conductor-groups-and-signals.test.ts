@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1, task:rem-prd-audit-rem-vg-design-halt-join, task:rem-as-built-rem-vg-design-halt-serial, task:rem-as-built-rem-vg-resolve-on-gate-pass, task:rem-as-built-rem-vg-drain-before-projection, task:rem-as-built-rem-vg-mixed-append-halt
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm,} from 'fs/promises';
 import { join } from 'path';
