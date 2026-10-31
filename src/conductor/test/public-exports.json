@@ -17,6 +17,7 @@
   "deriveMode",
   "dispatchCliEntry",
   "dispatchNonDispatchingCliCommand",
+  "dispatchStackRoundsCliEntry",
   "detectBuildReviewAcceptCommand",
   "detectBuildReviewFindingsCommand",
   "detectBuildReviewRecordReducedCoverageCommand",
