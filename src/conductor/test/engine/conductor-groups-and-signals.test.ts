@@ -106,6 +106,7 @@ import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtu
 import { validateRemediationPlan, REMEDIATION_PLAN_CONTRACT_VERSION } from '../../src/engine/remediation-plan-contract.js';
 import { appendRemediationTasks } from '../../src/engine/remediation-append.js';
 import { recordAsBuiltReconciliation } from '../../src/engine/as-built-case-reconciliation.js';
+import type { RemediationProjection } from '../../src/engine/remediation-projection.js';
 import * as parkMarker from '../../src/engine/park-marker.js';
 import * as remediationTaskAppend from '../../src/engine/remediation-task-append.js';
 import * as repairRestage from '../../src/engine/repair-restage.js';
@@ -1889,10 +1890,29 @@ describe('engine/conductor', () => {
       const rejected = validateRemediationPlan({ version: REMEDIATION_PLAN_CONTRACT_VERSION, dispositions: [
         { reference: { kind: 'as-built-finding', id: 'first' }, disposition: 'existing-task', category: null, rationale: 'Bind sibling.', tasks: [], boundTaskIds: ['2'] },
         { reference: { kind: 'as-built-finding', id: 'second' }, disposition: 'existing-task', category: null, rationale: 'Repair second.', tasks: [], boundTaskIds: ['2'] },
-      ] }, { source: 'as-built', requiredReferences: [
-        { kind: 'as-built-finding', id: 'first', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '1' }, summary: 'First missing guard.' },
-        { kind: 'as-built-finding', id: 'second', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Second missing guard.' },
-      ], activePlanTasks: [{ id: '1', title: 'First owner', doneWhen: [] }, { id: '2', title: 'Second owner', doneWhen: [] }], refusals: [], priorAsBuiltCases: [] });
+      ] }, {
+        version: 2,
+        source: 'as-built',
+        requiredReferences: [
+          { kind: 'as-built-finding', id: 'first', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '1' }, summary: 'First missing guard.' },
+          { kind: 'as-built-finding', id: 'second', sourceGate: 'architecture_review_as_built', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Second missing guard.' },
+        ],
+        evidence: { excerpts: [], omittedFiles: [] },
+        tasks: [{ id: '1', title: 'First owner', doneWhen: [] }, { id: '2', title: 'Second owner', doneWhen: [] }],
+        pendingAsBuiltFindings: [],
+        priorAsBuiltCases: [],
+        priorLaps: [],
+        refusals: [],
+        vocabulary: {
+          dispositions: [
+            ...artifactModule.REMEDIATION_TARGET_STEPS,
+            artifactModule.REMEDIATION_PUBLICATION_DISPOSITION,
+            artifactModule.REMEDIATION_EXISTING_TASK_DISPOSITION,
+            'halt',
+          ],
+          haltCategories: artifactModule.REMEDIATION_HALT_CATEGORIES,
+        },
+      } satisfies RemediationProjection);
       expect(rejected).toMatchObject({ kind: 'rejected' });
     });
 
