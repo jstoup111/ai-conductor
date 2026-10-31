@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-31T02:33:45.762Z
 Slug: operator-command-to-inspect-and-recover-wedged-rou
 Class: plan-gap
 Halting step: prd_audit
