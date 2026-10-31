@@ -1,4 +1,4 @@
-// Covers: task:6, task:rem-prd-audit-8
+// Covers: task:6, task:rem-prd-audit-6, task:rem-prd-audit-8
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
