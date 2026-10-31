@@ -575,6 +575,11 @@ episode recovery; the daemon log names the blocking halt disposition.
 after `harness_self_host.auth_park_timeout_minutes` (default 60), then HALTs with an actionable
 reason naming the credential to refresh.
 
+A Pi auth failure parks on Pi's own credentials file, `$PI_CODING_AGENT_DIR/auth.json` (default
+`~/.pi/agent/auth.json`), and resumes when that file changes to a valid JSON object. Recover with
+Pi's `/login`, or fix the upstream provider's environment key and restart the daemon.
+`build-auth-status` does not inspect Pi credentials.
+
 ```bash
 ai-conductor build-auth-status
 ```
