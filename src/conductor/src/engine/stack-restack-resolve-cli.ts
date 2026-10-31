@@ -5,13 +5,14 @@ import { resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli
 import { hasDurableChildState } from './child-cursor.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { clearHaltAtomically } from './rewind.js';
-import { missingCandidateSubjects, readConflictRecord, resolutionRefFor } from './restack/restack-conflict-record.js';
-import { parseCommitSha, type CommitSha, type RestackOpId } from './restack/restack-types.js';
+import { missingCandidateSubjects, readConflictRecord, recordAnswer } from './restack/restack-conflict-record.js';
+import { parseCommitSha, type CommitSha } from './restack/restack-types.js';
 import { checkPathOwnership } from './restack/restack-ownership.js';
 import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
+import type { ConductorEvent } from '../types/events.js';
 
 export type CheckRestackResolutionResult = { readonly kind: 'ok'; readonly tip: CommitSha } | { readonly kind: 'refused'; readonly detail: string };
 
@@ -45,11 +46,11 @@ export interface StackRestackResolveDeps {
   resolveWorktree?: (slug: string, options: { cwd?: string; resolveMainRoot?: (cwd: string) => Promise<string> }) => Promise<string | undefined>;
   acquireLease?: typeof acquireFeatureDispatchLease;
   resolveOperator?: (root: string) => Promise<string | undefined>;
-  appendEvent?: (worktree: string, event: { type: 'restack_resolution'; opId: RestackOpId; child: ChildId; action: 'recorded'; tip: CommitSha; operator: string }) => Promise<void>;
+  appendEvent?: (worktree: string, event: Extract<ConductorEvent, { type: 'restack_resolution' | 'restack_decision' }>) => Promise<void>;
   clearHalt?: typeof clearHaltAtomically;
 }
 
-async function appendRecordedResolution(worktree: string, event: { type: 'restack_resolution'; opId: RestackOpId; child: ChildId; action: 'recorded'; tip: CommitSha; operator: string }, append?: StackRestackResolveDeps['appendEvent']): Promise<void> {
+async function appendRecordedResolution(worktree: string, event: Extract<ConductorEvent, { type: 'restack_resolution' | 'restack_decision' }>, append?: StackRestackResolveDeps['appendEvent']): Promise<void> {
   if (append) return append(worktree, event);
   const events = new ConductorEventEmitter();
   const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
@@ -57,7 +58,7 @@ async function appendRecordedResolution(worktree: string, event: { type: 'restac
   try { await events.emitOrThrow(event); } finally { persister.stop(); }
 }
 
-export async function dispatchStackRestackResolve(command: { slug: string; child: string; tip: string }, deps: StackRestackResolveDeps = {}): Promise<number> {
+export async function dispatchStackRestackResolve(command: { slug: string; child: string; tip?: string; decision?: string }, deps: StackRestackResolveDeps = {}): Promise<number> {
   const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
   const child = parseChildId(Number(command.child));
   if (!child) { print('stack restack-resolve: refused — invalid child'); return 1; }
@@ -67,15 +68,31 @@ export async function dispatchStackRestackResolve(command: { slug: string; child
   const acquired = await (deps.acquireLease ?? acquireFeatureDispatchLease)(root, command.slug, 'stack restack-resolve');
   if (acquired.kind !== 'acquired') { print(`stack restack-resolve: refused — ${formatFeatureDispatchLeaseRefusal(acquired)}`); return 1; }
   try {
-    const checked = await checkRestackResolution(worktree, command.slug, child, command.tip);
-    if (checked.kind === 'refused') { print(`stack restack-resolve: refused — ${checked.detail}`); return 1; }
     const git = makeGitRunner(worktree);
+    if (command.decision !== undefined) {
+      if (!await hasDurableChildState(worktree, command.slug, { git })) { print('stack restack-resolve: refused — feature is not stacked'); return 1; }
+      const stored = await readConflictRecord(worktree, command.slug, { git });
+      if (stored.kind !== 'record') { print('stack restack-resolve: refused — no restack conflict is recorded'); return 1; }
+      if (stored.record.child !== child) { print(`stack restack-resolve: refused — record names child ${stored.record.child}`); return 1; }
+      const halt = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8').catch(() => '');
+      if (!halt.includes(`Restack-Conflict: ${child} ${stored.record.opId}`)) { print('stack restack-resolve: refused — no matching restack-conflict halt is live'); return 1; }
+      const operator = await (deps.resolveOperator ?? resolveMachineOperatorIdentity)(root);
+      if (!operator?.trim()) { print('stack restack-resolve: refused — no approved operator identity is available'); return 1; }
+      const recorded = await recordAnswer(worktree, command.slug, { kind: 'decision', decision: { child, oldParent: stored.record.oldParent, oldTip: stored.record.oldTip, commit: stored.record.commit, paths: stored.record.paths, answer: command.decision, operator: operator.trim() } }, { git });
+      if (recorded.kind !== 'updated') { print('stack restack-resolve: refused — could not record decision'); return 1; }
+      try { await appendRecordedResolution(worktree, { type: 'restack_decision', opId: stored.record.opId, child, action: 'recorded', commit: stored.record.commit, paths: [...stored.record.paths], operator: operator.trim() }, deps.appendEvent); }
+      catch (error) { print(`stack restack-resolve: recorded but could not append decision event: ${String(error)}`); return 1; }
+      try { await (deps.clearHalt ?? clearHaltAtomically)(worktree); }
+      catch (error) { print(`stack restack-resolve: recorded but could not clear HALT: ${String(error)}`); return 1; }
+      print(`stack restack-resolve: recorded decision for child ${child}`); return 0;
+    }
+    if (command.tip === undefined) { print('stack restack-resolve: refused — supply exactly one of --tip or --decision'); return 1; }
+    const checked = await checkRestackResolution(worktree, command.slug, child, command.tip, { git });
+    if (checked.kind === 'refused') { print(`stack restack-resolve: refused — ${checked.detail}`); return 1; }
     const stored = await readConflictRecord(worktree, command.slug, { git });
     if (stored.kind !== 'record') { print('stack restack-resolve: refused — no restack conflict is recorded'); return 1; }
-    const current = await git(['rev-parse', '-q', '--verify', resolutionRefFor(command.slug, child)]);
-    const old = current.exitCode === 0 ? current.stdout.trim() : '0'.repeat(40);
-    const updated = await git(['update-ref', resolutionRefFor(command.slug, child), checked.tip, old]);
-    if (updated.exitCode !== 0) { print('stack restack-resolve: refused — could not record resolution'); return 1; }
+    const updated = await recordAnswer(worktree, command.slug, { kind: 'tip', child, tip: checked.tip }, { git });
+    if (updated.kind !== 'updated') { print('stack restack-resolve: refused — could not record resolution'); return 1; }
     const operator = await (deps.resolveOperator ?? resolveMachineOperatorIdentity)(root);
     if (!operator?.trim()) { print('stack restack-resolve: recorded but could not append resolution event: no approved operator identity is available'); return 1; }
     try { await appendRecordedResolution(worktree, { type: 'restack_resolution', opId: stored.record.opId, child, action: 'recorded', tip: checked.tip, operator: operator.trim() }, deps.appendEvent); }
