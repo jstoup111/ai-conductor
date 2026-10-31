@@ -48,6 +48,7 @@ describe('restack resolution events', () => {
     }
   });
 
+  // Covers: task:1
   it('persists a recorded decision without its answer through the event spine', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-decision-events-'));
     const eventsPath = join(root, '.pipeline', 'events.jsonl');
