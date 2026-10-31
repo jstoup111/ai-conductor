@@ -28,7 +28,7 @@ import {
 } from './restack-move.js';
 import { replayChildRange, RemBlockBodyMismatchError } from './restack-replay.js';
 import { consumeRecordedResolution } from './restack-conflict-record.js';
-import { checkPathOwnership } from './restack-ownership.js';
+import { checkPathOwnership, ownedPaths } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
 import {
@@ -536,10 +536,12 @@ async function resumePlanned(
     }
     let replay;
     try {
+      const haltRecordOwned = (await ownedPaths(range, parent, git)).has(haltRecordPathFor(current.slug));
       replay = await replayChildRange(range, parent, current.journal.committer, git, {
         comparisonCommits: current.journal.comparisonCommits,
         appendOnlyRemUnion: current.journal.routed !== undefined,
         haltRecordSlug: current.slug,
+        haltRecordOwned,
       });
     } catch (error) {
       if (error instanceof RemBlockBodyMismatchError) {
@@ -562,6 +564,7 @@ async function resumePlanned(
         stamp: current.journal.committer,
         comparisonCommits: current.journal.comparisonCommits,
         haltRecordSlug: current.slug,
+        haltRecordOwned: (await ownedPaths(range, parent, git)).has(haltRecordPathFor(current.slug)),
         resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
         cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
         git,

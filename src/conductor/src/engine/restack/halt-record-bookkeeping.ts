@@ -2,7 +2,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GitRunner } from '../rebase.js';
-import { ownedPaths } from './restack-ownership.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
 
 const HALT_RECORD_DIR = '.docs/halted';
@@ -148,18 +147,17 @@ export async function carryNewestHaltRecord(
   slug: string,
   tip: CommitSha,
   stamp: CommitterStamp,
+  rangeOwnsRecord: boolean,
   git: GitRunner,
 ): Promise<CarriedHaltRecord> {
   const path = haltRecordPathFor(slug);
-  const [owned, parentRecord, rangeRecord, parentBlob, rangeBlob, tipBlob] = await Promise.all([
-    ownedPaths(range, newParent, git),
+  const [parentRecord, rangeRecord, parentBlob, rangeBlob, tipBlob] = await Promise.all([
     textAt(git, newParent, path), textAt(git, range.oldTip, path),
     haltRecordTree(git, newParent, path, { kind: 'read' }),
     haltRecordTree(git, range.oldTip, path, { kind: 'read' }),
     haltRecordTree(git, tip, path, { kind: 'read' }),
   ]);
-  const rangeTouchedRecord = owned.has(path);
-  const rangeWins = rangeTouchedRecord && chooseHaltRecord(parentRecord, rangeRecord) === 'range';
+  const rangeWins = rangeOwnsRecord && chooseHaltRecord(parentRecord, rangeRecord) === 'range';
   const winner = rangeWins ? rangeBlob : parentBlob;
   if (tipBlob?.sha === winner?.sha) return { tip, added: false };
 

@@ -33,7 +33,7 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
-import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
+import { checkPathOwnership, ownedPaths, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { conflictDeleteLines, consumeRecordedResolution } from './restack-conflict-record.js';
@@ -770,10 +770,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       }
       let replay;
       try {
+        const haltRecordOwned = (await ownedPaths(range, parent, git)).has(haltRecordPathFor(options.slug));
         replay = await replayChildRange(range, parent, journal.journal.committer, git, {
           comparisonCommits: newStackCommits,
           appendOnlyRemUnion: options.routed !== undefined,
           haltRecordSlug: options.slug,
+          haltRecordOwned,
         });
       } catch (error) {
         if (error instanceof RemBlockBodyMismatchError) {
@@ -805,6 +807,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           stamp: journal.journal.committer,
           comparisonCommits: newStackCommits,
           haltRecordSlug: options.slug,
+          haltRecordOwned: (await ownedPaths(range, parent, git)).has(haltRecordPathFor(options.slug)),
           resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
           cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
           git,

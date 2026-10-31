@@ -41,6 +41,8 @@ export interface ReplayChildRangeOptions {
   readonly appendOnlyRemUnion?: boolean;
   /** Omit and pin this feature's halt record while replaying ordinary commits. */
   readonly haltRecordSlug?: string;
+  /** Whether the range owns this feature's halt record after carried-merge normalization. */
+  readonly haltRecordOwned?: boolean;
 }
 
 interface AuthorIdentity {
@@ -279,7 +281,7 @@ export async function replayChildRange(
   }
 
   if (options.haltRecordSlug !== undefined) {
-    const carried = await carryNewestHaltRecord(range, newParent, options.haltRecordSlug, accumulator, stamp, git);
+    const carried = await carryNewestHaltRecord(range, newParent, options.haltRecordSlug, accumulator, stamp, options.haltRecordOwned ?? true, git);
     accumulator = carried.tip;
     await mapOmittedHaltRecordCommits(range, options.haltRecordSlug, newParent, accumulator, rewrites, git);
   }

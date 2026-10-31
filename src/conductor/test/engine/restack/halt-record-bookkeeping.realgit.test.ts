@@ -14,7 +14,7 @@ import {
   isHaltRecordOnlyCommit,
   mapOmittedHaltRecordCommits,
 } from '../../../src/engine/restack/halt-record-bookkeeping.js';
-import { checkPathOwnership } from '../../../src/engine/restack/restack-ownership.js';
+import { checkPathOwnership, ownedPaths } from '../../../src/engine/restack/restack-ownership.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import type { CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 
@@ -105,8 +105,9 @@ describe('halt-record bookkeeping (real local Git)', () => {
       prepare: async () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
       current: () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
     });
-    const carried = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
-    const carriedAgain = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
+    const rangeOwnsRecord = (await ownedPaths(range(oldParent, oldTip), newParent, subject.runner)).has('.docs/halted/demo.md');
+    const carried = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, rangeOwnsRecord, subject.runner);
+    const carriedAgain = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, rangeOwnsRecord, subject.runner);
 
     expect(carried.added).toBe(true);
     expect(carriedAgain).toEqual(carried);
@@ -127,15 +128,15 @@ describe('halt-record bookkeeping (real local Git)', () => {
     const oldTip = await subject.commit('source only', { 'src/a.ts': 'a\n' });
     await subject.git(['checkout', '-qb', 'parent', subject.base]);
     const newParent = await subject.commit('parent halt', { '.docs/halted/demo.md': 'Halted at: 2030-01-01T00:00:00.000Z\n' });
-    const untouched = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
+    const untouched = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, false, subject.runner);
     expect(untouched).toEqual({ added: false, tip: newParent });
 
     await subject.git(['checkout', '-q', 'range']);
     const ownedOlder = await subject.commit('older range halt', { '.docs/halted/demo.md': 'Halted at: 2029-01-01T00:00:00.000Z' });
-    const parentWins = await carryNewestHaltRecord(range(oldParent, ownedOlder), newParent, 'demo', newParent, stamp, subject.runner);
+    const parentWins = await carryNewestHaltRecord(range(oldParent, ownedOlder), newParent, 'demo', newParent, stamp, true, subject.runner);
     expect(parentWins).toEqual({ added: false, tip: newParent });
 
-    const restoreParent = await carryNewestHaltRecord(range(oldParent, ownedOlder), newParent, 'demo', ownedOlder, stamp, subject.runner);
+    const restoreParent = await carryNewestHaltRecord(range(oldParent, ownedOlder), newParent, 'demo', ownedOlder, stamp, true, subject.runner);
     expect(restoreParent.added).toBe(true);
     await expect(recordAt(subject, restoreParent.tip)).resolves.toBe(await recordAt(subject, newParent));
   });
@@ -178,7 +179,7 @@ describe('halt-record bookkeeping (real local Git)', () => {
     const oldTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
     await subject.git(['checkout', '-qb', 'parent', side]);
     const newParent = await subject.commit('older parent record', { '.docs/halted/demo.md': 'Halted at: 2030-01-01T00:00:00.000Z\n' });
-    const carried = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, subject.runner);
+    const carried = await carryNewestHaltRecord(range(oldParent, oldTip), newParent, 'demo', newParent, stamp, false, subject.runner);
 
     expect(carried).toEqual({ added: false, tip: newParent });
     await expect(recordAt(subject, carried.tip)).resolves.toBe(await recordAt(subject, newParent));

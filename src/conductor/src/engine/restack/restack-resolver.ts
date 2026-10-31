@@ -36,6 +36,8 @@ export interface ResolveRestackConflictOptions {
   readonly comparisonCommits?: readonly CommitSha[];
   /** Enables deterministic handling of this feature's halt-record bookkeeping. */
   readonly haltRecordSlug?: string;
+  /** Whether the range owns this feature's halt record after carried-merge normalization. */
+  readonly haltRecordOwned?: boolean;
   readonly resolver: RestackResolver;
   readonly cap: number;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
@@ -200,7 +202,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       // post-rewrite is therefore the durable authority for its resulting tip.
       let tip = [...rewrites.values()].at(-1) ?? options.newParent;
       if (options.haltRecordSlug !== undefined) {
-        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, runGit);
+        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned ?? true, runGit);
         tip = carried.tip;
         await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
       }

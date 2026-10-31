@@ -6,6 +6,7 @@ import { join, relative } from 'node:path';
 const SOURCE_ROOT = join(process.cwd(), 'src');
 const LAND_SPEC = 'engine/engineer/land-spec.ts';
 const RESTACK_REPLAY = 'engine/restack/restack-replay.ts';
+const HALT_RECORD_BOOKKEEPING = 'engine/restack/halt-record-bookkeeping.ts';
 
 interface Violation { file: string; line: number; }
 
@@ -31,6 +32,8 @@ function scanCommitMessages(source: string, file: string): Violation[] {
     const call = source.slice(match.index, callEnd === -1 ? undefined : callEnd + 2);
     // adr-2026-10-10-stacked-restack-journaled-replay D3 preserves the historical message verbatim.
     if (file === RESTACK_REPLAY && /\{\s*input:\s*replayedMessage\b/.test(call)) continue;
+    // #3451 requires this deterministic restack plumbing commit to retain its exact, trailer-free message.
+    if (file === HALT_RECORD_BOOKKEEPING && /\{\s*input:\s*`halt record: \$\{slug\}\\n`,/.test(call)) continue;
     if (call.includes('withDaemonCoAuthorTrailer(')) continue;
     const offset = match.index ?? 0;
     violations.push({ file, line: source.slice(0, offset).split('\n').length });
@@ -67,6 +70,18 @@ describe('daemon commit co-author guard', () => {
     const replay = "await git(['commit-tree', 'tree'], { input: replayedMessage });\n";
     expect(scanCommitMessages(replay, RESTACK_REPLAY)).toEqual([]);
     expect(scanCommitMessages(replay, 'engine/restack/other.ts'))
+      .toEqual([{ file: 'engine/restack/other.ts', line: 1 }]);
+  });
+
+  it('allows only halt-record bookkeeping to retain its exact trailer-free message', async () => {
+    const source = await readFile(join(SOURCE_ROOT, HALT_RECORD_BOOKKEEPING), 'utf8');
+    expect(source).toMatch(/'commit-tree'[\s\S]*?\{\s*input:\s*`halt record: \$\{slug\}\\n`,/);
+    expect(source).not.toContain('withDaemonCoAuthorTrailer(');
+    expect(scanCommitMessages(source, HALT_RECORD_BOOKKEEPING)).toEqual([]);
+
+    const bookkeeping = "await git(['commit-tree', 'tree'], { input: `halt record: ${slug}\\n`, });\n";
+    expect(scanCommitMessages(bookkeeping, HALT_RECORD_BOOKKEEPING)).toEqual([]);
+    expect(scanCommitMessages(bookkeeping, 'engine/restack/other.ts'))
       .toEqual([{ file: 'engine/restack/other.ts', line: 1 }]);
   });
 
