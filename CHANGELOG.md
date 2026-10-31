@@ -62,6 +62,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked feature operators gain tier-aware restack cascade allowances and cascade status reporting. ([implementation PR #3523](https://github.com/jstoup111/ai-conductor/pull/3523)).
 - Configure OTLP header credentials from a command when environment variables are not suitable. ([implementation PR #3531](https://github.com/jstoup111/ai-conductor/pull/3531)).
 - Operators can identify committed plans with unresolved Stories references through a read-only daemon diagnostic. ([implementation PR #3534](https://github.com/jstoup111/ai-conductor/pull/3534)).
+- Operators inspect and safely recover wedged routed stack rounds. ([implementation PR #3542](https://github.com/jstoup111/ai-conductor/pull/3542)).
 
 ### Changed
 
@@ -220,6 +221,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Routed repair rounds now drain correctly and halt safely when reconciliation cannot advance. ([implementation PR #3521](https://github.com/jstoup111/ai-conductor/pull/3521)).
 - Daemon logs now render consistently indented first and continuation lines. ([implementation PR #3536](https://github.com/jstoup111/ai-conductor/pull/3536)).
 - Claude limit notices are recognized only when the CLI itself prints them, so a step whose output quotes a usage-limit or spend-limit message is no longer misread as rate-limited and re-run indefinitely. ([implementation PR #3546](https://github.com/jstoup111/ai-conductor/pull/3546)).
+- Self-host builds now halt clearly when a completed rebase leaves a gate verdict stale. ([implementation PR #3538](https://github.com/jstoup111/ai-conductor/pull/3538)).
+- Routed remediation now re-runs stale child-region gates before allowing completion. ([implementation PR #3543](https://github.com/jstoup111/ai-conductor/pull/3543)).
 
 ## Migration
 
