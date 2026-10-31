@@ -278,6 +278,29 @@ write. The plan has 10 tasks and ships as a single PR.
 
 **Dependencies:** Task 8
 
+### Task 11: Close an open audit round whose hosts are all `restacked`
+**Story:** Story 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-rounds-close-predicate.realgit.test.ts` and `src/conductor/test/engine/routing/routing-events.test.ts` for each Done-when check (RED).
+2. In `src/conductor/src/engine/stack-rounds-cli.ts`, remove the `has no pending hosts to drop` refusal so an admissible round with no `pending` host returns `supersedable` with an empty `droppedHosts`. In `src/conductor/src/engine/routing/routing-events.ts`, let `routingRoundSupersededEvent` accept an empty `droppedHosts` and set `child` to the lowest dropped host, or to the record's current host (`currentHostOf`) when none is dropped (GREEN).
+3. Commit.
+
+**Done when:**
+- [test] For an open audit round r2 whose hosts 1 and 2 are both `restacked`, with r3 open and named by the marker, `checkRoundSupersession(r2)` returns `supersedable` with `supersededBy` r3, `droppedHosts` [] and `findingIds` [].
+- [test] Closing that r2 writes phase `closed` with hosts {1: `restacked`, 2: `restacked`} and exactly one `routing_round_superseded` outbox event with `droppedHosts` [] and `child` equal to r2's current host.
+- [test] `routingRoundSupersededEvent` with an empty `droppedHosts` returns `child` equal to the record's current host, and with `droppedHosts` [2, 3] returns `child` 2.
+- `src/conductor/src/engine/stack-rounds-cli.ts` contains no `has no pending hosts to drop` refusal, and `tsc --noEmit` passes.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-rounds-cli.ts` — predicate
+- `src/conductor/src/engine/routing/routing-events.ts` — factory child fallback
+- `src/conductor/test/engine/stack-rounds-close-predicate.realgit.test.ts` — all-restacked close tests
+- `src/conductor/test/engine/routing/routing-events.test.ts` — factory test
+
+**Dependencies:** Task 1, Task 4, Task 6
+
 ## Task Dependency Graph
 
 ```
@@ -286,6 +309,7 @@ Task 3 ─┬─ Task 4 ─┬┴─ Task 6 ─┐
         │          └── Task 5 ─┼─ Task 8 ─┬─ Task 9
         └─ Task 7 ─────────────┘          └─ Task 10
 Task 2 (independent)
+Task 1, Task 4, Task 6 ── Task 11
 ```
 
 ## Integration Points
@@ -303,7 +327,7 @@ Task 2 (independent)
 | adr-2026-10-12-routed-whole-feature-repair#D3 | no-change | none | Residue routing judgement is not changed. |
 | adr-2026-10-12-routed-whole-feature-repair#D4 | no-change | none | Owner/host separation and upward moves are not changed; a record with an in-progress reroute is refused. |
 | adr-2026-10-12-routed-whole-feature-repair#D5 | no-change | none | Prerequisite claims and reroutes are not changed. |
-| adr-2026-10-12-routed-whole-feature-repair#D6 | task | task-6, task-4, task-5 | `readRouteRecord(r4)` returns phase `closed` with hosts {1: `restacked`, 2: `done`} |
+| adr-2026-10-12-routed-whole-feature-repair#D6 | task | task-6, task-4, task-5, task-11 | `readRouteRecord(r4)` returns phase `closed` with hosts {1: `restacked`, 2: `done`} |
 | adr-2026-10-12-routed-whole-feature-repair#D7 | task | task-8, task-7, task-9 | calls `acquireLease` before `supersedeRound`, calls `lease.release` once |
 | adr-2026-10-12-routed-whole-feature-repair#D8 | no-change | none | The cursor and execution-child resolver are not changed. |
 | adr-2026-10-12-routed-whole-feature-repair#D9 | no-change | none | Routed task append at region entry is not changed. |
@@ -313,7 +337,7 @@ Task 2 (independent)
 | adr-2026-10-12-routed-whole-feature-repair#D13 | no-change | none | Routed exit restacks are not changed; a superseded round has no `built` host by predicate. |
 | adr-2026-10-12-routed-whole-feature-repair#D14 | no-change | none | The re-validation queue is not read or written; `revalidate` rounds are refused. |
 | adr-2026-10-12-routed-whole-feature-repair#D15 | task | task-10 | `reconcileRounds` returns `leaf-returned` for r5, and `prd_audit`, `architecture_review_as_built` and `manual_test` read `pending` |
-| adr-2026-10-12-routed-whole-feature-repair#D16 | task | task-1, task-10 | appends exactly one `routing_round_superseded` line for r4 to `.pipeline/events.jsonl` and empties r4's outbox |
+| adr-2026-10-12-routed-whole-feature-repair#D16 | task | task-1, task-10, task-11 | appends exactly one `routing_round_superseded` line for r4 to `.pipeline/events.jsonl` and empties r4's outbox |
 | adr-2026-10-12-routed-whole-feature-repair#D17 | no-change | none | A flat N=1 feature has no durable child state, so the eligibility check refuses before any routing read. |
 | adr-2026-10-12-routed-whole-feature-repair#D18 | existing | none | The routing flag is read through the existing `routingSettingOn`; the command refuses when routing is disabled and changes no default. |
 
