@@ -4,6 +4,25 @@ spec_hash: 7bccd72681acb12b22b69692cb6f52113c67fbbbfc7bc84d930b7ab94bcf2377
 pr: https://github.com/jstoup111/ai-conductor/pull/3542
 shipped: 2026-10-31
 engine_version: 20261031T004009Z-fa5d3fe03904
+findings:
+  - gate: architecture_review_as_built
+    finding: "as-built:4aa40d7c-a46b-4b43-b538-e461b4228322:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-12-routed-whole-feature-repair decision 6"
+    outcome: remediated
+    summary: "99% confidence, source-verified: concurrent closes can close the sole remaining round without leaf return. stack-rounds-cli.ts:340 checks survival before the lease; :346 passes the stale result to the writer; :75 CAS-checks only the target record. Two commands can each check r4/r5 as the other's survivor, then acquire the lease sequentially and successfully close both. D6 requires another round to stay non-closed. Preserve preliminary refusals and revalidate survival under the lease or atomically verify the surviving ref."
+  - gate: architecture_review_as_built
+    finding: "as-built:4aa40d7c-a46b-4b43-b538-e461b4228322:2"
+    class: REMEDIABLE
+    governing_clause: "Task 2"
+    outcome: remediated
+    summary: "99% confidence, verified repository reference search: dispatchStackRoundsIfDetected at src/conductor/src/cli.ts:522 has no production caller. Its only invocation is test/cli/stack-rounds-detect.test.ts:48; index.ts:998-1000 bypasses it with direct detector and dispatcher calls. Connect this helper to the production CLI entry so its rejected-vector proof exercises the shipped path."
+  - gate: architecture_review_as_built
+    finding: "as-built:eb8e91aa-f041-49be-a9d8-7f09450add88:1"
+    class: REMEDIABLE
+    governing_clause: "Task 2"
+    outcome: remediated
+    summary: "99% confidence, source-verified: prior reachability finding remains unresolved. dispatchStackRoundsIfDetected at src/conductor/src/cli.ts:522 has no production caller; production-source search finds only its definition. src/conductor/src/index.ts:998-1000 bypasses it with direct detector/dispatcher calls, while test/cli/stack-rounds-detect.test.ts:48 exercises only the helper. HEAD commit 5bbe6c6d12 removed the production wiring and dispatcher-spied entry test. Restore the production helper path and its rejected-vector entry proof as already required by task 2 and the existing remediation tasks."
 ---
 
 ## Cost
