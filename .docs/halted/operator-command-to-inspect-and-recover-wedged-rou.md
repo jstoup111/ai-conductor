@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-31T02:33:45.762Z
+Status: halted
 Slug: operator-command-to-inspect-and-recover-wedged-rou
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-operator-command-to-inspect-and-recover-wedged-rou
-Head SHA: a0b9bb1276d6a3bdf6b8a6acee28aa385d652c58
-Halted at: 2026-10-30T02:43:01.389Z
+Head SHA: ed3f01d356eae1a85cfae2219b7fb7ccba473e88
+Halted at: 2026-10-31T05:56:45.992Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-prd-audit halted: needs human DECIDE — PLAN_GAP on S3.1.
+A FINISH publication transition did not change the state it owns. Next action: Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH. Detail: The author_pr_prose transition left pr.prose unchanged at placeholder.
 ```
