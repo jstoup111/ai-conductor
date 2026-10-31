@@ -1,11 +1,17 @@
-import { HALT_RECORD_DIR } from '../halt-record.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import type { GitRunner } from '../rebase.js';
-import { ownedPaths } from './restack-ownership.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
-import type { CommitterStamp } from './restack-replay.js';
+
+const HALT_RECORD_DIR = '.docs/halted';
+
+interface CommitterStamp {
+  readonly name: string;
+  readonly email: string;
+  readonly date: string;
+}
 
 /** Resolve the repository-relative halt-record path for one feature. */
 export function haltRecordPathFor(slug: string): string {
@@ -79,6 +85,13 @@ async function commitsAreSigned(git: GitRunner): Promise<boolean> {
   return result.exitCode === 0 && result.stdout.trim() === 'true';
 }
 
+async function rangeTouchesPath(range: ChildRange, path: string, git: GitRunner): Promise<boolean> {
+  const result = await git(['diff', '--no-renames', '--quiet', range.oldParent, range.oldTip, '--', path]);
+  if (result.exitCode === 0) return false;
+  if (result.exitCode === 1) return true;
+  throw new Error(`could not determine whether child range touched ${path}: ${result.stderr}`);
+}
+
 /** True only for a non-merge commit whose sole changed path is this feature's halt record. */
 export async function isHaltRecordOnlyCommit(commit: CommitSha, slug: string, git: GitRunner): Promise<boolean> {
   const parents = await git(['rev-list', '--parents', '-n', '1', commit]);
@@ -128,7 +141,7 @@ export async function carryNewestHaltRecord(
   git: GitRunner,
 ): Promise<CarriedHaltRecord> {
   const path = haltRecordPathFor(slug);
-  const rangeTouchedRecord = (await ownedPaths(range, newParent, git)).has(path);
+  const rangeTouchedRecord = await rangeTouchesPath(range, path, git);
   const [parentRecord, rangeRecord, parentBlob, rangeBlob, tipBlob] = await Promise.all([
     textAt(git, newParent, path), textAt(git, range.oldTip, path),
     blobAt(git, newParent, path), blobAt(git, range.oldTip, path), blobAt(git, tip, path),
@@ -143,7 +156,7 @@ export async function carryNewestHaltRecord(
     ...(await commitsAreSigned(git) ? ['-S'] : []),
     tree, '-p', tip,
   ], {
-    input: `halt record: ${slug}\n`,
+    input: withDaemonCoAuthorTrailer(`halt record: ${slug}\n`),
     env: {
       GIT_AUTHOR_NAME: stamp.name,
       GIT_AUTHOR_EMAIL: stamp.email,
