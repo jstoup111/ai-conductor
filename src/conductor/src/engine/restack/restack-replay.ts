@@ -5,7 +5,7 @@ import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 import { unionRemBlocks } from '../routing/rem-block-merge.js';
-import { haltRecordPathFor, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
+import { carryNewestHaltRecord, haltRecordPathFor, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
 
 /** A deterministic append-only plan conflict that must halt without an LLM resolver. */
 export class RemBlockBodyMismatchError extends Error {
@@ -296,6 +296,8 @@ export async function replayChildRange(
   }
 
   if (options.haltRecordSlug !== undefined) {
+    const carried = await carryNewestHaltRecord(range, newParent, options.haltRecordSlug, accumulator, stamp, git);
+    accumulator = carried.tip;
     await mapOmittedHaltRecordCommits(range, options.haltRecordSlug, newParent, accumulator, rewrites, git);
   }
 
