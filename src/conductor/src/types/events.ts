@@ -2279,6 +2279,14 @@ type ConductorEventBody =
       paths: string[];
     }
   | {
+      type: 'restack_resolution';
+      opId: RestackOpId;
+      child: ChildId;
+      action: 'recorded' | 'consumed';
+      tip: CommitSha;
+      operator?: string;
+    }
+  | {
       type: 'restack_refused';
       reason: RestackRefusalReason;
       child?: ChildId;

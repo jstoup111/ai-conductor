@@ -174,7 +174,7 @@ describe('stack owners CLI with real local Git', () => {
         ?.commands.map((entry) => entry.name()),
       preDispatch: PRE_DISPATCH_COMMANDS.find((entry) => entry.detector === 'detectStackOwnersCommand'),
     }).toEqual({
-      command: ['land', 'owners', 'rounds'],
+      command: ['land', 'owners', 'rounds', 'restack-resolve'],
       preDispatch: { detector: 'detectStackOwnersCommand', commandPath: ['stack', 'owners'], helpOwner: 'router' },
     });
   });

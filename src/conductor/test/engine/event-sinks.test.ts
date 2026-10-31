@@ -160,6 +160,7 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'journal-live-owner'
   | 'published-stack'
   | 'deferred-base-refresh'
+  | 'restack-resolution-stale'
 >>;
 const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
 void restackRefusalReasonContract;
@@ -413,6 +414,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_planned',
   'restack_applied',
   'restack_conflict',
+  'restack_resolution',
   'restack_refused',
   'restack_recovered',
   'push_lease_refused',

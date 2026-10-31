@@ -31,6 +31,7 @@
 //    them before their fixture can exercise the target behavior. Enable only
 //    the guard's documented test valve here; tests of the guard pass an
 //    explicit environment and still cover the production refusal path.
+import { afterEach } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,11 +59,16 @@ delete process.env.GIT_EXTERNAL_DIFF;
 process.env[NO_AUTOLAUNCH_ENV] = '1';
 process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
 process.env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW = '1';
-if (!process.env.AI_CONDUCTOR_ENGINEER_DIR) {
-  process.env.AI_CONDUCTOR_ENGINEER_DIR = mkdtempSync(
-    join(tmpdir(), 'ai-conductor-test-engineer-')
-  );
-}
+const testEngineerDir = process.env.AI_CONDUCTOR_ENGINEER_DIR || mkdtempSync(
+  join(tmpdir(), 'ai-conductor-test-engineer-')
+);
+process.env.AI_CONDUCTOR_ENGINEER_DIR = testEngineerDir;
+// Individual suites use vi.unstubAllEnvs() or restore a captured pre-setup
+// value. Reassert the process-local redirect after every test so the next
+// suite cannot fall back to the operator's engineer store.
+afterEach(() => {
+  process.env.AI_CONDUCTOR_ENGINEER_DIR = testEngineerDir;
+});
 if (!process.env.AI_CONDUCTOR_USER_CONFIG_DIR?.trim()) {
   process.env.AI_CONDUCTOR_USER_CONFIG_DIR = mkdtempSync(
     join(tmpdir(), 'ai-conductor-test-user-config-')

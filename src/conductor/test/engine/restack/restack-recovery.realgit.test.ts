@@ -390,7 +390,7 @@ describe('recoverRestackJournal (real local Git)', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(resolverCalls).toBe(0);
     expect((await subject.git([
       'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',

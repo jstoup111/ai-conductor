@@ -209,6 +209,16 @@ function moveLines(moves: readonly RestackMoveRef[]): string[] {
   return moves.map((move) => `update ${move.ref} ${move.newSha} ${move.oldSha}`);
 }
 
+function consumedResolutionVerifyLines(journal: StoredRestackJournal): readonly string[] {
+  const consumed = journal.journal.consumedResolution;
+  if (!consumed) return [];
+  return [
+    `verify refs/conductor/${journal.slug}/restack/resolution/c${consumed.child} ${consumed.tip}`,
+    `verify refs/conductor/${journal.slug}/restack/conflict/record ${consumed.record}`,
+    `verify refs/conductor/${journal.slug}/restack/conflict/parent ${consumed.parent}`,
+  ];
+}
+
 function leafMovedLine(journal: StoredRestackJournal, moves: readonly RestackMoveRef[]): string | undefined {
   const leaf = journal.journal.ranges.find((range) => range.kind === 'leaf-active');
   if (!leaf) return undefined;
@@ -261,18 +271,23 @@ export async function haltRestack(
   return writeHaltMarker(worktree, `restack refused (${reason})${child}${detail}\n`, 'needs-human', events);
 }
 
-/**
- * Write the human halt for an unresolved replay conflict. A conflict is not a
- * refusal (ADR decision 12): its occurrence is `restack_conflict`, emitted by
- * the caller, so this writes the halt without a `restack_refused`.
- */
+/** Write the human halt for an unresolved replay conflict without a refusal event. */
 export async function haltRestackConflict(
   worktree: string,
   child: ChildId,
   detail: string,
   events?: ConductorEventEmitter,
+  recipe?: { readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha },
 ): Promise<HaltMarkerWriteResult> {
-  return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}\n`, 'needs-human', events);
+  const instructions = recipe === undefined ? '' : [
+    // ai-conductor:session-command-context=operator-only
+    `Restack-Conflict: ${child} ${recipe.opId}`,
+    `git switch -c restack-resolve/${recipe.slug}/c${child} ${recipe.oldTip}`,
+    `git rebase --onto ${recipe.newParent} ${recipe.oldParent}`,
+    `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --tip <sha>`,
+    // /ai-conductor:session-command-context
+  ].join('\n');
+  return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}${instructions === '' ? '' : `\n${instructions}`}\n`, 'needs-human', events);
 }
 
 async function abortReadyMove(
@@ -308,6 +323,7 @@ export async function applyRestackMove(
     const moved = await runGit(git, ['update-ref', '--stdin'], transaction([
       ...moveLines(moves),
       ...(marker === undefined ? [] : [marker]),
+      ...consumedResolutionVerifyLines(journal),
       ...journalStateUpdateLines(journal, nextBlob, 'moved'),
     ]));
     if (moved?.exitCode === 0) return { kind: 'moved', journal: { slug: journal.slug, blob: nextBlob, journal: next } };

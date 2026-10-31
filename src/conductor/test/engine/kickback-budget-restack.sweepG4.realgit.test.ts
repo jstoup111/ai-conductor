@@ -115,7 +115,7 @@ async function haltAtCascadeCap(subject: Subject) {
     slug: 'demo',
     cause: 'feature-repair',
     git: makeGitRunner(subject.repo),
-  })).resolves.toEqual({ kind: 'halted' });
+  })).resolves.toMatchObject({ kind: 'halted' });
   await expect(access(join(subject.repo, HALT_MARKER))).resolves.toBeUndefined();
 }
 

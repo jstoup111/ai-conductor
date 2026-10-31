@@ -176,7 +176,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo),
       resolver: async () => ({ resolved: false, reason: 'declined' }), resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(JSON.parse(await subject.git(['cat-file', 'blob', JOURNAL_REF]))).toMatchObject({ state: 'aborted' });
     expect(await counts(subject.repo)).toEqual({ 1: 1 });
   });
@@ -200,7 +200,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
     persister.start();
     try {
-      await expect(repairOnce(subject.repo, events)).resolves.toEqual({ kind: 'halted' });
+      await expect(repairOnce(subject.repo, events)).resolves.toMatchObject({ kind: 'halted' });
     } finally {
       persister.stop();
     }
@@ -229,7 +229,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
     const secondEvents = new ConductorEventEmitter();
     secondEvents.on('restack_refused', (event) => { records.push(event); });
     secondEvents.on('restack_planned', (event) => { records.push(event); });
-    await expect(repairOnce(second.repo, secondEvents)).resolves.toEqual({ kind: 'halted' });
+    await expect(repairOnce(second.repo, secondEvents)).resolves.toMatchObject({ kind: 'halted' });
     expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 2 }]);
     await expect(second.git(['rev-parse', '--verify', JOURNAL_REF])).rejects.toBeDefined();
   });
@@ -244,7 +244,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
       await subject.repair(1, `${corrupt}.txt`);
 
       await expect(checkCascadeCap(subject.repo, 'demo', [child(1)], 3)).resolves.toMatchObject({ kind: 'exhausted', child: 1 });
-      await expect(repairOnce(subject.repo)).resolves.toEqual({ kind: 'halted' });
+      await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'halted' });
       await expect(subject.git(['rev-parse', '--verify', JOURNAL_REF])).rejects.toBeDefined();
       expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
       expect(await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).toContain('refs/conductor/demo/cascades');
@@ -259,7 +259,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
       await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'applied' });
     }
     await subject.repair(1, 'four.txt');
-    await expect(repairOnce(subject.repo)).resolves.toEqual({ kind: 'halted' });
+    await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'halted' });
 
     const budgetLine = 'Kickback budget (restack): 3/3 consumed; 0 remaining';
     const reasonLine = 'Latest reason: restack cascade cap for originating child 1';

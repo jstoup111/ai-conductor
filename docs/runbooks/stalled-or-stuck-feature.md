@@ -1309,6 +1309,19 @@ advance; otherwise [clear the halt](#clear-a-halt-and-let-the-feature-resume) on
 A `restack conflict child <k>` HALT lists the conflicting commit and paths the resolver could not
 settle within the rebase resolution attempt budget.
 
+When that HALT includes `Restack-Conflict: <k> <op-id>`, resolve it on the scratch branch named in
+the recipe, never on `feat/c<k>/<slug>` or a closed ref:
+
+```bash
+git switch -c restack-resolve/<slug>/c<k> <old-tip>
+git rebase --onto <new-parent> <old-parent>
+ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
+```
+
+On success the command clears the HALT, and the next restack applies the recorded tip. For
+validation rules and refusals, see
+[restack conflict resolution](../reference/cli.md#restack-conflict-resolution).
+
 **Recovery:**
 
 - **`cascade-cap`:** if more repairs are justified, authorize them with the child the HALT names:
@@ -1324,7 +1337,7 @@ settle within the rebase resolution attempt budget.
   halt to retry the restack.
 - **Every other reason:** park the feature, remove the named condition (commit the overlapping
   changes, move the colliding untracked file, release the other checkout, let the concurrent Git operation finish,
-  or settle the conflict on the named child's branch), then
+  or settle the conflict using its scratch-branch recipe), then
   [clear the halt](#clear-a-halt-and-let-the-feature-resume). Do not delete
   `refs/conductor/<slug>/restack/*` refs by hand; the next stack preflight recovers or retries the
   operation from its journal.

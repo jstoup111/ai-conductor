@@ -1,6 +1,6 @@
 import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
-// Covers: task:1, task:10, task:15
+// Covers: task:1, task:6, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
@@ -150,6 +150,23 @@ describe('guardDaemonSessionInvocation', () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).toContain('stack-commit-guard');
     expect(guardDaemonSessionInvocation(argvFor('stack', 'land'), markedEnv()).allowed).toBe(false);
     expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
+  });
+
+  it('refuses operator-recorded restack resolution before command dispatch', async () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).not.toContain('stack');
+    const readFeaturePath = vi.fn();
+    const dispatch = vi.fn(async () => {
+      readFeaturePath('/project/.worktrees/demo');
+      return 0;
+    });
+    await expect(dispatchCliEntry({
+      argv: argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--tip', 'a'.repeat(40)),
+      environment: markedEnv(),
+      dispatch,
+      diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(readFeaturePath).not.toHaveBeenCalled();
   });
 
   it('never grants build-review operator authority to a daemon session', () => {
