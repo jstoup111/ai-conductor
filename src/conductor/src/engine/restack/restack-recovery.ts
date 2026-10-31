@@ -582,10 +582,11 @@ async function resumePlanned(
       const conflictParent = deliveredDecision === undefined
         ? undefined
         : await runGit(git, ['rev-parse', '-q', '--verify', `refs/conductor/${current.slug}/restack/conflict/parent`]);
-      const deliveredConflict = conflictRecord?.kind === 'record' && conflictParent?.exitCode === 0
+      const deliveredConflictRecord = conflictRecord?.kind === 'record' ? conflictRecord : undefined;
+      const deliveredConflict = deliveredConflictRecord !== undefined && conflictParent?.exitCode === 0
         ? parseCommitSha(conflictParent.stdout.trim())
         : undefined;
-      if (deliveredDecision !== undefined && (!deliveredConflict || conflictRecord?.kind !== 'record')) return { kind: 'unavailable' };
+      if (deliveredDecision !== undefined && (!deliveredConflict || deliveredConflictRecord === undefined)) return { kind: 'unavailable' };
       if (deliveredDecision !== undefined) {
         await options.events?.emit({
           type: 'restack_decision', action: 'applied', child: range.child,
@@ -641,7 +642,7 @@ async function resumePlanned(
         {
           git,
           ...(deliveredDecision === undefined ? {} : { deliveredDecision: {
-            child: range.child, blob: deliveredDecision.blob, record: conflictRecord!.blob, parent: deliveredConflict!,
+            child: range.child, blob: deliveredDecision.blob, record: deliveredConflictRecord!.blob, parent: deliveredConflict!,
           } }),
         },
       );

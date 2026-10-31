@@ -225,7 +225,11 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         reason: started.stderr || 'restack resolver rebase failed',
         expectedSubjects: await replayCandidateSubjects(tempGit, candidates),
       },
-      async (context) => options.resolver({ ...context, environment, operatorDecision: options.operatorDecision }),
+      async (context) => options.resolver({
+        ...context,
+        environment,
+        ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
+      }),
       options.cap,
     );
     if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome);

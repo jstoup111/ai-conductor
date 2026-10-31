@@ -839,10 +839,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const conflictParent = deliveredDecision === undefined
           ? undefined
           : await runGit(git, ['rev-parse', '-q', '--verify', conflictParentRefFor(options.slug)]);
-        const deliveredConflict = conflictRecord?.kind === 'record' && conflictParent?.exitCode === 0
+        const deliveredConflictRecord = conflictRecord?.kind === 'record' ? conflictRecord : undefined;
+        const deliveredConflict = deliveredConflictRecord !== undefined && conflictParent?.exitCode === 0
           ? parseCommitSha(conflictParent.stdout.trim())
           : undefined;
-        if (deliveredDecision !== undefined && (!deliveredConflict || conflictRecord?.kind !== 'record')) {
+        if (deliveredDecision !== undefined && (!deliveredConflict || deliveredConflictRecord === undefined)) {
           throw new Error('cannot record delivered decision conflict state');
         }
         const resolution = await resolveRestackConflict({
@@ -882,7 +883,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, {
           git,
           ...(deliveredDecision === undefined ? {} : { deliveredDecision: {
-            child: range.child, blob: deliveredDecision.blob, record: conflictRecord!.blob, parent: deliveredConflict!,
+            child: range.child, blob: deliveredDecision.blob, record: deliveredConflictRecord!.blob, parent: deliveredConflict!,
           } }),
         });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);

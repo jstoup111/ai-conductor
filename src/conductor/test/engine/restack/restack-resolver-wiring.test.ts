@@ -14,7 +14,7 @@ describe('restack resolver production wiring', () => {
     const resolver = await source('restack/restack-resolver.ts');
 
     expect(resolver).toContain('readonly operatorDecision?: { answer: string; commit: string; paths: readonly string[] }');
-    expect(resolver).toContain('options.resolver({ ...context, environment, operatorDecision: options.operatorDecision })');
+    expect(resolver).toContain('...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision })');
   });
 
   it('forwards the provider resolver and configured cap through every replay entry point', async () => {

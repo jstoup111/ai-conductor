@@ -102,7 +102,11 @@ export async function dispatchStackRestackResolve(command: { slug: string; child
       catch (error) { print(`stack restack-resolve: recorded but could not clear HALT: ${String(error)}`); return 1; }
       print(`stack restack-resolve: recorded decision for child ${child}`); return 0;
     }
-    const checked = await checkRestackResolution(worktree, command.slug, child, command.tip, { git });
+    const tip = command.tip;
+    if (tip === undefined) {
+      print('stack restack-resolve: refused — supply exactly one of --tip or --decision'); return 1;
+    }
+    const checked = await checkRestackResolution(worktree, command.slug, child, tip, { git });
     if (checked.kind === 'refused') { print(`stack restack-resolve: refused — ${checked.detail}`); return 1; }
     const stored = await readConflictRecord(worktree, command.slug, { git });
     if (stored.kind !== 'record') { print('stack restack-resolve: refused — no restack conflict is recorded'); return 1; }

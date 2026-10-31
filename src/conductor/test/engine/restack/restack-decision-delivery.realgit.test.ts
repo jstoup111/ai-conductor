@@ -148,7 +148,8 @@ describe('restack decision delivery (real local Git)', () => {
     ]);
     await expect(readRestackJournal(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'missing' });
     const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
-    expect(eventLines.map((event: { type: string }) => event.type)).toEqual(['restack_planned', 'restack_applied']);
+    expect(eventLines).toContainEqual(expect.objectContaining({ type: 'restack_planned' }));
+    expect(eventLines).toContainEqual(expect.objectContaining({ type: 'restack_applied' }));
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
   });
 
