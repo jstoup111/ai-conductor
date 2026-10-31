@@ -66,18 +66,58 @@ async function textAt(git: GitRunner, revision: CommitSha, path: string): Promis
   return result.exitCode === 0 ? result.stdout : undefined;
 }
 
-interface BlobEntry {
+export interface HaltRecordBlob {
   readonly mode: string;
   readonly sha: CommitSha;
 }
 
-async function blobAt(git: GitRunner, revision: CommitSha, path: string): Promise<BlobEntry | undefined> {
-  const result = await git(['ls-tree', revision, '--', path]);
-  if (result.exitCode !== 0) throw new Error(`could not read halt-record blob at ${revision}: ${result.stderr}`);
-  if (result.stdout.trim() === '') return undefined;
-  const match = result.stdout.trim().match(/^(\d+)\s+blob\s+([0-9a-f]{40,64})\t/);
-  if (!match) throw new Error(`could not parse halt-record blob at ${revision}`);
-  return { mode: match[1]!, sha: requiredSha(match[2]!, 'halt-record blob') };
+type HaltRecordTreeOperation =
+  | { readonly kind: 'read' }
+  | { readonly kind: 'write'; readonly record: HaltRecordBlob | undefined };
+
+/** Read a halt-record blob or replace it in a tree without touching the worktree. */
+export function haltRecordTree(
+  git: GitRunner,
+  tree: CommitSha,
+  path: string,
+  operation: { readonly kind: 'read' },
+): Promise<HaltRecordBlob | undefined>;
+export function haltRecordTree(
+  git: GitRunner,
+  tree: CommitSha,
+  path: string,
+  operation: { readonly kind: 'write'; readonly record: HaltRecordBlob | undefined },
+): Promise<CommitSha>;
+export async function haltRecordTree(
+  git: GitRunner,
+  tree: CommitSha,
+  path: string,
+  operation: HaltRecordTreeOperation,
+): Promise<HaltRecordBlob | undefined | CommitSha> {
+  if (operation.kind === 'read') {
+    const result = await git(['ls-tree', tree, '--', path]);
+    if (result.exitCode !== 0) throw new Error(`could not read halt-record blob at ${tree}: ${result.stderr}`);
+    if (result.stdout.trim() === '') return undefined;
+    const match = result.stdout.trim().match(/^(\d+)\s+blob\s+([0-9a-f]{40,64})\t/);
+    if (!match) throw new Error(`could not parse halt-record blob at ${tree}`);
+    return { mode: match[1]!, sha: requiredSha(match[2]!, 'halt-record blob') };
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), 'restack-halt-record-index-'));
+  const env = { GIT_INDEX_FILE: join(directory, 'index') };
+  try {
+    const read = await git(['read-tree', tree], { env });
+    if (read.exitCode !== 0) throw new Error(`could not load tip tree: ${read.stderr}`);
+    const update = operation.record === undefined
+      ? await git(['update-index', '--force-remove', path], { env })
+      : await git(['update-index', '--add', '--cacheinfo', `${operation.record.mode},${operation.record.sha},${path}`], { env });
+    if (update.exitCode !== 0) throw new Error(`could not update halt-record tree: ${update.stderr}`);
+    const written = await git(['write-tree'], { env });
+    if (written.exitCode !== 0) throw new Error(`could not write halt-record tree: ${written.stderr}`);
+    return requiredSha(written.stdout, 'halt-record tree');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function commitsAreSigned(git: GitRunner): Promise<boolean> {
@@ -94,29 +134,6 @@ export async function isHaltRecordOnlyCommit(commit: CommitSha, slug: string, gi
   if (changed.exitCode !== 0) throw new Error(`could not read changed paths for ${commit}: ${changed.stderr}`);
   const paths = changed.stdout.split('\n').filter(Boolean);
   return paths.length === 1 && paths[0] === haltRecordPathFor(slug);
-}
-
-async function recordTree(
-  git: GitRunner,
-  tip: CommitSha,
-  path: string,
-  source: BlobEntry | undefined,
-): Promise<CommitSha> {
-  const directory = await mkdtemp(join(tmpdir(), 'restack-halt-record-index-'));
-  const env = { GIT_INDEX_FILE: join(directory, 'index') };
-  try {
-    const read = await git(['read-tree', tip], { env });
-    if (read.exitCode !== 0) throw new Error(`could not load tip tree: ${read.stderr}`);
-    const update = source === undefined
-      ? await git(['update-index', '--force-remove', path], { env })
-      : await git(['update-index', '--add', '--cacheinfo', `${source.mode},${source.sha},${path}`], { env });
-    if (update.exitCode !== 0) throw new Error(`could not update halt-record tree: ${update.stderr}`);
-    const written = await git(['write-tree'], { env });
-    if (written.exitCode !== 0) throw new Error(`could not write halt-record tree: ${written.stderr}`);
-    return requiredSha(written.stdout, 'halt-record tree');
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
 }
 
 export interface CarriedHaltRecord {
@@ -137,14 +154,16 @@ export async function carryNewestHaltRecord(
   const [owned, parentRecord, rangeRecord, parentBlob, rangeBlob, tipBlob] = await Promise.all([
     ownedPaths(range, newParent, git),
     textAt(git, newParent, path), textAt(git, range.oldTip, path),
-    blobAt(git, newParent, path), blobAt(git, range.oldTip, path), blobAt(git, tip, path),
+    haltRecordTree(git, newParent, path, { kind: 'read' }),
+    haltRecordTree(git, range.oldTip, path, { kind: 'read' }),
+    haltRecordTree(git, tip, path, { kind: 'read' }),
   ]);
   const rangeTouchedRecord = owned.has(path);
   const rangeWins = rangeTouchedRecord && chooseHaltRecord(parentRecord, rangeRecord) === 'range';
   const winner = rangeWins ? rangeBlob : parentBlob;
   if (tipBlob?.sha === winner?.sha) return { tip, added: false };
 
-  const tree = await recordTree(git, tip, path, winner);
+  const tree = await haltRecordTree(git, tip, path, { kind: 'write', record: winner });
   const committed = await git([
     'commit-tree',
     ...(await commitsAreSigned(git) ? ['-S'] : []),

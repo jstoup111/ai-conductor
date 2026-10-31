@@ -5,7 +5,7 @@ import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 import { unionRemBlocks } from '../routing/rem-block-merge.js';
-import { carryNewestHaltRecord, haltRecordPathFor, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
+import { carryNewestHaltRecord, haltRecordPathFor, haltRecordTree, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
 
 /** A deterministic append-only plan conflict that must halt without an LLM resolver. */
 export class RemBlockBodyMismatchError extends Error {
@@ -137,26 +137,9 @@ async function pinnedHaltRecordTree(
   path: string,
 ): Promise<CommitSha> {
   const mergedTree = requiredSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
-  const selected = await git(['ls-tree', source, '--', path]);
-  if (selected.exitCode !== 0) throw new Error(`could not read halt record from ${source}: ${selected.stderr}`);
-  const entry = selected.stdout.trim();
-  const match = entry.match(/^(\d+)\s+(blob)\s+([0-9a-f]{40,64})\t/);
-  const indexDirectory = await mkdtemp(join(tmpdir(), 'restack-halt-record-index-'));
-  const indexPath = join(indexDirectory, 'index');
-  const env = { GIT_INDEX_FILE: indexPath };
-  try {
-    const read = await git(['read-tree', mergedTree], { env });
-    if (read.exitCode !== 0) throw new Error(`could not load merged tree for ${commit}: ${read.stderr}`);
-    const update = match
-      ? await git(['update-index', '--add', '--cacheinfo', `${match[1]},${match[3]},${path}`], { env })
-      : await git(['update-index', '--force-remove', path], { env });
-    if (update.exitCode !== 0) throw new Error(`could not pin halt record for ${commit}: ${update.stderr}`);
-    const written = await git(['write-tree'], { env });
-    if (written.exitCode !== 0) throw new Error(`could not write halt-record tree for ${commit}: ${written.stderr}`);
-    return requiredSha(written.stdout, `halt-record tree for ${commit}`);
-  } finally {
-    await rm(indexDirectory, { recursive: true, force: true });
-  }
+  const record = await haltRecordTree(git, source, path, { kind: 'read' });
+  const tree = await haltRecordTree(git, mergedTree, path, { kind: 'write', record });
+  return requiredSha(tree, `halt-record tree for ${commit}`);
 }
 
 async function textAt(git: GitRunner, revision: string, path: string): Promise<string | undefined> {
