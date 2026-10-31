@@ -85,7 +85,9 @@ describe('leaf-moved marker sweep (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'applied' });
 
     expect(await subject.rev('feat/daemon-demo')).toBe(advanced);
-    expect(await subject.rev('feat/c1/demo^')).toBe(advanced);
+    // The child retains its carried halt record; the unentered leaf maps the
+    // omitted record to the advanced default rather than that bookkeeping tip.
+    expect(await subject.rev('feat/c1/demo^^')).toBe(advanced);
     // One transaction moved the leaf together with child 1 and child 2.
     expect(moved).toHaveLength(1);
     expect(moved[0]).toContain('update refs/heads/feat/c1/demo ');
