@@ -202,7 +202,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       // post-rewrite is therefore the durable authority for its resulting tip.
       let tip = [...rewrites.values()].at(-1) ?? options.newParent;
       if (options.haltRecordSlug !== undefined) {
-        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned ?? true, runGit);
+        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned, runGit);
         tip = carried.tip;
         await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
       }

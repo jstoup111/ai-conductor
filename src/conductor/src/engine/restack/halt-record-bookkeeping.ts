@@ -147,17 +147,26 @@ export async function carryNewestHaltRecord(
   slug: string,
   tip: CommitSha,
   stamp: CommitterStamp,
-  rangeOwnsRecord: boolean,
+  rangeOwnsRecord: boolean | undefined,
   git: GitRunner,
 ): Promise<CarriedHaltRecord> {
   const path = haltRecordPathFor(slug);
+  // Ownership cannot be calculated before plumbing replay: carried-merge
+  // classification itself may need the replay's conflict to reach the
+  // flatten-refusal path.  A dynamic import keeps this late calculation out
+  // of the halt-bookkeeping/replay module initialization cycle.
+  let ownsRecord = rangeOwnsRecord;
+  if (ownsRecord === undefined) {
+    const { ownedPaths } = await import('./restack-ownership.js');
+    ownsRecord = (await ownedPaths(range, newParent, git)).has(path);
+  }
   const [parentRecord, rangeRecord, parentBlob, rangeBlob, tipBlob] = await Promise.all([
     textAt(git, newParent, path), textAt(git, range.oldTip, path),
     haltRecordTree(git, newParent, path, { kind: 'read' }),
     haltRecordTree(git, range.oldTip, path, { kind: 'read' }),
     haltRecordTree(git, tip, path, { kind: 'read' }),
   ]);
-  const rangeWins = rangeOwnsRecord && chooseHaltRecord(parentRecord, rangeRecord) === 'range';
+  const rangeWins = ownsRecord && chooseHaltRecord(parentRecord, rangeRecord) === 'range';
   const winner = rangeWins ? rangeBlob : parentBlob;
   if (tipBlob?.sha === winner?.sha) return { tip, added: false };
 

@@ -281,7 +281,7 @@ export async function replayChildRange(
   }
 
   if (options.haltRecordSlug !== undefined) {
-    const carried = await carryNewestHaltRecord(range, newParent, options.haltRecordSlug, accumulator, stamp, options.haltRecordOwned ?? true, git);
+    const carried = await carryNewestHaltRecord(range, newParent, options.haltRecordSlug, accumulator, stamp, options.haltRecordOwned, git);
     accumulator = carried.tip;
     await mapOmittedHaltRecordCommits(range, options.haltRecordSlug, newParent, accumulator, rewrites, git);
   }
