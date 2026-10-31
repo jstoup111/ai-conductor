@@ -249,7 +249,10 @@ describe('restack decision delivery (real local Git)', () => {
     expect(halt).toContain('--tip <sha>');
     expect(halt).toContain('--decision "<answer>"');
     const eventsWritten = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
-    expect(eventsWritten).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'stale', child }));
+    expect(eventsWritten).toContainEqual(expect.objectContaining({
+      type: 'restack_decision', action: 'stale', child,
+      commit: conflict.record.commit, paths: conflict.record.paths,
+    }));
   });
 
   // Covers: task:14
