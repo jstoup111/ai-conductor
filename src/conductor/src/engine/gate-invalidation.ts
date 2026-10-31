@@ -61,8 +61,9 @@ export const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs
 // a prefix here would turn an ADR-only rebase delta into a false noop.
 export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/', '.docs/decisions/'] as const;
 
-export function isReviewDocumentPath(path: string): boolean {
-  return COVERAGE_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
+export function isReviewDocumentPath(path: string, listedPaths: readonly string[] = []): boolean {
+  return listedPaths.includes(path) ||
+    COVERAGE_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
@@ -189,15 +190,20 @@ export function projectGateSurfaces(
   const featureTest = featureTestPaths(D, F);
   const featureRuntimeSurface = F.filter(isRuntimeSourcePath);
   const featureCodeTestSurface = F.filter((path) => isRuntimeSourcePath(path) || isTestPath(path));
+  const manifestBacked = documentInputs?.some((path) => /^\.docs\/[^/]+\/manifest\.json$/.test(path)) ?? false;
   const documents = (prefixes: readonly string[]) => {
-    const declared = documentInputs?.filter((path) => prefixes.some((prefix) => path.startsWith(prefix)));
+    const matches = (path: string): boolean => prefixes.some((prefix) => path.startsWith(prefix)) ||
+      (manifestBacked && isReviewDocumentPath(path, documentInputs));
+    const declared = documentInputs?.filter(matches);
     return {
-      matchedPaths: D.filter((path) => prefixes.some((prefix) => path.startsWith(prefix)) && (declared === undefined || declared.includes(path))),
+      matchedPaths: D.filter((path) => matches(path) && (declared === undefined || declared.includes(path))),
       // A runtime-only delta does not require resolving document inputs, so
       // callers deliberately supply an empty list in that case. It means the
       // delta named no concrete document, not that the gate has no document
       // dependency; retain the prefix declaration for its event surface.
-      declaredSurface: declared && declared.length > 0 ? declared : [`<${prefixes.join('|')}>`],
+      declaredSurface: manifestBacked && declared && declared.length > 0
+        ? declared
+        : [`<${prefixes.join('|')}>`],
     };
   };
   const prdInputs = documents(PRD_AUDIT_DOCUMENT_INPUT_PREFIXES);
@@ -314,7 +320,7 @@ export function classifyReplayGateInvalidation(
 
   for (const [gate, surface] of Object.entries(GATE_SURFACE)) {
     const projection = projections[surface];
-    const activeInputs = projection.matchedPaths.filter(isReviewDocumentPath);
+    const activeInputs = projection.matchedPaths.filter((path) => isReviewDocumentPath(path, documentInputs));
     if (gate === 'manual_test' && !ranManualTest) {
       candidates.push({
         gate,

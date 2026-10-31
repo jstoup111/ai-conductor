@@ -53,6 +53,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  tmp: process.env.TMP,',
     '  temp: process.env.TEMP,',
     '  root: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,',
+    '  engineerDir: process.env.AI_CONDUCTOR_ENGINEER_DIR,',
     '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
     '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
@@ -138,6 +139,7 @@ describe('run-vitest startup', () => {
     expect(observation.tmp).toBe(observation.root);
     expect(observation.temp).toBe(observation.root);
     expect(observation.scope).toBe(observation.root);
+    expect(observation.engineerDir).toBe(join(observation.root, 'engineer'));
     expect(observation.root).toMatch(new RegExp(`^${join(fixtureRoot, '.vitest-tmp', 'ai-conductor-vitest-run-')}`));
     expect(observation.gitCeiling?.split(delimiter)).toContain(observation.root);
     expect(existsSync(observation.root)).toBe(false);

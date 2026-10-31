@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { isTestFilePath, isTestSupportPath } from './test-path.js';
+import type { FeatureOwnership } from './feature-ownership.js';
 
 export interface TautologyPathClassification {
   /** Executable changed tests: kept at HEAD and passed to the scoped command. */
@@ -40,6 +41,8 @@ export interface TautologyPreflightDependencies {
   readonly mergeBase: string;
   readonly headSha: string;
   readonly diff: string;
+  /** Manifest-backed ownership keeps listed artifacts out of production restores. */
+  readonly ownership?: FeatureOwnership;
   /** Creates a disposable checkout at `path` from the current feature HEAD. */
   readonly createCheckout: (path: string, headSha: string) => Promise<void>;
   /** Reads exactly one changed production path from the merge base. */
@@ -239,12 +242,19 @@ function addedPaths(diff: string): ReadonlySet<string> {
 }
 
 /** Closed three-way classifier; unknown paths are production, never a broad test selector. */
-export function classifyTautologyPaths(paths: readonly string[], admittedTests: readonly string[] = []): TautologyPathClassification {
+export function classifyTautologyPaths(
+  paths: readonly string[],
+  admittedTests: readonly string[] = [],
+  ownership: FeatureOwnership = { kind: 'legacy' },
+): TautologyPathClassification {
   const admitted = new Set(admittedTests);
+  const listedArtifacts = ownership.kind === 'manifest' ? new Set(ownership.ownedPaths) : new Set<string>();
+  const isNonProduction = (path: string) =>
+    /^\.docs\/[^/]+\/manifest\.json$/.test(path) || listedArtifacts.has(path);
   return {
-    tests: paths.filter((path) => isTestFilePath(path) || admitted.has(path)).sort(),
-    testSupport: paths.filter((path) => !isTestFilePath(path) && !admitted.has(path) && isTestSupportPath(path)).sort(),
-    production: paths.filter((path) => !isTestFilePath(path) && !admitted.has(path) && !isTestSupportPath(path)).sort(),
+    tests: paths.filter((path) => !isNonProduction(path) && (isTestFilePath(path) || admitted.has(path))).sort(),
+    testSupport: paths.filter((path) => !isNonProduction(path) && !isTestFilePath(path) && !admitted.has(path) && isTestSupportPath(path)).sort(),
+    production: paths.filter((path) => !isNonProduction(path) && !isTestFilePath(path) && !admitted.has(path) && !isTestSupportPath(path)).sort(),
   };
 }
 
@@ -318,6 +328,7 @@ function cacheKey(deps: TautologyPreflightDependencies, paths: readonly string[]
       ? null
       : [...new Set(deps.counterfactualFileSelectors)].sort(),
     currentGreenProofIdentity: deps.currentGreenProofIdentity ?? null,
+    ownership: deps.ownership ?? { kind: 'legacy' },
   })).digest('hex')}`;
 }
 
@@ -344,7 +355,7 @@ export async function materializeTautologyPreflight(
   deps: TautologyPreflightDependencies,
 ): Promise<TautologyPreflightResult> {
   const paths = changedPaths(deps.diff);
-  const classified = classifyTautologyPaths(paths, deps.counterfactualFileSelectors ?? []);
+  const classified = classifyTautologyPaths(paths, deps.counterfactualFileSelectors ?? [], deps.ownership);
   const added = addedPaths(deps.diff);
   const renames = renamedPaths(deps.diff);
   const sourceIdentities = { mergeBase: deps.mergeBase, headSha: deps.headSha };

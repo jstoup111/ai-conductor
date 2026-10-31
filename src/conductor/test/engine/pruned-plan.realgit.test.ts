@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:11, task:23
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -82,9 +82,43 @@ describe('readPlanOrPruned (real local Git)', () => {
     await expect(readPlanOrPruned(f.readAt, f.realGit, deletedAt, planPath)).resolves.toEqual(Buffer.from(current));
   });
 
-  it('refuses when no reachable deletion supplied the missing plan', async () => {
+  it('reads a nested manifest plan from the parent of the manifest deletion', async () => {
     const f = await fixture();
-    const head = await mustSucceed(f.realGit, ['commit', '--allow-empty', '-qm', 'empty history']);
+    const manifestPath = '.docs/alpha/manifest.json';
+    const nestedPlanPath = '.docs/alpha/machine/plan.md';
+    const content = '# Nested manifest plan';
+    await mkdir(join(f.repo, '.docs', 'alpha', 'machine'), { recursive: true });
+    await writeFile(join(f.repo, manifestPath), JSON.stringify({
+      schemaVersion: 1,
+      slug: 'alpha',
+      artifacts: [{ kind: 'plan', path: nestedPlanPath }],
+    }));
+    await writeFile(join(f.repo, nestedPlanPath), content);
+    await f.commit('add manifest-backed plan');
+    await rm(join(f.repo, manifestPath));
+    await rm(join(f.repo, nestedPlanPath));
+    const deletedAt = await f.commit('prune manifest-backed plan');
+
+    await expect(readPlanOrPruned(f.readAt, f.realGit, deletedAt, '.docs/plans/alpha.md'))
+      .resolves.toEqual(Buffer.from(content));
+  });
+
+  it('refuses an unreachable manifest deletion so shipment audit keeps the plan unresolved', async () => {
+    const f = await fixture();
+    const head = await mustSucceed(f.realGit, ['commit', '--allow-empty', '-qm', 'main history']);
+    await mustSucceed(f.realGit, ['checkout', '-b', 'pruned-elsewhere']);
+    await mkdir(join(f.repo, '.docs', 'alpha', 'machine'), { recursive: true });
+    await writeFile(join(f.repo, '.docs/alpha/manifest.json'), JSON.stringify({
+      schemaVersion: 1,
+      slug: 'alpha',
+      artifacts: [{ kind: 'plan', path: '.docs/alpha/machine/plan.md' }],
+    }));
+    await writeFile(join(f.repo, '.docs/alpha/machine/plan.md'), '# Unreachable');
+    await f.commit('add unreachable manifest-backed plan');
+    await rm(join(f.repo, '.docs/alpha/manifest.json'));
+    await rm(join(f.repo, '.docs/alpha/machine/plan.md'));
+    await f.commit('prune unreachable manifest-backed plan');
+    await mustSucceed(f.realGit, ['checkout', 'main']);
 
     await expect(readPlanOrPruned(f.readAt, f.realGit, head, planPath)).resolves.toMatchObject({
       kind: 'refused', code: 'shipment-plan-pruned', path: planPath,

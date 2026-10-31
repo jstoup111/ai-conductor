@@ -2590,6 +2590,106 @@ describe('performRebase protected-artifact self-amendment (#1379, real git)', ()
   }, 20000);
 });
 
+describe('performRebase manifest ownership drift (Task 3, real git)', () => {
+  it('refuses manifest drift before moving HEAD', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-ownership-drift-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 'ownership@example.test']);
+      await g(['config', 'user.name', 'Ownership']);
+      await writeFile(join(repo, 'README.md'), 'base\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'base']);
+
+      await g(['checkout', '-qb', 'feature']);
+      await mkdir(join(repo, '.docs', 'f'), { recursive: true });
+      await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(repo, '.docs', 'coherence'), { recursive: true });
+      await writeFile(join(repo, '.docs', 'f', 'manifest.json'), `${JSON.stringify({
+        schemaVersion: 1,
+        slug: 'f',
+        artifacts: [
+          { kind: 'plan', path: '.docs/plans/f.md' },
+          { kind: 'coherence', path: '.docs/coherence/f.md' },
+        ],
+      }, null, 2)}\n`);
+      await writeFile(join(repo, '.docs', 'plans', 'f.md'), '# Plan\n');
+      await writeFile(join(repo, '.docs', 'coherence', 'f.md'), '# Coherence\n');
+      await g(['add', '.docs']);
+      await g(['commit', '-qm', 'add manifest']);
+      await rm(join(repo, '.docs', 'coherence', 'f.md'));
+      await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+      await writeFile(join(repo, '.docs', 'stories', 'unlisted.md'), '# Unlisted\n');
+      await g(['add', '.docs']);
+      await g(['commit', '-qm', 'add unlisted story']);
+
+      const before = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'base-advance.txt'), 'advance\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'advance base']);
+      await g(['checkout', '-q', 'feature']);
+
+      await expect(performRebase(makeGitRunner(repo), repo, 'main')).rejects.toThrow(
+        /\.docs\/coherence\/f\.md: missing.*restore the file.*\.docs\/stories\/unlisted\.md: unlisted.*ai-conductor register-artifact/s,
+      );
+      expect((await g(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('refuses manifest drift before moving HEAD when the manifest plan has a non-slug filename', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-ownership-non-slug-plan-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 'ownership@example.test']);
+      await g(['config', 'user.name', 'Ownership']);
+      await writeFile(join(repo, 'README.md'), 'base\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'base']);
+
+      await g(['checkout', '-qb', 'feature']);
+      await mkdir(join(repo, '.docs', 'f'), { recursive: true });
+      await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(repo, '.docs', 'coherence'), { recursive: true });
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(join(repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'f' }));
+      await writeFile(join(repo, '.docs', 'f', 'manifest.json'), `${JSON.stringify({
+        schemaVersion: 1,
+        slug: 'f',
+        artifacts: [
+          { kind: 'plan', path: '.docs/plans/custom-review-plan.md' },
+          { kind: 'coherence', path: '.docs/coherence/f.md' },
+        ],
+      }, null, 2)}\n`);
+      await writeFile(join(repo, '.docs', 'plans', 'custom-review-plan.md'), '# Plan\n');
+      await writeFile(join(repo, '.docs', 'coherence', 'f.md'), '# Coherence\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'add manifest']);
+      await rm(join(repo, '.docs', 'coherence', 'f.md'));
+      await g(['add', '.docs']);
+      await g(['commit', '-qm', 'remove listed coherence']);
+
+      const before = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'base-advance.txt'), 'advance\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'advance base']);
+      await g(['checkout', '-q', 'feature']);
+
+      await expect(performRebase(makeGitRunner(repo), repo, 'main')).rejects.toThrow(
+        /\.docs\/coherence\/f\.md: missing.*restore the file/s,
+      );
+      expect((await g(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 20000);
+});
+
 // ── Resolved rebase classifies by its true tree delta (preTree..HEAD) ────────
 //
 // Observed on projects-cannot-add (2026-09-21): main had advanced by one

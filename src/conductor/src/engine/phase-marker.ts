@@ -25,13 +25,18 @@ export interface WritePhaseMarkerOptions {
   phase: 'BUILD' | 'SHIP' | string;
   /** Path prefixes (relative to repo root) that are exempt from the guard. */
   allow: string[];
+  /** Manifest-owned paths. Absent for legacy features. */
+  own?: readonly string[];
+  /** Manifest-protected paths. Absent for legacy features. */
+  protect?: readonly string[];
 }
 
 /**
  * Write the phase-active marker, creating the `.pipeline` directory if
  * necessary. Content is line-oriented (not JSON/YAML) so shell/bash hooks
  * can read it without a parser: `step: <name>`, `phase: <BUILD|SHIP>`,
- * `written: <ISO-8601>`, followed by zero or more `allow: <prefix>` lines.
+ * `written: <ISO-8601>`, followed by zero or more `allow: <prefix>`,
+ * `own: <path>`, and `protect: <path>` lines.
  */
 export function writePhaseMarker(root: string, opts: WritePhaseMarkerOptions, now: Date = new Date()): void {
   const path = phaseMarkerPath(root);
@@ -41,6 +46,8 @@ export function writePhaseMarker(root: string, opts: WritePhaseMarkerOptions, no
     `phase: ${opts.phase}`,
     `written: ${now.toISOString()}`,
     ...opts.allow.map((prefix) => `allow: ${prefix}`),
+    ...(opts.own ?? []).map((path) => `own: ${path}`),
+    ...(opts.protect ?? []).map((path) => `protect: ${path}`),
   ];
   writeFileSync(path, `${lines.join('\n')}\n`, 'utf8');
 }

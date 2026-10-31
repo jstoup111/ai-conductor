@@ -92,7 +92,7 @@ export function buildFeatureManifest(
   };
 }
 
-function isExcludedManifestPath(path: string, manifestPath: DocsPath): boolean {
+export function isExcludedManifestPath(path: string, manifestPath: DocsPath): boolean {
   return path === manifestPath
     || path.startsWith('.docs/plan-review/')
     || path.startsWith('.docs/shipped/')

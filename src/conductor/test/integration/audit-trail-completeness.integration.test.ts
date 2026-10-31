@@ -81,6 +81,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   land_gate_rejected: 'not-audited-by-design',
   land_dependency_decided: 'not-audited-by-design',
   feature_artifacts_registered: 'not-audited-by-design',
+  feature_artifact_registration_refused: 'not-audited-by-design',
   dependency_drift_swept: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
@@ -380,6 +381,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   feature_artifacts_registered: {
     type: 'feature_artifacts_registered', slug: 'feature', added: [],
+  },
+  feature_artifact_registration_refused: {
+    type: 'feature_artifact_registration_refused', slug: 'feature', condition: 'missing rationale',
   },
   dependency_drift_swept: {
     type: 'dependency_drift_swept', repository: 'owner/repo', status: 'swept',

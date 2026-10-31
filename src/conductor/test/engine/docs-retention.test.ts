@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:22
 import { describe, expect, it } from 'vitest';
 
 import { DOCS_RETENTION_POLICY, prunableFilesForStem } from '../../src/engine/docs-retention.js';
@@ -14,6 +14,16 @@ const PRUNABLE_FAMILIES = [
   'plan-review',
   'applicability',
   'retros',
+] as const;
+
+const PRUNABLE_KINDS = [
+  'plan',
+  'conflicts',
+  'coherence',
+  'coherence-waiver',
+  'track',
+  'complexity',
+  'applicability',
 ] as const;
 
 const KEPT_FAMILIES = [
@@ -50,6 +60,7 @@ describe('prunableFilesForStem', () => {
     expect(DOCS_RETENTION_POLICY).toMatchObject({
       keptFamilies: KEPT_FAMILIES,
       prunableFamilies: PRUNABLE_FAMILIES,
+      prunableKinds: PRUNABLE_KINDS,
     });
   });
 

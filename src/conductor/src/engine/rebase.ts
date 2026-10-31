@@ -32,8 +32,19 @@ import {
   resolveFeaturePlanPath,
   resolveFeaturePrdPaths,
 } from './artifacts.js';
+import { featureManifestPath, type FeatureScopedKind } from './feature-manifest.js';
 import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
-import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
+import {
+  resolveFeatureArtifact,
+  resolveFeatureDecisionArtifact,
+  worktreeManifestSource,
+} from './feature-manifest-source.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+  type FeatureOwnership,
+} from './feature-ownership.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
 import {
@@ -1317,58 +1328,84 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
   }
 }
 
-/** Resolve review inputs.  Ordinary callers resolve only for a document
- * delta; preservation additionally requests the full declared set to bind
- * authority against later input edits. */
-export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
-  if (!force && !delta.some(isReviewDocumentPath)) return [];
+/**
+ * Resolve the feature identity used for every manifest lookup in this module.
+ *
+ * `feature_desc` is the durable feature identity and the only key that may
+ * select a manifest; an active-plan path is only a document location, so a
+ * manifest whose folder merely matches a plan filename never becomes this
+ * feature's authority. Without a `feature_desc` manifest, the first candidate
+ * is retained as the legacy fallback so manifest-absent behavior is unchanged.
+ */
+async function resolveManifestIdentity(projectRoot: string): Promise<{
+  featureDesc: string | undefined;
+  planPath: string | undefined;
+  context: Awaited<ReturnType<typeof buildArtifactResolutionContext>>;
+  manifestSlug: string | undefined;
+  manifestOrigin: 'manifest' | 'legacy';
+}> {
   const featureDesc = await resolveFeatureDesc(projectRoot);
-  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
-  const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
-  if (context.featureIdentities.length === 0) return delta.filter(isReviewDocumentPath);
-  const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
-  const manifestSlug = featureDesc ?? (planPath ? basename(planPath, '.md') : undefined);
-  const prd = manifestSlug === undefined
-    ? { origin: 'legacy' as const, paths: await resolveFeaturePrdPaths(projectRoot, context).then((paths) => paths.map(repoPath)) }
-    : await resolveFeatureArtifact(
-      worktreeManifestSource(projectRoot),
-      manifestSlug,
-      'prd',
-      async () => (await resolveFeaturePrdPaths(projectRoot, context)).map(repoPath),
-    );
-  const inputs = prd.paths.filter((path) => prd.origin === 'legacy' || !prd.missing.includes(path));
-  // The manifest-backed plan path is authoritative when one exists. The
-  // context's cached active-plan identity remains the legacy fallback.
+  const context = await buildArtifactResolutionContext(projectRoot, { featureDesc });
+  const planPath = context.activePlanPath ?? await resolveFeaturePlanPath(projectRoot, featureDesc);
+  const candidates = [...new Set([
+    featureDesc,
+    context.activePlanPath ? basename(context.activePlanPath, '.md') : undefined,
+    planPath ? basename(planPath, '.md') : undefined,
+  ].filter((candidate): candidate is string => candidate !== undefined))];
+  const manifestSource = worktreeManifestSource(projectRoot);
+  if (featureDesc !== undefined && await manifestSource.readFile(featureManifestPath(featureDesc)) !== null) {
+    return { featureDesc, planPath, context, manifestSlug: featureDesc, manifestOrigin: 'manifest' };
+  }
+  return { featureDesc, planPath, context, manifestSlug: candidates[0], manifestOrigin: 'legacy' };
+}
+
+const REVIEW_INPUT_ARTIFACT_KINDS = ['stories', 'prd', 'plan', 'coherence'] as const satisfies readonly FeatureScopedKind[];
+
+/**
+ * Resolve the declared review-document set when a feature manifest owns the
+ * feature. `resolveFeatureArtifact` remains the single manifest parser and
+ * missing-artifact authority; this caller deliberately retains declared
+ * missing paths as review inputs so their later creation or deletion is seen.
+ */
+async function resolveManifestReviewInputPaths(
+  manifestSource: ReturnType<typeof worktreeManifestSource>,
+  manifestSlug: string,
+): Promise<string[] | undefined> {
+  const [artifacts, decisions] = await Promise.all([
+    Promise.all(REVIEW_INPUT_ARTIFACT_KINDS.map((kind) =>
+      resolveFeatureArtifact(manifestSource, manifestSlug, kind, async () => []),
+    )),
+    resolveFeatureDecisionArtifact(manifestSource, manifestSlug, async () => []),
+  ]);
+
+  return [
+    featureManifestPath(manifestSlug),
+    ...artifacts.flatMap(({ paths }) => paths),
+    ...decisions.paths,
+  ];
+}
+
+/** Select legacy review inputs by their historical plan-stem identities. */
+async function resolveLegacyReviewInputPaths(
+  projectRoot: string,
+  planPath: string | undefined,
+  context: Awaited<ReturnType<typeof buildArtifactResolutionContext>>,
+  repoPath: (path: string) => string,
+  manifestSource: ReturnType<typeof worktreeManifestSource>,
+): Promise<string[]> {
+  if (context.featureIdentities.length === 0) return [];
+
+  const inputs = (await resolveFeaturePrdPaths(projectRoot, context)).map(repoPath);
   const activePlan = planPath ?? context.activePlanPath;
   if (activePlan) {
     const plan = repoPath(activePlan);
     const stem = basename(plan, '.md');
-    const coherence = await resolveFeatureArtifact(
-      worktreeManifestSource(projectRoot),
-      featureDesc ?? stem,
-      'coherence',
-      async () => [`.docs/coherence/${stem}.md`],
-    );
-    const coherencePath = coherence.paths.find((path) =>
-      coherence.origin === 'legacy' || !coherence.missing.includes(path),
-    );
-    inputs.push(plan);
-    if (coherencePath) inputs.push(coherencePath);
+    inputs.push(plan, `.docs/coherence/${stem}.md`);
     const body = await readFile(join(projectRoot, plan), 'utf8').catch(() => '');
-    const storiesResolution = await resolveFeatureArtifact(
-      worktreeManifestSource(projectRoot),
-      featureDesc ?? stem,
-      'stories',
-      async () => {
-        const legacyStories = await resolveFeatureStoriesRef(worktreeManifestSource(projectRoot), plan, body);
-        return legacyStories === null ? [] : [legacyStories];
-      },
-    );
-    const stories = storiesResolution.paths.find((path) =>
-      storiesResolution.origin === 'legacy' || !storiesResolution.missing.includes(path),
-    );
+    const stories = await resolveFeatureStoriesRef(manifestSource, plan, body);
     if (stories) inputs.push(stories);
   }
+
   // Same-stem paths also cover removed documents that no longer appear in a glob.
   for (const identity of context.featureIdentities) {
     for (const prefix of ['stories', 'specs', 'plans', 'coherence']) {
@@ -1376,20 +1413,52 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
     }
     inputs.push(`.docs/decisions/adr-${identity}.md`);
   }
-  // Decision records are inputs only when the feature CITES them.  Binding
+  return inputs;
+}
+
+/** Assemble the selected review paths with the ADRs their documents cite. */
+async function assembleReviewInputs(
+  projectRoot: string,
+  selectedPaths: readonly string[],
+  delta: string[],
+  force: boolean,
+  repoPath: (path: string) => string,
+): Promise<string[]> {
+  const inputs = [...selectedPaths.map(repoPath)];
+  // Decision records are inputs only when the feature CITES them. Binding
   // every ADR in the checkout made each ADR landed on main reopen
   // prd_audit / as-built on nearly every rebase, although
-  // none of those gates read an uncited decision.  Scan the feature's own
+  // none of those gates read an uncited decision. Scan the feature's own
   // documents (plan, coherence, stories, specs/PRD) for decision paths or
   // `adr-<stem>` references; a cited ADR edit still reopens its reviews.
-  const cited = new Set<string>();
-  for (const doc of [...new Set(inputs.map(repoPath))]) {
+  for (const doc of [...new Set(inputs)]) {
     if (doc.startsWith('.docs/decisions/')) continue;
     const text = await readFile(join(projectRoot, doc), 'utf8').catch(() => '');
-    for (const stem of citedDecisionStems(text)) cited.add(`.docs/decisions/${stem}.md`);
+    for (const stem of citedDecisionStems(text)) inputs.push(`.docs/decisions/${stem}.md`);
   }
-  inputs.push(...cited);
-  return [...new Set(inputs.map(repoPath))];
+  const resolved = [...new Set(inputs.map(repoPath))];
+  return force || delta.some((path) => isReviewDocumentPath(path, resolved)) ? resolved : [];
+}
+
+/** Resolve review inputs.  Ordinary callers resolve only for a document
+ * delta; preservation additionally requests the full declared set to bind
+ * authority against later input edits. */
+export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
+  const { planPath, context, manifestSlug, manifestOrigin } = await resolveManifestIdentity(projectRoot);
+  const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
+  const manifestSource = worktreeManifestSource(projectRoot);
+  const manifestPaths = manifestOrigin === 'manifest' && manifestSlug !== undefined
+    ? await resolveManifestReviewInputPaths(manifestSource, manifestSlug)
+    : undefined;
+  if (manifestPaths !== undefined) {
+    return assembleReviewInputs(projectRoot, manifestPaths, delta, force, repoPath);
+  }
+
+  if (!force && !delta.some((path) => isReviewDocumentPath(path))) return [];
+  const legacyPaths = context.featureIdentities.length === 0
+    ? delta.filter((path) => isReviewDocumentPath(path))
+    : await resolveLegacyReviewInputPaths(projectRoot, planPath, context, repoPath, manifestSource);
+  return assembleReviewInputs(projectRoot, legacyPaths, delta, force, repoPath);
 }
 
 /** Decision-record stems (`adr-...`) a feature document references, by
@@ -1404,7 +1473,7 @@ export function citedDecisionStems(text: string): string[] {
 
 function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): string[] {
   return [...new Set([...outcome.changedCodePaths,
-    ...(outcome.allChangedPaths ?? []).filter(isReviewDocumentPath)])];
+    ...(outcome.allChangedPaths ?? []).filter((path) => isReviewDocumentPath(path, outcome.documentInputs))])];
 }
 
 export interface PerformRebaseOpts {
@@ -1501,6 +1570,18 @@ export async function performRebase(
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
   // authority first so a stale or tampered seal fails before history changes.
   // Repositories predating seals retain the legacy rebase behavior.
+  const { featureDesc, manifestSlug: ownershipSlug } = await resolveManifestIdentity(projectRoot);
+  let ownership: FeatureOwnership | undefined;
+  if (ownershipSlug) {
+    ownership = await computeFeatureOwnership(
+      worktreeFeatureOwnershipSource(projectRoot, git),
+      ownershipSlug,
+      base.ref,
+    );
+    if (ownership.kind === 'malformed' || ownership.kind === 'drift') {
+      throw new ProtectedArtifactSealRejection(renderOwnershipRefusal(ownership));
+    }
+  }
   try {
     await access(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
     const verdict = await verifyProtectedArtifactSeal({
@@ -1509,8 +1590,11 @@ export async function performRebase(
       // omitting it silently reports a feature's OWN amended DECIDE artifact as
       // a foreign mutation. Resolved here rather than accepted from the caller
       // so no call site can disable the tolerance by forgetting to pass it.
-      featureDesc: await resolveFeatureDesc(projectRoot),
+      featureDesc,
       baseBranch: base.branch,
+      ownership: ownership?.kind === 'legacy' || ownership?.kind === 'manifest'
+        ? ownership
+        : undefined,
     });
     if (!verdict.ok) throw new ProtectedArtifactSealRejection(verdict.reason);
   } catch (error) {
@@ -2339,6 +2423,19 @@ export async function resolveRebaseConflicts(
   cap: number,
   opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'> & { supersessionJudgement?: boolean },
 ): Promise<RebaseOutcome> {
+  if (conflictOutcome.kind === 'conflict_halt') {
+    const manifestConflicts = conflictOutcome.conflicts.filter(isFeatureManifestConflict);
+    if (manifestConflicts.length > 0) {
+      // ai-conductor:session-command-context=operator-only
+      return {
+        ...conflictOutcome,
+        reason:
+          `feature manifest conflict requires human resolution: ${manifestConflicts.join(', ')}. ` +
+          "Recovery: take the base branch's manifest, then re-run ai-conductor register-artifact for each feature artifact entry.",
+      };
+      // /ai-conductor:session-command-context
+    }
+  }
   const resolved = await resolveRebaseConflictsInner(
     git,
     projectRoot,
@@ -3140,6 +3237,10 @@ export async function emitRebaseEvent(
 
 // ── .docs keep-both resolver ────────────────────────────────────────────────
 
+function isFeatureManifestConflict(path: string): boolean {
+  return /^\.docs\/[^/]+\/manifest\.json$/.test(path);
+}
+
 /**
  * Deterministic resolver for .docs/ conflicts: keep both sides of add/add or
  * rename/rename conflicts by preserving both versions with distinct names,
@@ -3157,6 +3258,10 @@ export async function emitRebaseEvent(
  */
 export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
   const { conflicts, projectRoot } = ctx;
+
+  if (conflicts.some(isFeatureManifestConflict)) {
+    return { resolved: false, reason: 'feature manifest conflicts require human resolution' };
+  }
 
   // Only resolve .docs/ conflicts; anything else is not our domain.
   if (!conflicts.every((f) => f.startsWith('.docs/'))) {

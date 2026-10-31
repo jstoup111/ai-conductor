@@ -509,7 +509,7 @@ type ConductorEventBody =
       type: 'decide_artifacts_pruned';
       removed: string[];
       deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[];
-      skipped: { stem: string; reason: 'no-shipped-record' }[];
+      skipped: { stem: string; reason: 'no-shipped-record' | 'malformed-manifest' }[];
       excluded: string[];
       pullRequestUrl?: string;
     }
@@ -666,6 +666,11 @@ type ConductorEventBody =
       type: 'feature_artifacts_registered';
       slug: string;
       added: Array<{ kind: ArtifactKind; path: string }>;
+    }
+  | {
+      type: 'feature_artifact_registration_refused';
+      slug: string;
+      condition: string;
     }
   | {
       type: 'dependency_drift_swept';

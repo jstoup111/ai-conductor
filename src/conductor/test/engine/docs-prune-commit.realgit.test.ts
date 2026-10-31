@@ -1,11 +1,11 @@
-// Covers: task:5
+// Covers: task:5, task:23
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
-import { commitDocsPruneDeletion } from '../../src/engine/docs-prune.js';
+import { commitDocsPruneDeletion, resolveDocsPruneSelection } from '../../src/engine/docs-prune.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const roots: string[] = [];
@@ -52,4 +52,51 @@ it('refuses an unexpected staged path and creates no deletion commit', async () 
   };
   await expect(commitDocsPruneDeletion({ repoDir: root, startPoint: 'main', removable: ['.docs/plans/alpha.md'], git: injectedGit as never })).rejects.toThrow(/unexpected staged path.*extra\.md/);
   expect((await git(['rev-parse', 'main'])).stdout).toBe(before);
+});
+
+it('removes a manifest-backed selection while retaining its stories and decision', async () => {
+  const { root, git } = await setup();
+  const manifestPath = '.docs/alpha/manifest.json';
+  const planPath = '.docs/alpha/machine/plan.md';
+  const storiesPath = '.docs/stories/alpha.md';
+  const decisionPath = '.docs/decisions/adr-alpha.md';
+  await mkdir(join(root, '.docs', 'alpha', 'machine'), { recursive: true });
+  await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+  await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
+  await writeFile(join(root, manifestPath), JSON.stringify({
+    schemaVersion: 1,
+    slug: 'alpha',
+    artifacts: [
+      { kind: 'plan', path: planPath },
+      { kind: 'stories', path: storiesPath },
+      { kind: 'decision', path: decisionPath },
+    ],
+  }));
+  await writeFile(join(root, planPath), '# Alpha\n');
+  await writeFile(join(root, '.docs/shipped/alpha.md'), 'shipped\n');
+  await writeFile(join(root, storiesPath), '# Stories\n');
+  await writeFile(join(root, decisionPath), '# Decision\n');
+  await git(['add', '-A']);
+  await git(['commit', '-qm', 'add manifest-backed artifacts']);
+  const origin = join(root, 'origin.git');
+  await git(['init', '--bare', '--initial-branch=main', origin]);
+  await git(['remote', 'add', 'origin', origin]);
+  await git(['push', '-u', 'origin', 'main']);
+
+  const selection = await resolveDocsPruneSelection(root, git as never);
+  const pruningCommit = await commitDocsPruneDeletion({
+    repoDir: root,
+    startPoint: 'main',
+    removable: selection.removable,
+    git,
+  });
+  await git(['update-ref', 'refs/heads/main', pruningCommit]);
+  await git(['push', 'origin', 'main']);
+  const mainTree = (await git(['ls-tree', '-r', '--name-only', 'origin/main'])).stdout.split('\n');
+
+  expect(mainTree).not.toContain(manifestPath);
+  expect(mainTree).not.toContain(planPath);
+  expect(mainTree).toContain(storiesPath);
+  expect(mainTree).toContain(decisionPath);
 });

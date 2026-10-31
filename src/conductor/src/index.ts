@@ -246,6 +246,10 @@ import {
   detectResealCommand,
   dispatchResealCommand,
 } from './engine/reseal-cli.js';
+import {
+  detectRegisterArtifactCommand,
+  dispatchRegisterArtifactCommand,
+} from './engine/register-artifact-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import {
   detectBuildTailCommand,
@@ -1014,6 +1018,12 @@ async function dispatchCliCommand(): Promise<void> {
   const resealCmd = detectResealCommand(process.argv);
   if (resealCmd) {
     process.exitCode = await dispatchResealCommand(resealCmd);
+    return;
+  }
+
+  const registerArtifactCmd = detectRegisterArtifactCommand(process.argv);
+  if (registerArtifactCmd) {
+    process.exitCode = await dispatchRegisterArtifactCommand(registerArtifactCmd);
     return;
   }
 

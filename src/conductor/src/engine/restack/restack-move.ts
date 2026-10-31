@@ -1,5 +1,5 @@
 import type { ChildId } from '../child-context.js';
-import { leafBranchFor } from '../feature-branch-identity.js';
+import { daemonOwnedSlugOfRef, leafBranchFor } from '../feature-branch-identity.js';
 import { writeHaltMarker, type HaltMarkerWriteResult } from '../halt-marker.js';
 import {
   confirmUntrackedRebasePaths,
@@ -8,6 +8,12 @@ import {
   type GitRunner,
 } from '../rebase.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+  type FeatureOwnership,
+} from '../feature-ownership.js';
 import { resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
@@ -35,6 +41,9 @@ export interface RestackMoveRef {
 
 export interface RestackMoveDependencies {
   readonly git?: GitRunner;
+  /** Feature and base supplied by the executor's pre-replay ownership check. */
+  readonly featureSlug?: string;
+  readonly ownershipBase?: string;
   /** Number of retries after the first lock failure. */
   readonly retries?: number;
   readonly sleep?: () => Promise<void>;
@@ -79,6 +88,33 @@ async function runGit(git: GitRunner, args: string[], input?: string) {
 
 function paths(output: string): string[] {
   return output.split('\n').map((path) => path.trim()).filter(Boolean);
+}
+
+async function resolveOwnershipBaseRef(git: GitRunner): Promise<string | undefined> {
+  const remoteHead = await runGit(git, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD']);
+  if (remoteHead?.exitCode === 0 && remoteHead.stdout.trim()) return remoteHead.stdout.trim();
+  for (const candidate of ['refs/heads/main', 'refs/heads/master', 'refs/heads/trunk']) {
+    const exists = await runGit(git, ['rev-parse', '-q', '--verify', candidate]);
+    if (exists?.exitCode === 0 && exists.stdout.trim()) return candidate;
+  }
+  return undefined;
+}
+
+async function resolveRestackOwnership(
+  worktree: string,
+  checkedOut: RefName,
+  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBase'>,
+): Promise<FeatureOwnership | string | undefined> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const slug = dependencies.featureSlug ?? daemonOwnedSlugOfRef(checkedOut);
+  if (slug === undefined) return undefined;
+  const baseRef = dependencies.ownershipBase ?? await resolveOwnershipBaseRef(git);
+  if (baseRef === undefined) return undefined;
+  try {
+    return await computeFeatureOwnership(worktreeFeatureOwnershipSource(worktree, git), slug, baseRef);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 function worktreeRecords(output: string): { readonly path: string; readonly branch?: string }[] {
@@ -138,7 +174,7 @@ export async function checkRestackPreMove(
   worktree: string,
   moves: readonly RestackMoveRef[],
   checkedOut: RefName,
-  dependencies: Pick<RestackMoveDependencies, 'git'> = {},
+  dependencies: Pick<RestackMoveDependencies, 'git' | 'featureSlug' | 'ownershipBase'> = {},
 ): Promise<RestackPreMoveResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const changedMoves = moves.filter((move) => move.oldSha !== move.newSha && move.ref.startsWith('refs/heads/'));
@@ -182,11 +218,29 @@ export async function checkRestackPreMove(
     };
   }
 
+  const ownership = await resolveRestackOwnership(worktree, checkedOut, dependencies);
+  if (typeof ownership === 'string') return { kind: 'seal-refused', detail: ownership };
+  if (ownership !== undefined) {
+    switch (ownership.kind) {
+      case 'legacy':
+      case 'manifest':
+        break;
+      case 'drift':
+      case 'malformed':
+        return { kind: 'seal-refused', detail: renderOwnershipRefusal(ownership) };
+      default: {
+        const exhaustive: never = ownership;
+        return exhaustive;
+      }
+    }
+  }
+
   try {
     const seal = await verifyProtectedArtifactSeal({
       projectRoot: worktree,
       baselineCommit: checkedOutMove.oldSha,
       toleratesEngineAppendedRemediation: true,
+      ownership: ownership?.kind === 'manifest' || ownership?.kind === 'legacy' ? ownership : undefined,
     });
     return seal.ok ? { kind: 'clear' } : { kind: 'seal-refused', detail: seal.reason };
   } catch (error) {

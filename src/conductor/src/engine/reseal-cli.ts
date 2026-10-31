@@ -18,6 +18,7 @@ import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from '.
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
+import { MalformedFeatureManifestError } from './feature-manifest-source.js';
 import { slicePositionsFromPlan, verifySlicePositions } from './slice-topology.js';
 
 export interface ResealDispatch {
@@ -200,11 +201,28 @@ async function positionChangeRefusal(
   slug: string,
   paths: readonly string[],
 ): Promise<string | undefined> {
-  const planPath = await resolveFeaturePlanPath(worktree, slug);
+  // Ownership validation in the reseal preparation path is responsible for
+  // rendering malformed manifests as a normal reseal refusal. A malformed
+  // manifest cannot identify a plan for this independent stack-topology
+  // check, so leave it to that ownership boundary instead of throwing before
+  // dispatch reaches it.
+  let planPath: string | undefined;
+  try {
+    planPath = await resolveFeaturePlanPath(worktree, slug);
+  } catch (error) {
+    if (error instanceof MalformedFeatureManifestError) return undefined;
+    const detail = error instanceof Error ? error.message : String(error);
+    return `cannot resolve sealed plan path: ${detail}`;
+  }
   if (!planPath || !paths.includes(repositoryRelativePath(worktree, planPath))) return undefined;
 
-  const planText = await readFile(planPath, 'utf8').catch(() => undefined);
-  if (planText === undefined) return undefined;
+  let planText: string;
+  try {
+    planText = await readFile(planPath, 'utf8');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `cannot read sealed plan ${repositoryRelativePath(worktree, planPath)}: ${detail}`;
+  }
   const positions = slicePositionsFromPlan(planText);
   const topology = await verifySlicePositions(
     worktree,

@@ -131,14 +131,14 @@ describe('operator park boundary contract', () => {
       'runGroupBranch(',
       'this.runParallelGroupViaCore(',
     ] as const;
-    const prdWideningReconciliationDispatch = `const judgement = await this.stepRunner.run('remediate', state, {
+    const prdWideningReconciliationDispatch = `const judgement = await this.runRemediateWithPhaseMarker(state, {
           remediationRequest: {
             mode: 'prd-widening-reconciliation',
             projection: JSON.stringify(context.value),
             nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,
           },
         });`;
-    const buildReviewAdjudicationDispatch = `const dispatched = await this.stepRunner.run('remediate', state, {
+    const buildReviewAdjudicationDispatch = `const dispatched = await this.runRemediateWithPhaseMarker(state, {
                         retryReason: \`Adjudicate this complete build-review context only; write \${requestedMode} remediation output.\\n\${JSON.stringify(context)}\`,
                       });`;
     // A string entry matches the exact statement text; a RegExp entry matches
@@ -146,6 +146,7 @@ describe('operator park boundary contract', () => {
     // several lines. Either way the primitive must sit at the matched offset.
     const reviewedHelperDispatchAllowlist: ReadonlyArray<string | RegExp> = [
       "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
+      "return await this.stepRunner.run('remediate', state, options);",
       prdWideningReconciliationDispatch,
       buildReviewAdjudicationDispatch,
       /const dispatch = await this\.stepRunner\.run\('remediate', state, \{\s*runId: attemptId,\s*retryReason: dispatchContext,\s*remediationRequest: \{ mode: 'gap-plan', projection: projectionResult\.projection \},\s*\}\);/g,

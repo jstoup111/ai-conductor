@@ -23,6 +23,15 @@ export const DOCS_RETENTION_POLICY = {
     'applicability',
     'retros',
   ],
+  prunableKinds: [
+    'plan',
+    'conflicts',
+    'coherence',
+    'coherence-waiver',
+    'track',
+    'complexity',
+    'applicability',
+  ],
   repositoryWideExclusions: [
     'audit',
     'audits',

@@ -277,6 +277,53 @@ elif [[ "$1" == interpret-trailers ]]; then cat; fi
     }
   });
 
+  it('uses manifest marker ownership exactly and always rejects a staged manifest mutation', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-manifest-ownership-'));
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', repoDir, ...args]);
+    const commit = async () => {
+      try { await git('commit', '-m', 'test'); return { code: 0, stderr: '' }; }
+      catch (error) {
+        const result = error as { code?: number; stderr?: string };
+        return { code: result.code ?? 1, stderr: result.stderr ?? '' };
+      }
+    };
+    try {
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), 'base\n');
+      await git('add', '.'); await git('commit', '-m', 'base');
+      const hooks = join(repoDir, '.git-hooks');
+      await mkdir(hooks, { recursive: true });
+      await writeFile(join(hooks, 'pre-commit'), PRE_COMMIT_HOOK); await chmod(join(hooks, 'pre-commit'), 0o755);
+      await git('config', 'core.hooksPath', hooks);
+      await mkdir(join(repoDir, '.docs/f/review'), { recursive: true });
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.docs/f/manifest.json'), '{}\n');
+      await git('add', '.docs/f/manifest.json'); await git('commit', '-m', 'manifest baseline');
+      await writeFile(join(repoDir, '.pipeline/phase-active'), [
+        'phase: BUILD',
+        'own: .docs/f/review/stories.md',
+        'protect: .docs/f/review/stories.md',
+        'protect: .docs/f/manifest.json',
+        '',
+      ].join('\n'));
+      await writeFile(join(repoDir, '.docs/f/review/stories.md'), 'owned\n');
+      await git('add', '.docs/f/review/stories.md');
+      expect((await commit()).code).toBe(0);
+      await writeFile(join(repoDir, '.docs/f/manifest.json'), '{"changed":true}\n');
+      await git('add', '.docs/f/manifest.json');
+      const modified = await commit();
+      expect(modified.code).not.toBe(0); expect(modified.stderr).toContain('.docs/f/manifest.json');
+      await rm(join(repoDir, '.docs/f/manifest.json'));
+      await git('add', '-A');
+      const deleted = await commit();
+      expect(deleted.code).not.toBe(0); expect(deleted.stderr).toContain('.docs/f/manifest.json');
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when the real pre-commit asset receives an escaping staged path', async () => {
     const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-escaping-path-'));
     const fakeBin = join(repoDir, 'fake-bin');

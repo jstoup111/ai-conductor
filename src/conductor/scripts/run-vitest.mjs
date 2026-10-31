@@ -17,6 +17,10 @@ const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
     ...testEnvironment,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
+    // This must be present before Vitest initializes its environment stubs.
+    // `vi.unstubAllEnvs()` restores the launcher environment, so a setup-file
+    // redirect alone can be cleared mid-suite and send signal writes to home.
+    AI_CONDUCTOR_ENGINEER_DIR: join(runRoot, 'engineer'),
     TMPDIR: runRoot,
     // Native subprocesses do not consistently prefer TMPDIR: some read TMP
     // or TEMP first. Keep all three aliases inside the run root so they

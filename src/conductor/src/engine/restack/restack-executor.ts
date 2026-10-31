@@ -5,6 +5,11 @@ import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf } from '../
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
 import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+} from '../feature-ownership.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
@@ -503,6 +508,17 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
   let moves: RestackMoveRef[] = [];
   let terminal = false;
   try {
+    const planningDefault = await defaultTip(git, options.cause === 'base-refresh' ? options.newDefault : undefined);
+    const ownership = await computeFeatureOwnership(
+      worktreeFeatureOwnershipSource(options.worktree, git),
+      options.slug,
+      planningDefault,
+    );
+    if (ownership.kind === 'malformed' || ownership.kind === 'drift') {
+      await writeSealHalt(options.worktree, renderOwnershipRefusal(ownership), options.events);
+      terminal = true;
+      return { kind: 'halted' };
+    }
     // The seal is the authority boundary for the plan that now supplies stack
     // topology. Verify it before loading that topology so a tampered plan
     // cannot turn a protected-artifact refusal into a cursor-unavailable
@@ -510,6 +526,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const seal = await verifyProtectedArtifactSeal({
       projectRoot: options.worktree,
       baselineCommit: 'HEAD',
+      ownership,
       toleratesEngineAppendedRemediation: true,
     });
     if (!seal.ok) {
@@ -531,7 +548,6 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // A repair's default is unchanged. Resolve that local default before
     // planning instead of borrowing the active child's closure, which is an
     // intermediate stack tip rather than the whole feature's base.
-    const planningDefault = await defaultTip(git, options.cause === 'base-refresh' ? options.newDefault : undefined);
     const plan = await planRestackRanges(options.worktree, {
       slug: options.slug,
       oldDefaultTip: planningDefault,
@@ -791,7 +807,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // replays so the transaction never relies on an in-memory replay result.
     moves = await Promise.all(moves.map(async (move) => ({ ...move, newSha: await requiredSha(git, stagingRefFor(options.slug, move.child!), `staging ref for child ${move.child}`) })));
     const checkedOut = await checkedOutRef(git);
-    const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
+    const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, {
+      git,
+      featureSlug: options.slug,
+      ownershipBase: planningDefault,
+    });
     if (preMove.kind === 'refused') {
       await abortJournal(options.worktree, journal, git, moves);
       await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });

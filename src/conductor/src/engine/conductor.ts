@@ -176,12 +176,23 @@ import {
   detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
 } from './attribution-telemetry.js';
-import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './phase-marker.js';
+import {
+  removePhaseMarker,
+  writePhaseMarker,
+  resolveDocsAllowlist,
+  type WritePhaseMarkerOptions,
+} from './phase-marker.js';
 import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
 } from './protected-artifact-seal.js';
+import {
+  computeFeatureOwnership,
+  renderOwnershipRefusal,
+  worktreeFeatureOwnershipSource,
+  type FeatureOwnership,
+} from './feature-ownership.js';
 import { describeResealRecovery } from './reseal-cli.js';
 import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
@@ -3716,7 +3727,7 @@ export class Conductor {
       // judge. A restart consequently reuses committed relations without a
       // second semantic remediate dispatch.
       judge: async () => {
-        const judgement = await this.stepRunner.run('remediate', state, {
+        const judgement = await this.runRemediateWithPhaseMarker(state, {
           remediationRequest: {
             mode: 'prd-widening-reconciliation',
             projection: JSON.stringify(context.value),
@@ -4159,7 +4170,7 @@ export class Conductor {
     let lastFault = 'remediation planner produced no current typed plan';
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const attemptId = randomUUID();
-      const dispatch = await this.stepRunner.run('remediate', state, {
+      const dispatch = await this.runRemediateWithPhaseMarker(state, {
         runId: attemptId,
         retryReason: dispatchContext,
         remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
@@ -4282,8 +4293,23 @@ export class Conductor {
       directingSource: 'task title' | 'rationale';
     }>();
     if (planPath) {
+      const ownershipSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      const currentCommit = ownershipSlug === undefined
+        ? undefined
+        : await currentCommitSha(this.projectRoot);
+      const remediationOwnership = ownershipSlug === undefined || currentCommit === undefined
+        ? { kind: 'legacy' as const }
+        : await computeFeatureOwnership(
+            worktreeFeatureOwnershipSource(this.projectRoot),
+            ownershipSlug,
+            this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
+          );
       for (const gap of plan.gaps) {
-        const target = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
+        const target = remediationGapTargetsAnotherFeatureSealedArtifact(
+          gap,
+          planStem(planPath),
+          remediationOwnership,
+        );
         if (target) sealedArtifactsByGapId.set(gap.id, target);
       }
     }
@@ -6809,6 +6835,77 @@ export class Conductor {
     return checkStepCompletion(this.projectRoot, 'build', { ...ctx, unverifiedDoneWhenNudgeSpent: true });
   }
 
+  private async phaseMarkerOptions(
+    stepName: string,
+    phase: WritePhaseMarkerOptions['phase'],
+    state: ConductState,
+    ownership?: FeatureOwnership,
+  ): Promise<WritePhaseMarkerOptions> {
+    const ownershipSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    const hasCommit = ownership === undefined && ownershipSlug !== undefined
+      ? await currentCommitSha(this.projectRoot)
+      : undefined;
+    const resolvedOwnership = ownership ?? (ownershipSlug === undefined || hasCommit === undefined
+      ? { kind: 'legacy' as const }
+      : await computeFeatureOwnership(
+          worktreeFeatureOwnershipSource(this.projectRoot),
+          ownershipSlug,
+          this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
+        ));
+    const allow = resolveDocsAllowlist(stepName);
+    switch (resolvedOwnership.kind) {
+      case 'legacy':
+        return { step: stepName, phase, allow };
+      case 'manifest': {
+        let manifestAllow = allow;
+        if (stepName === 'remediate') {
+          const planPath = await resolveFeaturePlanPath(this.projectRoot, ownershipSlug);
+          if (planPath === undefined) {
+            throw new Error('Manifest-backed remediate marker could not resolve its required plan path.');
+          }
+          const listedPlanPath = relative(this.projectRoot, planPath).replaceAll('\\', '/');
+          manifestAllow = [...allow.filter((path) => path !== '.docs/plans/'), listedPlanPath];
+        }
+        return {
+          step: stepName,
+          phase,
+          allow: manifestAllow,
+          own: resolvedOwnership.ownedPaths,
+          protect: [...resolvedOwnership.protectedPaths, resolvedOwnership.manifestPath],
+        };
+      }
+      case 'drift':
+      case 'malformed':
+        throw new Error(renderOwnershipRefusal(resolvedOwnership));
+      default: {
+        const exhaustive: never = resolvedOwnership;
+        return exhaustive;
+      }
+    }
+  }
+
+  private async runRemediateWithPhaseMarker(
+    state: ConductState,
+    options: StepRunOptions,
+  ): Promise<StepRunResult> {
+    let markerOptions: WritePhaseMarkerOptions;
+    try {
+      markerOptions = await this.phaseMarkerOptions('remediate', 'SHIP', state);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { success: false, output: reason, refusal: { kind: 'seal', reason } };
+    }
+    const markerPath = join(this.projectRoot, '.pipeline', 'phase-active');
+    const priorMarker = existsSync(markerPath) ? await readFile(markerPath) : undefined;
+    writePhaseMarker(this.projectRoot, markerOptions);
+    try {
+      return await this.stepRunner.run('remediate', state, options);
+    } finally {
+      if (priorMarker === undefined) removePhaseMarker(this.projectRoot);
+      else await writeFile(markerPath, priorMarker);
+    }
+  }
+
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
     await this.transcriptRetention.ready();
@@ -8494,11 +8591,10 @@ export class Conductor {
             // it needs its own phase-active marker write/clear around the
             // whole round rather than relying on the single-step code path.
             if (step.phase === 'BUILD' || step.phase === 'SHIP') {
-              writePhaseMarker(this.projectRoot, {
-                step: step.name,
-                phase: step.phase,
-                allow: resolveDocsAllowlist(step.name),
-              });
+              writePhaseMarker(
+                this.projectRoot,
+                await this.phaseMarkerOptions(step.name, step.phase, state),
+              );
             }
             try {
             await emitTracked({
@@ -11129,6 +11225,7 @@ export class Conductor {
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
           let protectedArtifactIssue: string | null = null;
+          let phaseMarkerOwnership: FeatureOwnership = { kind: 'legacy' };
           if (step.phase === 'BUILD' || step.phase === 'SHIP') {
             const currentCommit = await currentCommitSha(this.projectRoot);
             const baselineCommit = step.phase === 'BUILD' ? currentCommit : undefined;
@@ -11136,33 +11233,47 @@ export class Conductor {
             // commit identity. They remain outside this committed-artifact
             // boundary; real feature worktrees always supply one.
             if (currentCommit) {
-              const sealVerdict = await verifyProtectedArtifactSeal({
-                projectRoot: this.projectRoot,
-                baselineCommit: baselineCommit ?? undefined,
-                featureDesc: state.feature_desc,
-                // #976: lets the seal tolerate protected-artifact drift that is
-                // byte-identical to the base branch tip — i.e. another feature's
-                // already-merged PR, picked up by this feature's rebase — while
-                // still halting on any in-worktree mutation.
-                baseBranch: this.baseBranch,
-                onRebaseline: (event) => this.surfaceProtectedArtifactRebaseline(event),
-              });
-              if (!sealVerdict.ok) {
-                protectedArtifactIssue = sealVerdict.reason;
-                if (step.name === 'build') {
-                  const recovery = await describeResealRecovery(this.projectRoot, sealVerdict.path);
-                  if (recovery) protectedArtifactIssue += `\n${recovery}`;
-                }
-              } else {
-                if (sealVerdict.selfAmendments.length > 0) {
-                  console.warn(
-                    `Protected artifact self-amendments detected: ${sealVerdict.selfAmendments.map(({ path }) => path).join(', ')}. Each amendment must be justified by the approved plan and will be judged by build_review.`,
+              const ownershipSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+              const ownership = ownershipSlug === undefined
+                ? { kind: 'legacy' as const }
+                : await computeFeatureOwnership(
+                    worktreeFeatureOwnershipSource(this.projectRoot),
+                    ownershipSlug,
+                    this.baseBranch ?? await this.discoverLocalBase(makeGitRunner(this.projectRoot)),
                   );
-                }
-                if (step.phase === 'BUILD' && baselineCommit) {
-                  // Persist only after the workspace matches committed DECIDE
-                  // content. createProtectedArtifactSeal is immutable once present.
-                  await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+              phaseMarkerOwnership = ownership;
+              if (ownership.kind === 'drift' || ownership.kind === 'malformed') {
+                protectedArtifactIssue = renderOwnershipRefusal(ownership);
+              } else {
+                const sealVerdict = await verifyProtectedArtifactSeal({
+                  projectRoot: this.projectRoot,
+                  baselineCommit: baselineCommit ?? undefined,
+                  featureDesc: state.feature_desc,
+                  // #976: lets the seal tolerate protected-artifact drift that is
+                  // byte-identical to the base branch tip — i.e. another feature's
+                  // already-merged PR, picked up by this feature's rebase — while
+                  // still halting on any in-worktree mutation.
+                  baseBranch: this.baseBranch,
+                  ownership,
+                  onRebaseline: (event) => this.surfaceProtectedArtifactRebaseline(event),
+                });
+                if (!sealVerdict.ok) {
+                  protectedArtifactIssue = sealVerdict.reason;
+                  if (step.name === 'build') {
+                    const recovery = await describeResealRecovery(this.projectRoot, sealVerdict.path);
+                    if (recovery) protectedArtifactIssue += `\n${recovery}`;
+                  }
+                } else {
+                  if (sealVerdict.selfAmendments.length > 0) {
+                    console.warn(
+                      `Protected artifact self-amendments detected: ${sealVerdict.selfAmendments.map(({ path }) => path).join(', ')}. Each amendment must be justified by the approved plan and will be judged by build_review.`,
+                    );
+                  }
+                  if (step.phase === 'BUILD' && baselineCommit) {
+                    // Persist only after the workspace matches committed DECIDE
+                    // content. createProtectedArtifactSeal is immutable once present.
+                    await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit, ownership });
+                  }
                 }
               }
             }
@@ -11172,12 +11283,11 @@ export class Conductor {
           // session-hook write-guard can distinguish "docs/spec artifacts
           // changed mid-BUILD/SHIP" from DECIDE-phase edits. Independent of
           // written for every BUILD/SHIP step, not just `build`.
-          if (step.phase === 'BUILD' || step.phase === 'SHIP') {
-            writePhaseMarker(this.projectRoot, {
-              step: step.name,
-              phase: step.phase,
-              allow: resolveDocsAllowlist(step.name),
-            });
+          if ((step.phase === 'BUILD' || step.phase === 'SHIP') && protectedArtifactIssue === null) {
+            writePhaseMarker(
+              this.projectRoot,
+              await this.phaseMarkerOptions(step.name, step.phase, state, phaseMarkerOwnership),
+            );
           }
 
           // Native gates and the finish coordinator precede the self-host
@@ -14142,7 +14252,7 @@ export class Conductor {
                         ((context as { mode?: unknown }).mode === 'case-v1' || (context as { mode?: unknown }).mode === 'case-v2')
                         ? (context as { mode: 'case-v1' | 'case-v2' }).mode
                         : 'case-v1';
-                      const dispatched = await this.stepRunner.run('remediate', state, {
+                      const dispatched = await this.runRemediateWithPhaseMarker(state, {
                         retryReason: `Adjudicate this complete build-review context only; write ${requestedMode} remediation output.\n${JSON.stringify(context)}`,
                       });
                       if (!dispatched.success) {

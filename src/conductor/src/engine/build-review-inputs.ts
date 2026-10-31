@@ -297,6 +297,7 @@ export type BuildReviewRepairProvenance =
  */
 export const MACHINERY_AUTHORED_PATHS: readonly string[] = [
   '.docs/shipped/',
+  '.docs/*/manifest.json',
   '.pipeline/',
   'docs/',
   'CHANGELOG.md',
