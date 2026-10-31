@@ -4,6 +4,13 @@ spec_hash: 31464c3d42db0cb2b4084da1a58d1600a4470403853ac539561a8e8f0dbc1277
 pr: https://github.com/jstoup111/ai-conductor/pull/3522
 shipped: 2026-10-31
 engine_version: 20261031T004009Z-fa5d3fe03904
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is an unplanned global test-harness change that affects every suite, not just this feature's tests. It hardens isolation and has no product or operator-visible effect."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
