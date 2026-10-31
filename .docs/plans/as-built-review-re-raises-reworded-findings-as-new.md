@@ -426,3 +426,54 @@ Task 1 ─┬─> Task 2 ──────────────────�
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-refusal-b82bb720-5137-4cff-9a14-e5b3b1fd0b12: conductor.ts:4200-4211: pass 'needs-human' to haltForRemediationValidatorFault only for the prior-as-built-cases dimension/case-store faults and restore the default 'mechanical' class for every other buildRemediationProjection fault; revert test/engine/conductor-kickback-ledger.test.ts and test/prd-audit-kickback.test.ts haltClass expectations for the unreadable kickback ledger fault to 'mechanical'
+**Gate:** prd-audit
+**Rationale:** Verified in conductor.ts:4200-4211: every buildRemediationProjection fault halts 'needs-human'. Plan Task 14 admits needs-human only for prior-as-built-case projection faults (oversize, undeclared repair task, unreadable or malformed store). This removal-only rework narrows the reclassification to that dimension and keeps the mechanical class for all other sources and dimensions. It adds no behavior.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision b82bb720-5137-4cff-9a14-e5b3b1fd0b12 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision b82bb720-5137-4cff-9a14-e5b3b1fd0b12 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-b82bb720-5137-4cff-9a14-e5b3b1fd0b12 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-design-halt-join: conductor.ts validation-group join blocked-design halt (~9832-9845): call recordAsBuiltNeedsHumanFindings for every verdict finding (DESIGN and REMEDIABLE) before writeHaltMarker(reason,'needs-human'), halting needs-human on a store-write fault; add a conductor-groups-and-signals.test.ts test asserting needs-human cases and one as_built_finding_reconciled event per finding exist before the HALT file
+**Gate:** prd-audit
+**Rationale:** Verified (grep, 97%): recordAsBuiltNeedsHumanFindings has a single caller at conductor.ts:5218 (planner-halt). Plan Task 9 Step 3 requires recording before writeHaltMarker at both blocked-design halt sites. The prior lap restaged Task 9 with no explicit work and the defect remained, so this appends a concrete task scoped to the validation-group site. Approved architecture stays authoritative; this is conforming BUILD work.
+**Criterion:** S6.2
+**Parent task:** 9
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-design-halt-join is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-design-halt-serial: conductor.ts serial as-built blocked-design halt (~15046): call recordAsBuiltNeedsHumanFindings for every verdict finding before writeHaltMarker; add a conductor-groups-and-signals.test.ts test asserting the same needs-human cases and as_built_finding_reconciled events exist before the HALT file
+**Gate:** as-built
+**Rationale:** Verified (99%): the serial as-built DESIGN halt (conductor.ts ~15046) also bypasses recording. Plan Task 9 admits recording at both blocked-design halt sites per ADR decision 6. The join site is handled under S6.2, so this task covers the serial site only. Conforming BUILD work; no architecture decision needed.
+**Governing clause:** adr-2026-10-28-as-built-finding-reconciliation decision 6
+**Done when:**
+- adr-2026-10-28-as-built-finding-reconciliation decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-design-halt-serial is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-resolve-on-gate-pass: conductor.ts projectPendingAsBuiltRemediationFindings: resolve open as_built cases on every authoritative as-built gate pass (APPROVED, APPROVED WITH DRIFT NOTES, delivered PLAN_GAP) independently of whether pending findings exist; add conductor-groups-and-signals.test.ts tests for drift-notes and empty-pending gate passes resolving open cases
+**Gate:** as-built
+**Rationale:** Verified by reading conductor.ts:1340-1365: settlement returns early when pending findings are empty and resolves only for literal 'APPROVED'. Plan Task 10 admits resolving open cases at the gate-pass seam projectPendingAsBuiltRemediationFindings, and ADR decision 6 and the approved diagram define the edge as any authoritative gate pass. Fixing it changes no routing or asBuiltOutcome, so this is conforming BUILD work (90%).
+**Governing clause:** adr-2026-10-28-as-built-finding-reconciliation decision 6
+**Done when:**
+- adr-2026-10-28-as-built-finding-reconciliation decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-resolve-on-gate-pass is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-drain-before-projection: conductor.ts planRemediation: drain the remediation case-store outbox through drainRemediationCaseOutbox and events.emitOrThrow before buildRemediationProjection for an as-built gap-plan; add a conductor-groups-and-signals.test.ts test where a crash-left pending as_built_finding_reconciled entry is delivered once with its original eventId before the projection is built
+**Gate:** as-built
+**Rationale:** Verified (99%): conductor.ts:4188 calls buildRemediationProjection with no prior outbox drain. Plan Task 11 Step 3 explicitly requires draining the case-store outbox before building an as-built gap-plan projection (ADR decision 7). This is a direct omission of admitted work and goes to BUILD.
+**Governing clause:** adr-2026-10-28-as-built-finding-reconciliation decision 7
+**Done when:**
+- adr-2026-10-28-as-built-finding-reconciliation decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-drain-before-projection is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-mixed-append-halt: conductor.ts planRemediation planner-halt branch: before recording halt-answered findings and returning, record reconciliation for findings whose append or existing-task binding already succeeded in the same round; add a conductor-groups-and-signals.test.ts test for a mixed append-and-halt plan asserting the appended finding's case source and as_built_finding_reconciled event persist alongside the needs-human halt finding
+**Gate:** as-built
+**Rationale:** Verified (98%): in a mixed plan, appends succeed at conductor.ts:4922 and the planner-halt branch then records only the halt dispositions and returns at :5208-5224, skipping reconciliation at :5406-5428. Plan Tasks 8 and 9 admit recording appended findings after a successful append and halt-answered findings as needs-human. Recording both before the halt is conforming BUILD work.
+**Governing clause:** adr-2026-10-28-as-built-finding-reconciliation decision 6
+**Done when:**
+- adr-2026-10-28-as-built-finding-reconciliation decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-mixed-append-halt is committed and its targeted tests pass.
