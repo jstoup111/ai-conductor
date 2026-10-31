@@ -1,10 +1,10 @@
-// Covers: task:5
+// Covers: task:5, task:11
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { detectStackRestackResolveCommand } from '../../../src/cli.js';
@@ -16,6 +16,7 @@ import { journalRefFor, readRestackJournal, writeRestackJournalBlob, type Restac
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { resolveUnenteredLeafOwner } from '../../../src/engine/restack/restack-unentered-leaf.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 
@@ -114,6 +115,127 @@ async function baseRefreshConflictFixture() {
 }
 
 describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
+  async function replaceRecordedTipWithDecision(subject: Awaited<ReturnType<typeof baseRefreshConflictFixture>>) {
+    const conflict = await readConflictRecord(subject.repo, 'demo', { git: subject.runner });
+    if (conflict.kind !== 'record') throw new Error('expected recorded base-refresh conflict');
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), `Restack-Conflict: 2 ${conflict.record.opId}\n`);
+    await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), 'needs-human\n');
+    await expect(dispatchStackRestackResolve(
+      resolveCommand('--slug', 'demo', '--child', '2', '--decision', 'keep upstream'), resolveDeps(subject.repo),
+    )).resolves.toBe(0);
+    return conflict.record;
+  }
+
+  function resolvingDecisionResolver() {
+    return async ({ projectRoot, environment }: { projectRoot: string; environment: NodeJS.ProcessEnv }) => {
+      await writeFile(join(projectRoot, 'shared.txt'), 'resolved\n');
+      const local = makeGitRunner(projectRoot);
+      await local(['add', 'shared.txt'], { env: environment });
+      await local(['rebase', '--continue'], { env: environment });
+      return { resolved: true as const };
+    };
+  }
+
+  // Covers: task:11
+  it('delivers a recorded decision after the base branch advances and emits applied for child 2', async () => {
+    const subject = await baseRefreshConflictFixture();
+    await replaceRecordedTipWithDecision(subject);
+    await subject.git(['checkout', '-q', 'main']);
+    await writeFile(join(subject.repo, 'after-halt.txt'), 'advance\n');
+    await subject.git(['add', 'after-halt.txt']);
+    await subject.git(['commit', '-qm', 'advance default after decision']);
+    const advanced = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const events = new ConductorEventEmitter();
+    const applied: unknown[] = [];
+    events.on('restack_decision', (event) => { if (event.type === 'restack_decision') applied.push(event); });
+    const resolver = vi.fn(resolvingDecisionResolver());
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced,
+      events, git: subject.runner, resolver, resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      operatorDecision: expect.objectContaining({ answer: 'keep upstream' }),
+    }));
+    expect(applied).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child: subject.second }));
+  });
+
+  // Covers: task:11
+  it('delivers a decision replacing a recorded tip without consuming that tip', async () => {
+    const subject = await baseRefreshConflictFixture();
+    await replaceRecordedTipWithDecision(subject);
+    const events = new ConductorEventEmitter();
+    const consumed: unknown[] = [];
+    events.on('restack_resolution', (event) => { if (event.type === 'restack_resolution' && event.action === 'consumed') consumed.push(event); });
+    const resolver = vi.fn(resolvingDecisionResolver());
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      events, git: subject.runner, resolver, resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    expect(consumed).toEqual([]);
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      operatorDecision: expect.objectContaining({ answer: 'keep upstream' }),
+    }));
+  });
+
+  // Covers: task:12
+  it('delivers a decision while resuming a planned journal, persists applied, and retires it with the move', async () => {
+    const subject = await baseRefreshConflictFixture();
+    const conflict = await replaceRecordedTipWithDecision(subject);
+    const base = sha((await subject.git(['rev-parse', `${subject.firstTip}^`])).stdout.trim());
+    const leaf = parseChildId(3);
+    if (!leaf) throw new Error('expected leaf child');
+    const journal: RestackJournal = {
+      opId: conflict.opId,
+      cause: 'base-refresh',
+      newDefault: subject.newDefault,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.firstTip },
+        { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.firstTip },
+        { ref: 'refs/heads/feat/c2/demo' as never, oldSha: subject.secondTip },
+        { ref: 'refs/conductor/demo/closed/c2' as never, oldSha: subject.secondTip },
+        { ref: 'refs/heads/feat/daemon-demo' as never, oldSha: subject.leafTip },
+      ],
+      ranges: [
+        { child: parseChildId(1)!, oldParent: base, oldTip: subject.firstTip, kind: 'closed' },
+        { child: subject.second, oldParent: subject.firstTip, oldTip: subject.secondTip, kind: 'closed' },
+        { child: leaf, oldParent: subject.secondTip, oldTip: subject.leafTip, kind: 'leaf-active' },
+      ],
+      children: [
+        { child: parseChildId(1)!, status: 'pending' },
+        { child: subject.second, status: 'pending' },
+        { child: leaf, status: 'pending' },
+      ],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    const priorJournal = await readRestackJournal(subject.repo, 'demo', { git: subject.runner });
+    await subject.git(['update-ref', journalRefFor('demo'), blob, priorJournal.kind === 'journal' ? priorJournal.blob : '']);
+    const events = new ConductorEventEmitter();
+    new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events).start();
+    const resolver = vi.fn(resolvingDecisionResolver());
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', git: subject.runner, events, resolver, resolverCap: 1,
+    })).resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      operatorDecision: expect.objectContaining({ answer: 'keep upstream' }),
+    }));
+    const persisted = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(JSON.parse);
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child: subject.second }));
+    await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/decision/c2'])).rejects.toMatchObject({ code: 1 });
+    const resolved = (await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim();
+    await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).resolves.toMatchObject({ stdout: `${resolved}\n` });
+  });
+
   it('consumes a dispatcher-recorded base-refresh resolution and moves the closed child without test-written refs', async () => {
     const subject = await baseRefreshConflictFixture();
     const events = new ConductorEventEmitter();

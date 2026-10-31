@@ -206,6 +206,7 @@ describe('restack decision delivery (real local Git)', () => {
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child }));
   });
 
+  // Covers: task:11, task:13
   it('keeps an ignored decision while escalating its answer, recipe, and fresh conflict record', async () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();
