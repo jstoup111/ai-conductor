@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-30
+## [1.7.0] - 2026-10-31
 
 ### Added
 
@@ -86,6 +86,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build reviews now retain resolved findings across reconsideration laps. ([implementation PR #3414](https://github.com/jstoup111/ai-conductor/pull/3414)).
 - The implementation-quality build review now reports duplication and complexity findings completely, listing every affected site, so one repair can resolve them. ([implementation PR #3518](https://github.com/jstoup111/ai-conductor/pull/3518)).
 - Build reviews apply one consistent severity scale across built-in and custom reviewer prompts. ([implementation PR #3525](https://github.com/jstoup111/ai-conductor/pull/3525)).
+- Operators can record reduced coverage for an active stack child and receive specific refusal causes. ([implementation PR #3541](https://github.com/jstoup111/ai-conductor/pull/3541)).
 
 ### Removed
 
