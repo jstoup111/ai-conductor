@@ -64,7 +64,7 @@ describe('leaf-moved marker sweep (real local Git)', () => {
     await subject.git(['update-ref', 'refs/remotes/origin/main', base]);
     await subject.git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
     await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
-    const haltRecord = await subject.commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
+    await subject.commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
     await subject.git(['checkout', '-qb', 'feat/c1/demo']);
     await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', await subject.commit('C1', 'one.txt', 'one\n')]);
     await subject.git(['checkout', '-qb', 'feat/c2/demo']);
