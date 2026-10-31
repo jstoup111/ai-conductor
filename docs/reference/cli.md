@@ -1655,6 +1655,38 @@ ai-conductor stack land --slug <slug> --abandon
 It restores the host through its recorded recovery stages. `stack land`, `--done`, and `--abandon`
 each acquire the feature dispatch lease while they mutate the feature.
 
+### Routed rounds
+
+Inspect a stacked feature's routed rounds and repair marker without taking a lease or changing state:
+
+```bash
+ai-conductor stack rounds --slug <slug>
+```
+
+Each round prints one line: id, kind, phase, `host:state` pairs, current host, receipt
+(`settled`/`unsettled`), and outbox length. A final line reports the repair marker as a host and round,
+`absent`, or `unreadable`. When an open round has a `pending` host and no active host while the marker
+holds a different round, a `wedge:` line names the round and the close command to run. Exit `0`; exit
+`1` when the ref listing, any round, or the marker is unreadable.
+
+Close a stale audit round that a later round supersedes:
+
+```bash
+ai-conductor stack rounds --slug <slug> --close r<N> --reason "<why>"
+```
+
+All checks run read-only before the feature dispatch lease is taken. The command refuses, naming the
+cause, when the round is missing, unreadable, or not `open`; its kind is not `audit` (an operator round
+points to `stack land --abandon`); it has an in-progress reroute; any host is `admitted`, `repairing`,
+`reroute-moved`, `built`, `abandoning`, or `abandoned`; the repair marker is unreadable or holds this
+round; or no other non-closed round exists to supersede it. The lowest-numbered other non-closed round
+becomes `supersededBy`. One compare-and-swap closes the round, marks each `pending` host `done`,
+verifies the survivor round is unchanged, and queues a `routing_round_superseded` event naming the
+dropped hosts, their finding ids, the reason, and the operator. On success it prints the closed round,
+dropped hosts, and finding ids. It does not clear a halt; run [`halt clear`](#ai-conductor-halt-clear)
+before the daemon resumes. `--close` requires an approved operator identity and a non-empty
+`--reason`.
+
 To rewind a closed child, use the declared operator-round form rather than the open-child rewind:
 
 ```bash
@@ -1665,8 +1697,8 @@ For a closed child, `<step>` must be `acceptance_specs`, `build`, `test_suite`, 
 The command requires the live halt and opens a declared round on the closed host at that step; the
 daemon then resumes the host through the routed exit. `--done` is for `stack land` rounds only.
 
-With `stacked_prs.route_whole_feature_fixes: false`, `stack owners`, `stack land`, and the
-closed-child rewind refuse; see [child-by-child build](configuration.md#child-by-child-build).
+With `stacked_prs.route_whole_feature_fixes: false`, `stack owners`, `stack land`, `stack rounds`,
+and the closed-child rewind refuse; `stack rounds` also refuses a feature without durable child state; see [child-by-child build](configuration.md#child-by-child-build).
 See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`

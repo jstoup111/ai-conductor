@@ -56,16 +56,15 @@ git for-each-ref --format='%(refname) %(objectname:short) %(objecttype)' refs/co
 | `pushed/<branch>`, `push-intent/<branch>` | Last pushed tip per branch. |
 | `red/c<k>` | Recorded failing-acceptance baseline for child k. |
 
-Summarize every round:
+Summarize every round and the repair marker:
 
 ```bash
-for r in $(git for-each-ref --format='%(refname:lstrip=-1)' refs/conductor/<slug>/routes/); do
-  git cat-file -p refs/conductor/<slug>/routes/$r |
-    python3 -c "import json,sys;d=json.load(sys.stdin);print('$r',d['kind'],d['phase'],d['hosts'],d.get('currentHostIndex'))"
-done
-git cat-file -p refs/conductor/<slug>/repairing; echo
+ai-conductor stack rounds --slug <slug>
 git cat-file -p refs/conductor/<slug>/cascades; echo
 ```
+
+`stack rounds` prints one line per round (`<id> <kind> <phase> hosts <host>:<state>, ...`) and flags a
+wedged round with a `wedge:` line ([reference](../reference/cli.md#routed-rounds)).
 
 A healthy feature has at most one round with `phase` `open`. Each host moves through
 `pending → admitted → repairing → built → restacked`, ending in `restacked`, `done` or
@@ -174,8 +173,10 @@ The daemon then writes `feature errored — will re-dispatch on the next scan` a
 looks like this:
 
 ```text
-r3 audit open {'1': 'restacked', '2': 'pending'} 0
-r4 audit open {'1': 'built', '2': 'pending'} 0
+r3 audit open hosts 1:restacked, 2:pending current host 1 ...
+r4 audit open hosts 1:built, 2:pending current host 1 ...
+repair marker: host 1 round r4
+wedge: r3 host 2 pending unadmitted behind marker r4; ...
 ```
 
 Rounds are reconciled in ref order. The older open round tries to admit its next host and create
@@ -195,37 +196,18 @@ for r in r3 r4; do echo "== $r"; git -C .worktrees/<slug> cat-file -p refs/condu
 ```
 
 Closing the stale round drops its unstarted items. Record that in your halt-clear rationale.
-Then close it through the engine's own compare-and-swap transaction. Never `git update-ref` a
-route blob by hand: the serializer enforces round invariants that a hand-written blob skips.
-
-Save as `close-round.mts` in a scratch directory. Edit `ROUND` and the host ids:
-
-```ts
-import { readRouteRecord, writeRoutingTransaction } from '<repo>/src/conductor/src/engine/routing/route-record-store.ts';
-const wt = '<repo>/.worktrees/<slug>';
-const slug = '<slug>';
-const ROUND = 'r3';
-void (async () => {
-  const stored = await readRouteRecord(wt, slug, ROUND as never);
-  if (stored.kind !== 'record') throw new Error(`${ROUND} ${stored.kind}`);
-  if (stored.record.phase !== 'open') throw new Error(`${ROUND} phase ${stored.record.phase}`);
-  // Every host must end restacked, done or rerouted; mark unstarted hosts done.
-  const hosts = { ...stored.record.hosts, 2: 'done' as const };
-  const wrote = await writeRoutingTransaction(wt, slug, [
-    { kind: 'update-record', previous: stored, record: { ...stored.record, phase: 'closed' as const, hosts } },
-  ]);
-  console.log('WROTE', wrote.kind);
-})();
-```
+Close it through the engine's compare-and-swap transaction. Never `git update-ref` a route blob by
+hand: the serializer enforces round invariants that a hand-written blob skips.
 
 ```bash
-<repo>/src/conductor/node_modules/.bin/tsx close-round.mts
+ai-conductor stack rounds --slug <slug> --close r3 --reason "<why r3 is superseded>"
 ```
 
-`WROTE updated` means it succeeded. `WROTE unavailable` means the record failed validation: a
-closed round needs every host `restacked`, `done` or `rerouted`, and the current host `restacked`
-or `done`. Fix `hosts` and rerun. `restack-journal-open` means a restack is in progress, so let it
-finish first.
+The output names the dropped hosts and finding ids, and `.pipeline/events.jsonl` records
+`routing_round_superseded`. A refusal names the blocking state, such as an active host, the marker
+holding this round, or no other non-closed round. Resolve that state and rerun; see the
+[refusal list](../reference/cli.md#routed-rounds). A contested or failed write is also refused;
+rerun after the competing write settles.
 
 Then clear the halt with an [audited clear](stalled-or-stuck-feature.md#audited-clear) that names
 the closed round and its dropped items.
