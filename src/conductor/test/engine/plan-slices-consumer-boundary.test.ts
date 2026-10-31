@@ -180,6 +180,7 @@ describe('plan-slices consumer boundary', () => {
       join('engine', 'slice-topology.ts'),
       join('engine', 'stack-land-cli.ts'),
       join('engine', 'stack-owners-cli.ts'),
+      join('engine', 'stack-restack-resolve-cli.ts'),
       join('engine', 'stack-rounds-cli.ts'),
       join('types', 'config.ts'),
       ]);
