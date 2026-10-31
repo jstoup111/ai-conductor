@@ -34,6 +34,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { emitRestackRefused } from './restack-events.js';
@@ -448,14 +449,16 @@ interface ReplayConflict {
  * path set is the durable hand-off context: merge-tree's human stderr is not a
  * stable interface and may omit a path on some Git versions.
  */
-async function replayConflict(git: GitRunner, error: unknown): Promise<ReplayConflict | undefined> {
+async function replayConflict(git: GitRunner, slug: string, error: unknown): Promise<ReplayConflict | undefined> {
   const message = error instanceof Error ? error.message : String(error);
   const matched = /^merge-tree failed for ([0-9a-f]{40}|[0-9a-f]{64}):/m.exec(message);
   const commit = matched === null ? undefined : parseCommitSha(matched[1]!);
   if (!commit) return undefined;
   const changed = await runGit(git, ['diff', '--no-renames', '--name-only', `${commit}^`, commit]);
   if (changed.exitCode !== 0) throw new Error(`cannot determine conflicted paths for ${commit}`);
-  const paths = [...new Set(changed.stdout.split('\n').map((path) => path.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  const haltRecordPath = haltRecordPathFor(slug);
+  const paths = [...new Set(changed.stdout.split('\n').map((path) => path.trim()).filter((path) => path && path !== haltRecordPath))]
+    .sort((left, right) => left.localeCompare(right));
   return { commit, paths };
 }
 
@@ -696,6 +699,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         replay = await replayChildRange(range, parent, journal.journal.committer, git, {
           comparisonCommits: newStackCommits,
           appendOnlyRemUnion: options.routed !== undefined,
+          haltRecordSlug: options.slug,
         });
       } catch (error) {
         if (error instanceof RemBlockBodyMismatchError) {
@@ -705,7 +709,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return { kind: 'halted' };
         }
-        const conflict = await replayConflict(git, error);
+        const conflict = await replayConflict(git, options.slug, error);
         if (!conflict) throw error;
         const merge = await mergeInRange(git, range);
         if (merge) {
@@ -726,6 +730,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           newParent: parent,
           stamp: journal.journal.committer,
           comparisonCommits: newStackCommits,
+          haltRecordSlug: options.slug,
           resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
           cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
           git,
