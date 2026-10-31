@@ -42,7 +42,7 @@ As an operator facing a restack conflict the engine could not resolve, I want th
 
 #### Negative Paths
 - Given the same halt, when the operator reads its text, then it contains neither an instruction to rebase or commit on `feat/c2/demo` or `feat/daemon-demo` nor an instruction to move any `refs/conductor/demo/closed/*` ref.
-- Given a base-refresh restack that halts on an unresolved conflict, when the halt is written, then no `restack/conflict/*` ref is created and the halt text is byte-identical to today's.
+- Given a base-refresh restack that halts on an unresolved conflict, when the halt is written, then it writes the same conflict record, parent pin and `Restack-Conflict` line as a feature-repair conflict halt, and moves no branch or closure ref.
 - Given the repaired stack whose child 2 range contains a merge commit, when the routed exit restack conflicts on child 2, then it halts with the shipped `flatten_refused` reason and text, and no `restack/conflict/*` ref is created.
 - Given the repaired stack whose replay of child 2 halts on a `rem-*` block body mismatch, when the halt is written, then the conflict record is written as for any unresolved conflict, and no branch or closure ref has moved.
 - Given a conflict record from an earlier halt, when a later conflict halt is written on child 3, then the record names child 3 and the earlier record is replaced in one compare-and-swap.
@@ -52,7 +52,7 @@ As an operator facing a restack conflict the engine could not resolve, I want th
 - [ ] A real-git test drives a routed repair restack into an unresolved conflict on child 2 and asserts the record's fields and both conflict refs.
 - [ ] A test asserts the halt text contains the reason line and the three commands with concrete shas, and contains no command touching `feat/` branches or closure refs.
 - [ ] A test asserts both conflict refs survive `cleanJournal`.
-- [ ] A test asserts a base-refresh conflict halt writes no conflict ref and keeps today's text.
+- [ ] A test asserts a base-refresh conflict halt writes the conflict record and parent pin and moves no branch or closure ref.
 
 ## Story 2: The operator records a validated resolution and clears only its own halt
 
