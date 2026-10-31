@@ -36,7 +36,8 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionMatchesRange, decisionRefFor, readConflictRecord, readRestackDecision } from './restack-conflict-record.js';
+import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionRefFor } from './restack-conflict-record.js';
+import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
@@ -804,46 +805,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return haltedResult(options.worktree);
         }
-        const recordedDecision = await readRestackDecision(options.worktree, options.slug, range.child, { git });
-        const deliveredDecision = recordedDecision.kind === 'decision' && decisionMatchesRange(recordedDecision.decision, range)
-          ? recordedDecision
-          : undefined;
-        const decisionDiagnostic = recordedDecision.kind === 'unreadable'
-          ? `unreadable operator decision at ${decisionRefFor(options.slug, range.child)}`
-          : recordedDecision.kind === 'decision'
-            ? `stale operator decision: ${recordedDecision.decision.answer}`
-            : undefined;
-        if (recordedDecision.kind === 'decision' && deliveredDecision === undefined) {
-          await options.events?.emit({
-            type: 'restack_decision',
-            action: 'stale',
-            child: range.child,
-            commit: recordedDecision.decision.commit,
-            paths: [...recordedDecision.decision.paths],
-            opId: journal.journal.opId,
-          });
-        }
-        if (deliveredDecision !== undefined) {
-          await options.events?.emit({
-            type: 'restack_decision',
-            action: 'applied',
-            child: range.child,
-            commit: deliveredDecision.decision.commit,
-            paths: [...deliveredDecision.decision.paths],
-            opId: journal.journal.opId,
-          });
-        }
-        const conflictRecord = deliveredDecision === undefined
-          ? undefined
-          : await readConflictRecord(options.worktree, options.slug, { git });
-        const conflictParent = deliveredDecision === undefined
-          ? undefined
-          : await runGit(git, ['rev-parse', '-q', '--verify', conflictParentRefFor(options.slug)]);
-        const deliveredConflictRecord = conflictRecord?.kind === 'record' ? conflictRecord : undefined;
-        const deliveredConflict = deliveredConflictRecord !== undefined && conflictParent?.exitCode === 0
-          ? parseCommitSha(conflictParent.stdout.trim())
-          : undefined;
-        if (deliveredDecision !== undefined && (!deliveredConflict || deliveredConflictRecord === undefined)) {
+        const decisionDelivery = await prepareRestackDecisionDelivery({
+          worktree: options.worktree, slug: options.slug, range, opId: journal.journal.opId, git, events: options.events,
+        });
+        if (decisionDelivery === undefined) {
           throw new Error('cannot record delivered decision conflict state');
         }
         const resolution = await resolveRestackConflict({
@@ -855,19 +820,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           haltRecordSlug: options.slug,
           resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
           cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
-          ...(deliveredDecision === undefined ? {} : {
-            operatorDecision: {
-              answer: deliveredDecision.decision.answer,
-              commit: deliveredDecision.decision.commit,
-              paths: deliveredDecision.decision.paths,
-            },
-          }),
+          ...(decisionDelivery.operatorDecision === undefined ? {} : { operatorDecision: decisionDelivery.operatorDecision }),
           git,
         });
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
           const detail = [
-            ...(deliveredDecision === undefined ? [] : [`operator decision applied: ${deliveredDecision.decision.answer}`]),
-            ...(decisionDiagnostic === undefined ? [] : [decisionDiagnostic]),
+            ...restackDecisionDetailLines(decisionDelivery),
             ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
           ].join('\n') || undefined;
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, parent, 'conflict', detail, resolution.candidates);
@@ -882,9 +840,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         }
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, {
           git,
-          ...(deliveredDecision === undefined ? {} : { deliveredDecision: {
-            child: range.child, blob: deliveredDecision.blob, record: deliveredConflictRecord!.blob, parent: deliveredConflict!,
-          } }),
+          ...(decisionDelivery.deliveredDecision === undefined ? {} : { deliveredDecision: decisionDelivery.deliveredDecision }),
         });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
         journal = updated.journal;

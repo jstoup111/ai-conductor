@@ -186,6 +186,26 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(readRestackJournal(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'missing' });
   });
 
+  it('does not emit an applied decision from the executor when its conflict refs are absent', async () => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
+    persister.start();
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision: {
+      child, oldParent: subject.closedOne, oldTip: subject.closedTwo, commit: subject.closedTwo,
+      paths: ['two.txt'], answer: 'keep upstream', operator: 'operator@example.test',
+    } }, { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'must not be dispatched' }));
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
+      .resolves.toMatchObject({ kind: 'halted' });
+
+    expect(resolver).not.toHaveBeenCalled();
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8').catch(() => ''))
+      .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child }));
+  });
+
   it('keeps an ignored decision while escalating its answer, recipe, and fresh conflict record', async () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();
