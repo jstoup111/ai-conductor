@@ -4,6 +4,19 @@ spec_hash: 7fa02d9d283529b6213b894948a0fa664fc6146d5a2093525bfd2d2657dc7a2e
 pr: https://github.com/jstoup111/ai-conductor/pull/3553
 shipped: 2026-10-31
 engine_version: 20261031T092626Z-5ecd86e21e59
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is an unplanned injection seam that supports the planned ownership rule. It is never exercised by the engine and does not change behavior."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "The co-author guard allowlist is widened, but only as far as remediation task R3 requires: R3 requires a trailer-free bookkeeping message (ADR D2 reproducible SHA). The exemption is narrow and tested, and nobody outside the repository sees it."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
