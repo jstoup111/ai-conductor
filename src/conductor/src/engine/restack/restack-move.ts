@@ -296,6 +296,7 @@ export async function haltRestackConflict(
     `git switch -c restack-resolve/${recipe.slug}/c${child} ${recipe.oldTip}`,
     `git rebase --onto ${recipe.newParent} ${recipe.oldParent}`,
     `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --tip <sha>`,
+    `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --decision "<answer>"`,
     // /ai-conductor:session-command-context
   ].join('\n');
   return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}${instructions === '' ? '' : `\n${instructions}`}\n`, 'needs-human', events);
