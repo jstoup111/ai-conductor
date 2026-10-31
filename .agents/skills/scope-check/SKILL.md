@@ -107,7 +107,7 @@ Reached only when the change adds a skill. There are exactly two catalogs.
 | Audience | every repository that installs the harness | this repository only |
 | Installed by | `bin/install`, which auto-discovers every `skills/<name>/` containing a `SKILL.md` | nothing — never installed anywhere |
 | Discovery homes | both user-space catalogs: `~/.claude/skills` and `~/.agents/skills` | in-repo only: `.agents/skills/` natively, plus a `.claude/skills/<name>` symlink |
-| Current members | the shipped lifecycle catalog | `maintain-documentation`, `write-tests`, `scope-check` |
+| Current members | the shipped lifecycle catalog | every directory under `.agents/skills/` |
 
 ### Procedure
 
@@ -249,6 +249,10 @@ Answer each. Any YES in steps 1–3 requires the remedy in step 4 before the cha
   native project-local location; the committed `.claude/skills/<name>` symlink makes the identical
   file reachable from Claude. One file, two discovery paths — the same construction as the root
   instructions. A local skill that exists in only one of the two is reachable by only one host.
+  `test/check_local_skill_host_wiring.sh` (integrity check 2b) rejects a local skill without a
+  resolving `.claude/skills/<name>` symlink and an orphaned `.claude/skills` entry;
+  `test/check_skill_invocation_policy.sh` (integrity check 2a) rejects a local skill without its
+  `agents/openai.yaml` policy.
 
 ### Real asymmetries this decision must catch
 
