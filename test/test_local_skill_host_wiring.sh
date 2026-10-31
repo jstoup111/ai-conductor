@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Covers: task:4
 set -euo pipefail
 
 # Mutation tests for check_local_skill_host_wiring.sh. These fixtures prove the
