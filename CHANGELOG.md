@@ -63,6 +63,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Configure OTLP header credentials from a command when environment variables are not suitable. ([implementation PR #3531](https://github.com/jstoup111/ai-conductor/pull/3531)).
 - Operators can identify committed plans with unresolved Stories references through a read-only daemon diagnostic. ([implementation PR #3534](https://github.com/jstoup111/ai-conductor/pull/3534)).
 - Operators inspect and safely recover wedged routed stack rounds. ([implementation PR #3542](https://github.com/jstoup111/ai-conductor/pull/3542)).
+- Operators can record and resume a repaired stacked-restack conflict. ([implementation PR #3522](https://github.com/jstoup111/ai-conductor/pull/3522)).
 
 ### Changed
 
