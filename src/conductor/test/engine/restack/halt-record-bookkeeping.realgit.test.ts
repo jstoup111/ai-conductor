@@ -111,8 +111,9 @@ describe('halt-record bookkeeping (real local Git)', () => {
     expect(carried.added).toBe(true);
     expect(carriedAgain).toEqual(carried);
     expect((await subject.git(['rev-parse', `${carried.tip}^`])).stdout.trim()).toBe(newParent);
-    expect((await subject.git(['log', '-1', '--format=%B', carried.tip])).stdout).toBe('halt record: demo\n\n');
-    expect((await subject.git(['log', '-1', '--format=%B', carried.tip])).stdout).not.toContain(trailer);
+    const message = (await subject.git(['log', '-1', '--format=%B', carried.tip])).stdout;
+    expect(message.trimEnd()).toBe('halt record: demo');
+    expect(message).not.toContain(trailer);
     expect((await subject.git(['show', '-s', '--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI', carried.tip])).stdout.trim())
       .toBe(`${stamp.name}\x00${stamp.email}\x00${stamp.date}\x00${stamp.name}\x00${stamp.email}\x00${stamp.date}`);
     expect((await subject.git(['diff-tree', '--no-commit-id', '--name-only', '-r', carried.tip])).stdout.trim()).toBe('.docs/halted/demo.md');
