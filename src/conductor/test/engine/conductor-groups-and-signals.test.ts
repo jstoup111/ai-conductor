@@ -98,6 +98,7 @@ import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtu
 import { validateRemediationPlan, REMEDIATION_PLAN_CONTRACT_VERSION } from '../../src/engine/remediation-plan-contract.js';
 import { appendRemediationTasks } from '../../src/engine/remediation-append.js';
 import { recordAsBuiltReconciliation } from '../../src/engine/as-built-case-reconciliation.js';
+import * as parkMarker from '../../src/engine/park-marker.js';
 
 import type {
   InvokeOptions,
@@ -248,6 +249,15 @@ function asBuiltBlockedRemediableFixture(summary = 'ADR-1 needs a guard.') {
   };
 }
 
+let mainRootResolveSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+async function createCaseStoreFixtureWorktree(mainRoot: string): Promise<string> {
+  const worktree = join(mainRoot, '.worktrees', 'conductor-groups-and-signals');
+  await mkdir(worktree, { recursive: true });
+  mainRootResolveSpy = vi.spyOn(parkMarker, 'resolveMainRepoRoot').mockResolvedValue(mainRoot);
+  return worktree;
+}
+
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
     run: vi.fn().mockResolvedValue(result),
@@ -278,18 +288,22 @@ const RED_EVIDENCE_JSON = JSON.stringify({
 
 describe('engine/conductor', () => {
   let dir: string;
+  let tempRoot: string;
   let statePath: string;
   let events: ConductorEventEmitter;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-test-'));
+    tempRoot = dir;
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
     vi.mocked(creditKickbackGateLaps).mockClear();
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(tempRoot, { recursive: true, force: true });
+    mainRootResolveSpy?.mockRestore();
+    mainRootResolveSpy = undefined;
   });
 
   describe('built-in validation group engagement (auto-mode-only)', () => {
@@ -1873,6 +1887,8 @@ describe('engine/conductor', () => {
     });
 
     it('halts a mixed as-built group report with every finding listed and re-runs the refused gate after HALT clears', async () => {
+      dir = await createCaseStoreFixtureWorktree(dir);
+      statePath = join(dir, 'conduct-state.json');
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
@@ -1922,6 +1938,15 @@ describe('engine/conductor', () => {
         verifyArtifacts: true,
         maxRetries: 1,
       };
+      const reconciled: Array<{ findingId: string; outcome: string; haltAlreadyExists: boolean }> = [];
+      events.on('as_built_finding_reconciled', async (event) => {
+        if (event.type !== 'as_built_finding_reconciled') return;
+        reconciled.push({
+          findingId: event.findingId,
+          outcome: event.outcome,
+          haltAlreadyExists: await haltMarkerExists(dir),
+        });
+      });
 
       await new Conductor(options).run();
 
@@ -1935,6 +1960,20 @@ describe('engine/conductor', () => {
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
       const refused = await readState(statePath);
       expect(refused.ok && refused.value.architecture_review_as_built).toBe('refused');
+      const cases = JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as {
+        asBuiltCases: Array<{ status: string; sources: Array<{ class: string; summary: string }> }>;
+      };
+      expect(cases.asBuiltCases.map((record) => ({
+        status: record.status,
+        source: record.sources[0] && { class: record.sources[0].class, summary: record.sources[0].summary },
+      }))).toEqual([
+        { status: 'needs-human', source: { class: 'REMEDIABLE', summary: 'Add the missing guard' } },
+        { status: 'needs-human', source: { class: 'DESIGN', summary: 'Choose the incompatible boundary' } },
+      ]);
+      expect(reconciled).toEqual([
+        { findingId: expect.stringMatching(/:1$/), outcome: 'needs-human', haltAlreadyExists: false },
+        { findingId: expect.stringMatching(/:2$/), outcome: 'needs-human', haltAlreadyExists: false },
+      ]);
 
       await rm(join(dir, '.pipeline/HALT'), { force: true });
       await rm(join(dir, '.pipeline/HALT.class'), { force: true });
@@ -1943,6 +1982,178 @@ describe('engine/conductor', () => {
       expect(asBuiltCalls).toBe(2);
       expect(remediateCalls).toBe(0);
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
+    });
+  });
+
+  describe('as-built case-store closure at conductor boundaries', () => {
+    const FEATURE = 'as-built-case-store-closure';
+
+    beforeEach(async () => {
+      dir = await createCaseStoreFixtureWorktree(dir);
+      statePath = join(dir, 'conduct-state.json');
+    });
+
+    async function seedSerialAsBuiltState(): Promise<void> {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', `${FEATURE}.md`), [
+        '### Task 1: Existing task', '', 'Done when: it is complete.', '',
+        '### Task 2: Existing sibling', '', 'Done when: it is complete.', '',
+      ].join('\n'));
+      await writeState(statePath, {
+        ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+        feature_desc: FEATURE,
+        complexity_tier: 'M',
+        architecture_review_as_built: 'pending',
+      } as ConductState);
+    }
+
+    async function serialRun(runner: StepRunner): Promise<void> {
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        fromStep: 'architecture_review_as_built', mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 1,
+      }).run();
+    }
+
+    async function readAsBuiltCases(): Promise<Array<{
+      status: string;
+      repairTaskIds: string[];
+      sources: Array<{ findingId: string; class: string; summary: string }>;
+    }>> {
+      return (JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as {
+        asBuiltCases: Array<{
+          status: string;
+          repairTaskIds: string[];
+          sources: Array<{ findingId: string; class: string; summary: string }>;
+        }>;
+      }).asBuiltCases;
+    }
+
+    it('records every serial terminal finding and emits its reconciliation before the needs-human HALT', async () => {
+      await seedSerialAsBuiltState();
+      const reconciled: Array<{ findingId: string; haltAlreadyExists: boolean }> = [];
+      events.on('as_built_finding_reconciled', async (event) => {
+        if (event.type !== 'as_built_finding_reconciled') return;
+        reconciled.push({ findingId: event.findingId, haltAlreadyExists: await haltMarkerExists(dir) });
+      });
+      await serialRun({ run: vi.fn(async (step, _state, options) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, options?.runId, {
+            version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+            findings: [
+              { class: 'DESIGN', summary: 'Choose the boundary.' },
+              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the guard.' },
+            ],
+            violations: 'The design cannot proceed.', resolution: 'Choose a boundary.',
+          });
+        }
+        return { success: true };
+      }) });
+
+      expect(await readAsBuiltCases()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ class: 'DESIGN', summary: 'Choose the boundary.' })] }),
+        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ class: 'REMEDIABLE', summary: 'Add the guard.' })] }),
+      ]));
+      expect(reconciled).toEqual([
+        { findingId: expect.stringMatching(/:1$/), haltAlreadyExists: false },
+        { findingId: expect.stringMatching(/:2$/), haltAlreadyExists: false },
+      ]);
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    });
+
+    it.each([
+      ['APPROVED WITH DRIFT NOTES', { verdict: 'APPROVED WITH DRIFT NOTES' as const, driftNotes: [{ note: 'Documented harmless drift.' }] }],
+      ['APPROVED with no pending findings', { verdict: 'APPROVED' as const, driftNotes: [] }],
+    ])('resolves open as-built cases on a %s gate pass even with no pending findings', async (_name, passing) => {
+      await seedSerialAsBuiltState();
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+        cases: [], prdWideningCases: [], suppressions: [], outbox: [],
+        asBuiltCases: [{
+          id: 'open-as-built-case', domain: 'as_built', status: 'open', repairTaskIds: ['rem-as-built-1'], recurrenceCount: 1,
+          sources: [{ findingId: 'prior-finding', attemptId: 'prior', class: 'REMEDIABLE', summary: 'Prior finding.', relation: 'new', reason: 'Prior result.' }],
+        }],
+      }), 'utf8');
+      await serialRun({ run: vi.fn(async (step, _state, options) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, options?.runId, {
+            version: 'v2', reachability: [], ...passing,
+          });
+        }
+        return { success: true };
+      }) });
+
+      expect((await readAsBuiltCases()).find((record) => record.sources[0]?.findingId === 'prior-finding'))
+        .toMatchObject({ status: 'resolved' });
+    });
+
+    it('delivers a crash-left reconciliation event once with its original eventId before building the as-built projection', async () => {
+      await seedSerialAsBuiltState();
+      const seeded = recordAsBuiltReconciliation({
+        version: 'v4', feature: { version: 'v1', repository: tempRoot, feature: 'conductor-groups-and-signals' },
+        cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [],
+      }, {
+        results: [{ source: { findingId: 'crash-left', attemptId: 'prior', class: 'REMEDIABLE', summary: 'Crash-left finding.' }, relation: 'new', reason: 'Prior repair.' }],
+        newEventId: () => 'crash-left-event-id',
+      });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify(seeded.state), 'utf8');
+      const order: string[] = [];
+      events.on('as_built_finding_reconciled', (event) => {
+        if (event.type === 'as_built_finding_reconciled') order.push(`event:${event.eventId}`);
+      });
+      await serialRun({ run: vi.fn(async (step, _state, options) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedRemediableFixture());
+        } else if (step === 'remediate') {
+          order.push('remediate');
+          await persistFixtureProjectedRemediationPlan(dir, options, [{
+            id: '1', referenceKind: 'as-built-finding', disposition: 'halt', category: 'decision',
+            rationale: 'A decision is required.', tasks: [],
+          }]);
+        }
+        return { success: true };
+      }) });
+
+      expect(order).toEqual(['event:crash-left-event-id', 'remediate']);
+      expect((JSON.parse(await readFile(join(dir, '.pipeline', 'remediation-cases.json'), 'utf8')) as { outbox: unknown[] }).outbox)
+        .toHaveLength(0);
+    });
+
+    it('persists appended and halt findings together when a mixed as-built plan stops for a human decision', async () => {
+      await seedSerialAsBuiltState();
+      const eventsSeen: Array<{ findingId: string; outcome: string }> = [];
+      events.on('as_built_finding_reconciled', (event) => {
+        if (event.type === 'as_built_finding_reconciled') eventsSeen.push({ findingId: event.findingId, outcome: event.outcome });
+      });
+      await serialRun({ run: vi.fn(async (step, _state, options) => {
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, options?.runId, {
+            version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+            findings: [
+              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Append this repair.' },
+              { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Choose this design.' },
+            ],
+            violations: 'Both findings block the review.', resolution: 'Repair and decide.',
+          });
+        } else if (step === 'remediate') {
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            { id: '1', disposition: 'build', category: null, rationale: 'Append repair.', tasks: [{ id: 'append-repair', title: 'Append repair' }] },
+            { id: '2', disposition: 'halt', category: 'architectural-clarity', rationale: 'Decision required.', tasks: [] },
+          ]);
+        }
+        return { success: true };
+      }) });
+
+      expect(await readAsBuiltCases()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: 'open', repairTaskIds: ['rem-as-built-append-repair'], sources: [expect.objectContaining({ findingId: expect.stringMatching(/:1$/), class: 'REMEDIABLE', summary: 'Append this repair.' })] }),
+        expect.objectContaining({ status: 'needs-human', sources: [expect.objectContaining({ findingId: expect.stringMatching(/:2$/), class: 'REMEDIABLE', summary: 'Choose this design.' })] }),
+      ]));
+      expect(eventsSeen).toEqual([
+        { findingId: expect.stringMatching(/:1$/), outcome: 'new' },
+        { findingId: expect.stringMatching(/:2$/), outcome: 'needs-human' },
+      ]);
     });
   });
 
