@@ -13,6 +13,11 @@ import {
 import type { ChildRange, CommitSha } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
+import {
+  carryNewestHaltRecord,
+  isHaltRecordOnlyCommit,
+  mapOmittedHaltRecordCommits,
+} from './halt-record-bookkeeping.js';
 
 /** Resolver dispatch receives the same immutable identity as every Git child. */
 export interface RestackResolutionContext extends ResolutionContext {
@@ -29,6 +34,8 @@ export interface ResolveRestackConflictOptions {
   readonly stamp: CommitterStamp;
   /** Commits introduced by the advance; patch-equivalent candidates are omitted. */
   readonly comparisonCommits?: readonly CommitSha[];
+  /** Enables deterministic handling of this feature's halt-record bookkeeping. */
+  readonly haltRecordSlug?: string;
   readonly resolver: RestackResolver;
   readonly cap: number;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
@@ -76,6 +83,7 @@ async function replayCandidates(
   git: GitRunner,
   range: ChildRange,
   comparisonCommits: readonly CommitSha[],
+  haltRecordSlug: string | undefined,
 ): Promise<CommitSha[]> {
   const compared = new Set<string>();
   for (const commit of comparisonCommits) {
@@ -87,6 +95,7 @@ async function replayCandidates(
   const candidates: CommitSha[] = [];
   for (const raw of listed.stdout.split('\n').filter(Boolean)) {
     const commit = requiredSha(raw, 'restack replay candidate');
+    if (haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, haltRecordSlug, git)) continue;
     // Empty commits have no patch-id and deliberately remain candidates.
     if (!compared.has(await patchId(git, commit) ?? '')) candidates.push(commit);
   }
@@ -142,10 +151,11 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
   const sequenceEditorPath = join(helpers, 'sequence-editor');
   const rewritePath = join(helpers, 'rewritten-list');
   const hooksPath = join(helpers, 'hooks');
+  const attributesPath = join(helpers, 'attributes');
   let added = false;
 
   try {
-    const candidates = await replayCandidates(runGit, options.range, options.comparisonCommits ?? []);
+    const candidates = await replayCandidates(runGit, options.range, options.comparisonCommits ?? [], options.haltRecordSlug);
     const addedResult = await runGit(['worktree', 'add', '--detach', temporaryWorktree, options.range.oldTip], { env: identity });
     if (addedResult.exitCode !== 0) throw new Error(`could not add restack resolver worktree: ${addedResult.stderr}`);
     added = true;
@@ -158,15 +168,24 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
     await writeFile(join(hooksPath, 'post-rewrite'), `#!/bin/sh\ncat > ${shellQuote(rewritePath)}\n`);
     await chmod(join(hooksPath, 'post-rewrite'), 0o700);
 
+    if (options.haltRecordSlug !== undefined) {
+      await writeFile(attributesPath, `${`.docs/halted/${options.haltRecordSlug}.md`} merge=conductor-halt-record\n`);
+    }
     const environment: NodeJS.ProcessEnv = {
       ...identity,
       GIT_SEQUENCE_EDITOR: sequenceEditorPath,
       GIT_EDITOR: 'true',
       // A resolver-specific hook captures Git's rewritten list without adding
       // non-pick instructions to the engine-owned todo.
-      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_COUNT: options.haltRecordSlug === undefined ? '1' : '3',
       GIT_CONFIG_KEY_0: 'core.hooksPath',
       GIT_CONFIG_VALUE_0: hooksPath,
+      ...(options.haltRecordSlug === undefined ? {} : {
+        GIT_CONFIG_KEY_1: 'core.attributesFile',
+        GIT_CONFIG_VALUE_1: attributesPath,
+        GIT_CONFIG_KEY_2: 'merge.conductor-halt-record.driver',
+        GIT_CONFIG_VALUE_2: 'true',
+      }),
     };
     const nativeTemporaryGit = makeGitRunner(temporaryWorktree);
     // Every call rooted in the detached checkout, including rebase-state
@@ -175,10 +194,21 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       ...opts,
       env: { ...environment, ...opts?.env },
     });
+    const resolved = async (outcome: RebaseOutcome): Promise<RestackConflictResolution> => {
+      const rewrites = await readRewrites(rewritePath);
+      // Git may reap a detached resolver checkout as the final rebase action.
+      // post-rewrite is therefore the durable authority for its resulting tip.
+      let tip = [...rewrites.values()].at(-1) ?? options.newParent;
+      if (options.haltRecordSlug !== undefined) {
+        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, runGit);
+        tip = carried.tip;
+        await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
+      }
+      return { outcome, tip, rewrites, candidates };
+    };
     const started = await tempGit(['rebase', '-i', '--onto', options.newParent, options.range.oldParent], { env: environment });
     if (started.exitCode === 0) {
-      const tip = requiredSha((await tempGit(['rev-parse', 'HEAD'], { env: environment })).stdout, 'resolved restack tip');
-      return { outcome: { kind: 'noop' }, tip, rewrites: await readRewrites(rewritePath), candidates };
+      return resolved({ kind: 'noop' });
     }
 
     const conflicts = await conflictedFiles(tempGit);
@@ -194,10 +224,8 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       async (context) => options.resolver({ ...context, environment }),
       options.cap,
     );
-    const tip = outcome.kind === 'changed' || outcome.kind === 'noop'
-      ? requiredSha((await tempGit(['rev-parse', 'HEAD'], { env: environment })).stdout, 'resolved restack tip')
-      : undefined;
-    return { outcome, tip, rewrites: await readRewrites(rewritePath), candidates };
+    if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome);
+    return { outcome, tip: undefined, rewrites: await readRewrites(rewritePath), candidates };
   } finally {
     try {
       if (added) {
