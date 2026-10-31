@@ -31,6 +31,39 @@ export interface StoredConflictRecord {
   readonly record: RestackConflictRecord;
 }
 
+/** Durable operator answer for one exact child range. */
+export interface RestackDecision {
+  readonly child: ChildId;
+  readonly oldParent: CommitSha;
+  readonly oldTip: CommitSha;
+  readonly commit: CommitSha;
+  readonly paths: readonly string[];
+  readonly answer: string;
+  readonly operator: string;
+}
+
+export interface StoredRestackDecision {
+  readonly kind: 'decision';
+  readonly slug: string;
+  /** Blob behind the decision ref; used as the decision CAS value. */
+  readonly blob: CommitSha;
+  readonly decision: RestackDecision;
+}
+
+export type ReadRestackDecisionResult =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'unreadable'; readonly blob: CommitSha }
+  | StoredRestackDecision;
+
+export type RecordAnswerInput =
+  | { readonly kind: 'decision'; readonly decision: RestackDecision }
+  | { readonly kind: 'tip'; readonly child: ChildId; readonly tip: CommitSha };
+
+export type RecordAnswerResult =
+  | { readonly kind: 'updated' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'unavailable' };
+
 export type ReadConflictRecordResult =
   | { readonly kind: 'missing' }
   | { readonly kind: 'unreadable'; readonly blob: CommitSha }
@@ -91,6 +124,10 @@ export function resolutionRefFor(slug: string, child: ChildId): RefName {
   return `refs/conductor/${slug}/restack/resolution/c${child}` as RefName;
 }
 
+export function decisionRefFor(slug: string, child: ChildId): RefName {
+  return `refs/conductor/${slug}/restack/decision/c${child}` as RefName;
+}
+
 async function runGit(git: GitRunner, args: string[], input?: string) {
   try {
     return await git(args, input === undefined ? undefined : { input });
@@ -141,10 +178,113 @@ function parseConflictRecord(value: unknown): RestackConflictRecord | undefined 
   };
 }
 
+/** Keep decisions fail-closed: every field is consumed by a later replay. */
+function parseRestackDecision(value: unknown): RestackDecision | undefined {
+  if (!isRecord(value)
+    || typeof value.child !== 'number'
+    || typeof value.oldParent !== 'string'
+    || typeof value.oldTip !== 'string'
+    || typeof value.commit !== 'string'
+    || typeof value.answer !== 'string' || value.answer === ''
+    || typeof value.operator !== 'string' || value.operator === '') return undefined;
+  const child = parseChildId(value.child);
+  const oldParent = parseCommitSha(value.oldParent);
+  const oldTip = parseCommitSha(value.oldTip);
+  const commit = parseCommitSha(value.commit);
+  const paths = parseStringArray(value.paths);
+  if (!child || !oldParent || !oldTip || !commit || !paths) return undefined;
+  return { child, oldParent, oldTip, commit, paths, answer: value.answer, operator: value.operator };
+}
+
 async function refValue(git: GitRunner, ref: RefName): Promise<CommitSha | typeof ZERO_SHA | undefined> {
   const resolved = await runGit(git, ['rev-parse', '-q', '--verify', ref]);
   if (resolved?.exitCode === 1) return ZERO_SHA;
   return resolved?.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
+}
+
+/** Read and validate a durable decision. A malformed blob is never usable. */
+export async function readRestackDecision(
+  worktree: string,
+  slug: string,
+  child: ChildId,
+  dependencies: ConflictRecordDependencies = {},
+): Promise<ReadRestackDecisionResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const resolved = await runGit(git, ['rev-parse', '-q', '--verify', decisionRefFor(slug, child)]);
+  if (resolved?.exitCode === 1) return { kind: 'missing' };
+  const blob = resolved?.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
+  if (!blob) return { kind: 'unreadable', blob: '' as CommitSha };
+  const contents = await runGit(git, ['cat-file', 'blob', blob]);
+  if (contents?.exitCode !== 0) return { kind: 'unreadable', blob };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents.stdout);
+  } catch {
+    return { kind: 'unreadable', blob };
+  }
+  const decision = parseRestackDecision(parsed);
+  return decision === undefined ? { kind: 'unreadable', blob } : { kind: 'decision', slug, blob, decision };
+}
+
+/** A decision can be delivered only to the same logical child range. */
+export function decisionMatchesRange(decision: RestackDecision, range: ChildRange): boolean {
+  return decision.child === range.child
+    && decision.oldParent === range.oldParent
+    && decision.oldTip === range.oldTip;
+}
+
+/** Materialize a validated decision as a Git blob for an answer transaction. */
+export async function writeRestackDecision(
+  worktree: string,
+  decision: RestackDecision,
+  dependencies: ConflictRecordDependencies = {},
+): Promise<CommitSha | undefined> {
+  const serialized = JSON.stringify(decision);
+  if (!parseRestackDecision(JSON.parse(serialized))) return undefined;
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const written = await runGit(git, ['hash-object', '-w', '--stdin'], serialized);
+  return written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+}
+
+/** Delete a delivered decision with the blob value observed at delivery time. */
+export function decisionDeleteLines(slug: string, decision: Pick<StoredRestackDecision, 'blob' | 'decision'>): readonly string[] {
+  return [`delete ${decisionRefFor(slug, decision.decision.child)} ${decision.blob}`];
+}
+
+/**
+ * Replace one answer kind with the other in one ref transaction.  Each named
+ * ref is compared against the exact value observed before the transaction.
+ */
+export async function recordAnswer(
+  worktree: string,
+  slug: string,
+  answer: RecordAnswerInput,
+  dependencies: ConflictRecordDependencies = {},
+): Promise<RecordAnswerResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const child = answer.kind === 'decision' ? answer.decision.child : answer.child;
+  const decisionRef = decisionRefFor(slug, child);
+  const resolutionRef = resolutionRefFor(slug, child);
+  const [oldDecision, oldResolution] = await Promise.all([
+    refValue(git, decisionRef), refValue(git, resolutionRef),
+  ]);
+  if (oldDecision === undefined || oldResolution === undefined) return { kind: 'unavailable' };
+
+  let update: string;
+  let deleteLine: string | undefined;
+  if (answer.kind === 'decision') {
+    const blob = await writeRestackDecision(worktree, answer.decision, { git });
+    if (!blob) return { kind: 'unavailable' };
+    update = `update ${decisionRef} ${blob} ${oldDecision}`;
+    if (oldResolution !== ZERO_SHA) deleteLine = `delete ${resolutionRef} ${oldResolution}`;
+  } else {
+    update = `update ${resolutionRef} ${answer.tip} ${oldResolution}`;
+    if (oldDecision !== ZERO_SHA) deleteLine = `delete ${decisionRef} ${oldDecision}`;
+  }
+  const transaction = ['start', update, ...(deleteLine ? [deleteLine] : []), 'prepare', 'commit', ''].join('\n');
+  const updated = await runGit(git, ['update-ref', '--stdin'], transaction);
+  if (updated?.exitCode === 0) return { kind: 'updated' };
+  return updated === undefined ? { kind: 'unavailable' } : { kind: 'stale' };
 }
 
 /** Read and validate a durable conflict record. A malformed blob is never usable. */

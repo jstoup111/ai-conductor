@@ -5,7 +5,7 @@ import type { GitRunner } from '../rebase.js';
 import { routingTeardownRefNames } from '../routing/routing-refs.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from './restack-journal.js';
 import { cascadesRefFor } from './cascade-cap.js';
-import { conflictParentRefFor, conflictRecordRefFor, resolutionRefFor } from './restack-conflict-record.js';
+import { conflictParentRefFor, conflictRecordRefFor, decisionRefFor, resolutionRefFor } from './restack-conflict-record.js';
 
 /**
  * The feature-owned conductor refs have deliberately finite names.  Cleanup
@@ -30,6 +30,7 @@ export function featureConductorRefNames(slug: string): readonly string[] {
       pushedTipRef(slug, child.branch),
       pushedTipIntentRef(slug, child.branch),
       resolutionRefFor(slug, childId),
+      decisionRefFor(slug, childId),
     );
   }
   return refs;

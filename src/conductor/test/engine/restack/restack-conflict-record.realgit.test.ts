@@ -12,8 +12,13 @@ import {
   conflictParentRefFor,
   conflictRecordRefFor,
   consumeRecordedResolution,
+  decisionMatchesRange,
+  decisionRefFor,
+  readRestackDecision,
+  recordAnswer,
   readConflictRecord,
   resolutionRefFor,
+  type RestackDecision,
   writeConflictRecord,
   type RestackConflictRecord,
 } from '../../../src/engine/restack/restack-conflict-record.js';
@@ -70,6 +75,76 @@ function record(head: CommitSha, value: { readonly child?: number; readonly opId
 }
 
 describe('restack conflict record (real local Git)', () => {
+  // Covers: task:2
+  it('writes and reads a fail-closed operator decision for its exact child range', async () => {
+    const subject = await createRepo();
+    const decision: RestackDecision = {
+      child: child(2), oldParent: subject.head, oldTip: subject.head, commit: subject.head,
+      paths: ['src/flag.ts'], answer: 'keep the upstream seam', operator: 'operator@example.test',
+    };
+
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision })).resolves.toEqual({ kind: 'updated' });
+    await expect(readRestackDecision(subject.repo, 'demo', child(2))).resolves.toMatchObject({
+      kind: 'decision', slug: 'demo', decision,
+    });
+
+    for (const invalid of [
+      { ...decision, operator: undefined },
+      { ...decision, commit: 'not-a-sha' },
+      { ...decision, answer: '' },
+    ]) {
+      const blob = sha((await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], { input: JSON.stringify(invalid) })).stdout.trim());
+      await subject.git(['update-ref', decisionRefFor('demo', child(2)), blob]);
+      await expect(readRestackDecision(subject.repo, 'demo', child(2))).resolves.toEqual({ kind: 'unreadable', blob });
+    }
+
+    const range = { child: child(2), oldParent: subject.head, oldTip: subject.head, kind: 'closed' as const };
+    expect(decisionMatchesRange(decision, range)).toBe(true);
+    expect(decisionMatchesRange({ ...decision, child: child(3) }, range)).toBe(false);
+    expect(decisionMatchesRange({ ...decision, oldParent: sha('1'.repeat(40)) }, range)).toBe(false);
+    expect(decisionMatchesRange({ ...decision, oldTip: sha('2'.repeat(40)) }, range)).toBe(false);
+  });
+
+  // Covers: task:2
+  it('atomically replaces the other answer kind and rejects a changed compare-and-swap value', async () => {
+    const subject = await createRepo();
+    const decision: RestackDecision = {
+      child: child(2), oldParent: subject.head, oldTip: subject.head, commit: subject.head,
+      paths: ['src/flag.ts'], answer: 'keep the upstream seam', operator: 'operator@example.test',
+    };
+    const resolution = resolutionRefFor('demo', child(2));
+    const decisionRef = decisionRefFor('demo', child(2));
+    await subject.git(['update-ref', resolution, subject.head]);
+
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision })).resolves.toEqual({ kind: 'updated' });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolution])).resolves.toMatchObject({ exitCode: 1 });
+    const recorded = await readRestackDecision(subject.repo, 'demo', child(2));
+    expect(recorded.kind).toBe('decision');
+
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'tip', child: child(2), tip: subject.head })).resolves.toEqual({ kind: 'updated' });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', decisionRef])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '--verify', resolution])).resolves.toMatchObject({
+      exitCode: 0, stdout: subject.head,
+    });
+
+    const current = sha((await subject.git(['rev-parse', resolution])).stdout.trim());
+    await subject.git(['commit', '--allow-empty', '-qm', 'concurrent answer']);
+    const concurrent = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const native = makeGitRunner(subject.repo);
+    let raced = false;
+    const racingGit = async (args: string[], options?: { input?: string }) => {
+      if (!raced && args[0] === 'update-ref' && args[1] === '--stdin') {
+        raced = true;
+        await native(['update-ref', resolution, concurrent, current]);
+      }
+      return native(args, options);
+    };
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision }, { git: racingGit }))
+      .resolves.toEqual({ kind: 'stale' });
+    await expect(native(['rev-parse', '-q', '--verify', decisionRef])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(native(['rev-parse', resolution])).resolves.toMatchObject({ exitCode: 0, stdout: concurrent });
+  });
+
   it('writes the complete parsed record and pins its replay parent', async () => {
     const subject = await createRepo();
     const expected = record(subject.head);
