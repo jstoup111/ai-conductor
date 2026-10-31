@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Covers: task:4, task:8
 # Covers: task:3
+# Covers: task:5
 # BEGIN integrity failure reporting
 set -eEuo pipefail
 
@@ -283,6 +284,25 @@ if invocation_policy_fixture_output=$(bash "$SCRIPT_DIR/test_skill_invocation_po
 else
   printf '%s\n' "$invocation_policy_fixture_output" | sed 's/^/    /'
   assert "invocation policy checker rejects invalid metadata mutations" 1
+fi
+
+# ── 2b. Repository-local skill host wiring ──────────────────────────────────
+
+echo ""
+echo -e "${BOLD}2b. Repository-local skill host wiring${NC}"
+
+if local_skill_host_wiring_output=$(bash "$SCRIPT_DIR/check_local_skill_host_wiring.sh" "$HARNESS_DIR" 2>&1); then
+  assert "every repository-local skill is wired for both Claude and Codex" 0
+else
+  printf '%s\n' "$local_skill_host_wiring_output" | sed 's/^/    /'
+  assert "every repository-local skill is wired for both Claude and Codex" 1
+fi
+
+if local_skill_host_wiring_fixture_output=$(bash "$SCRIPT_DIR/test_local_skill_host_wiring.sh" 2>&1); then
+  assert "local skill host-wiring checker rejects one-host mutations" 0
+else
+  printf '%s\n' "$local_skill_host_wiring_fixture_output" | sed 's/^/    /'
+  assert "local skill host-wiring checker rejects one-host mutations" 1
 fi
 
 # ── 3. Agent references ─────────────────────────────────────────────────────
