@@ -243,6 +243,7 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
       .resolves.toMatchObject({ kind: 'halted' });
 
+    expect(resolver).toHaveBeenCalledTimes(1);
     expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
     const halt = await readFile(join(subject.repo, '.pipeline/HALT'), 'utf8');
     expect(halt).toContain("stale operator decision: keep upstream's resolveReviewScope seam");
