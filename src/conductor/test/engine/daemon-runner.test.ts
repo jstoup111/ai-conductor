@@ -103,6 +103,9 @@ import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import { admitRound } from '../../src/engine/routing/round-admission.js';
+import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
 
 // Covers: task:1
 
@@ -276,7 +279,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
           await runStackPreflight({
             worktree: worktree.path,
             slug: ITEM.slug,
-            events,
+            events: events ?? new ConductorEventEmitter(),
             git: makeGitRunner(worktree.path),
             reconcileRounds: async () => ({
               kind: 'stalled', detail: 'next-host admission refused',
@@ -309,6 +312,82 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
         haltClass: 'mechanical', retained: false,
       });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:8
+  it('reports the first line when a conductor dispatch ends on a parked r5 routing stop', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      const host = parseChildId(1)!;
+      const roundId = parseRoundId('r5')!;
+      const git = makeGitRunner(worktreePath);
+      const created = await createRouteRecord(worktreePath, ITEM.slug, {
+        roundId,
+        kind: 'audit',
+        sealedAuthored: 0,
+        items: [],
+        allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+      });
+      if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
+      await admitRound(worktreePath, ITEM.slug, created.record, host, { git });
+      await mkdir(join(worktreePath, '.pipeline', 'children', '1'), { recursive: true });
+      await writeFile(join(worktreePath, '.pipeline', 'conduct-state.json'), JSON.stringify({
+        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', feature_desc: ITEM.slug,
+      }));
+      await writeFile(join(worktreePath, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      }));
+      await execFile('git', ['add', '.ai-conductor', '.docs'], { cwd: worktreePath });
+      await execFile('git', ['commit', '-qm', 'commit conductor fixture artifacts'], { cwd: worktreePath });
+
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree, _item, _provider, events) => {
+        const parked = vi.spyOn(
+          Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+          'advanceTail',
+        ).mockResolvedValue('parked');
+        try {
+          await new Conductor({
+            projectRoot: worktree.path,
+            stateFilePath: join(worktree.path, '.pipeline', 'conduct-state.json'),
+            featureSlug: ITEM.slug,
+            fromStep: 'build_review',
+            mode: 'auto',
+            daemon: true,
+            verifyArtifacts: false,
+            config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+            events: events ?? new ConductorEventEmitter(),
+            stepRunner: { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) },
+            acceptanceRedExec: vi.fn(),
+            childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+          }).run();
+        } finally {
+          parked.mockRestore();
+        }
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      const firstLine = (await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf8')).split('\n', 1)[0]!;
+      expect(firstLine).toContain('r5');
+      expect(firstLine).toContain('child');
+      expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(firstLine) });
+      expect(outcome.reason).not.toContain('loop ended without DONE or HALT marker');
     } finally {
       await rm(worktreePath, { recursive: true, force: true });
     }

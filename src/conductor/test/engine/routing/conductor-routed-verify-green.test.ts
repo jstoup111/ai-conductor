@@ -1,4 +1,4 @@
-// Covers: task:7, task:9, task:207
+// Covers: task:2, task:3, task:4, task:5, task:6, task:7, task:8, task:9, task:10, task:207
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -15,12 +15,18 @@ const mocks = vi.hoisted(() => ({
   operatorRevalidation: false,
   revalidationRecord: undefined as undefined | import('../../../src/engine/routing/route-types.js').RouteRecord,
   observedRevalidationRecordKind: undefined as undefined | string,
+  parkingQueue: false,
+  routedRoundMarker: undefined as undefined | { host: number; roundId: string },
 }));
 
-vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
-  enterHostRegion: vi.fn(),
-  verifyGreenAcceptance: (...args: unknown[]) => mocks.verifyGreenAcceptance(...args),
-}));
+vi.mock('../../../src/engine/routing/host-region-entry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/host-region-entry.js')>();
+  return {
+    ...actual,
+    enterHostRegion: vi.fn(),
+    verifyGreenAcceptance: (...args: unknown[]) => mocks.verifyGreenAcceptance(...args),
+  };
+});
 vi.mock('../../../src/engine/acceptance-red-runner.js', () => ({
   selfHealAcceptanceRed: (...args: unknown[]) => mocks.selfHealAcceptanceRed(...args),
 }));
@@ -30,7 +36,12 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
     ...actual,
     drainRoutingOutboxes: () => mocks.drainRoutingOutboxes(),
     readRepairMarker: (...args: Parameters<typeof actual.readRepairMarker>) =>
-      mocks.operatorRevalidation
+      mocks.routedRoundMarker !== undefined
+        ? Promise.resolve({
+            kind: 'marker', slug: 'demo', blob: 'a'.repeat(40),
+            marker: mocks.routedRoundMarker,
+          } as never)
+        : mocks.operatorRevalidation
         ? Promise.resolve({ kind: 'marker', slug: 'demo', blob: 'a'.repeat(40), marker: { host: 1, roundId: undefined } } as never)
         : actual.readRepairMarker(...args),
     readRouteRecord: (...args: Parameters<typeof actual.readRouteRecord>) =>
@@ -43,6 +54,13 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
             } as never);
           })()
         : actual.readRouteRecord(...args),
+    readRevalidationQueue: (...args: Parameters<typeof actual.readRevalidationQueue>) =>
+      mocks.parkingQueue
+        ? Promise.resolve({
+            kind: 'queue', slug: 'demo', blob: 'a'.repeat(40),
+            queue: { generation: 1, entries: [{ child: 1, position: 1, closureSha: 'a'.repeat(40), gates: [], replay: { oldParent: 'a'.repeat(40), newParent: 'b'.repeat(40) }, state: 'queued' }], outbox: [] },
+          } as never)
+        : actual.readRevalidationQueue(...args),
   };
 });
 vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
@@ -66,11 +84,20 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
 
 import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
+import { selectNextGate } from '../../../src/engine/selector.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { admitRound, reconcileRounds, recordRoundStall } from '../../../src/engine/routing/round-admission.js';
+import { createRouteRecord, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId, parseRouteRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import type { HaltDisposition } from '../../../src/engine/halt-marker.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { StepRunner } from '../../../src/engine/step-runner-types.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
+import { clearMarker, readRawHaltClass, rekickSweep, resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
+import { renderDaemonEvent } from '../../../src/daemon-cli.js';
+import { restageHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -123,6 +150,8 @@ afterEach(async () => {
   mocks.operatorRevalidation = false;
   mocks.revalidationRecord = undefined;
   mocks.observedRevalidationRecordKind = undefined;
+  mocks.parkingQueue = false;
+  mocks.routedRoundMarker = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -142,19 +171,27 @@ async function routedFixture() {
   return { root };
 }
 
-function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner, host = child) {
+function routedConductor(
+  root: string,
+  events: ConductorEventEmitter,
+  runner: StepRunner,
+  host = child,
+  round = roundId,
+  verifyArtifacts = true,
+  mode: 'auto' | 'interactive' = 'auto',
+) {
   const cursor = {
     kind: 'repair-pending' as const,
     child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
     branch: 'feat/daemon-demo', repairChildren: [host],
-    routedRepair: { child: host, roundId },
+    routedRepair: { child: host, roundId: round },
   };
   return new Conductor({
     projectRoot: root,
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     featureSlug: 'demo',
     fromStep: 'acceptance_specs',
-    mode: 'auto', daemon: true, verifyArtifacts: true,
+    mode, daemon: mode === 'auto', verifyArtifacts,
     config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
     events,
     stepRunner: runner,
@@ -167,7 +204,377 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
   });
 }
 
+async function prepareParkingRound(
+  root: string,
+  host: NonNullable<ReturnType<typeof parseChildId>>,
+  admit = true,
+  roundId = parseRoundId('r5')!,
+  kind: 'audit' | 'operator' = 'audit',
+) {
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'feat/daemon-demo']);
+  await git(['config', 'user.email', 'routing@example.test']);
+  await git(['config', 'user.name', 'Routing']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await git(['add', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['host', 'leaf'] },
+  });
+  const created = await createRouteRecord(root, 'demo', {
+    roundId, kind, sealedAuthored: 0, items: [],
+    allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+  });
+  if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
+  if (admit) await expect(admitRound(root, 'demo', created.record, host, { git })).resolves.toMatchObject({ kind: 'admitted' });
+}
+
+function parkedConductor(root: string, events: ConductorEventEmitter) {
+  return new Conductor({
+    projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    featureSlug: 'demo', fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
+    config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+    events, stepRunner: { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) },
+    acceptanceRedExec: vi.fn(), childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+  });
+}
+
 describe('Conductor routed acceptance verify-green path', () => {
+  // Covers: task:4
+  it('revalidates child 2 by selecting its re-pended test_suite then build_review before the parked exit', async () => {
+    const { root } = await routedFixture();
+    const host = parseChildId(2)!;
+    await mkdir(join(root, '.pipeline', 'children', '2', 'gates'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'pending', build_review: 'pending',
+    }));
+    // Earlier successful verdicts are deliberately unstamped; the admitted
+    // revalidate marker must make both gates run again.
+    await Promise.all(['test_suite', 'build_review'].map((step) =>
+      writeFile(join(root, '.pipeline', 'children', '2', 'gates', `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    const revalidate = parseRoundId('r6')!;
+    await prepareParkingRound(root, host, true, revalidate);
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'test_suite', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn(), resetSession: vi.fn(async () => {}) }, acceptanceRedExec: vi.fn(),
+    });
+    const privateConductor = conductor as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, never>> };
+    privateConductor.activeRegionChild = host;
+    const overlay = await privateConductor.readGateVerdictOverlay();
+    expect(overlay.test_suite).toBeUndefined();
+    expect(overlay.build_review).toBeUndefined();
+    const childState = JSON.parse(await readFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8'));
+    expect(selectNextGate({ steps: ALL_STEPS, state: childState, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'leaf-host' } })).toMatchObject({ kind: 'run', step: 'test_suite' });
+    childState.test_suite = 'done';
+    expect(selectNextGate({ steps: ALL_STEPS, state: childState, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'leaf-host' } })).toMatchObject({ kind: 'run', step: 'build_review' });
+  });
+
+  // Covers: task:4, task:rem-prd-audit-S1.3
+  it('re-pends an operator round entered at test_suite and dispatches its stale successful gates in order', async () => {
+    const { root } = await routedFixture();
+    const host = parseChildId(1)!;
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    await Promise.all(['test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    const operator = parsedOpenRevalidatingRecord('operator');
+    const enteredAtTestSuite = parseRouteRecord(JSON.stringify({
+      ...operator,
+      roundId: 'r5',
+      operator: { ...operator.operator!, origin: 'rewind', entryStep: 'test_suite' },
+    }));
+    if (enteredAtTestSuite === undefined) throw new Error('expected parsed operator route');
+    await expect(restageHostRegion(root, 'demo', host, enteredAtTestSuite, makeGitRunner(root))).resolves.toEqual({ kind: 'restaged' });
+
+    mocks.routedRoundMarker = { host, roundId: 'r5' };
+    const conductor = routedConductor(root, new ConductorEventEmitter(), { run: vi.fn(), resetSession: vi.fn() }, host, parseRoundId('r5')!, false);
+    const privateConductor = conductor as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, never>> };
+    privateConductor.activeRegionChild = host;
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'));
+    const overlay = await privateConductor.readGateVerdictOverlay();
+    const dispatched: string[] = [];
+    for (const expected of ['test_suite', 'build_review']) {
+      const selected = selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child', child: host } });
+      expect(selected).toMatchObject({ kind: 'run', step: expected });
+      dispatched.push(expected);
+      state[expected] = 'done';
+    }
+    expect(dispatched).toEqual(['test_suite', 'build_review']);
+  });
+
+  // Covers: task:5, task:rem-prd-audit-S2.1, task:rem-prd-audit-S2.3
+  it('runs fresh validation after an unchanged routed repair build and renders its persisted running lines in order', async () => {
+    const { root } = await routedFixture();
+    const host = parseChildId(1)!;
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'pending', build_review: 'pending',
+    }));
+    await Promise.all(['test_suite', 'build_review'].map((step) =>
+      writeFile(join(gates, `${step}.json`), JSON.stringify({ satisfied: true, checkedAt: 1 }))));
+    mocks.routedRoundMarker = { host, roundId: 'r5' };
+    const conductor = routedConductor(root, new ConductorEventEmitter(), { run: vi.fn(), resetSession: vi.fn() }, host, parseRoundId('r5')!, false);
+    const privateConductor = conductor as unknown as { activeRegionChild: typeof host; readGateVerdictOverlay: () => Promise<Record<string, never>> };
+    privateConductor.activeRegionChild = host;
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'));
+    const overlay = await privateConductor.readGateVerdictOverlay();
+    const dispatched: string[] = ['build']; // The repair leaves the tree byte-identical; its round stamp is the invalidation authority.
+    for (const expected of ['test_suite', 'build_review']) {
+      expect(selectNextGate({ steps: ALL_STEPS, state, verdicts: overlay, regionStart: 'acceptance_specs', routedParking: { kind: 'child', child: host } })).toMatchObject({ kind: 'run', step: expected });
+      dispatched.push(expected);
+      state[expected] = 'done';
+    }
+    expect(dispatched).toEqual(['build', 'test_suite', 'build_review']);
+
+    const rendered: string[] = [];
+    for (const event of dispatched.map((step, index) => ({ type: 'step_started' as const, step: step as 'build' | 'test_suite' | 'build_review', index, child: host }))) {
+      renderDaemonEvent(event, (line) => rendered.push(line));
+    }
+    expect(rendered.findIndex((line) => line.includes('▶ build'))).toBeLessThan(rendered.findIndex((line) => line.includes('▶ test_suite')));
+    expect(rendered.findIndex((line) => line.includes('▶ test_suite'))).toBeLessThan(rendered.findIndex((line) => line.includes('▶ build_review')));
+  });
+
+  // Covers: task:8
+  it('escalates the third identical parked r5 stall, and resets after either routing progress event', async () => {
+    const { root } = await routedFixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const stall = {
+      kind: 'stalled' as const,
+      detail: 'awaiting admission',
+      rounds: [{ roundId: parseRoundId('r5')!, readable: true as const, unsettledHosts: { [child]: 'admitted' as const } }],
+    };
+    persister.start();
+    try {
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toEqual({ detail: expect.stringContaining('r5') });
+
+      for (const progress of ['routed_repair_phase', 'remediation_routed'] as const) {
+        // A progress occurrence splits the backwards scan, even when two
+        // identical stalls immediately preceded it.
+        await writeFile(join(root, '.pipeline', 'events.jsonl'), [
+          JSON.stringify({ type: 'routing_rounds_stalled', rounds: stall.rounds }),
+          JSON.stringify({ type: 'routing_rounds_stalled', rounds: stall.rounds }),
+          JSON.stringify({ type: progress }),
+        ].join('\n') + '\n', 'utf8');
+        await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      }
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:8
+  // Covers: task:rem-prd-audit-8
+  it('re-kicks a mechanical parked r5 halt into reconciliation and a conductor dispatch without operator action', async () => {
+    const { root } = await routedFixture();
+    const leaf = parseChildId(2)!;
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'pending', build: 'skipped', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    await prepareParkingRound(root, leaf);
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
+    persister.start();
+    try {
+      // Drive the actual parking terminal through the conductor so this
+      // regression fails if stopParkedForRouting no longer writes a retryable
+      // r5 halt.
+      await parkedConductor(root, events).run();
+    } finally {
+      persister.stop();
+      advanceTail.mockRestore();
+    }
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/r5.*parked leaf-host host 2.*awaiting admission/);
+    await expect(resolveHaltRetention(() => readRawHaltClass(root))).resolves.toEqual({
+      haltClass: 'mechanical', retained: false,
+    });
+
+    // The actual re-kick sweep, rather than an operator deleting the files,
+    // clears the retryable halt and leaves the durable dispatch sentinel.
+    await expect(rekickSweep({
+      listHaltedWorktrees: async () => ['demo'],
+      readHaltReason: async () => readFile(join(root, '.pipeline', 'HALT'), 'utf8'),
+      readHaltClass: async () => (await readRawHaltClass(root)) as HaltDisposition,
+      hasRebaseInProgress: async () => false,
+      abortRebase: async () => {},
+      clearMarker: async () => clearMarker(root),
+      lastRekickSha: new Map(),
+    }, 'a'.repeat(40))).resolves.toEqual({ cleared: ['demo'], skipped: [] });
+    await expect(readFile(join(root, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('rekick\n');
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // routedConductor injects a resumed host entry.  Persist the matching
+    // production transition so its later routed exit sees the same durable
+    // state as a real re-kick after host entry.
+    const git = makeGitRunner(root);
+    const stored = await readRouteRecord(root, 'demo', parseRoundId('r5')!, { git });
+    if (stored.kind !== 'record') throw new Error(`expected durable r5 record, got ${stored.kind}`);
+    const repairing = transitionHost(stored, leaf, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') throw new Error('expected r5 leaf to enter repairing');
+    await expect(writeRoutingTransaction(root, 'demo', [
+      { kind: 'update-record', previous: stored, record: repairing.record },
+    ], { git })).resolves.toMatchObject({ kind: 'updated' });
+
+    // Read the persisted r5 record through the production reconciler, rather
+    // than echoing a canned navigation result through the mock seam.
+    await expect(reconcileRounds(root, 'demo', { git: makeGitRunner(root) })).resolves.toMatchObject({
+      kind: 'navigate-leaf-to-build', roundId: 'r5', host: leaf,
+    });
+
+    mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'verified', headSha: 'a'.repeat(40) });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+    }));
+    const rerunEvents: Array<{ type?: string; step?: string; child?: number }> = [];
+    const rerunEventEmitter = new ConductorEventEmitter();
+    rerunEventEmitter.on('step_started', (event) => { rerunEvents.push(event as { type?: string; step?: string; child?: number }); });
+    rerunEventEmitter.on('loop_halt', (event) => { rerunEvents.push(event as { type?: string; step?: string; child?: number }); });
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    await routedConductor(root, rerunEventEmitter, runner, leaf, parseRoundId('r5')!, false, 'interactive').run();
+    expect(runner.run).toHaveBeenCalledWith('build_review', expect.any(Object), expect.any(Object));
+    expect(rerunEvents).toContainEqual(expect.objectContaining({ type: 'step_started', step: 'build_review', child: leaf }));
+    expect(rerunEvents).not.toContainEqual(expect.objectContaining({ type: 'loop_halt' }));
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    const stalls = ledger.filter((event) => event.type === 'routing_rounds_stalled');
+    expect(stalls).toEqual([expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 })]);
+    expect([...ledger, ...rerunEvents].some((event) => event.type?.includes('operator'))).toBe(false);
+  });
+
+  // Covers: task:7
+  it.each([
+    { label: 'child host', host: child, kind: 'child' },
+    { label: 'leaf host', host: parseChildId(2)!, kind: 'leaf-host' },
+  ])('turns an advanceTail $label parking decision into a named mechanical routed-round HALT', async ({ host, kind }) => {
+    const { root } = await routedFixture();
+    await prepareParkingRound(root, host);
+
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const loopHalts: string[] = [];
+    events.on('loop_halt', (event) => { if (event.type === 'loop_halt') loopHalts.push(event.reason); });
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events, stepRunner: runner, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+    });
+
+    persister.start();
+    try {
+      await conductor.run();
+    } finally {
+      persister.stop();
+      advanceTail.mockRestore();
+    }
+
+    const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8');
+    const firstLine = halt.trim().split('\n')[0]!;
+    expect(firstLine).toContain('r5');
+    expect(firstLine).toContain(kind);
+    expect(firstLine).toContain(String(host));
+    expect(firstLine).toContain('awaiting admission');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+    expect(loopHalts).toEqual([firstLine]);
+    const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(ledger.filter((event) => event.type === 'routing_rounds_stalled')).toEqual([
+      expect.objectContaining({ type: 'routing_rounds_stalled', attempt: 1 }),
+    ]);
+  });
+
+  // Covers: task:7
+  it('names the lowest queued child when queue parking leaves no runnable gate', async () => {
+    const { root } = await routedFixture();
+    await prepareParkingRound(root, child, false);
+    mocks.parkingQueue = true;
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await parkedConductor(root, events).run();
+    } finally {
+      persister.stop();
+      advanceTail.mockRestore();
+    }
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/r5.*parked queue child 1.*awaiting admission/);
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+  });
+
+  // Covers: task:7
+  it('preserves a live HALT byte-for-byte when routed parking stops', async () => {
+    const { root } = await routedFixture();
+    await prepareParkingRound(root, child);
+    const live = 'operator halt remains authoritative\nwith detail\n';
+    await writeFile(join(root, '.pipeline', 'HALT'), live);
+    const advanceTail = vi.spyOn(
+      Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+      'advanceTail',
+    ).mockResolvedValue('parked');
+    try {
+      await parkedConductor(root, new ConductorEventEmitter()).run();
+    } finally {
+      advanceTail.mockRestore();
+    }
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(live);
+  });
+
+  // Covers: task:7
+  it('replaces provisional DONE with a mechanical named HALT when completion is refused by an open round', async () => {
+    const { root } = await routedFixture();
+    await prepareParkingRound(root, child);
+    await writeFile(join(root, '.pipeline', 'DONE'), 'gate-driven loop converged\n');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await parkedConductor(root, events).run();
+    } finally {
+      persister.stop();
+    }
+    await expect(readFile(join(root, '.pipeline', 'DONE'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/r5.*completion refused.*routed round remains open/);
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+  });
+
+  // Covers: task:7
+  it('completes a flat feature without a parked routing stall', async () => {
+    const { root } = await routedFixture();
+    const events = new ConductorEventEmitter();
+    const stalls: unknown[] = [];
+    events.on('routing_rounds_stalled', (event) => { stalls.push(event); });
+    await parkedConductor(root, events).run();
+    await expect(readFile(join(root, '.pipeline', 'DONE'), 'utf8')).resolves.toBe('gate-driven loop converged\n');
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
+    expect(stalls).toEqual([]);
+  });
+
   it('refuses a parsed operator record at the revalidating-source exclusion while an otherwise-identical open revalidate record enters', async () => {
     const { root } = await routedFixture();
     mocks.operatorRevalidation = true;
@@ -620,5 +1027,111 @@ describe('Conductor routed acceptance verify-green path', () => {
     // The leaf never closes and never runs verify-green, so its ordinary
     // acceptance_specs completion predicate applies.
     expect((await contextFor(parseChildId(2)!)).routedVerifyGreen).toBeUndefined();
+  });
+
+  // Covers: task:2
+  it.each([
+    ['enabled matching marker', true, { host: 1, roundId: 'r5' }, 'r5'],
+    ['flag off', false, { host: 1, roundId: 'r5' }, undefined],
+    ['no marker', true, undefined, undefined],
+    ['another host marker', true, { host: 2, roundId: 'r5' }, undefined],
+  ])('supplies routed-round stamps to every child-region gate only for an active host with a matching marker: %s', async (
+    _label,
+    routeWholeFeatureFixes,
+    marker,
+    expectedRound,
+  ) => {
+    const { root } = await routedFixture();
+    mocks.routedRoundMarker = marker;
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: routeWholeFeatureFixes } },
+      events: new ConductorEventEmitter(), stepRunner: runner, acceptanceRedExec: vi.fn(),
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: typeof child;
+      completionCtx: (state: Record<string, unknown>) => Promise<{ activeChild?: unknown; routedRound?: string }>;
+    };
+    privateConductor.activeRegionChild = child;
+
+    const context = await privateConductor.completionCtx({ feature_desc: 'demo' });
+
+    expect(context.activeChild).toBe(child);
+    if (expectedRound === undefined) {
+      expect(context).not.toHaveProperty('routedRound');
+    } else {
+      expect(context).toMatchObject({ routedRound: expectedRound });
+    }
+  });
+
+  // Covers: task:3
+  it('masks unstamped and old successful routed verdicts, but retains failed evidence and this-round evidence', async () => {
+    const { root } = await routedFixture();
+    mocks.routedRoundMarker = { host: 1, roundId: 'r5' };
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await Promise.all([
+      writeFile(join(gates, 'build.json'), JSON.stringify({ satisfied: true, checkedAt: 1 })),
+      writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r5' })),
+      writeFile(join(gates, 'build_review.json'), JSON.stringify({
+        satisfied: false, checkedAt: 1, kickback: { from: 'build', evidence: 'failed before r5' },
+      })),
+    ]);
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(), resetSession: vi.fn() }, acceptanceRedExec: vi.fn(),
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: typeof child;
+      readGateVerdictOverlay: () => Promise<Record<string, unknown>>;
+    };
+    privateConductor.activeRegionChild = child;
+
+    const overlay = await privateConductor.readGateVerdictOverlay();
+
+    expect(overlay.build).toBeUndefined();
+    expect(overlay.test_suite).toMatchObject({ satisfied: true, routedRound: 'r5' });
+    expect(overlay.build_review).toMatchObject({ satisfied: false, kickback: { evidence: 'failed before r5' } });
+  });
+
+  // Covers: task:3
+  it('counts only current-round satisfied test_suite evidence while a routed host is active', async () => {
+    const { root } = await routedFixture();
+    mocks.routedRoundMarker = { host: 1, roundId: 'r5' };
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(), resetSession: vi.fn() }, acceptanceRedExec: vi.fn(),
+    }) as unknown as { activeRegionChild: typeof child; readGateVerdictOverlay: () => Promise<Record<string, { satisfied: boolean; routedRound?: string }>> };
+    conductor.activeRegionChild = child;
+    await writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1, routedRound: 'r4' }));
+    expect((await conductor.readGateVerdictOverlay()).test_suite).toBeUndefined();
+    await writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 2, routedRound: 'r5' }));
+    await expect(conductor.readGateVerdictOverlay()).resolves.toMatchObject({ test_suite: { satisfied: true, routedRound: 'r5' } });
+  });
+
+  // Covers: task:3
+  it('does not mask satisfied verdicts outside an active routed host', async () => {
+    const { root } = await routedFixture();
+    const gates = join(root, '.pipeline', 'children', '1', 'gates');
+    await mkdir(gates, { recursive: true });
+    await writeFile(join(gates, 'test_suite.json'), JSON.stringify({ satisfied: true, checkedAt: 1 }));
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(), resetSession: vi.fn() }, acceptanceRedExec: vi.fn(),
+    }) as unknown as { activeRegionChild: typeof child; readGateVerdictOverlay: () => Promise<Record<string, { satisfied: boolean }>> };
+    conductor.activeRegionChild = child;
+    await expect(conductor.readGateVerdictOverlay()).resolves.toMatchObject({ test_suite: { satisfied: true } });
   });
 });
