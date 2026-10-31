@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "write-tests-skill-outlived-its-machinery-replaceme",
+  "artifacts": [
+    {
+      "kind": "applicability",
+      "path": ".docs/applicability/write-tests-skill-outlived-its-machinery-replaceme.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/write-tests-skill-outlived-its-machinery-replaceme.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/write-tests-skill-outlived-its-machinery-replaceme.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/write-tests-skill-outlived-its-machinery-replaceme.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/write-tests-skill-outlived-its-machinery-replaceme.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/write-tests-skill-outlived-its-machinery-replaceme.md"
+    }
+  ]
+}
