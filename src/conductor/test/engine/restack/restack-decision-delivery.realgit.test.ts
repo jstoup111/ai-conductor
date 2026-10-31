@@ -159,6 +159,7 @@ describe('restack decision delivery (real local Git)', () => {
       .resolves.toMatchObject({ stdout: closedRefs.stdout });
   });
 
+  // Covers: task:13
   it('does not deliver child 2\'s decision while replaying child 3', async () => {
     const subject = await childThreeConflictFixture();
     const events = new ConductorEventEmitter();
