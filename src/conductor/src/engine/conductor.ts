@@ -1343,6 +1343,11 @@ export class Conductor {
     if (unreadable) return unreadable;
     const stored = await readAsBuiltVerdict(this.projectRoot);
     if (stored.kind !== 'present') {
+      // A runner-success-only flow (notably verification-off unit fixtures)
+      // has no authoritative as-built result to settle.  With no accepted
+      // repair awaiting projection, that is a no-op rather than a failed
+      // projection; a pending repair still fails closed below.
+      if (stored.kind === 'absent' && this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
       return stored.kind === 'unreadable'
         ? `as-built verdict artifact could not be read for recorded-findings projection: ${stored.reason}`
         : 'as-built verdict artifact is absent for recorded-findings projection';
