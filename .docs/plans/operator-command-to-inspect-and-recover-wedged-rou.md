@@ -347,3 +347,38 @@ Task 1, Task 4, Task 6 ── Task 11
 - [ ] Every task has 2–5 single-line `Done when:` checks naming the mechanism.
 - [ ] Dependencies are acyclic.
 - [ ] No task edits another feature's sealed artifact.
+
+### Task rem-prd-audit-6: In src/conductor/src/engine/routing/route-record-store.ts, distinguish a CAS mismatch from other update-ref --stdin failures in writeRoutingTransaction (re-read the touched refs, or inspect stderr, and return cas-failed only when an old value no longer matches; otherwise unavailable). Then add the Task 6 test in which an injected git runner makes update-ref --stdin exit non-zero: supersedeRound must return refused naming the 'failed write' and r4's ref must still resolve to its previous blob. Keep the existing contested-write test passing.
+**Gate:** prd-audit
+**Rationale:** Verified: writeRoutingTransaction (route-record-store.ts) maps every non-zero update-ref --stdin exit to cas-failed, so supersedeRound (stack-rounds-cli.ts:78-80) reports 'contested write' instead of 'failed write' for a plain git failure, and Task 6's last done-when test is missing. Clear implementation/test drift inside Task 6; no architectural decision needed.
+**Criterion:** S2.8
+**Parent task:** 6
+**Done when:**
+- [test] S2.8 is satisfied by this task.
+- The repair for task rem-prd-audit-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-8: Add a dispatcher test in the close-dispatcher suite: two sequential closes (r4 citing r5, then r5 citing r4) using pre-lease checks taken before either write. The second close must refuse and leave one round non-closed. Preliminary refusals must still happen before the lease is acquired.
+**Gate:** prd-audit
+**Rationale:** Verified: in dispatchStackRoundsCommand, checkRoundSupersession runs before the lease, and supersedeRound only CAS-checks the target record, so two concurrent closes of r4 and r5 can both pass. That breaks ADR D6's requirement that another round stays non-closed. The store already supports a verify-ref op, so the surviving round's record can be verified atomically in the same transaction. This fits Task 6 (one compare-and-swap) and keeps Task 8's refusal-before-lease order. The ADR is unambiguous and only the implementation is wrong.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 6
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 6 is satisfied by this task.
+- The repair for task rem-prd-audit-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-9: In src/conductor/src/index.ts, replace the direct detectStackRoundsCommand/dispatchStackRoundsCommand calls at ~998-1000 with a call to dispatchStackRoundsIfDetected from src/conductor/src/cli.ts. Set process.exitCode from its result and return when it handled the command.
+**Gate:** as-built
+**Rationale:** Verified: dispatchStackRoundsIfDetected (src/conductor/src/cli.ts:522) has no production caller, and src/index.ts:998-1000 calls detectStackRoundsCommand and dispatchStackRoundsCommand directly. As a result, Task 2's rejected-vector proof does not exercise the shipped entry path. This is wiring drift admitted by Task 2 and Task 9 (wire into the CLI entry point).
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-9 is committed and its targeted tests pass.
+
+### Task rem-as-built-2: In src/conductor/test/cli/stack-rounds-detect.test.ts, make the rejected-vector test drive the production entry path (the index.ts route through dispatchStackRoundsIfDetected) with dispatchStackRoundsCommand spied. Assert zero dispatch calls and unchanged `git for-each-ref refs/conductor/` output for every rejected vector.
+**Gate:** as-built
+**Rationale:** Verified: dispatchStackRoundsIfDetected (src/conductor/src/cli.ts:522) has no production caller, and src/index.ts:998-1000 calls detectStackRoundsCommand and dispatchStackRoundsCommand directly. As a result, Task 2's rejected-vector proof does not exercise the shipped entry path. This is wiring drift admitted by Task 2 and Task 9 (wire into the CLI entry point).
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-2 is committed and its targeted tests pass.
