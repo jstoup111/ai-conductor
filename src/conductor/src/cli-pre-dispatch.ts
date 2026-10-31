@@ -60,6 +60,7 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectRoundStampCommand', commandPath: ['round-stamp'], helpOwner: 'router' },
   { detector: 'detectStackCommitGuardCommand', commandPath: ['stack-commit-guard'], helpOwner: 'router' },
   { detector: 'detectStackLandCommand', commandPath: ['stack', 'land'], helpOwner: 'router' },
+  { detector: 'detectStackRoundsCommand', commandPath: ['stack', 'rounds'], helpOwner: 'router' },
   { detector: 'detectStackOwnersCommand', commandPath: ['stack', 'owners'], helpOwner: 'router' },
   { detector: 'detectEvidenceCommand', commandPath: ['evidence'], helpOwner: 'router' },
   { detector: 'detectKpiCommand', commandPath: ['kpi'], helpOwner: 'router' },

@@ -278,6 +278,29 @@ write. The plan has 10 tasks and ships as a single PR.
 
 **Dependencies:** Task 8
 
+### Task 11: Close an open audit round whose hosts are all `restacked`
+**Story:** Story 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-rounds-close-predicate.realgit.test.ts` and `src/conductor/test/engine/routing/routing-events.test.ts` for each Done-when check (RED).
+2. In `src/conductor/src/engine/stack-rounds-cli.ts`, remove the `has no pending hosts to drop` refusal so an admissible round with no `pending` host returns `supersedable` with an empty `droppedHosts`. In `src/conductor/src/engine/routing/routing-events.ts`, let `routingRoundSupersededEvent` accept an empty `droppedHosts` and set `child` to the lowest dropped host, or to the record's current host (`currentHostOf`) when none is dropped (GREEN).
+3. Commit.
+
+**Done when:**
+- [test] For an open audit round r2 whose hosts 1 and 2 are both `restacked`, with r3 open and named by the marker, `checkRoundSupersession(r2)` returns `supersedable` with `supersededBy` r3, `droppedHosts` [] and `findingIds` [].
+- [test] Closing that r2 writes phase `closed` with hosts {1: `restacked`, 2: `restacked`} and exactly one `routing_round_superseded` outbox event with `droppedHosts` [] and `child` equal to r2's current host.
+- [test] `routingRoundSupersededEvent` with an empty `droppedHosts` returns `child` equal to the record's current host, and with `droppedHosts` [2, 3] returns `child` 2.
+- `src/conductor/src/engine/stack-rounds-cli.ts` contains no `has no pending hosts to drop` refusal, and `tsc --noEmit` passes.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-rounds-cli.ts` — predicate
+- `src/conductor/src/engine/routing/routing-events.ts` — factory child fallback
+- `src/conductor/test/engine/stack-rounds-close-predicate.realgit.test.ts` — all-restacked close tests
+- `src/conductor/test/engine/routing/routing-events.test.ts` — factory test
+
+**Dependencies:** Task 1, Task 4, Task 6
+
 ## Task Dependency Graph
 
 ```
@@ -286,6 +309,7 @@ Task 3 ─┬─ Task 4 ─┬┴─ Task 6 ─┐
         │          └── Task 5 ─┼─ Task 8 ─┬─ Task 9
         └─ Task 7 ─────────────┘          └─ Task 10
 Task 2 (independent)
+Task 1, Task 4, Task 6 ── Task 11
 ```
 
 ## Integration Points
@@ -303,7 +327,7 @@ Task 2 (independent)
 | adr-2026-10-12-routed-whole-feature-repair#D3 | no-change | none | Residue routing judgement is not changed. |
 | adr-2026-10-12-routed-whole-feature-repair#D4 | no-change | none | Owner/host separation and upward moves are not changed; a record with an in-progress reroute is refused. |
 | adr-2026-10-12-routed-whole-feature-repair#D5 | no-change | none | Prerequisite claims and reroutes are not changed. |
-| adr-2026-10-12-routed-whole-feature-repair#D6 | task | task-6, task-4, task-5 | `readRouteRecord(r4)` returns phase `closed` with hosts {1: `restacked`, 2: `done`} |
+| adr-2026-10-12-routed-whole-feature-repair#D6 | task | task-6, task-4, task-5, task-11 | `readRouteRecord(r4)` returns phase `closed` with hosts {1: `restacked`, 2: `done`} |
 | adr-2026-10-12-routed-whole-feature-repair#D7 | task | task-8, task-7, task-9 | calls `acquireLease` before `supersedeRound`, calls `lease.release` once |
 | adr-2026-10-12-routed-whole-feature-repair#D8 | no-change | none | The cursor and execution-child resolver are not changed. |
 | adr-2026-10-12-routed-whole-feature-repair#D9 | no-change | none | Routed task append at region entry is not changed. |
@@ -313,7 +337,7 @@ Task 2 (independent)
 | adr-2026-10-12-routed-whole-feature-repair#D13 | no-change | none | Routed exit restacks are not changed; a superseded round has no `built` host by predicate. |
 | adr-2026-10-12-routed-whole-feature-repair#D14 | no-change | none | The re-validation queue is not read or written; `revalidate` rounds are refused. |
 | adr-2026-10-12-routed-whole-feature-repair#D15 | task | task-10 | `reconcileRounds` returns `leaf-returned` for r5, and `prd_audit`, `architecture_review_as_built` and `manual_test` read `pending` |
-| adr-2026-10-12-routed-whole-feature-repair#D16 | task | task-1, task-10 | appends exactly one `routing_round_superseded` line for r4 to `.pipeline/events.jsonl` and empties r4's outbox |
+| adr-2026-10-12-routed-whole-feature-repair#D16 | task | task-1, task-10, task-11 | appends exactly one `routing_round_superseded` line for r4 to `.pipeline/events.jsonl` and empties r4's outbox |
 | adr-2026-10-12-routed-whole-feature-repair#D17 | no-change | none | A flat N=1 feature has no durable child state, so the eligibility check refuses before any routing read. |
 | adr-2026-10-12-routed-whole-feature-repair#D18 | existing | none | The routing flag is read through the existing `routingSettingOn`; the command refuses when routing is disabled and changes no default. |
 
@@ -323,3 +347,56 @@ Task 2 (independent)
 - [ ] Every task has 2–5 single-line `Done when:` checks naming the mechanism.
 - [ ] Dependencies are acyclic.
 - [ ] No task edits another feature's sealed artifact.
+
+### Task rem-prd-audit-6: In src/conductor/src/engine/routing/route-record-store.ts, distinguish a CAS mismatch from other update-ref --stdin failures in writeRoutingTransaction (re-read the touched refs, or inspect stderr, and return cas-failed only when an old value no longer matches; otherwise unavailable). Then add the Task 6 test in which an injected git runner makes update-ref --stdin exit non-zero: supersedeRound must return refused naming the 'failed write' and r4's ref must still resolve to its previous blob. Keep the existing contested-write test passing.
+**Gate:** prd-audit
+**Rationale:** Verified: writeRoutingTransaction (route-record-store.ts) maps every non-zero update-ref --stdin exit to cas-failed, so supersedeRound (stack-rounds-cli.ts:78-80) reports 'contested write' instead of 'failed write' for a plain git failure, and Task 6's last done-when test is missing. Clear implementation/test drift inside Task 6; no architectural decision needed.
+**Criterion:** S2.8
+**Parent task:** 6
+**Done when:**
+- [test] S2.8 is satisfied by this task.
+- The repair for task rem-prd-audit-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-8: Add a dispatcher test in the close-dispatcher suite: two sequential closes (r4 citing r5, then r5 citing r4) using pre-lease checks taken before either write. The second close must refuse and leave one round non-closed. Preliminary refusals must still happen before the lease is acquired.
+**Gate:** prd-audit
+**Rationale:** Verified: in dispatchStackRoundsCommand, checkRoundSupersession runs before the lease, and supersedeRound only CAS-checks the target record, so two concurrent closes of r4 and r5 can both pass. That breaks ADR D6's requirement that another round stays non-closed. The store already supports a verify-ref op, so the surviving round's record can be verified atomically in the same transaction. This fits Task 6 (one compare-and-swap) and keeps Task 8's refusal-before-lease order. The ADR is unambiguous and only the implementation is wrong.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 6
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 6 is satisfied by this task.
+- The repair for task rem-prd-audit-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-9: In src/conductor/src/index.ts, replace the direct detectStackRoundsCommand/dispatchStackRoundsCommand calls at ~998-1000 with a call to dispatchStackRoundsIfDetected from src/conductor/src/cli.ts. Set process.exitCode from its result and return when it handled the command.
+**Gate:** as-built
+**Rationale:** Verified: dispatchStackRoundsIfDetected (src/conductor/src/cli.ts:522) has no production caller, and src/index.ts:998-1000 calls detectStackRoundsCommand and dispatchStackRoundsCommand directly. As a result, Task 2's rejected-vector proof does not exercise the shipped entry path. This is wiring drift admitted by Task 2 and Task 9 (wire into the CLI entry point).
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-9 is committed and its targeted tests pass.
+
+### Task rem-as-built-2: In src/conductor/test/cli/stack-rounds-detect.test.ts, make the rejected-vector test drive the production entry path (the index.ts route through dispatchStackRoundsIfDetected) with dispatchStackRoundsCommand spied. Assert zero dispatch calls and unchanged `git for-each-ref refs/conductor/` output for every rejected vector.
+**Gate:** as-built
+**Rationale:** Verified: dispatchStackRoundsIfDetected (src/conductor/src/cli.ts:522) has no production caller, and src/index.ts:998-1000 calls detectStackRoundsCommand and dispatchStackRoundsCommand directly. As a result, Task 2's rejected-vector proof does not exercise the shipped entry path. This is wiring drift admitted by Task 2 and Task 9 (wire into the CLI entry point).
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-10: In src/conductor/src/cli.ts, change dispatchStackRoundsIfDetected to take the detector result (`StackRoundsDispatch | null`) instead of argv. It returns null without calling dispatch when that result is null. In src/conductor/src/index.ts, restore an exported `dispatchStackRoundsCliEntry(argv, dispatch = stackRoundsCli.dispatchStackRoundsCommand): Promise<boolean>`. It returns `await dispatchStackRoundsIfDetected(detectStackRoundsCommand(argv), dispatch)`, sets process.exitCode, and returns true when the command was handled. The direct `detectStackRoundsCommand(argv)` call must stay in index.ts so the pre-dispatch registry audit (test/cli/support/cli-catalog-checks.ts) still sees it. Replace the direct detect/dispatch block at ~998-1000 with `if (await dispatchStackRoundsCliEntry(process.argv)) return;`. test/cli/pre-dispatch-registry.test.ts must keep passing unchanged.
+**Gate:** as-built
+**Rationale:** Verified (99%): `dispatchStackRoundsIfDetected` (src/conductor/src/cli.ts:522) has no production caller. src/conductor/src/index.ts:998-1000 calls `detectStackRoundsCommand` and `dispatchStackRoundsCommand` directly. The rejected-vector test (test/cli/stack-rounds-detect.test.ts:48) calls only the helper. HEAD 5bbe6c6d12 reverted the earlier remediation (rem-as-built-9 and rem-as-built-2). The likely cause (inferred, ~85%): test/cli/support/cli-catalog-checks.ts:45 finds dispatched detectors by scanning index.ts for `detect*Command(` calls. When index.ts routes only through the helper, no such call remains, so pre-dispatch-registry.test.ts reports the `detectStackRoundsCommand` registry entry (cli-pre-dispatch.ts:63) as stale. Re-applying the old tasks verbatim would repeat that cycle. The fix: index.ts still calls `detectStackRoundsCommand(argv)` directly, and the shipped path still goes through the helper. To do that, change the helper to accept the already-detected command (or null). Both the helper's surviving test and the registry audit keep their coverage. This is conforming wiring and test drift admitted by Task 2 (rejected vectors must not reach the dispatcher through the CLI entry) and Task 9 (wire into the CLI entry point). No architectural decision is needed, so the route is BUILD.
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-10 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-11: In src/conductor/test/cli/stack-rounds-detect.test.ts, make the rejected-vector test drive the production entry `dispatchStackRoundsCliEntry` exported from src/index.ts. Pass an injected `vi.fn()` dispatcher for `dispatchStackRoundsCommand`, or spy on it if ESM spying works. For every rejected vector, assert the result is false, the dispatcher is never called, and `git for-each-ref refs/conductor/` output in the fixture repository is unchanged. Keep the detector-level accept/reject assertions.
+**Gate:** as-built
+**Rationale:** Verified (99%): `dispatchStackRoundsIfDetected` (src/conductor/src/cli.ts:522) has no production caller. src/conductor/src/index.ts:998-1000 calls `detectStackRoundsCommand` and `dispatchStackRoundsCommand` directly. The rejected-vector test (test/cli/stack-rounds-detect.test.ts:48) calls only the helper. HEAD 5bbe6c6d12 reverted the earlier remediation (rem-as-built-9 and rem-as-built-2). The likely cause (inferred, ~85%): test/cli/support/cli-catalog-checks.ts:45 finds dispatched detectors by scanning index.ts for `detect*Command(` calls. When index.ts routes only through the helper, no such call remains, so pre-dispatch-registry.test.ts reports the `detectStackRoundsCommand` registry entry (cli-pre-dispatch.ts:63) as stale. Re-applying the old tasks verbatim would repeat that cycle. The fix: index.ts still calls `detectStackRoundsCommand(argv)` directly, and the shipped path still goes through the helper. To do that, change the helper to accept the already-detected command (or null). Both the helper's surviving test and the registry audit keep their coverage. This is conforming wiring and test drift admitted by Task 2 (rejected vectors must not reach the dispatcher through the CLI entry) and Task 9 (wire into the CLI entry point). No architectural decision is needed, so the route is BUILD.
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-11 is committed and its targeted tests pass.

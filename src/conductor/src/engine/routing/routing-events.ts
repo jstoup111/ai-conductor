@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { ConductorEvent } from '../../types/events.js';
 import type { ChildId } from '../child-context.js';
-import type { HostState, RouteRecord, RoundId } from './route-types.js';
+import { currentHostOf, type HostState, type RouteRecord, type RoundId } from './route-types.js';
 import type { CommitSha } from '../restack/restack-types.js';
 
 function occurrence(): { readonly eventId: string; readonly occurredAt: string } {
@@ -38,6 +38,25 @@ export function operatorRoundEvent(
   return {
     type: 'operator_round', ...occurrence(), roundId, child: host,
     origin: operator.origin, reason: operator.reason, action: phase,
+  };
+}
+
+/** Creates the durable occurrence paired with closing a stale audit round. */
+export function routingRoundSupersededEvent(
+  record: RouteRecord,
+  supersededBy: RoundId,
+  droppedHosts: readonly ChildId[],
+  findingIds: readonly string[],
+  reason: string,
+  operator: string,
+): Extract<ConductorEvent, { type: 'routing_round_superseded' }> {
+  return {
+    type: 'routing_round_superseded', ...occurrence(), roundId: record.roundId,
+    supersededBy, droppedHosts, findingIds, reason, operator,
+    child: droppedHosts.reduce<ChildId | undefined>(
+      (lowest, host) => lowest === undefined || host < lowest ? host : lowest,
+      undefined,
+    ) ?? currentHostOf(record)!,
   };
 }
 

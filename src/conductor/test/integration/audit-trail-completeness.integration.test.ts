@@ -281,6 +281,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   routed_repair_phase: 'not-audited-by-design',
   routing_rounds_stalled: 'not-audited-by-design',
   operator_round: 'not-audited-by-design',
+  routing_round_superseded: 'not-audited-by-design',
   child_revalidated: 'not-audited-by-design',
   // Stack-publication occurrences persist on the spine but are not audited (event-sinks audit: false).
   stack_member_published: 'not-audited-by-design',
@@ -1031,6 +1032,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   operator_round: {
     type: 'operator_round', eventId: 'route-5', occurredAt: '2030-01-01T00:00:00.000Z',
     roundId: parseRoundId('r1')!, child: parseChildId(1)!, origin: 'land', reason: 'test', action: 'opened',
+  },
+  routing_round_superseded: {
+    type: 'routing_round_superseded', eventId: 'route-6', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, child: parseChildId(1)!, supersededBy: parseRoundId('r2')!,
+    droppedHosts: [parseChildId(1)!], findingIds: ['finding-1'], reason: 'test', operator: 'operator@example.test',
   },
   child_revalidated: {
     type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',

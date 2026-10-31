@@ -39,6 +39,7 @@ function dispatcherBody(sourceText: string, name: string): string {
 function dispatchedDetectors(sourceText: string): string[] {
   const source = [
     dispatcherBody(sourceText, 'dispatchNonDispatchingCliCommand'),
+    dispatcherBody(sourceText, 'dispatchStackRoundsCliEntry'),
     dispatcherBody(sourceText, 'dispatchCliCommand'),
   ].join('\n');
   const detectors = new Set<string>();

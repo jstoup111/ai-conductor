@@ -79,6 +79,7 @@ export const EVENT_SINKS = {
   routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
   routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
   operator_round: { render: false, persist: true, audit: false, otel: false },
+  routing_round_superseded: { render: false, persist: true, audit: false, otel: false },
   child_revalidated: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },

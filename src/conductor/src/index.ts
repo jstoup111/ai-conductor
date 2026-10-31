@@ -90,6 +90,8 @@ import {
   detectHaltClearCommand,
   detectKickbackBudgetCommand,
   detectStackLandCommand,
+  detectStackRoundsCommand,
+  dispatchStackRoundsIfDetected,
   detectStackOwnersCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
@@ -105,6 +107,7 @@ import {
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchStackLandCommand } from './engine/stack-land-cli.js';
+import * as stackRoundsCli from './engine/stack-rounds-cli.js';
 import { dispatchStackOwnersCommand } from './engine/stack-owners-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
@@ -861,6 +864,16 @@ export async function dispatchCliEntry(input: {
 
 // --- Main ---
 
+export async function dispatchStackRoundsCliEntry(
+  argv: readonly string[],
+  dispatch: typeof stackRoundsCli.dispatchStackRoundsCommand = stackRoundsCli.dispatchStackRoundsCommand,
+): Promise<boolean> {
+  const stackRoundsCode = await dispatchStackRoundsIfDetected(detectStackRoundsCommand(argv), dispatch);
+  if (stackRoundsCode === null) return false;
+  process.exitCode = stackRoundsCode;
+  return true;
+}
+
 async function dispatchCliCommand(): Promise<void> {
   // Private child entrypoint. It intentionally is not registered in the
   // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
@@ -992,6 +1005,8 @@ async function dispatchCliCommand(): Promise<void> {
     process.exitCode = await dispatchStackLandCommand(stackLandCmd);
     return;
   }
+
+  if (await dispatchStackRoundsCliEntry(process.argv)) return;
 
   const stackOwnersCmd = detectStackOwnersCommand(process.argv);
   if (stackOwnersCmd) {

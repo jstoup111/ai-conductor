@@ -257,6 +257,7 @@ const ROUTING_EVENT_TYPES = [
   'operator_round',
   'routed_repair_phase',
   'routing_rounds_stalled',
+  'routing_round_superseded',
   'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -677,6 +678,18 @@ const routingEvents = [
     detail: 'routing rounds stalled: r1 (1: pending); test refusal',
     attempt: 1,
   },
+  {
+    type: 'routing_round_superseded',
+    eventId: 'routing-6',
+    occurredAt: '2026-10-12T00:00:05.000Z',
+    roundId: routingRoundId,
+    child: routingChild,
+    supersededBy: parseRoundId('r2')!,
+    droppedHosts: [routingChild],
+    findingIds: ['finding-1'],
+    reason: 'superseded by r2',
+    operator: 'operator@example.test',
+  },
 ] as const satisfies readonly ConductorEvent[];
 
 // @ts-expect-error -- routing occurrences always retain their execution child.
@@ -736,6 +749,7 @@ describe('event sink subscriptions', () => {
         operator_round: { render: false, persist: true, audit: false, otel: false },
         routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
         routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
+        routing_round_superseded: { render: false, persist: true, audit: false, otel: false },
         child_revalidated: { render: false, persist: true, audit: false, otel: false },
       });
     } finally {

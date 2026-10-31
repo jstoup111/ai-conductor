@@ -39,7 +39,7 @@ const ROUTING_CHILD = parseChildId(1)!;
 const ROUTING_ROUND = parseRoundId('r1')!;
 const ROUTING_CLOSURE = parseCommitSha('a'.repeat(40))!;
 
-function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'routed_repair_phase' | 'child_revalidated', eventId: string): ConductorEvent {
+function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'routed_repair_phase' | 'child_revalidated' | 'routing_round_superseded', eventId: string): ConductorEvent {
   const occurredAt = '2026-10-12T00:00:00.000Z';
   switch (type) {
     case 'remediation_routed':
@@ -62,6 +62,12 @@ function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'rou
       return {
         type, eventId, occurredAt, child: ROUTING_CHILD, generation: 1,
         closureSha: ROUTING_CLOSURE, outcome: 'passed',
+      };
+    case 'routing_round_superseded':
+      return {
+        type, eventId, occurredAt, roundId: ROUTING_ROUND, child: ROUTING_CHILD,
+        supersededBy: parseRoundId('r2')!, droppedHosts: [ROUTING_CHILD],
+        findingIds: ['finding-1'], reason: 'stale audit round', operator: 'operator@example.test',
       };
   }
 }
@@ -269,11 +275,13 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
   });
 
+  // Covers: task:1
   it.each([
     'remediation_routed',
     'remediation_rerouted',
     'routed_repair_phase',
     'child_revalidated',
+    'routing_round_superseded',
   ] as const)('deduplicates replayed %s events by eventId', async (type) => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
@@ -282,6 +290,17 @@ describe('EventPersister', () => {
     await emitter.emit(event);
     await emitter.emit(event);
     persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  // Covers: task:1
+  it('returns duplicate when a routing-round supersession is replayed', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = routingEvent('routing_round_superseded', 'superseded-r1');
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
 
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });

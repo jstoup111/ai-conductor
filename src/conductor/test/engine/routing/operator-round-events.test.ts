@@ -102,7 +102,7 @@ describe('operator round events', () => {
       return subject.git(args, options);
     };
     await expect(drainOutbox(subject.repo, stored, (event) => persister.persistDurably(event), { git: flakyGit }))
-      .resolves.toEqual({ kind: 'retry' });
+      .resolves.toEqual({ kind: 'unavailable' });
     const replay = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git });
     if (replay.kind !== 'record') throw new Error('missing replayable operator route record');
     await expect(drainOutbox(subject.repo, replay, (event) => persister.persistDurably(event), { git: flakyGit }))

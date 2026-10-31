@@ -240,7 +240,41 @@ export async function writeRoutingTransaction(
     lines.push(`verify ${journalRefFor(slug)} ${journal.kind === 'journal' ? journal.blob : ZERO_SHA}`, 'prepare', 'commit', '');
     const input = lines.join('\n');
     const updated = await git(['update-ref', '--stdin'], { input });
-    return updated.exitCode === 0 ? { kind: 'updated' } : { kind: 'cas-failed' };
+    if (updated.exitCode === 0) return { kind: 'updated' };
+
+    // `update-ref` uses one exit status for both a stale old value and an
+    // ordinary write failure.  Only call it contention after re-reading every
+    // value this transaction fenced proves that one has moved.
+    const expected = new Map<string, CommitSha | undefined>();
+    const expectRef = (ref: string, value: CommitSha | undefined): void => {
+      const prior = expected.get(ref);
+      if (expected.has(ref) && prior !== value) throw new Error('inconsistent transaction fence');
+      expected.set(ref, value);
+    };
+    for (const op of ops) {
+      switch (op.kind) {
+        case 'create-record': expectRef(routeRecordRefFor(slug, op.record.roundId), undefined); break;
+        case 'update-record': expectRef(routeRecordRefFor(slug, op.record.roundId), op.previous.blob); break;
+        case 'delete-record': expectRef(routeRecordRefFor(slug, op.previous.record.roundId), op.previous.blob); break;
+        case 'create-marker': expectRef(repairMarkerRefFor(slug), undefined); break;
+        case 'replace-marker': expectRef(repairMarkerRefFor(slug), op.previous.blob); break;
+        case 'update-queue': expectRef(revalidationQueueRefFor(slug), op.previous.blob); break;
+        case 'delete-queue': expectRef(revalidationQueueRefFor(slug), op.previous.blob); break;
+        case 'update-branch': expectRef(op.ref, op.old); break;
+        case 'create-pin': expectRef(op.ref, undefined); break;
+        case 'update-marker':
+        case 'delete-marker': expectRef(repairMarkerRefFor(slug), op.old); break;
+        case 'verify-ref': expectRef(op.ref, op.value); break;
+      }
+    }
+    expectRef(journalRefFor(slug), journal.kind === 'journal' ? journal.blob : undefined);
+    for (const [ref, value] of expected) {
+      const reread = await git(['rev-parse', '-q', '--verify', ref]);
+      const actual = reread.exitCode === 1 ? undefined : reread.exitCode === 0 ? parseCommitSha(reread.stdout.trim()) : undefined;
+      if (reread.exitCode !== 0 && reread.exitCode !== 1) return { kind: 'unavailable' };
+      if (actual !== value) return { kind: 'cas-failed' };
+    }
+    return { kind: 'unavailable' };
   } catch { return { kind: 'unavailable' }; }
 }
 

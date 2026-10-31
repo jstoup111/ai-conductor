@@ -72,7 +72,7 @@ describe('routing outbox delivery', () => {
       };
 
       await expect(drainOutbox(subject.repo, stored, (entry) => persister.persistDurably(entry), { git: flakyGit }))
-        .resolves.toEqual({ kind: 'retry' });
+        .resolves.toEqual({ kind: 'unavailable' });
       const redelivered = await readRouteRecord(subject.repo, 'demo', roundId);
       if (redelivered.kind !== 'record') throw new Error('expected redeliverable route record');
       await expect(drainOutbox(subject.repo, redelivered, (entry) => persister.persistDurably(entry), { git: flakyGit }))
