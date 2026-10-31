@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-31T03:07:17.074Z
 Slug: as-built-review-re-raises-reworded-findings-as-new
 Class: needs-human
 Halting step: unknown
