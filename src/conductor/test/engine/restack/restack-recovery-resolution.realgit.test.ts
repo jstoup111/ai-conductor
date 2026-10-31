@@ -48,7 +48,7 @@ function resolveDeps(repo: string) {
   return {
     resolveMainRoot: async () => repo,
     resolveWorktree: async () => repo,
-    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => undefined } }),
+    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
     resolveOperator: async () => 'operator@example.test',
     print: () => undefined,
   };
@@ -69,7 +69,6 @@ async function baseRefreshConflictFixture() {
   await git(['config', 'user.name', 'Restack resolution']);
   await writeFile(join(repo, '.git', 'info', 'exclude'), '.pipeline/\n');
   await commit('base', 'shared.txt', 'base\n');
-  const base = sha((await git(['rev-parse', 'HEAD'])).stdout.trim());
   const first = parseChildId(1);
   const second = parseChildId(2);
   if (!first || !second) throw new Error('child ids should parse');

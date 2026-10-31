@@ -101,7 +101,7 @@ describe('restack decision delivery (real local Git)', () => {
       .resolves.toMatchObject({ kind: 'halted' });
 
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(resolver.mock.calls[0]![0]).not.toHaveProperty('operatorDecision');
+    expect(resolver).toHaveBeenCalledWith(expect.not.objectContaining({ operatorDecision: expect.anything() }));
     const conflict = await readConflictRecord(subject.repo, 'demo', { git: subject.git });
     if (conflict.kind !== 'record') throw new Error('expected recorded conflict');
     const halt = await readFile(join(subject.repo, '.pipeline/HALT'), 'utf8');
@@ -115,7 +115,7 @@ describe('restack decision delivery (real local Git)', () => {
       `ai-conductor stack restack-resolve --slug demo --child ${child} --tip <sha>`,
     ].join('\n');
     expect(halt).toBe(`${preDecisionConflictHalt}\nai-conductor stack restack-resolve --slug demo --child ${child} --decision "<answer>"\n`);
-    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
   });
 
@@ -136,7 +136,7 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
       .resolves.toEqual({ kind: 'restacked' });
 
-    expect(resolver.mock.calls[0]![0]).not.toHaveProperty('operatorDecision');
+    expect(resolver).toHaveBeenCalledWith(expect.not.objectContaining({ operatorDecision: expect.anything() }));
     const appliedRefs = (await subject.git(['for-each-ref', '--format=%(refname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/']))
       .stdout.trim().split('\n').filter(Boolean);
     expect(appliedRefs).toEqual([
@@ -147,7 +147,7 @@ describe('restack decision delivery (real local Git)', () => {
       'refs/heads/feat/daemon-demo',
     ]);
     await expect(readRestackJournal(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'missing' });
-    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
     expect(eventLines).toContainEqual(expect.objectContaining({ type: 'restack_planned' }));
     expect(eventLines).toContainEqual(expect.objectContaining({ type: 'restack_applied' }));
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
@@ -178,7 +178,7 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
       .resolves.toEqual({ kind: 'restacked' });
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ operatorDecision: expect.objectContaining({ answer: 'keep upstream' }) }));
-    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(eventLines).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child }));
     await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/decision/c2'])).resolves.toMatchObject({ exitCode: 1 });
     await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/conflict/record'])).resolves.toMatchObject({ exitCode: 1 });
@@ -245,12 +245,12 @@ describe('restack decision delivery (real local Git)', () => {
       .resolves.toMatchObject({ kind: 'halted' });
 
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
+    expect(resolver).toHaveBeenCalledWith(expect.not.objectContaining({ operatorDecision: expect.anything() }));
     const halt = await readFile(join(subject.repo, '.pipeline/HALT'), 'utf8');
     expect(halt).toContain("stale operator decision: keep upstream's resolveReviewScope seam");
     expect(halt).toContain('--tip <sha>');
     expect(halt).toContain('--decision "<answer>"');
-    const eventsWritten = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    const eventsWritten = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(eventsWritten).toContainEqual(expect.objectContaining({
       type: 'restack_decision', action: 'stale', child,
       commit: conflict.record.commit, paths: conflict.record.paths,
@@ -271,7 +271,7 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
       .resolves.toMatchObject({ kind: 'halted' });
 
-    expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
+    expect(resolver).toHaveBeenCalledWith(expect.not.objectContaining({ operatorDecision: expect.anything() }));
     await expect(readFile(join(subject.repo, '.pipeline/HALT'), 'utf8'))
       .resolves.toContain('unreadable operator decision at refs/conductor/demo/restack/decision/c2');
   });
@@ -292,9 +292,9 @@ describe('restack decision delivery (real local Git)', () => {
       .resolves.toMatchObject({ kind: 'halted' });
 
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ conflicts: ['three.txt'] }));
-    expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
+    expect(resolver).toHaveBeenCalledWith(expect.not.objectContaining({ operatorDecision: expect.anything() }));
     const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8').catch(() => ''))
-      .trim().split('\n').filter(Boolean).map(JSON.parse);
+      .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child: 3 }));
   });
 });

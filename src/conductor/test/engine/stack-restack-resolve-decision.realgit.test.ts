@@ -73,9 +73,9 @@ function deps(repo: string, output: string[]) {
   return {
     resolveMainRoot: async () => repo,
     resolveWorktree: async () => repo,
-    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => undefined } }),
+    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
     resolveOperator: async () => 'operator@example.test',
-    print: (line: string) => output.push(line),
+    print: (line: string) => { output.push(line); },
   };
 }
 

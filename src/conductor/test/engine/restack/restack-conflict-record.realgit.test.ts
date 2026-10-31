@@ -175,7 +175,7 @@ describe('restack conflict record (real local Git)', () => {
     const refusals: unknown[] = [];
     const { ConductorEventEmitter } = await import('../../../src/ui/events.js');
     const events = new ConductorEventEmitter();
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     const result = await runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault,
