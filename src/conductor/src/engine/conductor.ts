@@ -12085,6 +12085,7 @@ export class Conductor {
                   renderExhaustedMechanicalBuildReviewHalt(
                     mechanicalEntry ?? { mechanicalFaults: 0 },
                     aggregateRaw,
+                    this.activeRegionChild,
                   ),
                 );
                 const aggregate = parseBuildReviewAggregate(aggregateRaw);

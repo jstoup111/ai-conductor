@@ -9,8 +9,11 @@ import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedRes
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from '../../src/engine/build-review-cli.js';
+import { detectBuildReviewRecordReducedCoverageCommand } from '../../src/cli.js';
+import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
@@ -1411,6 +1414,346 @@ describe('build-review accept', () => {
       expect(print).toHaveBeenCalledWith('build-review accept: requires an interactive terminal and a verified local operator identity.');
       expect(appendEvent).toHaveBeenCalledWith(join(root, '.worktrees', 'review-rubrics'), expect.objectContaining({ reason: 'non-interactive-or-unidentified-operator' }));
       expect(readFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('build-review record-reduced-coverage --child', () => {
+    // Covers: task:2
+    const childTwoLap = parseBuildReviewLapId('lap-child-2')!;
+    const childTwoAggregate = joinBuildReviewRubricOutcomes({
+      lapId: childTwoLap, snapshotDigest: 'sha256:child-two',
+      results: {
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'child provider offline' },
+      },
+    });
+    const childOneAggregate = joinBuildReviewRubricOutcomes({
+      lapId: parseBuildReviewLapId('lap-child-1')!, snapshotDigest: 'sha256:child-one',
+      results: {
+        testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'child provider offline' },
+      },
+    });
+
+    async function writeChildAggregate(source: unknown, child = '2'): Promise<string> {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const path = join(worktree, '.pipeline', 'children', child, 'build-review.json');
+      await mkdir(join(worktree, '.pipeline', 'children', child), { recursive: true });
+      await writeFile(path, JSON.stringify(source));
+      return path;
+    }
+
+    async function writeLedger(child: string | undefined, mechanicalFaults?: number): Promise<void> {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const directory = child === undefined
+        ? join(worktree, '.pipeline')
+        : join(worktree, '.pipeline', 'children', child);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: mechanicalFaults === undefined ? {} : {
+          build_review: {
+            count: 0, cumulative: 0, mechanicalFaults, treeHash: null,
+            lastReason: 'test fixture', priorVerdict: false, resolvedBefore: 0,
+          },
+        },
+      }));
+    }
+
+    function command() {
+      return detectBuildReviewRecordReducedCoverageCommand([
+        'node', 'ai-conductor', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--child', '2',
+        '--lap', 'lap-child-2', '--rubric', 'testQuality', '--rationale', 'The child provider is unavailable.',
+      ])!;
+    }
+
+    function childDeps(overrides: Record<string, unknown> = {}) {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      return deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined,
+        createStore: () => new BuildReviewDispositionStore(worktree),
+        readMechanicalFaults: async () => 0,
+        ...overrides,
+      });
+    }
+
+    it('records child 2 infrastructure coverage against its aggregate and exhausted ledger', async () => {
+      // Covers: task:2
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const childAggregatePath = await writeChildAggregate(childTwoAggregate);
+      await writeLedger(undefined, 0);
+      await writeLedger('2', 3);
+      const readFile = vi.fn((path: string) => import('node:fs/promises').then(({ readFile }) => readFile(path, 'utf8')));
+      const readMechanicalFaults = vi.fn((ledgerRoot: string, child?: ChildId) => readKickbackLedger(ledgerRoot, child).then(
+        (ledger) => ledger.gates.build_review?.mechanicalFaults,
+      ));
+      const print = vi.fn();
+      const appendEvent = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile, readMechanicalFaults, print, appendEvent,
+        createStore: () => new BuildReviewDispositionStore(worktree),
+      }))).resolves.toBe(0);
+
+      expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: recorded testQuality for lap lap-child-2.');
+      expect(readFile.mock.calls.map(([path]) => path)).toEqual([childAggregatePath, childAggregatePath]);
+      expect(readMechanicalFaults).toHaveBeenCalledWith(worktree, 2);
+      expect(appendEvent).toHaveBeenCalledWith(worktree, expect.objectContaining({
+        type: 'build_review_reduced_coverage_accepted', lapId: 'lap-child-2',
+      }));
+
+      const store = new BuildReviewDispositionStore(worktree);
+      const stored = await store.listReducedCoverage({ version: 'v1', repository: root, feature: 'review-rubrics' });
+      expect(stored).toMatchObject({ ok: true, records: [expect.objectContaining({ identity: { rubric: 'testQuality', reason: 'provider-error' } })] });
+      expect(stored.ok && stored.records).toHaveLength(1);
+      await expect(resolveEffectiveBuildReviewVerdict(worktree, childTwoAggregate, {
+        child: parseChildId(2), adjudicationEnabled: false,
+        resolveMainRoot: async () => root, realpath: async (path: string) => path,
+      })).resolves.toMatchObject({
+        ok: true,
+        effective: { hasRecordedReducedCoverage: true, uncoveredInfrastructureFailureRubrics: [] },
+      });
+    });
+
+    it('records a child projection-oversized failure without a child build-review ledger entry', async () => {
+      // Covers: task:2
+      const projectionAggregate = joinBuildReviewRubricOutcomes({
+        lapId: childTwoLap, snapshotDigest: 'sha256:child-two-projection',
+        results: {
+          testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'projection-oversized', detail: 'projection is too large' },
+        },
+      });
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      await writeChildAggregate(projectionAggregate);
+      await writeLedger('2');
+      const print = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined, readMechanicalFaults: vi.fn(async () => 0), print,
+        createStore: () => new BuildReviewDispositionStore(worktree),
+      }))).resolves.toBe(0);
+
+      expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: recorded testQuality for lap lap-child-2.');
+    });
+
+    // Covers: task:3
+    it('names the child ledger and its consumed allowance without recording a decision', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const storePath = join(worktree, '.pipeline', 'build-review-dispositions.json');
+      await writeChildAggregate(childTwoAggregate);
+      await writeLedger(undefined, 3);
+      await writeLedger('2', 2);
+      const print = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined, print, createStore: () => new BuildReviewDispositionStore(worktree),
+      }))).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: refused because the mechanical-fault allowance remains (2 of 3 consumed in .pipeline/children/2/kickback-ledger.json).');
+      await expect(access(storePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // Covers: task:3
+    it('names the root ledger and its consumed allowance on a flat feature', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const storePath = join(worktree, '.pipeline', 'build-review-dispositions.json');
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'build-review.json'), JSON.stringify(infrastructureAggregate));
+      await writeLedger(undefined, 1);
+      const print = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage({
+        kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'The provider is unavailable.',
+      }, deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined, print, createStore: () => new BuildReviewDispositionStore(worktree),
+      }))).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: refused because the mechanical-fault allowance remains (1 of 3 consumed in .pipeline/kickback-ledger.json).');
+      await expect(access(storePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // Covers: task:3
+    it('refuses a child command whose requested lap is not current and names its aggregate', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const storePath = join(worktree, '.pipeline', 'build-review-dispositions.json');
+      await writeChildAggregate(childOneAggregate, '1');
+      const print = vi.fn();
+      const appendEvent = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage({
+        ...command(), child: '1', lapId: 'lap-child-2',
+      }, deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined, print, appendEvent, createStore: () => new BuildReviewDispositionStore(worktree),
+      }))).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; lap 'lap-child-2' is not the current lap ('lap-child-1') in .pipeline/children/1/build-review.json.");
+      expect(appendEvent).toHaveBeenCalledWith(worktree, expect.objectContaining({ reason: 'requested-lap-not-current' }));
+      await expect(access(storePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // Covers: task:3
+    it('keeps the existing child lease recheck when the aggregate lap changes before writing', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      const aggregatePath = await writeChildAggregate(childTwoAggregate);
+      await writeLedger('2', 3);
+      const storePath = join(worktree, '.pipeline', 'build-review-dispositions.json');
+      const realStore = new BuildReviewDispositionStore(worktree);
+      const print = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined, print,
+        createStore: () => ({
+          appendReducedCoverageIfCurrent: async (...args: Parameters<BuildReviewDispositionStore['appendReducedCoverageIfCurrent']>) => {
+            await writeFile(aggregatePath, JSON.stringify({ ...childTwoAggregate, lapId: 'lap-child-2-replaced' }));
+            return realStore.appendReducedCoverageIfCurrent(...args);
+          },
+        }),
+      }))).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: refused because the inspected review lap changed.');
+      await expect(access(storePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // Covers: task:3
+    it('keeps one child record when the same reduced coverage is recorded twice', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      await writeChildAggregate(childTwoAggregate);
+      await writeLedger('2', 3);
+      const print = vi.fn();
+      const recordDeps = deps({
+        cwd: root, resolveMainRoot: async () => root, realpath: async (path: string) => path,
+        readFile: undefined, print, createStore: () => new BuildReviewDispositionStore(worktree),
+      });
+
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), recordDeps)).resolves.toBe(0);
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), recordDeps)).resolves.toBe(1);
+
+      expect(print).toHaveBeenLastCalledWith("build-review record-reduced-coverage: refused because reduced coverage is already recorded for 'testQuality'.");
+      const stored = await new BuildReviewDispositionStore(worktree).listReducedCoverage({ version: 'v1', repository: root, feature: 'review-rubrics' });
+      expect(stored.ok && stored.records).toHaveLength(1);
+    });
+
+    // Covers: task:3
+    it('refuses an invalid child before aggregate or ledger reads', async () => {
+      const readFile = vi.fn(async () => JSON.stringify(childTwoAggregate));
+      const readMechanicalFaults = vi.fn(async () => 3);
+      const print = vi.fn();
+      const appendEvent = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage({ ...command(), child: 'x' }, childDeps({
+        readFile, readMechanicalFaults, print, appendEvent,
+      }))).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; invalid child id 'x'.");
+      expect(appendEvent).toHaveBeenCalledWith(join(root, '.worktrees', 'review-rubrics'), expect.objectContaining({ reason: 'invalid-child' }));
+      expect(readFile).not.toHaveBeenCalled();
+      expect(readMechanicalFaults).not.toHaveBeenCalled();
+    });
+
+    // Covers: task:3
+    it('refuses a non-interactive child command before aggregate or ledger reads', async () => {
+      const readFile = vi.fn(async () => JSON.stringify(childTwoAggregate));
+      const readMechanicalFaults = vi.fn(async () => 3);
+      const print = vi.fn();
+      const appendEvent = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), childDeps({
+        isInteractive: false, readFile, readMechanicalFaults, print, appendEvent,
+      }))).resolves.toBe(1);
+
+      expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: requires an interactive terminal and a verified local operator identity.');
+      expect(appendEvent).toHaveBeenCalledWith(join(root, '.worktrees', 'review-rubrics'), expect.objectContaining({ reason: 'non-interactive-or-unidentified-operator' }));
+      expect(readFile).not.toHaveBeenCalled();
+      expect(readMechanicalFaults).not.toHaveBeenCalled();
+    });
+
+    // Covers: task:4
+    it('names unreadable child and root aggregates, including the root stacked hint', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      await writeChildAggregate(childOneAggregate, '1');
+      await writeChildAggregate(childTwoAggregate, '2');
+      const rootPrint = vi.fn();
+      const rootEvents = vi.fn();
+
+      await expect(dispatchBuildReviewRecordReducedCoverage({
+        kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-child-2', rubric: 'testQuality', rationale: 'risk',
+      }, childDeps({ print: rootPrint, appendEvent: rootEvents }))).resolves.toBe(1);
+      expect(rootPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/build-review.json is missing. This feature is stacked; pass --child <k> (children with a build-review aggregate: 1, 2).");
+      expect(rootEvents).toHaveBeenCalledWith(worktree, expect.objectContaining({ reason: 'aggregate-unreadable' }));
+
+      await writeFile(join(worktree, '.pipeline', 'children', '2', 'build-review.json'), '{bad json');
+      const malformedPrint = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), childDeps({ print: malformedPrint }))).resolves.toBe(1);
+      expect(malformedPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/children/2/build-review.json is malformed (invalid JSON).");
+
+      await writeChildAggregate({ version: 'not-an-aggregate' });
+      const schemaPrint = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), childDeps({ print: schemaPrint }))).resolves.toBe(1);
+      expect(schemaPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/children/2/build-review.json is malformed (does not match the build-review aggregate schema).");
+    });
+
+    // Covers: task:4
+    it('does not give a stacked hint for an absent selected child or a flat feature', async () => {
+      const selectedPrint = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage({ ...command(), child: '3' }, childDeps({ print: selectedPrint }))).resolves.toBe(1);
+      expect(selectedPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/children/3/build-review.json is missing.");
+
+      const flatPrint = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage({
+        kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk',
+      }, childDeps({ print: flatPrint }))).resolves.toBe(1);
+      expect(flatPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/build-review.json is missing.");
+    });
+
+    // Covers: task:5
+    it('names an unreadable child ledger and a rejected disposition store', async () => {
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      await writeChildAggregate(childTwoAggregate);
+      await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: { build_review: {} } }));
+      const ledgerPrint = vi.fn();
+      const ledgerEvents = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), childDeps({ print: ledgerPrint, appendEvent: ledgerEvents, readMechanicalFaults: undefined }))).resolves.toBe(1);
+      expect(ledgerPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/children/2/kickback-ledger.json gate 'build_review' is unreadable.");
+      expect(ledgerEvents).toHaveBeenCalledWith(worktree, expect.objectContaining({ reason: 'kickback-ledger-unreadable' }));
+
+      await writeLedger('2', 3);
+      const storePrint = vi.fn();
+      const storeEvents = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), childDeps({
+        print: storePrint, appendEvent: storeEvents,
+        createStore: () => ({ appendReducedCoverageIfCurrent: async () => ({ ok: false as const, kind: 'invalid' as const, message: 'store rejected' }) }),
+      }))).resolves.toBe(1);
+      expect(storePrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; .pipeline/build-review-dispositions.json rejected the decision (invalid): store rejected.");
+      expect(storeEvents).toHaveBeenCalledWith(worktree, expect.objectContaining({ reason: 'disposition-store-invalid' }));
+    });
+
+    // Covers: task:5
+    it('names an unresolved feature worktree and preserves flat root recording', async () => {
+      const unresolvedPrint = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage(command(), childDeps({
+        print: unresolvedPrint, realpath: async () => join(root, '.worktrees', 'other-feature'),
+      }))).resolves.toBe(1);
+      expect(unresolvedPrint).toHaveBeenCalledWith("build-review record-reduced-coverage: refused for 'review-rubrics'; the feature worktree could not be resolved.");
+
+      const worktree = join(root, '.worktrees', 'review-rubrics');
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'build-review.json'), JSON.stringify(infrastructureAggregate));
+      await writeLedger(undefined, 3);
+      const reads = vi.fn(async (path: string) => readFile(path, 'utf8'));
+      const ledgers = vi.fn(async (ledgerRoot: string, child?: ChildId) => readKickbackLedger(ledgerRoot, child).then((ledger) => ledger.gates.build_review?.mechanicalFaults));
+      const flatPrint = vi.fn();
+      await expect(dispatchBuildReviewRecordReducedCoverage({
+        kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk',
+      }, childDeps({ readFile: reads, readMechanicalFaults: ledgers, print: flatPrint }))).resolves.toBe(0);
+      expect(flatPrint).toHaveBeenCalledWith('build-review record-reduced-coverage: recorded testQuality for lap lap-current.');
+      expect(reads.mock.calls.map(([path]) => path)).toEqual([join(worktree, '.pipeline', 'build-review.json'), join(worktree, '.pipeline', 'build-review.json')]);
+      expect(ledgers).toHaveBeenCalledWith(worktree, undefined);
     });
   });
 

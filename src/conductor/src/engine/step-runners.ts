@@ -4301,9 +4301,9 @@ export class DefaultStepRunner implements StepRunner {
     const controller = new AbortController();
     // Review acceptance is rubric policy; a fast test suite must not shorten a model judgment.
     const deadlineAt = Date.now() + (entry.policy.timeout_seconds ?? 300) * 1_000;
-    // The outer deadline timer is registered before discovery's own timer.
-    // Preserve its cause so that an in-flight catalog operation reports a
-    // deadline rather than a generic cancellation when this timer fires first.
+    // This is the sole deadline authority for the whole candidate, including
+    // installed-policy discovery. Preserve its cause so an in-flight catalog
+    // operation reports a deadline rather than a generic cancellation.
     const deadlineAbortReason = 'build-review-candidate-deadline';
     const timeout = setTimeout(() => controller.abort(deadlineAbortReason), Math.max(0, deadlineAt - Date.now()));
     let result: ProviderExecutionResult;
@@ -4397,8 +4397,9 @@ export class DefaultStepRunner implements StepRunner {
         try {
           if (context.abortSignal?.aborted) throw new ReviewPolicyCatalogError(catalogProvider.id, 'cancelled', 'candidate cancelled before policy catalog discovery');
           if (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt) throw new ReviewPolicyCatalogError(catalogProvider.id, 'timeout', 'candidate deadline elapsed before policy catalog discovery');
-          // One discovery signal: the candidate's cancellation joined with a
-          // timer for its deadline, so an in-flight request cannot outlive it.
+          // One discovery signal: the owning candidate's cancellation. Its
+          // deadline is armed above, so a catalog request cannot outlive the
+          // candidate or race a second, nearly-identical deadline timer.
           const discovery = new AbortController();
           let deadlineElapsed = false;
           const cancelDiscovery = () => {
@@ -4406,12 +4407,7 @@ export class DefaultStepRunner implements StepRunner {
             discovery.abort();
           };
           context.abortSignal?.addEventListener('abort', cancelDiscovery, { once: true });
-          const deadlineTimer = context.deadlineAt === undefined ? undefined : setTimeout(() => {
-            deadlineElapsed = true;
-            discovery.abort();
-          }, Math.max(0, context.deadlineAt - Date.now()));
           releaseDiscoveryAuthority = () => {
-            if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
             context.abortSignal?.removeEventListener('abort', cancelDiscovery);
           };
           context.onTeardown(async () => releaseDiscoveryAuthority?.());
