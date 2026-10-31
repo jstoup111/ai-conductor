@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:10, task:13
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -53,6 +53,41 @@ async function fixture() {
   return { ...subject, git, closedOne, closedTwo };
 }
 
+async function childThreeConflictFixture() {
+  const subject = await createSweepRepository('restack-decision-child-three-', cleanup);
+  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  await subject.git(['add', '.ai-conductor/config.yml']);
+  await subject.git(['commit', '-qm', 'configure stack']);
+  await subject.commit('base', 'base.txt', 'base\n');
+  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+  const closedOne = await subject.commit('closed one', 'one.txt', 'one\n');
+  await subject.git(['update-ref', closureRefFor('demo', host), closedOne]);
+  await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+  const closedTwo = await subject.commit('closed two', 'two.txt', 'two\n');
+  await subject.git(['update-ref', closureRefFor('demo', child), closedTwo]);
+  await subject.git(['checkout', '-qb', 'feat/c3/demo']);
+  const closedThree = await subject.commit('closed three', 'three.txt', 'child three\n');
+  await subject.git(['update-ref', closureRefFor('demo', parseChildId(3)!), closedThree]);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+  await sealStack(subject.repo);
+  await subject.git(['checkout', '-q', 'feat/c1/demo']);
+  await subject.commit('routed fix touching child 3', 'three.txt', 'routed\n');
+  const git = makeGitRunner(subject.repo);
+  const route: RouteRecord = {
+    roundId, kind: 'audit', phase: 'open',
+    items: [{ findingId: 'finding-1', kind: 'audit', owner: host, host, reason: 'repair', fallback: [] }],
+    allocation: { [host]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
+    hosts: { [host]: 'repairing' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [],
+    entry: { host, pinnedBase: closedOne, tree: (await git(['rev-parse', `${closedOne}^{tree}`])).stdout.trim() as never },
+  };
+  const blob = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(route) })).stdout.trim();
+  const marker = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host, roundId }) })).stdout.trim();
+  await git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+  await git(['update-ref', repairMarkerRefFor('demo'), marker]);
+  return { ...subject, git, closedOne, closedTwo };
+}
+
 describe('restack decision delivery (real local Git)', () => {
   it('delivers a matching decision, journals it, then deletes it only with the applied move', async () => {
     const subject = await fixture();
@@ -85,5 +120,63 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/conflict/record'])).resolves.toMatchObject({ exitCode: 1 });
     await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/conflict/parent'])).resolves.toMatchObject({ exitCode: 1 });
     await expect(readRestackJournal(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'missing' });
+  });
+
+  it('keeps an ignored decision while escalating its answer, recipe, and fresh conflict record', async () => {
+    const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events,
+      resolver: async () => ({ resolved: false as const, reason: 'initial operator choice' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const firstConflict = await readConflictRecord(subject.repo, 'demo', { git: subject.git });
+    if (firstConflict.kind !== 'record') throw new Error('expected initial conflict record');
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision: {
+      child, oldParent: firstConflict.record.oldParent, oldTip: firstConflict.record.oldTip,
+      commit: firstConflict.record.commit, paths: firstConflict.record.paths,
+      answer: "keep upstream's resolveReviewScope seam", operator: 'operator@example.test',
+    } }, { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+    const decision = await subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/decision/c2']);
+    const featureRefs = await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/']);
+    const closedRefs = await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/closed/']);
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events,
+      resolver: vi.fn(async () => ({ resolved: false as const, reason: 'resolver rejected the supplied seam' })), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    const halt = await readFile(join(subject.repo, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain("operator decision applied: keep upstream's resolveReviewScope seam");
+    expect(halt).toContain('resolver rejected the supplied seam');
+    expect(halt).toContain('git switch -c restack-resolve/demo/c2');
+    expect(halt).toContain('git rebase --onto');
+    const conflict = await readConflictRecord(subject.repo, 'demo', { git: subject.git });
+    if (conflict.kind !== 'record') throw new Error('expected refreshed conflict record');
+    expect(halt).toContain(`Restack-Conflict: 2 ${conflict.record.opId}`);
+    await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/decision/c2']))
+      .resolves.toMatchObject({ exitCode: 0, stdout: decision.stdout.trim() });
+    await expect(subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/']))
+      .resolves.toMatchObject({ stdout: featureRefs.stdout });
+    await expect(subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/closed/']))
+      .resolves.toMatchObject({ stdout: closedRefs.stdout });
+  });
+
+  it('does not deliver child 2\'s decision while replaying child 3', async () => {
+    const subject = await childThreeConflictFixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
+    persister.start();
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'decision', decision: {
+      child, oldParent: subject.closedOne, oldTip: subject.closedTwo, commit: subject.closedTwo,
+      paths: ['two.txt'], answer: 'keep child two unchanged', operator: 'operator@example.test',
+    } }, { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'child three still conflicts' }));
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
+      .resolves.toMatchObject({ kind: 'halted' });
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ conflicts: ['three.txt'] }));
+    expect(resolver.mock.calls[0]![0].operatorDecision).toBeUndefined();
+    const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8').catch(() => ''))
+      .trim().split('\n').filter(Boolean).map(JSON.parse);
+    expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child: 3 }));
   });
 });

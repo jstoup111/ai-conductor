@@ -849,7 +849,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           git,
         });
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
-          const detail = 'reason' in resolution.outcome ? resolution.outcome.reason : undefined;
+          const detail = [
+            ...(deliveredDecision === undefined ? [] : [`operator decision applied: ${deliveredDecision.decision.answer}`]),
+            ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
+          ].join('\n') || undefined;
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, parent, 'conflict', detail, resolution.candidates);
           terminal = true;
           return haltedResult(options.worktree);
