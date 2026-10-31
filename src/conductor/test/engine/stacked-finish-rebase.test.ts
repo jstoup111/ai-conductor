@@ -22,8 +22,21 @@ import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { readBaseAdvanceHistory, resolveBaseAdvanceForFailure } from '../../src/engine/test-suite-remediation.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const publicationSeam = vi.hoisted(() => ({ forcePublishedStackRefusal: false }));
+
+vi.mock('../../src/engine/stack-publication.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/engine/stack-publication.js')>();
+  return {
+    ...actual,
+    publishedStackRefusal: (...args: Parameters<typeof actual.publishedStackRefusal>) =>
+      publicationSeam.forcePublishedStackRefusal
+        ? Promise.resolve(true)
+        : actual.publishedStackRefusal(...args),
+  };
+});
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
@@ -36,6 +49,7 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 };
 
 afterEach(async () => {
+  publicationSeam.forcePublishedStackRefusal = false;
   for (const persister of persisters.splice(0)) persister.stop();
   await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -230,6 +244,62 @@ const OBSERVED = [
 ] as const;
 
 describe('FINISH rebase step on a stacked feature (real local Git)', () => {
+  // Covers: task:3
+  it('halts after one dispatch when a published-stack refusal leaves a stale rebase verdict', async () => {
+    const subject = await stackedFixture();
+    const staleReason = 'routed leaf return requires fresh whole-feature validation';
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: false,
+      reason: staleReason,
+      checkedAt: 1,
+    });
+    publicationSeam.forcePublishedStackRefusal = true;
+    const events = new ConductorEventEmitter();
+    const seen = observe(events, ['restack_refused']);
+    const conductor = new Conductor({
+      stateFilePath: subject.statePath,
+      stepRunner: { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) },
+      events,
+      projectRoot: subject.repo,
+      daemon: true,
+      featureSlug: 'demo',
+      mode: 'auto',
+      verifyArtifacts: true,
+    });
+    const state = await readState(subject.statePath);
+    if (!state.ok) throw new Error(state.error.message);
+    const privateConductor = conductor as unknown as {
+      persistedStateSnapshot: ConductState;
+      runRebaseStep(state: ConductState): Promise<StepRunResult>;
+      advanceTail(
+        step: (typeof ALL_STEPS)[number],
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ): Promise<number | 'halt'>;
+    };
+    privateConductor.persistedStateSnapshot = { ...state.value };
+
+    expect(await privateConductor.runRebaseStep(state.value)).toEqual({ success: true });
+    expect(seen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'published-stack' })]);
+
+    const rebase = ALL_STEPS.find((step) => step.name === 'rebase');
+    if (!rebase) throw new Error('rebase step missing');
+    expect(await privateConductor.advanceTail(
+      rebase,
+      state.value,
+      new Map<StepName, number>(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    )).toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      "step 'rebase' completed but its gate verdict was not refreshed",
+    );
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(staleReason);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
   // Covers: task:3
   it('adopts an advanced-default restack so the resumed leaf reaches test_suite without a loop halt', async () => {
     const subject = await stackedFixture({ childCount: 2 });
