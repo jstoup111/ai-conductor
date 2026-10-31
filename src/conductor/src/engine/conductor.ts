@@ -83,6 +83,7 @@ import {
   type RemediationProjectionLimits,
 } from './remediation-projection.js';
 import { readTypedRemediationPlan } from './remediation-plan-store.js';
+import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
@@ -1414,6 +1415,43 @@ export class Conductor {
     if (!written.ok) return `remediation case store write fault: ${written.reason}`;
     await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
     return undefined;
+  }
+
+  /** Project admitted, repair-bearing as-built dispositions into case-store results. */
+  private asBuiltReconciliationResults(
+    dispositions: readonly AcceptedRemediationPlanDisposition[],
+    findings: ReadonlyMap<string, RecordedAsBuiltRemediationFinding>,
+    attemptId: string | undefined,
+    existingTaskIdsByFindingId: ReadonlyMap<string, readonly string[]>,
+    appendedTaskIdsByFindingId: ReadonlyMap<string, readonly string[]> | undefined,
+  ): AsBuiltReconciliationResult[] {
+    return dispositions.flatMap((disposition): AsBuiltReconciliationResult[] => {
+      if (
+        disposition.reference.kind !== 'as-built-finding' ||
+        disposition.disposition === 'halt' ||
+        !disposition.reconciliation
+      ) return [];
+      const finding = findings.get(disposition.reference.id);
+      if (finding === undefined) return [];
+      const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+        ? existingTaskIdsByFindingId.get(disposition.reference.id)
+        : appendedTaskIdsByFindingId?.get(disposition.reference.id);
+      if (repairTaskIds === undefined) return [];
+      return [{
+        source: {
+          findingId: finding.finding,
+          attemptId: attemptId ?? this.currentRunId ?? 'unknown-attempt',
+          class: finding.class,
+          ...(finding.reference === undefined ? {} : { reference: finding.reference }),
+          summary: finding.summary,
+        },
+        relation: disposition.reconciliation.relation,
+        reason: disposition.reconciliation.reason,
+        ...(disposition.reconciliation.priorCaseId === undefined
+          ? {} : { priorCaseId: disposition.reconciliation.priorCaseId }),
+        repairTaskIds,
+      }];
+    });
   }
 
   /** Persist terminal DESIGN/planner outcomes before their needs-human halt. */
@@ -5295,27 +5333,13 @@ export class Conductor {
     // plan (some fixes + one halt) still surfaces the halt rather than
     // routing around it and losing the halt detail entirely.
     if (halts.length > 0) {
-      const reconciled = typedPlan.value.dispositions.flatMap((disposition): AsBuiltReconciliationResult[] => {
-        if (disposition.reference.kind !== 'as-built-finding' || disposition.disposition === 'halt' || !disposition.reconciliation) return [];
-        const finding = asBuiltRecordedFindings.get(disposition.reference.id);
-        if (finding === undefined) return [];
-        const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-          ? resolvedExistingTaskIdsByGapId.get(disposition.reference.id)
-          : appendedTaskIdsByGapId?.get(disposition.reference.id);
-        if (repairTaskIds === undefined) return [];
-        return [{
-          source: {
-            findingId: finding.finding, attemptId: asBuiltAttemptId ?? this.currentRunId ?? 'unknown-attempt',
-            class: finding.class, ...(finding.reference === undefined ? {} : { reference: finding.reference }),
-            summary: finding.summary,
-          },
-          relation: disposition.reconciliation.relation,
-          reason: disposition.reconciliation.reason,
-          ...(disposition.reconciliation.priorCaseId === undefined
-            ? {} : { priorCaseId: disposition.reconciliation.priorCaseId }),
-          repairTaskIds,
-        }];
-      });
+      const reconciled = this.asBuiltReconciliationResults(
+        typedPlan.value.dispositions,
+        asBuiltRecordedFindings,
+        asBuiltAttemptId,
+        resolvedExistingTaskIdsByGapId,
+        appendedTaskIdsByGapId,
+      );
       const reconciliationFault = await this.recordAsBuiltReconciliationResults(reconciled);
       if (reconciliationFault !== undefined) return { kind: 'halt', haltClass: 'needs-human', detail: reconciliationFault };
       const plannerHaltFindings = typedPlan.value.dispositions.flatMap((disposition): AsBuiltCaseFinding[] => {
@@ -5516,28 +5540,13 @@ export class Conductor {
       // The append/restage transaction is the admission boundary.  Do not
       // write a case for rejected, missing, failed-append, or failed-restage
       // plans; a durable source means the repair was actually admitted.
-      const reconciled = typedPlan.value.dispositions.flatMap((disposition): AsBuiltReconciliationResult[] => {
-        if (disposition.reference.kind !== 'as-built-finding' || disposition.disposition === 'halt' || !disposition.reconciliation) return [];
-        const finding = asBuiltRecordedFindings.get(disposition.reference.id);
-        if (finding === undefined) return [];
-        const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-          ? resolvedExistingTaskIdsByGapId.get(disposition.reference.id)
-          : appendedTaskIdsByGapId?.get(disposition.reference.id);
-        if (repairTaskIds === undefined) return [];
-        return [{
-          source: {
-            findingId: finding.finding, attemptId: asBuiltAttemptId ?? this.currentRunId ?? 'unknown-attempt',
-            class: finding.class,
-            ...(finding.reference === undefined ? {} : { reference: finding.reference }),
-            summary: finding.summary,
-          },
-          relation: disposition.reconciliation.relation,
-          reason: disposition.reconciliation.reason,
-          ...(disposition.reconciliation.priorCaseId === undefined
-            ? {} : { priorCaseId: disposition.reconciliation.priorCaseId }),
-          ...(repairTaskIds === undefined ? {} : { repairTaskIds }),
-        }];
-      });
+      const reconciled = this.asBuiltReconciliationResults(
+        typedPlan.value.dispositions,
+        asBuiltRecordedFindings,
+        asBuiltAttemptId,
+        resolvedExistingTaskIdsByGapId,
+        appendedTaskIdsByGapId,
+      );
       const recordingFault = await this.recordAsBuiltReconciliationResults(reconciled);
       if (recordingFault !== undefined) {
         await reportRefusal(recordingFault);
