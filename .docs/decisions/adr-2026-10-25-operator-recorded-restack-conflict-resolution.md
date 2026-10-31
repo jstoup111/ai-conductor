@@ -85,6 +85,9 @@ Option B.
    - **Writes.** One record per feature. It is written in a compare-and-swap transaction and
      replaced by the next conflict halt.
    - **Survival.** The record is outside `restack/staging/`, so `cleanJournal` leaves it in place.
+
+> **Amended 2026-10-31 by #3478:** The record and the `Restack-Conflict` halt line are also written for an unresolved `base-refresh` conflict. Its candidate subjects are the resolver's replay candidates, which omit commits patch-equivalent to the new default (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 1).
+
 2. **The conflict halt says how to resolve it.** The HALT and the committed halt record carry, in
    order:
    - the child, the commit, the paths and the resolver's reason;
@@ -95,6 +98,8 @@ Option B.
      - run `ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <sha>`.
 
    The halt never tells the operator to rebase the child's own branch.
+
+> **Amended 2026-10-31 by #3478:** The halt also prints the `stack restack-resolve --decision` recipe beside the `--tip` recipe, for either restack cause (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 1).
 3. **`ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <sha>` validates and
    records the resolution.**
    - **Refused up front, each refusal naming its cause:**
@@ -122,6 +127,8 @@ Option B.
 
      It then releases the lease. The committed halt record is superseded by the shipped resume
      path.
+
+> **Amended 2026-10-31 by #3478:** The command also accepts `--decision "<answer>"` instead of `--tip`; the two are mutually exclusive. With the same refusals, it pins the answer and the conflict identity at `refs/conductor/<slug>/restack/decision/c<k>`, appends `restack_decision` `recorded`, and clears the HALT. The next restack hands that decision to the resolver. Recording either answer deletes the other kind's ref for the same child in the same compare-and-swap transaction, so the latest answer wins (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decisions 2 and 3).
 4. **The next restack consumes a matching resolution as the child's resolver output.**
    - **Where.** In `runRestack` and in recovery's `resumePlanned`, for a `feature-repair` journal,
      before a replayed range of child `k` is replayed.
@@ -142,6 +149,8 @@ Option B.
      reason `restack-resolution-stale`, naming the field that differs. The resolution and the record
      are kept.
    - **With no resolution ref,** the replay runs exactly as today.
+
+> **Amended 2026-10-31 by #3478:** Consumption is no longer limited to `feature-repair` journals. A matching resolution is consumed for a `base-refresh` range too. When no resolution matches, a decision whose child, `oldParent` and `oldTip` match is delivered to the resolver (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 3).
 5. **A resolution lives until the restack that consumed it applies.**
    - The ready→moved transaction (`applyRestackMove`) carries `verify` lines asserting that the
      consumed resolution ref, the record and the parent pin are unchanged. If one changed after
@@ -152,6 +161,8 @@ Option B.
    - An aborted or halted restack never deletes them.
    - Feature teardown deletes them by name: `featureConductorRefNames` gains the conflict refs and
      `restack/resolution/c<k>` for every child id. Cleanup never discovers refs by prefix.
+
+> **Amended 2026-10-31 by #3478:** The ready→moved `verify` lines and the applied transaction's deletions also cover a delivered `restack/decision/c<k>` ref. `featureConductorRefNames` gains it for every child (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 4).
 6. **Post-restack guarantees come from the shipped machinery.** A consumed resolution enters the
    journal as `resolved`, so the shipped path then runs unchanged:
    - the move;
@@ -185,6 +196,8 @@ Option B.
      Writing the conflict refs at a halt, including the `rem-*` body-mismatch halt, moves neither.
    - **Merge-bearing children are out of scope.** A merge-bearing child keeps the shipped
      `flatten_refused` halt, its text and its recovery, and writes no conflict ref.
+
+> **Amended 2026-10-31 by #3478:** A sibling member, `restack_decision {child, action, commit, paths, operator?, opId?}`, records a decision being `recorded`, `applied` or `stale`. `restack_resolution` is unchanged (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 5).
 9. **Parity.** All of these are byte-for-byte unchanged:
    - a feature-repair restack with no resolution ref;
    - base-refresh restacks;
@@ -193,6 +206,8 @@ Option B.
    - routing-off behavior.
 
    The N=1 golden guard still holds. The restack ADR decision 13 obligations are unaffected.
+
+> **Amended 2026-10-31 by #3478:** Base-refresh conflict halts are no longer byte-identical. They write the conflict refs and print the `Restack-Conflict` line and both recipes. They still move no branch or closure ref (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decisions 1 and 6).
 10. **The guidance changes with the mechanism.**
     - In `docs/runbooks/stalled-or-stuck-feature.md`, "A stacked restack halted" stops telling the
       operator to settle the conflict on the child's branch and documents decision 2's recipe and
