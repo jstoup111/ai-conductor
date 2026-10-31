@@ -49,14 +49,15 @@ describe('halt record bookkeeping', () => {
     expect(chooseHaltRecord('Halted at: not-a-time\n', 'Halted at: still-not-a-time\n')).toBe('parent');
   });
 
-  it('chooses the range for its only parseable time or absent parent record', () => {
+  it('chooses the range for its only parseable time or any record absent from the parent', () => {
     expect(chooseHaltRecord('Halted at: not-a-time\n', haltedRecord('2026-10-26T12:00:00.000Z'))).toBe('range');
     expect(chooseHaltRecord(undefined, haltedRecord('2026-10-26T12:00:00.000Z'))).toBe('range');
+    expect(chooseHaltRecord(undefined, 'legacy halt record\n')).toBe('range');
   });
 
   it('keeps the parent when the range record is absent', () => {
     expect(chooseHaltRecord(haltedRecord('2026-10-26T12:00:00.000Z'), undefined)).toBe('parent');
-    expect(chooseHaltRecord(undefined, 'Halted at: not-a-time\n')).toBe('parent');
+    expect(chooseHaltRecord(undefined, undefined)).toBe('parent');
   });
 
   it('prefers Resolved at over Halted at and returns the halt-record path', () => {
