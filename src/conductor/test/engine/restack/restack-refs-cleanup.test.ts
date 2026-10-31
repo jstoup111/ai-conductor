@@ -88,7 +88,7 @@ function routingFixtureRefs() {
 }
 
 describe('deleteFeatureConductorRefs (real local Git)', () => {
-  // Covers: task:12
+  // Covers: task:12, task:2
   it('lists conflict and every child resolution and decision ref, then deletes them during single-slug reclaim', async () => {
     const subject = await fixture();
     const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
