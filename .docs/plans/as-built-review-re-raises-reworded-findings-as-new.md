@@ -477,3 +477,47 @@ Task 1 ─┬─> Task 2 ──────────────────�
 **Done when:**
 - adr-2026-10-28-as-built-finding-reconciliation decision 6 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg-mixed-append-halt is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-undeclared-repair-needs-human: remediation-projection.ts: give the undeclared prior-case repair-task fault dimension 'prior-as-built-cases' so conductor.ts planRemediation halts it needs-human; in conductor-groups-and-signals.test.ts 'prior as-built case projection faults (Task 14)' assert undeclaredRepair.haltClass is 'needs-human', no remediate dispatch, and HALT text names the task id; update remediation-projection.test.ts for the new dimension
+**Gate:** prd-audit
+**Rationale:** Verified (conductor.ts:4263, 97%): the needs-human class is chosen only when dimension is 'prior-as-built-cases' or source is 'remediation case store'. The undeclared-repair-task fault has source 'active plan', so it halts mechanical, and the Task 14 test asserts mechanical. Task 14 Done-when and the refusal-rework task both list an undeclared repair task as a needs-human prior-case fault. The fix stays inside that refusal boundary: tag this fault with dimension 'prior-as-built-cases' in remediation-projection.ts so the existing classifier halts needs-human, then flip the test expectation. This is conforming BUILD work and needs no architecture decision.
+**Criterion:** S1.5
+**Parent task:** 14
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-undeclared-repair-needs-human is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-no-plan-skip-recording: conductor.ts validation-group join halt (~9897) and serial as-built halt (~15119): call recordAsBuiltNeedsHumanFindings only when asBuiltOutcome.kind is 'blocked-design', so blocked-remediable rounds whose planRemediation returned kind 'none' record no case or event; keep the planner-halt recording inside planRemediation unchanged
+**Gate:** as-built
+**Rationale:** Verified (conductor.ts:9897 and :15119, 99%): the fallback recordAsBuiltNeedsHumanFindings calls at both halt sites run for every asBuiltOutcome, including blocked-remediable rounds where planRemediation returned kind 'none' after a rejected or missing plan. Task 12 requires no recording for those rounds. Task 9 and the design-halt repair tasks only admit recording for DESIGN halts, and planner-halt recording happens separately inside planRemediation. Fix: gate both fallback calls on asBuiltOutcome.kind === 'blocked-design'. This is conforming BUILD work.
+**Parent task:** 12
+**Governing clause:** Task 12
+**Done when:**
+- Task 12 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-no-plan-skip-recording is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-reconciliation-invalid-exhaustion-test: conductor-groups-and-signals.test.ts: through the as-built gap-plan path, have remediate return a reconciliation-invalid plan on every attempt; assert no plan task is appended, the HALT text carries the last rejection diagnostic naming the 'reconciliation' field, and remediation-cases.json/events.jsonl gain no as_built case or as_built_finding_reconciled line
+**Gate:** prd-audit
+**Rationale:** Verified (90%): no test covers Task 12's first Done-when, where every attempt returns a reconciliation-invalid plan and retries run out. That exhaustion path also currently records needs-human cases, which is the defect fixed by rem-vg-no-plan-skip-recording. Task 12 admits this test, so this is BUILD work.
+**Criterion:** S2.10
+**Parent task:** 12
+**Done when:**
+- [test] S2.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-reconciliation-invalid-exhaustion-test is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-unapplied-plan-no-case-test: conductor-groups-and-signals.test.ts: seed an as_built case, then for a rejected plan, a missing plan, a valid plan whose append fails, and a valid plan whose existing-task binding fails, assert remediation-cases.json gains no as_built case or source, the seeded case serialization is byte-identical, and events.jsonl gains no as_built_finding_reconciled line
+**Gate:** prd-audit
+**Rationale:** Verified (90%): the diff has no test for Task 12's second Done-when, which requires no case, source, or event for a rejected plan, a missing plan, a failed append, or a failed existing-task binding, with seeded cases byte-identical afterward. The production defect is fixed by rem-vg-no-plan-skip-recording and rem-vg-mixed-halt-exclude-unadmitted-bindings. Task 12 admits this test coverage.
+**Criterion:** S6.6
+**Parent task:** 12
+**Done when:**
+- [test] S6.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-unapplied-plan-no-case-test is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-mixed-halt-exclude-unadmitted-bindings: conductor.ts planRemediation planner-halt branch (~5268): reconcile and record only findings whose append succeeded, excluding existing-task bindings that were resolved but not admitted or restaged; add a conductor-groups-and-signals.test.ts test for a plan mixing an existing-task binding with a halt, asserting the bound case is byte-identical (no source, no reopen, no recurrence increment) and no as_built_finding_reconciled event is written for it
+**Gate:** as-built
+**Rationale:** Verified (conductor.ts:5268-5277, 98%): the planner-halt branch passes resolvedExistingTaskIdsByGapId to asBuiltReconciliationResults and records those results. It then returns before admitAndRestageRepair, so it records bindings that were never admitted. ADR D6 and Task 12 require that recording follow a successful append or binding. Fix: in the halt branch, reconcile only appended dispositions by passing an empty existing-task map or filtering out existing-task bindings. Keep the successful-append recording added by rem-as-built-rem-vg-mixed-append-halt. This is conforming BUILD work.
+**Governing clause:** adr-2026-10-28-as-built-finding-reconciliation decision 6
+**Done when:**
+- adr-2026-10-28-as-built-finding-reconciliation decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-mixed-halt-exclude-unadmitted-bindings is committed and its targeted tests pass.
