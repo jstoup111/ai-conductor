@@ -257,6 +257,7 @@ describe('BUILD-region queue admission', () => {
 
     expect(resolveActiveChild.mock.invocationCallOrder.filter((order) => order > mocks.admission.mock.invocationCallOrder[0]!).length).toBe(0);
     expect(runner.run).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(`queued child 1, queue generation 3;`);
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(kind);
     await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
   });
@@ -308,6 +309,7 @@ describe('BUILD-region queue admission', () => {
     });
     await conductor.run();
     expect(runner.run).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('queued child 1, queue generation 3;');
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('admitted round r7 for child 1 re-resolved as cursor');
   });
 
