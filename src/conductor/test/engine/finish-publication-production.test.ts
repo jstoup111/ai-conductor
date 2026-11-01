@@ -1,6 +1,6 @@
 // Covers: task:1, task:2, task:3, task:4, task:5, task:24, task:rem-as-built-rem-as-built-r17-5, task:rem-operator-5-r2, task:rem-as-built-rem-asbuilt-7242ec34-1
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,7 @@ import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
@@ -2458,27 +2459,8 @@ describe('production FINISH publication composition', () => {
         }
         throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
       });
-      const dispatchJudgment = vi.fn(async () => ({ success: true }));
-      const dispatchAuthoring = vi.fn(async () => {
-        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
-          version: 1,
-          title: 'feat: authored publication',
-          body: '## Why\n\nThe teardown hook never ran.\n\n## What Changed\n\nRun it.\n',
-        }));
-        return { success: true };
-      });
-      const operations: GithubOperationRunner = {
-        run: vi.fn(async (request) => {
-          if (request.operation !== 'pull-request.edit' || !request.payload || !('title' in request.payload)) {
-            throw new Error('expected an engine-owned prose edit');
-          }
-          title = request.payload.title;
-          body = request.payload.body;
-          return {};
-        }),
-      };
       const writeShippedRecord = vi.fn(async () => 0);
-      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
+      const makeCoordinator = (operations: GithubOperationRunner, events?: ConductorEventEmitter) => createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
@@ -2490,8 +2472,9 @@ describe('production FINISH publication composition', () => {
         writeShippedRecord,
         repairPresentation: async () => {},
         operations,
+        events,
       });
-      const input = {
+      const input = (dispatchAuthoring: NonNullable<Parameters<ReturnType<typeof makeCoordinator>['advance']>[0]['dispatchAuthoring']>) => ({
         state: {
           feature_desc: 'feature',
           worktree_branch: 'feat/feature',
@@ -2503,32 +2486,105 @@ describe('production FINISH publication composition', () => {
         } as ConductState,
         mode: 'auto' as const,
         daemon: true,
-        dispatchJudgment,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
         dispatchAuthoring,
         emit: async () => {},
-      };
+      });
 
-      await expect(makeCoordinator().advance(input)).resolves.toEqual({
+      const currentRegions = {
+        alpha: '\nCurrent alpha bytes.\n',
+        beta: '\nCurrent beta bytes.\n',
+        gamma: '\nCurrent gamma bytes.\n',
+      };
+      body = [
+        PR_BODY_FLOOR_MARKER,
+        '',
+        '## Why',
+        '',
+        '_Not yet authored_',
+        '',
+        '<!-- ai-conductor:step alpha -->', currentRegions.alpha.trim(), '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step beta -->', currentRegions.beta.trim(), '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->', currentRegions.gamma.trim(), '<!-- /ai-conductor:step -->',
+      ].join('\n');
+      const handoffBody = [
+        '## Why', '', 'The teardown hook now completes before the daemon records shipment.', '',
+        '<!-- ai-conductor:step beta -->', 'Changed beta bytes.', '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->', 'Changed gamma bytes.', '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->', 'Repeated gamma bytes.', '<!-- /ai-conductor:step -->',
+      ].join('\n');
+      const featureEvents = new ConductorEventEmitter();
+      const emittedFailures: unknown[] = [];
+      featureEvents.on('github_operation_failed', (event) => { emittedFailures.push(event); });
+      const edits: Parameters<GithubOperationRunner['run']>[0][] = [];
+      const operations: GithubOperationRunner = {
+        run: vi.fn(async (request) => {
+          edits.push(request);
+          if (request.operation !== 'pull-request.edit' || !request.payload || !('title' in request.payload) || !('body' in request.payload)) {
+            throw new Error('expected an engine-owned prose edit');
+          }
+          title = request.payload.title;
+          body = request.payload.body;
+          return {};
+        }),
+      };
+      const dispatchAuthoring = vi.fn(async () => {
+        const failedEdit = {
+          type: 'github_operation_failed' as const,
+          operation: 'pull-request.edit' as const,
+          target: { kind: 'pull-request' as const, repository: 'acme/widget', number: 1364 },
+          error: 'a prior provider-side operation failed',
+        };
+        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+          version: 1, title: '  feat: authored publication  ', body: handoffBody,
+        }));
+        await appendFile(join(pipeline, 'pipeline-events.jsonl'), `${JSON.stringify(failedEdit)}\n`);
+        await featureEvents.emit(failedEdit);
+        return { success: true };
+      });
+
+      await expect(makeCoordinator(operations, featureEvents).advance(input(dispatchAuthoring))).resolves.toEqual({
         kind: 'publication_progress', transition: 'author_pr_prose',
       });
-
-      // The dedup key stays unwritten until the prose survives, so a prose
-      // halt here remains re-dispatchable by the daemon.
       expect(writeShippedRecord).not.toHaveBeenCalled();
-
-      // A daemon re-creates this composition on the next dispatch. The exact
-      // revision the authoring pass produced remains accepted, so the healthy
-      // placeholder path consumes its one authoring provider pass, not a
-      // second judgment pass.
-      await makeCoordinator().advance(input);
-
-      expect(dispatchAuthoring).toHaveBeenCalledWith({
-        kind: 'finish_pr_prose_authoring',
-        pullRequestUrl: prUrl,
-        authoringScope: ['title', 'body'],
-        maximumPasses: 1,
+      expect(edits).toHaveLength(1);
+      expect(edits[0]).toMatchObject({
+        operation: 'pull-request.edit', payload: { title: 'feat: authored publication' },
       });
-      expect(dispatchJudgment).not.toHaveBeenCalled();
+      const published = edits[0]!.payload;
+      if (!published || !('body' in published) || typeof published.body !== 'string') throw new Error('missing published body');
+      expect(published.body).toBe([
+        '## Why', '', 'The teardown hook now completes before the daemon records shipment.', '',
+        '<!-- ai-conductor:step beta -->', 'Current beta bytes.', '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->', 'Current gamma bytes.', '<!-- /ai-conductor:step -->', '', '',
+        '<!-- ai-conductor:step alpha -->', 'Current alpha bytes.', '<!-- /ai-conductor:step -->',
+      ].join('\n'));
+      expect(emittedFailures).toHaveLength(1);
+      await expect(readFile(join(pipeline, 'pipeline-events.jsonl'), 'utf8')).resolves.toContain('github_operation_failed');
+
+      body = `${PR_BODY_FLOOR_MARKER}\n\n## Why\n\n_Not yet authored_\n`;
+      await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'stale', body: 'stale prose' }));
+      const staleOperations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+      const dispatchWithoutHandoff = vi.fn(async () => {
+        await expect(readFile(join(pipeline, 'finish-pr-prose.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        return { success: true };
+      });
+      await expect(makeCoordinator(staleOperations).advance(input(dispatchWithoutHandoff))).resolves.toMatchObject({
+        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_not_returned',
+      });
+      expect(staleOperations.run).not.toHaveBeenCalled();
+
+      const failedOperations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+      const failedDispatch = vi.fn(async () => {
+        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+          version: 1, title: 'feat: ignored authoring output', body: '## Why\n\nThis output must not publish.\n',
+        }));
+        return { success: false };
+      });
+      await expect(makeCoordinator(failedOperations).advance(input(failedDispatch))).resolves.toEqual({
+        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_dispatch_failed',
+      });
+      expect(failedOperations.run).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
