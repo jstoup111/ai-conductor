@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-01T12:21:00.258Z
 Slug: a-partial-stack-merge-or-mid-stack-push-halts-the-
 Class: needs-human
 Halting step: unknown
