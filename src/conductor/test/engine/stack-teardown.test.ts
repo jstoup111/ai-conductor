@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:1, task:2, task:3, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -143,6 +143,58 @@ describe('stack teardown', () => {
     await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip: pushed, mergedHead, git }))
       .resolves.toEqual({ kind: 'accounted' });
     expect(calls).toContainEqual(['rev-list', pushed, '--not', pushed, mergedHead]);
+  });
+
+  it('fetches an absent merged head from origin before accounting for the local child tip', async () => {
+    const { root, pushed } = await accountingFixture('fetch-merged-head');
+    const origin = join(root, 'origin.git');
+    const publisher = join(root, 'publisher');
+    await runGit(root, ['init', '--bare', '-q', origin]);
+    await runGit(root, ['remote', 'add', 'origin', origin]);
+    await runGit(root, ['push', '-q', 'origin', 'main:main']);
+    await runGit(root, ['push', '-q', 'origin', `child-work:merged-head`]);
+    await runGit(root, ['clone', '-q', origin, publisher]);
+    await runGit(publisher, ['config', 'user.email', 'stack@example.test']);
+    await runGit(publisher, ['config', 'user.name', 'Stack teardown']);
+    await runGit(publisher, ['checkout', '-q', 'merged-head']);
+    await writeFile(join(publisher, 'merged.txt'), 'merged\n');
+    await runGit(publisher, ['add', 'merged.txt']);
+    await runGit(publisher, ['commit', '-qm', 'merged head']);
+    const mergedHead = (await runGit(publisher, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(publisher, ['push', '-q', 'origin', 'HEAD:merged-head']);
+    const calls: string[][] = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push(args);
+      return runGit(root, args, options?.input);
+    });
+
+    expect((await runGit(root, ['cat-file', '-e', `${mergedHead}^{commit}`])).exitCode).not.toBe(0);
+    await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip: pushed, mergedHead, git }))
+      .resolves.toEqual({ kind: 'accounted' });
+    expect(calls).toContainEqual(['fetch', 'origin', mergedHead]);
+    await expect(runGit(root, ['cat-file', '-e', `${mergedHead}^{commit}`])).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it('fails closed when an absent merged head cannot be fetched without reading its range', async () => {
+    const mergedHead = 'merged-head';
+    const calls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'cat-file' && args[1] === '-e' && args[2] === `${mergedHead}^{commit}`) {
+        return { exitCode: 1, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'fetch' && args[1] === 'origin' && args[2] === mergedHead) {
+        return { exitCode: 128, stdout: '', stderr: 'not found' };
+      }
+      return { exitCode: 0, stdout: 'pushed-tip\n', stderr: '' };
+    });
+
+    await expect(accountForChildCommits({
+      slug: 'demo', branch: 'feat/c1/demo', localTip: 'local-tip', mergedHead, git,
+    })).resolves.toEqual({ kind: 'failed' });
+    expect(calls).toContainEqual(['cat-file', '-e', `${mergedHead}^{commit}`]);
+    expect(calls).toContainEqual(['fetch', 'origin', mergedHead]);
+    expect(calls.some(([command]) => command === 'rev-list')).toBe(false);
   });
 
   it('rejects one production-file commit beyond the pushed and merged tips', async () => {

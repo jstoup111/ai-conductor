@@ -39,6 +39,12 @@ export async function accountForChildCommits(input: {
   if (input.localTip === input.mergedHead) return { kind: 'accounted' };
 
   try {
+    const mergedHead = await input.git(['cat-file', '-e', `${input.mergedHead}^{commit}`]);
+    if (mergedHead.exitCode !== 0) {
+      const fetched = await input.git(['fetch', 'origin', input.mergedHead]);
+      if (fetched.exitCode !== 0) return { kind: 'failed' };
+    }
+
     const pushed = await input.git(['rev-parse', '--quiet', '--verify', pushedTipRef(input.slug, input.branch)]);
     if (pushed.exitCode !== 0 && pushed.exitCode !== 1) return { kind: 'failed' };
 
