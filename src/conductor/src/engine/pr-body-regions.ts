@@ -20,11 +20,17 @@ export type ParsePrTemplateRegionsResult =
 
 const MARKER = /(^|\r?\n)(<!-- ai-conductor:step ([^\r\n]+) -->|<!-- \/ai-conductor:step -->)(?=\r?\n|$)/g;
 const CLOSING_MARKER = '<!-- /ai-conductor:step -->';
+const OPENING_MARKER = /<!-- ai-conductor:step ([^\r\n]+) -->/g;
 
 function markersFor(key: string): { readonly start: string; readonly end: string } {
   // ai-conductor:session-command-context=operator-only
   return { start: `<!-- ai-conductor:step ${key} -->`, end: CLOSING_MARKER };
   // /ai-conductor:session-command-context
+}
+
+/** Lists step-region keys using the marker grammar shared by restoration. */
+export function listRegionKeys(body: string): readonly string[] {
+  return [...body.matchAll(OPENING_MARKER)].map((match) => match[1]);
 }
 
 /** Restores one captured region without interpreting any of its captured bytes. */

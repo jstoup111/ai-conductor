@@ -1,5 +1,6 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { extractRegionBytes, listRegionKeys, restoreRegion } from './pr-body-regions.js';
 
 export const PR_PROSE_HANDOFF_PATH = '.pipeline/finish-pr-prose.json';
 
@@ -16,6 +17,18 @@ export type ReadPrProseHandoffResult =
   | { kind: 'returned'; prose: AuthoredPrProse }
   | { kind: 'not_returned' }
   | { kind: 'invalid'; detail: string };
+
+export type ApplyAuthoredPrProseResult =
+  | { readonly kind: 'apply'; readonly title: string; readonly body: string }
+  | { readonly kind: 'invalid'; readonly detail: string };
+
+export type ApplyAuthoredPrProseInput = {
+  readonly currentBody: string;
+  readonly prose: AuthoredPrProse;
+  readonly isPlaceholder: (title: string, body: string) => boolean;
+};
+
+const CLOSES_REFERENCE = /\bCloses\s+([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*#\d+)\b/g;
 
 function handoffPath(pipelineDir: string): string {
   return join(pipelineDir, 'finish-pr-prose.json');
@@ -83,4 +96,32 @@ export async function clearPrProseHandoff(pipelineDir: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+}
+
+function closesReferences(body: string): readonly string[] {
+  return [...body.matchAll(CLOSES_REFERENCE)].map((match) => `Closes ${match[1]}`);
+}
+
+/**
+ * Applies returned prose while retaining project-owned step regions and closing
+ * references already present on the retained PR.
+ */
+export function applyAuthoredPrProse(input: ApplyAuthoredPrProseInput): ApplyAuthoredPrProseResult {
+  let body = input.prose.body;
+  for (const key of listRegionKeys(input.currentBody)) {
+    const bytes = extractRegionBytes(input.currentBody, key);
+    if (bytes !== undefined) body = restoreRegion(body, { key, bytes });
+  }
+
+  if (input.isPlaceholder(input.prose.title, body)) {
+    return { kind: 'invalid', detail: 'PR-prose handoff body is still placeholder.' };
+  }
+
+  const missingReference = closesReferences(input.currentBody)
+    .find((reference) => !body.includes(reference));
+  if (missingReference !== undefined) {
+    return { kind: 'invalid', detail: `PR-prose handoff body must retain ${missingReference}.` };
+  }
+
+  return { kind: 'apply', title: input.prose.title, body };
 }
