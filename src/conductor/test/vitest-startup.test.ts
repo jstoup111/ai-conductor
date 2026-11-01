@@ -143,6 +143,24 @@ describe('run-vitest startup', () => {
     expect(existsSync(observation.root)).toBe(false);
   });
 
+  it('replaces an inherited parent scope with its fresh child scope', async () => {
+    const parentScope = join(fixtureRoot, 'parent-run-root');
+    await mkdir(parentScope);
+
+    const result = await launch({
+      TMPDIR: parentScope,
+      AI_CONDUCTOR_TEST_TMP_ROOT: parentScope,
+      AI_CONDUCTOR_TEST_TMP_SCOPE: parentScope,
+      AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: join(fixtureRoot, 'original-tmpdir'),
+    });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.root).not.toBe(parentScope);
+    expect(observation.scope).toBe(observation.root);
+    expect(observation.tmpdir).toBe(observation.root);
+  });
+
   it('installs an explicit storage parent before launching Vitest', async () => {
     const originalTmpdir = join(fixtureRoot, 'original-tmpdir');
     const override = join(fixtureRoot, 'explicit-storage');

@@ -17,6 +17,11 @@ const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
     ...testEnvironment,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
+    // A fresh launcher owns a fresh scope as well as a fresh root.  Without
+    // this override, a nested run inherits its parent's scope marker while
+    // using this launcher's root, so helpers that recover test temp storage
+    // can escape the child root after a temporary environment reset.
+    AI_CONDUCTOR_TEST_TMP_SCOPE: runRoot,
     TMPDIR: runRoot,
     // Native subprocesses do not consistently prefer TMPDIR: some read TMP
     // or TEMP first. Keep all three aliases inside the run root so they
