@@ -1,5 +1,5 @@
 // Covers: task:6
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { checkRoundAdmissionFence } from '../../../src/engine/routing/round-admission.js';
+import { admitRound, checkRoundAdmissionFence } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { routeAdmittedRound } from '../../../src/engine/routing/round-router.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -54,7 +54,23 @@ async function routedCandidate(git: ReturnType<typeof makeGitRunner>) {
   });
 }
 
+async function ownerCandidate(git: ReturnType<typeof makeGitRunner>) {
+  return routeAdmittedRound({
+    admitted: [{
+      id: 'S3.6', gateSource: 'prd_audit', provenance: { kind: 'task-bound' }, ownerTaskIds: ['T1'],
+      citedPaths: ['src/engine/a.ts'],
+      gap: {
+        id: 'S3.6', rationale: 'Repair the owner route.', criterion: 'The repair block cites the owner file.',
+        governingClause: 'Update src/engine/a.ts.', tasks: [{ id: 'repair', title: 'Repair the owner route.' }],
+      } as never,
+    }],
+    sliceMembership: { taskSlices: { T1: 1 }, titles: ['owner'] }, planText: '### Task T1: owner\n',
+    appendedChildren: {}, declaredPositions: [c1, c3], leafTip: leafBranchFor('demo'), roundId: r2, git,
+  });
+}
+
 describe('conductor routed citation admission fence', () => {
+  // Covers: task:6
   it('keeps an open audit round ahead of a successfully routed leaf-only repair block', async () => {
     const { repo, git } = await fixture();
     try {
@@ -77,6 +93,9 @@ describe('conductor routed citation admission fence', () => {
       await expect(checkRoundAdmissionFence(repo, 'demo', { roundId: r2, kind: 'audit' }, { git }))
         .resolves.toMatchObject({ fence: true, detail: expect.stringContaining('r1') });
       await expect(readRouteRecord(repo, 'demo', r2, { git })).resolves.toEqual({ kind: 'absent' });
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(join(repo, '.pipeline', 'events.jsonl'), '');
+      expect(await readFile(join(repo, '.pipeline', 'events.jsonl'), 'utf8')).not.toContain('remediation_routed');
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
@@ -89,7 +108,6 @@ describe('conductor routed citation admission fence', () => {
         roundId: r2, sealedAuthored: 1, kind: 'audit', items: routed.items, allocation: routed.allocation,
       }, { git });
       if (created.kind !== 'created') throw new Error(created.kind);
-      const { admitRound } = await import('../../../src/engine/routing/round-admission.js');
       await expect(admitRound(repo, 'demo', created.record, c3, { git })).resolves.toMatchObject({ kind: 'admitted' });
       await expect(readRouteRecord(repo, 'demo', r2, { git })).resolves.toMatchObject({
         kind: 'record', record: { items: expect.arrayContaining([
@@ -97,6 +115,28 @@ describe('conductor routed citation admission fence', () => {
         ]) },
       });
       await expect(readRepairMarker(repo, 'demo', { git })).resolves.toMatchObject({ kind: 'marker', marker: { roundId: r2, host: c3 } });
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:6
+  it('keeps a child-1-owned finding on child 1 when its closed tree already contains every cited file', async () => {
+    const { repo, git } = await fixture();
+    try {
+      const routed = await ownerCandidate(git);
+      if (routed.kind !== 'routed') throw new Error(routed.detail);
+      expect(routed.items).toEqual([expect.objectContaining({ owner: c1, host: c1 })]);
+
+      const created = await createRouteRecord(repo, 'demo', {
+        roundId: r2, sealedAuthored: 1, kind: 'audit', items: routed.items, allocation: routed.allocation,
+      }, { git });
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await expect(admitRound(repo, 'demo', created.record, c1, { git })).resolves.toMatchObject({ kind: 'admitted' });
+      await expect(readRepairMarker(repo, 'demo', { git })).resolves.toMatchObject({
+        kind: 'marker', marker: { roundId: r2, host: c1 },
+      });
+      await expect(readRouteRecord(repo, 'demo', r2, { git })).resolves.toMatchObject({
+        kind: 'record', record: { hosts: { [c1]: 'admitted' } },
+      });
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
