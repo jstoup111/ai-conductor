@@ -1,12 +1,52 @@
-// Covers: task:2, task:24
+// Covers: task:1, task:2, task:24
 import { describe, expect, it } from 'vitest';
 import {
+  PRD_WIDENING_CAPTURE_DEFECT_RECOVERY,
+  PRD_WIDENING_MIGRATION_FAILURE_RECOVERY,
   renderPrdAuditProjectionHalt,
   renderPrdAuditScopeHalt,
   renderPrdWideningRecovery,
 } from '../../src/engine/prd-widening-recovery.js';
 
 describe('renderPrdWideningRecovery', () => {
+  it('maps every capture defect away from malformed history', () => {
+    expect(Object.values(PRD_WIDENING_CAPTURE_DEFECT_RECOVERY)).not.toContain('malformed-history');
+  });
+
+  it('classifies every widening-history migration failure precisely', () => {
+    expect(PRD_WIDENING_MIGRATION_FAILURE_RECOVERY).toEqual({
+      'corrupt-history': 'malformed-history',
+      'unknown-history-version': 'unsupported-history',
+      'unsupported-history': 'unsupported-history',
+      'unsupported-legacy-row': 'unsupported-history',
+      'foreign-feature-history': 'foreign-feature',
+      'unreadable-legacy': 'persistence-failed',
+      'case-write-failed': 'persistence-failed',
+      'decision-write-failed': 'persistence-failed',
+    });
+  });
+
+  it.each([
+    [
+      'changed-offer-reference',
+      ['NC-2'],
+      /correct that entry against the latest halt or leave its decision pending before clearing again/i,
+    ],
+    ['missing-rationale', ['S3.17'], /rationale.*entry/i],
+    ['duplicate-decision-entry', ['S3.17'], /keep one entry per criterion/i],
+    ['unreadable-decision-block', [], /repair the block's JSON before clearing again/i],
+  ] as const)('uses the %s action without treating a cleared-block defect as history damage', (reason, affected, action) => {
+    const recovery = renderPrdWideningRecovery(reason, affected);
+
+    for (const criterion of affected) {
+      expect(recovery).toContain(criterion);
+    }
+    expect(recovery).toMatch(action);
+    expect(recovery).not.toMatch(/malformed-history/i);
+    expect(recovery).not.toMatch(/known-good copy/i);
+    expect(recovery).not.toMatch(/restore the original \.pipeline widening history/i);
+  });
+
   it('keeps the reason, bounded record references, and actionable recovery together', () => {
     expect(renderPrdWideningRecovery('stale-relation', ['source-1', 'case-1'])).toContain('affected source-1, case-1');
     expect(renderPrdWideningRecovery('stale-relation', ['source-1'])).toContain('re-run reconciliation');

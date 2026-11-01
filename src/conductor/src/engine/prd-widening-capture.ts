@@ -47,10 +47,13 @@ export type PrdWideningCaptureDefectKind =
   | 'missing-operator'
   | 'offer-read-failed'
   | 'write-failed'
-  | 'unsupported-legacy-clear';
+  | 'unsupported-legacy-clear'
+  | 'unknown-criterion'
+  | 'offered-set-unavailable';
 
 export interface PrdWideningCaptureDefect {
   readonly kind: PrdWideningCaptureDefectKind;
+  readonly criterion?: string;
   readonly offerEntryId?: string;
 }
 
