@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   routedExit: undefined as undefined | (() => Promise<unknown>),
   consumeQueued: undefined as undefined | (() => Promise<unknown>),
-  queueAdmission: undefined as undefined | (() => Promise<unknown>),
+  queueAdmission: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
 }));
 
 vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
@@ -33,7 +33,7 @@ vi.mock('../../../src/engine/routing/queue-admission.js', async (importOriginal)
   return {
     ...actual,
     admitQueuedRevalidation: (...args: Parameters<typeof actual.admitQueuedRevalidation>) =>
-      mocks.queueAdmission === undefined ? actual.admitQueuedRevalidation(...args) : mocks.queueAdmission(),
+      mocks.queueAdmission === undefined ? actual.admitQueuedRevalidation(...args) : mocks.queueAdmission(...args),
   };
 });
 
@@ -190,6 +190,48 @@ describe('routed round conductor resume', () => {
 
     expect(order).toEqual(['resolve-host', 'exit', 'consume', 'resolve-next']);
     expect(result).toMatchObject({ index: ALL_STEPS.findIndex((step) => step.name === 'acceptance_specs'), activeChild: { child: queued } });
+  });
+
+  // Covers: task:3
+  it('restores whole-feature state and resumes manual test after a leaf return with no queued admission', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const wholeFeatureState: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', manual_test: 'pending',
+    };
+    await writeState(statePath, wholeFeatureState);
+    const childState: ConductState = {
+      ...wholeFeatureState,
+      manual_test: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: host, position: host, isLeaf: true,
+      branch: 'feat/c1/demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    const admission = vi.fn(async () => ({ kind: 'none' as const }));
+    mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'leaf-returned' as const, roundId } });
+    mocks.queueAdmission = admission;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    conductor.activeRegionChild = host;
+
+    await expect(conductor.continueRoutedHostExit(childState, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true))
+      .resolves.toEqual({ index: ALL_STEPS.findIndex((step) => step.name === 'manual_test') });
+
+    expect(admission).toHaveBeenCalledOnce();
+    expect(admission).toHaveBeenCalledWith(expect.objectContaining({ reconciled: { kind: 'leaf-returned', roundId } }));
+    expect(childState).toEqual(wholeFeatureState);
   });
 
   it('surfaces a remediation PR when a resumed routed exit halts', async () => {
