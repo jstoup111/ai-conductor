@@ -4,6 +4,19 @@ spec_hash: 37e2c3a235b87dbfd0a57b2139cc5975cd8de35fc6d3e753d018711cceee78c7
 pr: https://github.com/jstoup111/ai-conductor/pull/3556
 shipped: 2026-11-01
 engine_version: 20261031T181032Z-1677e5b98206
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is test-isolation plumbing outside the operator-decision intent. Default production behavior is unchanged: the hook text is identical when no launcher is passed. It is not user-visible."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This is an unplanned production change to the Claude provider's temp-file lifecycle, unrelated to restack decisions. It only fixes a leak on error paths and does not change prompts, arguments or dispatch results, so it is outside intent but not user-visible."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
