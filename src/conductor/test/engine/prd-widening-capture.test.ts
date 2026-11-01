@@ -19,7 +19,7 @@ import {
 } from '../../src/engine/accepted-widenings.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
-const feature = { version: 1 as const, repository: 'example/repository', feature: 'wording-drift' };
+const feature = { version: 'v1' as const, repository: 'example/repository', feature: 'wording-drift' };
 const originalSource = { id: 'NC.source.1', snapshot: 'The originally offered visible behavior.' };
 
 function cleared(entries: unknown): string {
@@ -291,7 +291,7 @@ describe('capturePrdWideningDecisions', () => {
     try {
       await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
       const store = new AcceptedWideningDecisionStore(projectRoot, {
-        version: 1, repository: feature.repository, feature: feature.feature,
+        version: 'v1', repository: feature.repository, feature: feature.feature,
       }, { newDecisionId: (() => {
         const ids = ['decision-story', 'decision-nc'];
         return () => ids.shift()!;
@@ -382,7 +382,7 @@ describe('capturePrdWideningDecisions', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-capture-'));
     try {
       const store = new AcceptedWideningDecisionStore(projectRoot, {
-        version: 1, repository: feature.repository, feature: feature.feature,
+        version: 'v1', repository: feature.repository, feature: feature.feature,
       }, { newDecisionId: (() => {
         let next = 0;
         return () => `decision-${++next}`;
@@ -464,7 +464,7 @@ describe('capturePrdWideningDecisions', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-capture-'));
     try {
       const store = new AcceptedWideningDecisionStore(projectRoot, {
-        version: 1, repository: feature.repository, feature: feature.feature,
+        version: 'v1', repository: feature.repository, feature: feature.feature,
       }, { newDecisionId: (() => {
         const ids = ['decision-1', 'decision-2'];
         return () => ids.shift()!;
