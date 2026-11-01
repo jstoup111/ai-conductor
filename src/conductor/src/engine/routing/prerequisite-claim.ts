@@ -6,6 +6,7 @@ import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
 import { syncRestackedWorktree } from '../restack/restack-sync.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { closureRefFor, rejectedPinRefFor } from './routing-refs.js';
+import { resolveCitedPaths } from './cannot-host.js';
 import { resolveGitRef } from './git-ref-resolver.js';
 import { readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
 import { remediationReroutedEvent, withOutboxEvent } from './routing-events.js';
@@ -90,7 +91,7 @@ export function parseBuilderClaim(result: unknown): ParsedBuilderClaim {
 }
 
 export type VerifyPrerequisiteClaimResult =
-  | { readonly kind: 'verified'; readonly destination: ChildId; readonly ref: string }
+  | { readonly kind: 'verified'; readonly destination: ChildId; readonly ref: string; readonly claimedPaths: readonly string[] }
   | { readonly kind: 'unverified'; readonly detail: string }
   | { readonly kind: 'refused-not-above'; readonly detail: string };
 
@@ -161,6 +162,23 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
     return { kind: 'refused-not-above', detail: `claimed child ${input.claim.child} is not above host ${input.host}` };
   }
   const git = input.git ?? makeGitRunner(input.worktree ?? process.cwd());
+  // Route records from before resolved-path routing can contain directories
+  // and partial citations. Normalize both durable evidence and the builder's
+  // claim against the same leaf listing before either can drive a reroute.
+  const leafTip = leafBranchFor(input.slug);
+  const [claimed, required] = await Promise.all([
+    (input.claim.paths?.length ?? 0) === 0
+      ? Promise.resolve({ inputs: [], outputs: [], dropped: [] } as const)
+      : resolveCitedPaths(input.claim.paths!, leafTip, git),
+    (input.prerequisitePaths?.length ?? 0) === 0
+      ? Promise.resolve({ inputs: [], outputs: [], dropped: [] } as const)
+      : resolveCitedPaths(input.prerequisitePaths!, leafTip, git),
+  ]);
+  if ('kind' in claimed) return { kind: 'unverified', detail: claimed.detail };
+  if ('kind' in required) return { kind: 'unverified', detail: required.detail };
+  if (claimed.inputs.length === 0 && (input.claim.symbols?.length ?? 0) === 0) {
+    return { kind: 'unverified', detail: 'claim names no prerequisite file' };
+  }
   const source = closureRefFor(input.slug, input.host);
   if (!await existingRef(git, source)) {
     return { kind: 'unverified', detail: `claiming host ${input.host} closure is unavailable` };
@@ -168,8 +186,8 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
   // A builder may only claim that the paths it explicitly names are missing
   // from its host.  The admitted work-order inputs are a destination
   // obligation: they need not be missing at the source (and commonly are).
-  const claimedPaths = input.claim.paths ?? [];
-  const destinationPaths = [...new Set([...claimedPaths, ...(input.prerequisitePaths ?? [])])];
+  const claimedPaths = claimed.inputs;
+  const destinationPaths = [...new Set([...claimedPaths, ...required.inputs])];
   if (await hasAnyClaimInput(git, source, claimedPaths, input.claim.symbols ?? [])) {
     return { kind: 'unverified', detail: `claimed prerequisite is already present at host ${input.host}` };
   }
@@ -177,7 +195,7 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
   if (!await existingRef(git, destination.ref)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} is unavailable` };
   if (!await hasPaths(git, destination.ref, destinationPaths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
   if (!await hasSymbols(git, destination.ref, input.claim.symbols ?? [])) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite symbols` };
-  return { kind: 'verified', destination: input.claim.child, ref: destination.ref };
+  return { kind: 'verified', destination: input.claim.child, ref: destination.ref, claimedPaths };
 }
 
 export type RerouteRoundResult =
@@ -399,7 +417,10 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,
     from: input.host, to: verified.destination, leaf,
-    evidence: [...(parsed.claim.paths ?? []), ...(parsed.claim.symbols ?? [])],
+    // Persist the verified repository paths, rather than the builder's raw
+    // spelling. A bare suffix is useful to the builder but not durable route
+    // evidence: the fallback must identify the concrete file that was found.
+    evidence: [...verified.claimedPaths, ...(parsed.claim.symbols ?? [])],
     git,
   });
   if (moved.kind !== 'rerouted') return { kind: 'needs-human', detail: moved.detail };

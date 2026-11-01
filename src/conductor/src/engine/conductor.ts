@@ -404,6 +404,8 @@ import {
   resolveBuildOutcomeCategory,
   sameNoOpCycle,
   writeBuildOutcomeBestEffort,
+  type BuildOutcomeRung,
+  type BuildTerminalOutcome,
 } from './build-outcome.js';
 import type { Track } from '../types/index.js';
 import {
@@ -1124,6 +1126,46 @@ export class Conductor {
       error: input.reason,
     });
   }
+
+  /** Persist one terminal BUILD attempt without changing its caller-owned meaning. */
+  private async recordBuildOutcome(input: {
+    terminalOutcome: BuildTerminalOutcome;
+    reason?: string;
+    note?: string[];
+    gate: string | null;
+    rung: BuildOutcomeRung;
+    treeBefore: string | null;
+    treeAfter: string | null;
+    resolvedBefore: number;
+    resolvedAfter: number;
+    headBefore: string | null;
+    headAfter: string | null;
+    outcomeStore: Awaited<ReturnType<typeof readBuildOutcome>>;
+  }): Promise<void> {
+    await writeBuildOutcomeBestEffort(this.projectRoot, {
+      ...input.outcomeStore,
+      records: [...input.outcomeStore.records, {
+        outcome: classifyBuildSettle({
+          treeBefore: input.treeBefore,
+          treeAfter: input.treeAfter,
+          resolvedBefore: input.resolvedBefore,
+          resolvedAfter: input.resolvedAfter,
+        }),
+        terminalOutcome: input.terminalOutcome,
+        gate: input.gate,
+        verdict: input.gate === null ? null : false,
+        rung: input.rung,
+        treeBefore: input.treeBefore,
+        treeAfter: input.treeAfter,
+        headBefore: input.headBefore,
+        headAfter: input.headAfter,
+        note: input.note,
+        category: await resolveBuildOutcomeCategory(this.projectRoot, input.note),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+      }],
+    });
+  }
+
   private featureSlug?: string;
   private operatorParkBoundary?: () => Promise<boolean>;
   private resume: boolean;
@@ -11920,7 +11962,39 @@ export class Conductor {
               process.off('SIGTERM', sigterm);
               return;
             }
-            if (settled.kind === 'failed') result = { ...result, success: false, output: settled.detail };
+            if (settled.kind === 'failed') {
+              // A rejected prerequisite claim is a completed, region-local
+              // BUILD attempt.  It must retain its precise settlement detail
+              // without falling through to the generic retry-exhaustion HALT:
+              // the open round remains on this host for the next builder.
+              const [headAfter, treeAfter, resolvedAfter, outcomeStore] = await Promise.all([
+                currentCommitSha(this.projectRoot),
+                currentTreeHash(this.projectRoot),
+                countResolvedTasks(this.projectRoot, this.activeRegionChild),
+                readBuildOutcome(this.projectRoot),
+              ]);
+              const note = [settled.detail];
+              await this.recordBuildOutcome({
+                terminalOutcome: 'failed',
+                reason: 'routed-prerequisite-claim',
+                note,
+                gate: null,
+                rung: buildOutcomeRung(result, esc),
+                treeBefore: treeHashBeforeBuild,
+                treeAfter,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter,
+                headBefore: headShaBeforeBuild,
+                headAfter,
+                outcomeStore,
+              });
+              // Keep this rejected claim in this step's ordinary failure
+              // flow: it consumes the host region's retry allowance, emits
+              // the normal retry event, and revisits the operator-park
+              // boundary before another builder dispatch.  Re-entering
+              // `stepLoop` would reset the local `attempt` counter.
+              result = { ...result, success: false, output: settled.detail };
+            }
           }
 
           // An end_attempt policy is an ordinary failed provider attempt: it
@@ -12150,30 +12224,19 @@ export class Conductor {
               const outcomeStore = await readBuildOutcome(this.projectRoot);
               const note = result.output ? result.output.split('\n').slice(-200) : undefined;
               const gate = await pendingBuildKickbackGate();
-              await writeBuildOutcomeBestEffort(this.projectRoot, {
-                ...outcomeStore,
-                records: [
-                  ...outcomeStore.records,
-                  {
-                    outcome: classifyBuildSettle({
-                      treeBefore: treeHashBeforeBuild,
-                      treeAfter,
-                      resolvedBefore: resolvedTasksBefore,
-                      resolvedAfter,
-                    }),
-                    terminalOutcome: 'no-verdict',
-                    gate,
-                    verdict: gate === null ? null : false,
-                    rung: buildOutcomeRung(result, esc),
-                    treeBefore: treeHashBeforeBuild,
-                    treeAfter,
-                    headBefore: headShaBeforeBuild,
-                    headAfter,
-                    note,
-                    category: await resolveBuildOutcomeCategory(this.projectRoot, note),
-                    reason: 'authFailure',
-                  },
-                ],
+              await this.recordBuildOutcome({
+                terminalOutcome: 'no-verdict',
+                reason: 'authFailure',
+                note,
+                gate,
+                rung: buildOutcomeRung(result, esc),
+                treeBefore: treeHashBeforeBuild,
+                treeAfter,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter,
+                headBefore: headShaBeforeBuild,
+                headAfter,
+                outcomeStore,
               });
             };
             if (isAuthorizedRecoveryTrial) {
@@ -14097,29 +14160,18 @@ export class Conductor {
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             const note = lastError ? lastError.split('\n').slice(-200) : undefined;
             const gate = await pendingBuildKickbackGate();
-            await writeBuildOutcomeBestEffort(this.projectRoot, {
-              ...outcomeStore,
-              records: [
-                ...outcomeStore.records,
-                {
-                  outcome: classifyBuildSettle({
-                    treeBefore: treeHashBeforeBuild,
-                    treeAfter,
-                    resolvedBefore: resolvedTasksBefore,
-                    resolvedAfter,
-                  }),
-                  terminalOutcome: 'failed',
-                  gate,
-                  verdict: gate === null ? null : false,
-                  rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
-                  treeBefore: treeHashBeforeBuild,
-                  treeAfter,
-                  headBefore: headShaBeforeBuild,
-                  headAfter,
-                  note,
-                  category: await resolveBuildOutcomeCategory(this.projectRoot, note),
-                },
-              ],
+            await this.recordBuildOutcome({
+              terminalOutcome: 'failed',
+              note,
+              gate,
+              rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
+              treeBefore: treeHashBeforeBuild,
+              treeAfter,
+              resolvedBefore: resolvedTasksBefore,
+              resolvedAfter,
+              headBefore: headShaBeforeBuild,
+              headAfter,
+              outcomeStore,
             });
           }
           await emitTracked({
@@ -15873,29 +15925,18 @@ export class Conductor {
             completedBuildTreeAfter = treeAfter;
             completedBuildMadeProgress = resolvedAfter > resolvedTasksBefore;
             const gate = await pendingBuildKickbackGate();
-            await writeBuildOutcomeBestEffort(this.projectRoot, {
-              ...outcomeStore,
-              records: [
-                ...outcomeStore.records,
-                {
-                  outcome: classifyBuildSettle({
-                    treeBefore: treeHashBeforeBuild,
-                    treeAfter,
-                    resolvedBefore: resolvedTasksBefore,
-                    resolvedAfter,
-                  }),
-                  terminalOutcome: 'done',
-                  gate,
-                  verdict: gate === null ? null : false,
-                  rung: buildOutcomeRung(stepResult, lastBuildEscalation),
-                  treeBefore: treeHashBeforeBuild,
-                  treeAfter,
-                  headBefore: headShaBeforeBuild,
-                  headAfter,
-                  note: tail,
-                  category: await resolveBuildOutcomeCategory(this.projectRoot, tail),
-                },
-              ],
+            await this.recordBuildOutcome({
+              terminalOutcome: 'done',
+              note: tail,
+              gate,
+              rung: buildOutcomeRung(stepResult, lastBuildEscalation),
+              treeBefore: treeHashBeforeBuild,
+              treeAfter,
+              resolvedBefore: resolvedTasksBefore,
+              resolvedAfter,
+              headBefore: headShaBeforeBuild,
+              headAfter,
+              outcomeStore,
             });
             if (
               reverifyDoneTestSuiteAfterBuild &&

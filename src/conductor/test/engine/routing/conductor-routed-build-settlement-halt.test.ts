@@ -1,13 +1,14 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:3, task:4, task:5, task:8
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
+import { Conductor, type StepRunner, type StepRunOptions } from '../../../src/engine/conductor.js';
 import { renderKickbackBudgetView } from '../../../src/engine/kickback-budget-view.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
+import { readBuildOutcome } from '../../../src/engine/build-outcome.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
@@ -21,6 +22,11 @@ const settlementSeam = vi.hoisted(() => ({
   haltedReason: undefined as string | undefined,
 }));
 
+const claimSeam = vi.hoisted(() => ({
+  detail: undefined as string | undefined,
+  calls: [] as unknown[],
+}));
+
 vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
   return {
@@ -31,12 +37,27 @@ vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) =
   };
 });
 
+vi.mock('../../../src/engine/routing/prerequisite-claim.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/prerequisite-claim.js')>();
+  return {
+    ...actual,
+    settleRoutedBuildClaim: vi.fn(async (input) => {
+      claimSeam.calls.push(input.structuredResult);
+      return claimSeam.detail === undefined
+        ? actual.settleRoutedBuildClaim(input)
+        : { kind: 'failed' as const, detail: claimSeam.detail };
+    }),
+  };
+});
+
 const child = parseChildId(1)!;
 const roots: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
   settlementSeam.haltedReason = undefined;
+  claimSeam.detail = undefined;
+  claimSeam.calls.length = 0;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -55,6 +76,10 @@ async function subject(options: {
   omitEffectiveGrowthCap?: boolean;
   roundId?: string;
   settledEarlierGrowth?: number;
+  buildResult?: unknown;
+  activeChild?: number;
+  maxRetries?: number;
+  operatorParkAfterBuild?: boolean;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
@@ -108,24 +133,25 @@ async function subject(options: {
     throw new Error('route fixture admission failed');
   }
   let parkAfterBuild = false;
-  const build = vi.fn(async () => {
-    parkAfterBuild = true;
-    return { success: true };
+  const build = vi.fn(async (_options?: StepRunOptions) => {
+    parkAfterBuild = options.operatorParkAfterBuild ?? true;
+    return { success: true, ...(options.buildResult === undefined ? {} : { finalStructuredResult: options.buildResult }) };
   });
-  const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
+  const runner: StepRunner = { run: async (step, _state, options) => step === 'build' ? build(options) : { success: true } };
+  const events = new ConductorEventEmitter();
   const conductor = new Conductor({
     projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
-    mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
-    events: new ConductorEventEmitter(), stepRunner: runner,
+    mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: options.maxRetries ?? 1,
+    events, stepRunner: runner,
     operatorParkBoundary: async () => parkAfterBuild,
     config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: options.configGrowthCap ?? 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
-      resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/demo', routedRepair: { child, roundId: routeRoundId } }) as never,
+      resolveActiveChild: async () => ({ kind: 'active', child: options.activeChild ?? child, position: options.activeChild ?? child, isLeaf: true, branch: 'feat/demo', routedRepair: { child: options.activeChild ?? child, roundId: routeRoundId } }) as never,
       enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
       enterChildRegion: async () => ({ kind: 'completed' }) as never,
     },
   });
-  return { root, build, conductor, git, roundId: routeRoundId };
+  return { root, build, conductor, events, git, roundId: routeRoundId };
 }
 
 async function enableRoutedGrowthSnapshot(root: string) {
@@ -345,5 +371,99 @@ describe('routed BUILD settlement cap halt', () => {
     expect(halt).toContain(`Pending remediation findings are unavailable: ${reason}.`);
     if (reason.includes('restack')) expect(halt).not.toContain('malformed');
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  // Covers: task:8, task:rem-prd-audit-refusal-82f49fa3-6a12-4844-9ad6-de5621a7aa15
+  // Rejected prerequisite claims are ordinary, region-local failed BUILD
+  // attempts. The actual claim normalization is covered by the real-Git
+  // settlement tests; this keeps the conductor assertion at its orchestration
+  // boundary.
+  it.each([
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1', 1],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file', 1],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file', 1],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] }, 'claimed destination 2 lacks prerequisite paths', 1],
+  ])('passes every rejected claim through as a child-one unsuccessful attempt without a routing halt', async (claim, detail, activeChild) => {
+    claimSeam.detail = `routed prerequisite claim unverified: ${detail}`;
+    // Keep one retry available so the injected operator park ends after the
+    // failed, charged attempt rather than synthesizing the generic exhausted
+    // BUILD HALT that is outside this routed-claim boundary.
+    const fixture = await subject({ cap: 15, activeChild, buildResult: claim, maxRetries: 2 });
+    const failures: unknown[] = [];
+    const retries: unknown[] = [];
+    fixture.events.on('step_failed', (event) => { failures.push(event); });
+    fixture.events.on('step_retry', (event) => { retries.push(event); });
+
+    await fixture.conductor.run();
+
+    expect(claimSeam.calls).toContainEqual(claim);
+    expect(fixture.build).toHaveBeenCalled();
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readRouteRecord(fixture.root, 'demo', fixture.roundId, { git: fixture.git })).resolves.toMatchObject({
+      kind: 'record', record: { items: expect.arrayContaining([expect.objectContaining({ host: child })]) },
+    });
+    await expect(readBuildOutcome(fixture.root)).resolves.toMatchObject({
+      records: [expect.objectContaining({
+        terminalOutcome: 'failed',
+        note: [`routed prerequisite claim unverified: ${detail}`],
+        reason: 'routed-prerequisite-claim',
+      })],
+    });
+    expect(failures).toEqual([]);
+    expect(retries).toContainEqual(expect.objectContaining({
+      type: 'step_retry', step: 'build', attempt: 2,
+      reason: `routed prerequisite claim unverified: ${detail}`,
+    }));
+  });
+
+  it.each([
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1'],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file'],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file'],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] }, 'claimed destination 2 lacks prerequisite paths'],
+  ])('bounds repeated rejected claims within the child-one BUILD retry allowance: %o', async (claim, detail) => {
+    const maxRetries = 3;
+    claimSeam.detail = `routed prerequisite claim unverified: ${detail}`;
+    const fixture = await subject({
+      cap: 15,
+      activeChild: child,
+      buildResult: claim,
+      maxRetries,
+      operatorParkAfterBuild: false,
+    });
+    const terminalEvents: unknown[] = [];
+    fixture.events.on('step_retry', (event) => { terminalEvents.push(event); });
+    fixture.events.on('step_failed', (event) => { terminalEvents.push(event); });
+    await fixture.conductor.run();
+
+    expect(fixture.build).toHaveBeenCalledTimes(maxRetries);
+    expect(claimSeam.calls).toEqual(Array(maxRetries).fill(claim));
+    expect(fixture.build.mock.calls.map(([options]) => options?.attempt)).toEqual([1, 2, 3]);
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      "step 'build' failed in auto mode (retries exhausted)",
+    );
+    await expect(readBuildOutcome(fixture.root)).resolves.toMatchObject({
+      records: expect.arrayContaining([expect.objectContaining({
+        reason: 'routed-prerequisite-claim',
+        note: [`routed prerequisite claim unverified: ${detail}`],
+      })]),
+    });
+    await expect(readRouteRecord(fixture.root, 'demo', fixture.roundId, { git: fixture.git })).resolves.toMatchObject({
+      kind: 'record', record: { items: expect.arrayContaining([expect.objectContaining({ host: child })]) },
+    });
+    expect(terminalEvents).toEqual([
+      expect.objectContaining({
+        type: 'step_retry', step: 'build', attempt: 2,
+        reason: `routed prerequisite claim unverified: ${detail}`,
+      }),
+      expect.objectContaining({
+        type: 'step_retry', step: 'build', attempt: 3,
+        reason: `routed prerequisite claim unverified: ${detail}`,
+      }),
+      expect.objectContaining({
+        type: 'step_failed', step: 'build', retryCount: maxRetries, child,
+        error: `routed prerequisite claim unverified: ${detail}`,
+      }),
+    ]);
   });
 });

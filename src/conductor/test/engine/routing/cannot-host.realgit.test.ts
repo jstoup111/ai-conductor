@@ -1,4 +1,4 @@
-// Covers: task:22, task:rem-prd-audit-W5
+// Covers: task:2, task:22, task:rem-prd-audit-W5
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { parseChildId, type ChildId } from '../../../src/engine/child-context.js
 import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { classifyCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
+import { resolveCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
 import { initTestRepo } from '../../fixtures/git-repo.js';
 
 const roots: string[] = [];
@@ -56,6 +56,17 @@ async function threeChildStack() {
   await mustSucceed(realGit, ['update-ref', closureRefFor('demo', child(2)), 'HEAD']);
 
   await mustSucceed(realGit, ['checkout', '-qb', leafBranchFor('demo')]);
+  await mkdir(join(repo, 'src', 'engine', 'restack'), { recursive: true });
+  await mkdir(join(repo, 'src', 'cli'), { recursive: true });
+  await Promise.all([
+    writeFile(join(repo, 'src', 'engine', 'a.ts'), 'export const engineA = 1;\n'),
+    writeFile(join(repo, 'src', 'engine', 'register-artifact-cli.ts'), 'export const register = true;\n'),
+    writeFile(join(repo, 'src', 'engine', 'restack', 'restack-sync.ts'), 'export const sync = true;\n'),
+    writeFile(join(repo, 'src', 'engine', 'index.ts'), 'export {};\n'),
+    writeFile(join(repo, 'src', 'cli', 'index.ts'), 'export {};\n'),
+  ]);
+  await mustSucceed(realGit, ['add', '.']);
+  await mustSucceed(realGit, ['commit', '-qm', 'leaf citation paths']);
   const calls: string[][] = [];
   const git: GitRunner = async (args, options) => {
     calls.push([...args]);
@@ -65,10 +76,58 @@ async function threeChildStack() {
 }
 
 describe('cannot-host (real local Git)', () => {
+  it('resolves exact and unique suffix citations from one leaf listing', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const resolved = await resolveCitedPaths([
+      'register-artifact-cli.ts',
+      'restack/restack-sync.ts',
+      'src/engine/a.ts',
+      'brand-new.ts',
+      'index.ts',
+    ], leafTip, stack.git);
+
+    expect(resolved).toEqual({
+      inputs: [
+        'src/engine/register-artifact-cli.ts',
+        'src/engine/restack/restack-sync.ts',
+        'src/engine/a.ts',
+      ],
+      outputs: ['brand-new.ts'],
+      dropped: [{ path: 'index.ts', kind: 'dropped-ambiguous' }],
+    });
+    expect(stack.calls.filter((args) => args.join(' ') === `ls-tree -r --name-only ${leafTip}`)).toHaveLength(1);
+  });
+
+  it('drops directory citations rather than treating them as files or outputs', async () => {
+    const stack = await threeChildStack();
+    const resolved = await resolveCitedPaths(['src/engine/', 'src/engine'], leafBranchFor('demo'), stack.git);
+
+    expect(resolved).toEqual({
+      inputs: [],
+      outputs: [],
+      dropped: [
+        { path: 'src/engine/', kind: 'dropped-directory' },
+        { path: 'src/engine', kind: 'dropped-directory' },
+      ],
+    });
+  });
+
+  it('halts when its one leaf listing cannot be read', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const unreadable: GitRunner = async (args, options) => args.join(' ') === `ls-tree -r --name-only ${leafTip}`
+      ? { exitCode: 1, stdout: '', stderr: 'missing leaf' }
+      : stack.git(args, options);
+
+    expect(await resolveCitedPaths(['src/engine/a.ts'], leafTip, unreadable))
+      .toMatchObject({ kind: 'halt', detail: expect.stringContaining(leafTip) });
+  });
+
   it('moves a T1 repair for a leaf prerequisite to child 2 without changing task ownership', async () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
-    const classified = await classifyCitedPaths(['src/b.ts'], leafTip, stack.git);
+    const classified = await resolveCitedPaths(['src/b.ts'], leafTip, stack.git);
     if ('kind' in classified) throw new Error(classified.detail);
     const selected = await selectHost({
       owner: child(1),
@@ -92,7 +151,7 @@ describe('cannot-host (real local Git)', () => {
   it('treats a path absent from the leaf as an output and leaves its T1 repair with child 1', async () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
-    const classified = await classifyCitedPaths(['src/new.ts'], leafTip, stack.git);
+    const classified = await resolveCitedPaths(['src/new.ts'], leafTip, stack.git);
     if ('kind' in classified) throw new Error(classified.detail);
     const selected = await selectHost({
       owner: child(1),
@@ -103,7 +162,7 @@ describe('cannot-host (real local Git)', () => {
     });
 
     expect({ classified, selected }).toEqual({
-      classified: { inputs: [], outputs: ['src/new.ts'] },
+      classified: { inputs: [], outputs: ['src/new.ts'], dropped: [] },
       selected: { host: child(1), reason: 'owner' },
     });
   });
@@ -114,7 +173,7 @@ describe('cannot-host (real local Git)', () => {
     await writeFile(join(stack.repo, 'src', 'leaf-only.ts'), 'export const leaf = true;\n');
     await mustSucceed(makeGitRunner(stack.repo), ['add', 'src/leaf-only.ts']);
     await mustSucceed(makeGitRunner(stack.repo), ['commit', '-qm', 'leaf only']);
-    const classified = await classifyCitedPaths(['src/b.ts', 'src/leaf-only.ts'], leafTip, stack.git);
+    const classified = await resolveCitedPaths(['src/b.ts', 'src/leaf-only.ts'], leafTip, stack.git);
     if ('kind' in classified) throw new Error(classified.detail);
     expect(await selectHost({
       owner: child(1), inputs: classified.inputs, positions: [child(1), child(2), child(3)], leafTip, git: stack.git,
@@ -130,7 +189,7 @@ describe('cannot-host (real local Git)', () => {
     expect(await selectHost({
       owner: child(1), inputs: ['src/b.ts'], positions: [child(1), child(2), child(3)], leafTip, git: failingClosure,
     })).toMatchObject({ kind: 'halt', detail: expect.stringContaining('2') });
-    expect(await classifyCitedPaths(['src/b.ts'], 'feat/daemon-missing', stack.git))
+    expect(await resolveCitedPaths(['src/b.ts'], 'feat/daemon-missing', stack.git))
       .toMatchObject({ kind: 'halt', detail: expect.stringContaining('feat/daemon-missing') });
   });
 

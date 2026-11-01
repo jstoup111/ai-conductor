@@ -114,7 +114,7 @@ async function routedHostFixture(hostState: 'repairing' | 'built') {
     allocation: { [host]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
   });
   if (created.kind !== 'created') throw new Error(created.kind);
-  const admitted = await admitRound(subject.repo, 'demo', created.record, host, { persist: async () => undefined });
+  const admitted = await admitRound(subject.repo, 'demo', created.record, host, { persist: async () => 'persisted' });
   if (admitted.kind !== 'admitted') throw new Error(admitted.kind);
   const closureRef = 'refs/conductor/demo/closed/c1';
   const pinned = (await subject.git(['rev-parse', closureRef])).stdout.trim();

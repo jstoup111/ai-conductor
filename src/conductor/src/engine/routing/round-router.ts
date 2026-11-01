@@ -4,7 +4,8 @@ import type { AsBuiltGoverningReference } from '../as-built-contract.js';
 import type { CriterionBoundRemediationGap, FrozenHostPlan } from '../remediation-append.js';
 import { allocateFrozenBlocks } from '../remediation-append.js';
 import type { GitRunner } from '../rebase.js';
-import { classifyCitedPaths, selectHost } from './cannot-host.js';
+import { resolveCitedPaths, selectHost } from './cannot-host.js';
+import { citedRepositoryPaths } from './cited-repository-paths.js';
 import { deriveTaskBoundOwner } from './owner-derivation.js';
 import { resolveResidueOwner, runResidueRoutingCall, type ResidueRoutingJudge } from './residue-routing-call.js';
 import type { ExistingTaskRoutedItem, FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
@@ -120,6 +121,29 @@ function hintFor(gap: CriterionBoundRemediationGap): string {
   return [gap.rationale, gap.criterion].filter((value): value is string => typeof value === 'string' && value !== '').join('\n');
 }
 
+/**
+ * The frozen remediation renderer carries these fields into a new task block.
+ * Resolve them before host selection, so a host always owns the code its block
+ * asks it to repair. Existing authored tasks allocate no block and therefore
+ * intentionally contribute no text here.
+ */
+function blockTextCitations(source: AdmittedRoutingItem): readonly string[] {
+  if (source.existingTask) return [];
+  const taskText = source.gap.tasks.length === 0
+    ? [source.gap.rationale]
+    : source.gap.tasks.map((task) => task.title);
+  return citedRepositoryPaths([
+    ...taskText,
+    source.gap.rationale,
+    source.gap.criterion ?? '',
+    source.gap.governingClause ?? '',
+  ].join('\n'));
+}
+
+function citationsFor(source: AdmittedRoutingItem): readonly string[] {
+  return [...new Set([...source.citedPaths, ...blockTextCitations(source)])];
+}
+
 function existingTaskFields(source: AdmittedRoutingItem, mixedRound: boolean): Pick<ExistingTaskRoutedItem, 'existingTask' | 'taskIds' | 'restage'> | undefined {
   if (!source.existingTask) return undefined;
   return {
@@ -157,7 +181,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
       planText: input.planText, appendedChildren: input.appendedChildren, declaredPositions: input.declaredPositions,
     });
     if (ownership.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: ownership.detail };
-    const paths = await classifyCitedPaths(source.citedPaths, input.leafTip, input.git);
+    const paths = await resolveCitedPaths(citationsFor(source), input.leafTip, input.git);
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: ownership.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
@@ -172,7 +196,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   for (const answer of judged.answers) {
     const source = residue.find((item) => item.id === answer.itemId)!;
     const owner = resolveResidueOwner(answer);
-    const paths = await classifyCitedPaths(source.citedPaths, input.leafTip, input.git);
+    const paths = await resolveCitedPaths(citationsFor(source), input.leafTip, input.git);
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: owner.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
