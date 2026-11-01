@@ -1733,7 +1733,8 @@ The command acquires the feature dispatch lease, then validates the tip against 
 conflict: the feature is stacked, the live HALT names the same child and operation, the tip descends
 from the recorded new parent, contains every candidate commit subject, has no merge commits, and
 touches only paths child `<k>` owns. On success it writes
-`refs/conductor/<slug>/restack/resolution/c<k>`, appends a `restack_resolution` event with
+`refs/conductor/<slug>/restack/resolution/c<k>` (replacing any recorded `--decision` for that
+child), appends a `restack_resolution` event with
 `action: recorded` and the operator identity, clears the HALT, and exits `0`. The next restack uses
 the recorded tip for that child instead of replaying the conflicted range, emits
 `restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs. A
