@@ -73,7 +73,10 @@ export async function checkInventory(
     const scripts = Object.entries(module).filter(([, value]) => typeof value === 'string');
     if (scripts.length === 0) throw new Error(`${moduleName} generated-hook inventory is empty`);
     for (const [exportName, value] of Object.entries(module)) {
-      if (typeof value !== 'string' && !(moduleName === 'git-hook-assets' && exportName === 'buildCommitMsgHook' && typeof module.COMMIT_MSG_HOOK === 'string')) {
+      const isHookBuilder = moduleName === 'git-hook-assets'
+        && ((exportName === 'buildCommitMsgHook' && typeof module.COMMIT_MSG_HOOK === 'string')
+          || (exportName === 'buildPreCommitHook' && typeof module.PRE_COMMIT_HOOK === 'string'));
+      if (typeof value !== 'string' && !isHookBuilder) {
         throw new Error(`${moduleName}#${exportName} is an unclassified generated-hook export`);
       }
     }

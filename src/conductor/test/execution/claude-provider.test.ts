@@ -4,7 +4,7 @@ import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 // Covers: task:5
 // Covers: task:7
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions, mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({
@@ -506,6 +506,23 @@ describe('ClaudeProvider', () => {
       expect(testTmpRoot).toBeDefined();
       expect(dirname(dirname(promptPath!))).toBe(testTmpRoot);
       await expect(access(promptPath!)).rejects.toThrow();
+    });
+
+    it('removes a system-prompt file when serializing the native schema throws', async () => {
+      const testTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT!;
+      const schema: { self?: unknown } = {};
+      schema.self = schema;
+
+      await expect(provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        systemPrompt: 'Keep this private.',
+        nativeSchema: schema,
+      })).rejects.toThrow(/circular structure/i);
+
+      expect((await readdir(testTmpRoot))
+        .filter((entry) => entry.startsWith('ai-conductor-claude-system-prompt-'))).toEqual([]);
+      expect(mockExeca).not.toHaveBeenCalled();
     });
 
     it('selects the stream-json envelope for a non-REPL dispatch', async () => {
