@@ -597,6 +597,8 @@ export type HumanRequiredReason =
 
 export type PublicationDisposition =
   | { kind: 'complete' }
+  /** A verified authoring transition; the conductor re-enters FINISH without charging a retry. */
+  | { kind: 'advanced'; transition: PublicationTransition }
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | {
       kind: 'publication_revision_progress';
@@ -898,6 +900,7 @@ export function routeFinishPublicationDisposition(
   switch (disposition.kind) {
     case 'complete':
       return { kind: 'complete' };
+    case 'advanced':
     case 'publication_progress':
       return { kind: 'progress_finish', transition: disposition.transition };
     case 'publication_revision_progress':
@@ -956,6 +959,7 @@ function isExactDisposition(
   switch (value.kind) {
     case 'complete':
       return hasOnly('kind');
+    case 'advanced':
     case 'publication_progress':
       return hasOnly('kind', 'transition') && isPublicationTransition(value.transition);
     case 'publication_revision_progress':
