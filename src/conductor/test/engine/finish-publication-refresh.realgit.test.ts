@@ -1,6 +1,6 @@
 // Covers: task:8, task:9
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -12,6 +12,8 @@ import { pushedTipRef } from '../../src/engine/push-lease.js';
 import { writePublicationRecord } from '../../src/engine/stack-publication-record.js';
 import { refreshLedgerRefFor } from '../../src/engine/stack-refresh-ledger.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const roots: string[] = [];
@@ -53,7 +55,7 @@ const localRemoteGit: typeof executeRemoteGit = async (args, dependencies) => ex
   config: async () => ({ stdout: 'git@github.com:acme/rocket.git\n' }),
 });
 
-async function fixture() {
+async function fixture(options: { readonly unchangedIndex?: number } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'finish-refresh-'));
   roots.push(root);
   const repo = join(root, 'repo');
@@ -86,52 +88,84 @@ async function fixture() {
   await git(repo, ['reset', '--hard', newTips[1]!]);
   newTips.push(await commit(repo, 'new-2'));
 
+  const recordedTips = newTips.map((tip, index) => index === options.unchangedIndex ? oldTips[index]! : tip);
   const ledger = {
     version: 1,
     members: Object.fromEntries(branches.map((branch, index) => [branch, {
-      position: positions[index], pr: 101 + index, publishedTip: oldTips[index], recordedTip: newTips[index],
+      position: positions[index], pr: 101 + index, publishedTip: oldTips[index], recordedTip: recordedTips[index],
     }])),
     rounds: [], aboveOwed: [], posted: [],
   };
   const blob = await git(repo, ['hash-object', '-w', '--stdin'], JSON.stringify(ledger));
   await git(repo, ['update-ref', refreshLedgerRefFor('demo'), blob.stdout.trim()]);
-  return { repo, origin, oldTips, newTips };
+  return { repo, origin, oldTips, recordedTips };
 }
 
 describe('FINISH published member refresh (real Git)', () => {
-  it('pushes pending members bottom-up, records their receipts, and emits one event each', async () => {
+  it('pushes pending members bottom-up, records receipts, and persists one refresh event per moved member', async () => {
     const subject = await fixture();
-    const events: Array<{ pr: number; oldTip: string; newTip: string }> = [];
-    await refreshPublishedStackMembers({
-      root: subject.repo, slug: 'demo', mutation: mutation(),
-      remoteGit: localRemoteGit,
-      git: async (args, options) => git(subject.repo, args, options?.input),
-      events: { emit: async (event) => { events.push(event); } },
-    });
-
-    expect(events.map((event) => event.pr)).toEqual([101, 102, 103]);
-    for (const [index, branch] of branches.entries()) {
-      expect(await tip(subject.origin, `refs/heads/${branch}`)).toBe(subject.newTips[index]);
-      expect(await tip(subject.repo, pushedTipRef('demo', branch))).toBe(subject.newTips[index]);
+    const remotePushes: string[][] = [];
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await refreshPublishedStackMembers({
+        root: subject.repo, slug: 'demo', mutation: mutation(),
+        remoteGit: async (args, dependencies) => {
+          remotePushes.push([...args]);
+          return localRemoteGit(args, dependencies);
+        },
+        git: async (args, options) => git(subject.repo, args, options?.input),
+        events,
+      });
+    } finally {
+      persister.stop();
     }
-    expect(await git(subject.origin, ['merge-base', '--is-ancestor', subject.newTips[0]!, subject.newTips[1]!])).toMatchObject({ exitCode: 0 });
-    expect(await git(subject.origin, ['merge-base', '--is-ancestor', subject.newTips[1]!, subject.newTips[2]!])).toMatchObject({ exitCode: 0 });
+
+    expect(remotePushes).toEqual(branches.map((branch, index) => [
+      'push', 'origin', `${subject.recordedTips[index]}:refs/heads/${branch}`,
+    ]));
+    for (const [index, branch] of branches.entries()) {
+      expect(await tip(subject.origin, `refs/heads/${branch}`)).toBe(subject.recordedTips[index]);
+      expect(await tip(subject.repo, pushedTipRef('demo', branch))).toBe(subject.recordedTips[index]);
+    }
+    expect(await git(subject.origin, ['merge-base', '--is-ancestor', subject.recordedTips[0]!, subject.recordedTips[1]!])).toMatchObject({ exitCode: 0 });
+    expect(await git(subject.origin, ['merge-base', '--is-ancestor', subject.recordedTips[1]!, subject.recordedTips[2]!])).toMatchObject({ exitCode: 0 });
+
+    const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'stack_member_refreshed');
+    expect(persisted).toEqual(branches.map((_, index) => expect.objectContaining({
+      type: 'stack_member_refreshed', pr: 101 + index,
+      oldTip: subject.oldTips[index], newTip: subject.recordedTips[index],
+    })));
   });
 
-  it('resumes by skipping members whose pushed receipt already equals their recorded tip', async () => {
-    const subject = await fixture();
-    await refreshPublishedStackMembers({
-      root: subject.repo, slug: 'demo', mutation: mutation(),
-      remoteGit: localRemoteGit,
-      git: async (args, options) => git(subject.repo, args, options?.input),
-    });
-    const events: unknown[] = [];
-    await refreshPublishedStackMembers({
-      root: subject.repo, slug: 'demo', mutation: mutation(),
-      remoteGit: localRemoteGit,
-      git: async (args, options) => git(subject.repo, args, options?.input),
-      events: { emit: async (event) => { events.push(event); } },
-    });
-    expect(events).toEqual([]);
+  it('does not push or emit for a member whose receipt already equals its recorded tip', async () => {
+    const subject = await fixture({ unchangedIndex: 2 });
+    const remotePushes: string[][] = [];
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await refreshPublishedStackMembers({
+        root: subject.repo, slug: 'demo', mutation: mutation(),
+        remoteGit: async (args, dependencies) => {
+          remotePushes.push([...args]);
+          return localRemoteGit(args, dependencies);
+        },
+        git: async (args, options) => git(subject.repo, args, options?.input),
+        events,
+      });
+    } finally {
+      persister.stop();
+    }
+    expect(remotePushes).toEqual(branches.slice(0, 2).map((branch, index) => [
+      'push', 'origin', `${subject.recordedTips[index]}:refs/heads/${branch}`,
+    ]));
+    const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'stack_member_refreshed');
+    expect(persisted.map((event) => event.pr)).toEqual([101, 102]);
   });
 });
