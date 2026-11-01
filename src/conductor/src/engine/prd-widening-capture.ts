@@ -321,11 +321,7 @@ export async function capturePrdWideningDecisions(
   const legacy = parseLegacyPrdWideningClear(clearedBlock);
   const containsModernOffer = rawEntries.some((entry) =>
     typeof entry === 'object' && entry !== null && !Array.isArray(entry) && Object.hasOwn(entry, 'offerEntryId'));
-  if (legacy.kind === 'unsupported' && !containsModernOffer) {
-    return { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] };
-  }
-  if (legacy.kind === 'supported' && rawEntries.every((entry) =>
-    typeof entry === 'object' && entry !== null && !Array.isArray(entry) && !Object.hasOwn(entry, 'offerEntryId'))) {
+  if (legacy.kind === 'supported' && !containsModernOffer) {
     const captured: AcceptedWideningDecision[] = [];
     const defects: PrdWideningCaptureDefect[] = [];
     for (const entry of legacy.entries) {

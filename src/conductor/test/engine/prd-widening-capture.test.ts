@@ -1,4 +1,5 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:3, task:4
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,6 +78,11 @@ function offeredStories(...criteria: string[]) {
   return { kind: 'available' as const, criteria: new Set(criteria) };
 }
 
+function legacyClearReference(kind: 'source' | 'case', { criterion, summary }: { criterion: string; summary: string }): string {
+  const digest = createHash('sha256').update(criterion).update('\0').update(summary).update('\0').digest('hex');
+  return `legacy-clear-${kind}-${digest}`;
+}
+
 function decision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     criterion: 'NC.1',
@@ -148,6 +154,106 @@ describe('capturePrdWideningDecisions', () => {
     expect(result).toEqual({
       kind: 'captured', captured: [], defects: [{ kind: 'offered-set-unavailable', criterion: 'S3.17' }],
     });
+  });
+
+  it('captures decided offered stories entry by entry when a JSON array also contains pending decisions', async () => {
+    const partialRecorded: AcceptedWideningDecisionInput[] = [];
+    const partial = await capturePrdWideningDecisions(cleared([
+      {
+        criterion: 'S1.2', summary: 'The first newly raised story criterion.', decision: 'refuse',
+        rationale: 'The operator refuses this criterion.',
+      },
+      { criterion: 'S1.3', summary: 'The second newly raised story criterion.', decision: 'pending' },
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(partialRecorded),
+      offeredStoryCriteria: offeredStories('S1.2', 'S1.3'),
+    });
+
+    expect({ partial, partialRecorded }).toMatchObject({
+      partial: { kind: 'captured', captured: [{ criterion: 'S1.2', authority: 'refuse' }], defects: [] },
+      partialRecorded: [{ criterion: 'S1.2', authority: 'refuse' }],
+    });
+
+    const allPendingRecorded: AcceptedWideningDecisionInput[] = [];
+    const allPending = await capturePrdWideningDecisions(cleared([
+      { criterion: 'S1.2', summary: 'The first newly raised story criterion.', decision: 'pending' },
+      decision({ decision: 'pending' }),
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(allPendingRecorded),
+      offeredStoryCriteria: offeredStories('S1.2'),
+    });
+
+    expect({ allPending, allPendingRecorded }).toEqual({
+      allPending: { kind: 'captured', captured: [], defects: [] },
+      allPendingRecorded: [],
+    });
+  });
+
+  it('keeps a fully decided offerless story block as legacy-clear provenance and rejects retired shapes', async () => {
+    let legacyState: RemediationCaseStoreState = {
+      version: 'v2', feature, cases: [], suppressions: [], prdWideningCases: [],
+    };
+    const legacyOfferStore: PrdWideningCaptureOfferStore = {
+      mutate: async (operation) => {
+        const outcome = await operation(legacyState);
+        legacyState = outcome.nextState ?? legacyState;
+        return { ok: true, value: outcome.value };
+      },
+    };
+    const recorded: AcceptedWideningDecisionInput[] = [];
+    const legacyEntries = [
+      {
+        criterion: 'S1.2', summary: 'The first historical story criterion.', decision: 'accept',
+        rationale: 'The operator approved it before offers were recorded.',
+      },
+      {
+        criterion: 'S1.3', summary: 'The second historical story criterion.', decision: 'refuse',
+        rationale: 'The operator declined it before offers were recorded.',
+      },
+    ];
+    const legacy = await capturePrdWideningDecisions(cleared(legacyEntries), {
+      operator: 'operator@example.test', offerStore: legacyOfferStore, decisionStore: decisionStore(recorded),
+      offeredStoryCriteria: offeredStories('S1.2', 'S1.3'),
+    });
+
+    expect({ legacy, recorded, legacyState }).toMatchObject({
+      legacy: { kind: 'captured', defects: [], captured: [
+        {
+          criterion: 'S1.2', originalCaseId: legacyClearReference('case', legacyEntries[0]),
+          originalSource: { id: legacyClearReference('source', legacyEntries[0]), snapshot: legacyEntries[0].summary },
+        },
+        {
+          criterion: 'S1.3', originalCaseId: legacyClearReference('case', legacyEntries[1]),
+          originalSource: { id: legacyClearReference('source', legacyEntries[1]), snapshot: legacyEntries[1].summary },
+        },
+      ] },
+      recorded: [
+        {
+          criterion: 'S1.2', originalCaseId: legacyClearReference('case', legacyEntries[0]),
+          originalSource: { id: legacyClearReference('source', legacyEntries[0]), snapshot: legacyEntries[0].summary },
+        },
+        {
+          criterion: 'S1.3', originalCaseId: legacyClearReference('case', legacyEntries[1]),
+          originalSource: { id: legacyClearReference('source', legacyEntries[1]), snapshot: legacyEntries[1].summary },
+        },
+      ],
+      legacyState: { prdWideningCases: [
+        { id: legacyClearReference('case', legacyEntries[0]) },
+        { id: legacyClearReference('case', legacyEntries[1]) },
+      ] },
+    });
+
+    await expect(Promise.all([
+      capturePrdWideningDecisions('OVER_SCOPE_ACCEPT: S1.2 approved by operator', {
+        operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(),
+      }),
+      capturePrdWideningDecisions('```json over-scope-decisions\n{"entries":[]}\n```', {
+        operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(),
+      }),
+    ])).resolves.toEqual([
+      { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] },
+      { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] },
+    ]);
   });
   it('retains supported pre-offer evidence without rebinding it to current wording', () => {
     expect(parseLegacyPrdWideningClear(cleared([{
