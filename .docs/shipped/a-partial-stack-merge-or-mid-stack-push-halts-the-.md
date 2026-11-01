@@ -23,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","2cb6d85b-caba-4a14-90d0-8389ea71e718","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 2
