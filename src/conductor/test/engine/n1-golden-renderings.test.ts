@@ -76,12 +76,13 @@ describe('N=1 golden renderings', () => {
     // run-root marker rather than forwarding that mutable value, otherwise
     // this nested Vitest run can create shell fixtures in the real /tmp.
     const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-    // The nested runner must allocate its own root under a short parent. The
-    // worktree's package-local `.vitest-tmp` path can exceed Unix socket-path
-    // limits, which makes Vitest's config loader fall back to an unguarded
-    // `/tmp/tmp.*` directory. Its global setup still snapshots and owns the
-    // child root created below this original system temp directory.
-    const childTmpBase = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
+    // The nested runner needs a short, private parent.  Do not use the real
+    // system tmpdir here: its global leak guard would then observe unrelated
+    // outer-suite workers that happen to create entries while this child runs.
+    // Keeping the base below this run's root also avoids the package-local
+    // socket-path limit that made Vitest fall back to `/tmp/tmp.*`.
+    const childTmpBase = await mkdtemp(join(runTmpRoot ?? tmpdir(), 'n1-golden-child-suite-'));
+    roots.push(childTmpBase);
     const result = await execFile(process.execPath, [
       'scripts/run-vitest.mjs',
       'run',
@@ -95,14 +96,13 @@ describe('N=1 golden renderings', () => {
       env: {
         ...process.env,
         [N1_GOLDEN_SUITE_CHILD]: '1',
-        ...(childTmpBase === undefined ? {} : {
-          AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
-        }),
-        ...(runTmpRoot === undefined ? {} : {
-          TMPDIR: runTmpRoot,
-          TMP: runTmpRoot,
-          TEMP: runTmpRoot,
-        }),
+        AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
+        // `run-vitest.mjs` preserves this marker across its fresh allocation;
+        // make the child's real-tmpdir guard observe only its private base.
+        AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: childTmpBase,
+        TMPDIR: childTmpBase,
+        TMP: childTmpBase,
+        TEMP: childTmpBase,
       },
     });
     // The child may report the pre-run stale-root sweep and its teardown's
