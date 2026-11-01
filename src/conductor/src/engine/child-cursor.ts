@@ -279,11 +279,12 @@ export async function resolveActiveChild(
   const queue = routingOn ? await readRevalidationQueue(worktree, slug, { git }) : { kind: 'absent' as const };
   if (queue.kind === 'unreadable') return { kind: 'git-error', unreadableRef: revalidationQueueRefFor(slug) };
   if (repair.kind === 'unreadable') return { kind: 'git-error', unreadableRef: repairMarkerRefFor(slug) };
-  const route = repair.kind === 'marker'
-    ? await readRouteRecord(worktree, slug, repair.marker.roundId, { git })
-    : undefined;
-  if (route?.kind === 'unreadable') {
-    return { kind: 'git-error', unreadableRef: routeRecordRefFor(slug, repair.marker.roundId) };
+  let route: Awaited<ReturnType<typeof readRouteRecord>> | undefined;
+  if (repair.kind === 'marker') {
+    route = await readRouteRecord(worktree, slug, repair.marker.roundId, { git });
+    if (route.kind === 'unreadable') {
+      return { kind: 'git-error', unreadableRef: routeRecordRefFor(slug, repair.marker.roundId) };
+    }
   }
 
   const symbolic = await runGit(git, ['symbolic-ref', '-q', 'HEAD']);
