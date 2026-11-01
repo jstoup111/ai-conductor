@@ -2031,7 +2031,7 @@ async function advanceFinishPublicationUnreconciled(
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
           observedAfterAuthoring.pr.prose !== 'indeterminate' &&
-          observedAfterAuthoring.pr.prose !== snapshot.pr.prose
+          observedAfterAuthoring.pr.prose !== pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
@@ -2052,7 +2052,7 @@ async function advanceFinishPublicationUnreconciled(
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
           observedAfterAuthoring.pr.prose !== 'indeterminate' &&
-          observedAfterAuthoring.pr.prose !== snapshot.pr.prose
+          observedAfterAuthoring.pr.prose !== pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
@@ -2079,7 +2079,7 @@ async function advanceFinishPublicationUnreconciled(
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
           observedAfterAuthoring.pr.prose !== 'indeterminate' &&
-          observedAfterAuthoring.pr.prose !== snapshot.pr.prose
+          observedAfterAuthoring.pr.prose !== pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
