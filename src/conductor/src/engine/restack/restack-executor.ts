@@ -58,6 +58,10 @@ import { childRevalidatedEvent } from '../routing/routing-events.js';
 import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
+import { pushedTipRef } from '../push-lease.js';
+import { activePublicationRecord } from '../stack-publication-record.js';
+import { refreshLedgerRefFor, refreshLedgerUpdateLines } from '../stack-refresh-ledger.js';
+import type { RouteKind } from '../../types/routing.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -351,6 +355,11 @@ export async function appliedTransactionLines(
     if (journal.journal.queueOld === undefined) lines.push(`create ${queueRef} ${journal.journal.queueNew}`);
     else lines.push(`update ${queueRef} ${journal.journal.queueNew} ${journal.journal.queueOld}`);
   }
+  if (journal.journal.refreshTracked === true && journal.journal.refreshNew !== undefined) {
+    const refreshRef = refreshLedgerRefFor(journal.slug);
+    if (journal.journal.refreshOld === undefined) lines.push(`create ${refreshRef} ${journal.journal.refreshNew}`);
+    else lines.push(`update ${refreshRef} ${journal.journal.refreshNew} ${journal.journal.refreshOld}`);
+  }
   if (journal.journal.consumedResolution !== undefined) {
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
   }
@@ -404,6 +413,41 @@ export class RoutedApplyPlanRefChangedError extends Error {
   }
 }
 
+/** Build the published-stack ledger CAS after the moved refs are durable. */
+async function writeRefreshLedgerPlan(
+  worktree: string,
+  journal: StoredRestackJournal,
+  kind: RouteKind,
+  git: GitRunner,
+): Promise<{ readonly old?: CommitSha; readonly next: CommitSha } | undefined> {
+  const routed = journal.journal.routed;
+  if (routed === undefined) return undefined;
+  const publication = await activePublicationRecord(worktree, journal.slug, { git });
+  if (publication === undefined) return undefined;
+  const hostMember = publication.record.members.find((member) => member.position === routed.host);
+  if (hostMember === undefined) throw new Error('published stack does not contain routed host');
+  const moves = (await Promise.all(publication.record.members.map(async (member) => {
+    const branchRef = ref(`refs/heads/${member.branch}`);
+    const prior = journal.journal.refs.find((entry) => entry.ref === branchRef);
+    if (prior === undefined) return [];
+    const recordedTip = await requiredSha(git, branchRef, `published branch ${member.branch}`);
+    const pushedTip = await requiredSha(git, pushedTipRef(journal.slug, member.branch), `published receipt for ${member.branch}`);
+    return [{ position: member.position, branch: member.branch, pr: member.pr, pushedTip, recordedTip }];
+  }))).flat();
+  if (moves.length === 0) return undefined;
+  const ledger = await refreshLedgerUpdateLines(worktree, journal.slug, {
+    moves,
+    round: {
+      roundId: routed.roundId,
+      kind,
+      host: routed.host,
+      marker: `<!-- conductor:routed-fix:${routed.roundId}:${hostMember.pr} -->`,
+    },
+  }, { git });
+  if (ledger.kind !== 'lines') throw new Error('cannot read refresh ledger for routed restack');
+  return { ...(ledger.previous === undefined ? {} : { old: ledger.previous }), next: ledger.blob };
+}
+
 /** Persist a routed route-record replacement before the applied transaction can use it. */
 export async function journalRoutedApplyPlan(
   worktree: string,
@@ -420,25 +464,32 @@ export async function journalRoutedApplyPlan(
   // `queueInvalidation` is recorded even when merging leaves the queue blob
   // unchanged, so it is the durable completion bit for that half of a plan.
   const queuePlanReady = journal.journal.queueTracked !== true || journal.journal.queueInvalidation !== undefined;
-  if (journal.journal.state !== 'synced' || (routePlanReady && queuePlanReady)) return journal;
+  const refreshPlanReady = journal.journal.refreshTracked !== true || journal.journal.refreshNew !== undefined;
+  if (journal.journal.state !== 'synced' || (routePlanReady && queuePlanReady && refreshPlanReady)) return journal;
   let routeNew: CommitSha | undefined;
+  let routeKind: RouteKind | undefined;
   if (routed !== undefined) {
     const stored = await readRouteRecord(worktree, journal.slug, routed.roundId, { git });
     if (stored.kind !== 'record') throw new Error('cannot read routed record for applied transaction');
     if (stored.blob !== routed.routeOld) {
       throw new RoutedApplyPlanRefChangedError(routeRecordRefFor(journal.slug, routed.roundId));
     }
-    const advanced = routedRecordAfterExit(stored, routed.host, 'restacked');
-    if (advanced.kind !== 'updated') throw new Error('cannot mark routed host restacked');
-    const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(advanced.record));
-    routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
-    if (!routeNew) throw new Error('cannot write routed applied record blob');
+    if (routed.routeNew === undefined) {
+      const advanced = routedRecordAfterExit(stored, routed.host, 'restacked');
+      if (advanced.kind !== 'updated') throw new Error('cannot mark routed host restacked');
+      const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(advanced.record));
+      routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+      if (!routeNew) throw new Error('cannot write routed applied record blob');
+    }
+    routeKind = stored.record.kind;
   }
   const queueNew = await writeQueuePlan(journal, transition.queueInvalidation, git);
-  if (routeNew === undefined && queueNew === undefined) return journal;
+  const refresh = routeKind === undefined ? undefined : await writeRefreshLedgerPlan(worktree, journal, routeKind, git);
+  if (routeNew === undefined && queueNew === undefined && refresh === undefined) return journal;
   const planned = await recordRoutedApplyPlan(worktree, journal, {
     routeNew,
     queueNew,
+    ...(refresh === undefined ? {} : { refreshOld: refresh.old, refreshNew: refresh.next }),
     invalidation: transition.queueInvalidation.map(({ child, gates }) => ({ child, gates: [...gates] })),
     queueInvalidation: transition.queueInvalidation,
   }, { git });

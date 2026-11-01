@@ -4,7 +4,6 @@ import { parseCommitSha, parseRefName, type CommitSha, type RefName } from './re
 import { parseRoundId, type RoundId } from './routing/route-types.js';
 import type { RouteKind } from '../types/routing.js';
 
-const ZERO_SHA = '0'.repeat(40);
 const routeKinds = new Set<RouteKind>(['audit', 'revalidate', 'operator']);
 
 export interface RefreshLedgerMember {
@@ -76,7 +75,15 @@ export interface RefreshLedgerDependencies {
 }
 
 export type RefreshLedgerUpdateLinesResult =
-  | { readonly kind: 'lines'; readonly ledger: RefreshLedger; readonly lines: readonly string[] }
+  | {
+    readonly kind: 'lines';
+    readonly ledger: RefreshLedger;
+    /** The exact blob that the caller must retain until its transaction applies. */
+    readonly blob: CommitSha;
+    /** Absent only when the ledger transaction creates its ref. */
+    readonly previous?: CommitSha;
+    readonly lines: readonly string[];
+  }
   | { readonly kind: 'unreadable'; readonly ref: RefName; readonly diagnostic: RefreshLedgerDiagnostic };
 
 export type RefreshPendingState = 'push-pending' | 'comments-owed' | 'settled';
@@ -232,6 +239,8 @@ export async function refreshLedgerUpdateLines(
   return {
     kind: 'lines',
     ledger,
+    blob,
+    ...(current.kind === 'ledger' ? { previous: current.blob } : {}),
     lines: [current.kind === 'ledger'
       ? `update ${ref} ${blob} ${current.blob}`
       : `create ${ref} ${blob}`],

@@ -94,6 +94,10 @@ export interface RestackJournalDraft {
   readonly queueNew?: CommitSha;
   /** Complete queue entries produced by the transition. */
   readonly queueInvalidation?: readonly RevalidationQueueEntry[];
+  /** A published-stack refresh ledger CAS which applies with this restack. */
+  readonly refreshTracked?: true;
+  readonly refreshOld?: CommitSha;
+  readonly refreshNew?: CommitSha;
   readonly dirtyPaths: readonly string[];
   readonly refs: readonly RestackJournalRef[];
   readonly ranges: readonly ChildRange[];
@@ -134,6 +138,8 @@ export type UpdateRestackChildStatusResult =
 export interface RoutedApplyPlan {
   readonly routeNew?: CommitSha;
   readonly queueNew?: CommitSha;
+  readonly refreshOld?: CommitSha;
+  readonly refreshNew?: CommitSha;
   readonly invalidation: readonly RestackJournalInvalidation[];
   readonly queueInvalidation?: readonly RevalidationQueueEntry[];
 }
@@ -326,6 +332,8 @@ function parseJournal(value: unknown): RestackJournal | undefined {
   const invalidation = value.invalidation === undefined ? undefined : parseInvalidation(value.invalidation);
   const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
   const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
+  const refreshOld = value.refreshOld === undefined ? undefined : typeof value.refreshOld === 'string' ? parseCommitSha(value.refreshOld) : undefined;
+  const refreshNew = value.refreshNew === undefined ? undefined : typeof value.refreshNew === 'string' ? parseCommitSha(value.refreshNew) : undefined;
   const queueInvalidation = value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
   const consumedResolution = value.consumedResolution === undefined ? undefined : parseConsumedResolution(value.consumedResolution);
   const deliveredDecision = value.deliveredDecision === undefined ? undefined : parseDeliveredDecision(value.deliveredDecision);
@@ -339,6 +347,11 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     || (value.queueTracked !== undefined && value.queueTracked !== true)
     || (value.queueOld !== undefined && !queueOld)
     || (value.queueNew !== undefined && !queueNew)
+    || (value.refreshTracked !== undefined && value.refreshTracked !== true)
+    || (value.refreshOld !== undefined && !refreshOld)
+    || (value.refreshNew !== undefined && !refreshNew)
+    || (value.refreshTracked === true && !refreshNew)
+    || (value.refreshTracked !== true && (refreshOld !== undefined || refreshNew !== undefined))
     || (value.queueInvalidation !== undefined && !queueInvalidation)
     || (value.consumedResolution !== undefined && !consumedResolution)
     || (value.deliveredDecision !== undefined && !deliveredDecision)) return undefined;
@@ -355,6 +368,9 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(value.queueTracked === true ? { queueTracked: true as const } : {}),
     ...(queueOld === undefined ? {} : { queueOld }),
     ...(queueNew === undefined ? {} : { queueNew }),
+    ...(value.refreshTracked === true ? { refreshTracked: true as const } : {}),
+    ...(refreshOld === undefined ? {} : { refreshOld }),
+    ...(refreshNew === undefined ? {} : { refreshNew }),
     ...(queueInvalidation === undefined ? {} : { queueInvalidation }),
     ...(consumedResolution === undefined ? {} : { consumedResolution }),
     ...(deliveredDecision === undefined ? {} : { deliveredDecision }),
@@ -477,6 +493,11 @@ export async function recordRoutedApplyPlan(
       },
     }),
     ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
+    ...(plan.refreshNew === undefined ? {} : {
+      refreshTracked: true as const,
+      ...(plan.refreshOld === undefined ? {} : { refreshOld: plan.refreshOld }),
+      refreshNew: plan.refreshNew,
+    }),
     invalidation: plan.invalidation.map((entry) => ({ ...entry, gates: [...entry.gates] })),
     ...(plan.queueInvalidation === undefined ? {} : {
       queueInvalidation: plan.queueInvalidation.map((entry) => ({
