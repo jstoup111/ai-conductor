@@ -191,16 +191,27 @@ describe('verified prerequisite reroute (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
-  it.each([
-    ['already-present', { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1'],
-    ['ambiguous', { outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file'],
-  ])('keeps the routed host and refs for a %s rejected claim', async (_name, structuredResult, detail) => {
+  it('rejects an already-present claim without moving the routed host or refs', async () => {
     const subject = await fixture();
     try {
       const before = await routingRefs(subject.git);
       await expect(settleRoutedBuildClaim({
-        structuredResult, worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
-      })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining(detail) });
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('claimed prerequisite is already present at host 1') });
+      expect(await routingRefs(subject.git)).toBe(before);
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId, host: c1 } });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('rejects an ambiguous-only claim without moving the routed host or refs', async () => {
+    const subject = await fixture();
+    try {
+      const before = await routingRefs(subject.git);
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('claim names no prerequisite file') });
       expect(await routingRefs(subject.git)).toBe(before);
       await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId, host: c1 } });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
