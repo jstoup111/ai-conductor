@@ -87,6 +87,34 @@ async function isPublicationOperationFailedError(error: unknown): Promise<boolea
   return (isPublicationOperationFailedError as (value: unknown) => boolean)(error);
 }
 
+async function prProseAuthoringFailedError(
+  cause: 'not_returned' | 'invalid',
+  detail: string,
+): Promise<Error> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const PrProseAuthoringFailedError = mod.PrProseAuthoringFailedError;
+  if (typeof PrProseAuthoringFailedError !== 'function') {
+    throw new Error(
+      'expected export "PrProseAuthoringFailedError" to classify missing or invalid authored PR prose (not yet implemented)',
+    );
+  }
+  return new (PrProseAuthoringFailedError as new (
+    failureCause: 'not_returned' | 'invalid',
+    failureDetail: string,
+  ) => Error)(cause, detail);
+}
+
+async function isPrProseAuthoringFailedError(error: unknown): Promise<boolean> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const isPrProseAuthoringFailedError = mod.isPrProseAuthoringFailedError;
+  if (typeof isPrProseAuthoringFailedError !== 'function') {
+    throw new Error(
+      'expected export "isPrProseAuthoringFailedError" to discriminate missing or invalid authored PR prose (not yet implemented)',
+    );
+  }
+  return (isPrProseAuthoringFailedError as (value: unknown) => boolean)(error);
+}
+
 async function routeFinishPublicationDisposition(disposition: unknown) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const route = mod.routeFinishPublicationDisposition;
@@ -519,6 +547,85 @@ describe('author_pr_prose publish failure', () => {
       transition: 'author_pr_prose',
       reason: 'authoring_dispatch_failed',
     });
+  });
+});
+
+describe('author_pr_prose handoff failure', () => {
+  function placeholderSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'placeholder',
+        ready: false,
+      },
+    });
+  }
+
+  function authoredSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+    });
+  }
+
+  it.each([
+    ['not_returned', 'The authoring handoff was not returned.', 'prose_not_returned'],
+    ['invalid', 'The returned handoff body is still placeholder.', 'prose_invalid'],
+  ] as const)(
+    'retries %s authored prose after placeholder prose is re-observed without treating it as unmoved',
+    async (cause, detail, reason) => {
+      const failure = await prProseAuthoringFailedError(cause, detail);
+
+      await expect(advanceFinishPublication({
+        observe: async () => placeholderSnapshot(),
+        effects: {
+          authorProse: async () => { throw failure; },
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+        },
+      })).resolves.toEqual({
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason,
+        detail,
+      });
+    },
+  );
+
+  it.each([
+    ['not_returned', 'The authoring handoff was not returned.'],
+    ['invalid', 'The returned handoff body is still placeholder.'],
+  ] as const)(
+    'accepts authoritative authored prose after a %s handoff failure',
+    async (cause, detail) => {
+      const failure = await prProseAuthoringFailedError(cause, detail);
+
+      await expect(advanceFinishPublication({
+        observe: vi.fn<() => Promise<PublicationSnapshot>>()
+          .mockResolvedValueOnce(placeholderSnapshot())
+          .mockResolvedValueOnce(authoredSnapshot()),
+        effects: {
+          authorProse: async () => { throw failure; },
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+        },
+      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+    },
+  );
+
+  it('exports a discriminator for typed authored-prose failures', async () => {
+    const failure = await prProseAuthoringFailedError('invalid', 'body is still placeholder');
+
+    await expect(isPrProseAuthoringFailedError(failure)).resolves.toBe(true);
+    await expect(isPrProseAuthoringFailedError(new Error('body is still placeholder'))).resolves.toBe(false);
+  });
+
+  it('keeps authored-prose handoff retries out of non-retryable reasons', async () => {
+    await expect(nonRetryablePublicationReason('prose_not_returned')).resolves.toBeUndefined();
+    await expect(nonRetryablePublicationReason('prose_invalid')).resolves.toBeUndefined();
   });
 });
 
