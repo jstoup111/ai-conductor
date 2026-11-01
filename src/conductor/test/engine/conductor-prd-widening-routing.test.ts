@@ -1,4 +1,4 @@
-// Covers: task:21, task:25, task:4
+// Covers: task:21, task:25, task:4, task:7
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -320,6 +320,86 @@ describe('typed PRD widening routing', () => {
       recordedDispositions: [],
     }, { attemptId: `typed-${criterion}`, codeStamp: null });
   }
+
+  function prdAuditEntry(): { preparePrdWideningBeforeAudit(): Promise<string | undefined> } {
+    return new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+    }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
+  }
+
+  it.each([
+    ['accepted-widenings.json', '{not-json', 'malformed-history'],
+    ['accepted-widenings.json', '{"version":999,"decisions":[]}', 'unsupported-history'],
+    ['accepted-widenings.json', JSON.stringify({
+      version: 2,
+      feature: { version: 1, repository: '/fixture/repository', feature: 'another-feature' },
+      decisions: [],
+    }), 'foreign-feature'],
+  ] as const)('halts the PRD-audit entry as %s for %s without changing either history', async (file, raw, recovery) => {
+    const acceptedPath = join(projectRoot, '.pipeline', 'accepted-widenings.json');
+    const casesPath = join(projectRoot, '.pipeline', 'remediation-cases.json');
+    const casesBefore = await readFile(casesPath, 'utf8');
+    await writeFile(join(projectRoot, '.pipeline', file), raw, 'utf8');
+
+    const result = await prdAuditEntry().preparePrdWideningBeforeAudit();
+
+    expect(result).toContain(recovery);
+    expect(result).toContain('.pipeline/accepted-widenings.json');
+    expect(result).toContain('.pipeline/remediation-cases.json');
+    await expect(readFile(join(projectRoot, '.pipeline', file), 'utf8')).resolves.toBe(raw);
+    await expect(readFile(casesPath, 'utf8')).resolves.toBe(casesBefore);
+    await expect(readFile(acceptedPath, 'utf8')).resolves.toBe(raw);
+  });
+
+  it.each([
+    ['decision authority', () => vi.spyOn(AcceptedWideningDecisionStore.prototype, 'append')
+      .mockResolvedValue({ ok: false, reason: 'atomic-replace-failed' } as never)],
+    ['remediation case', () => vi.spyOn(RemediationCaseStore.prototype, 'mutate')
+      .mockResolvedValue({ ok: false, reason: 'atomic-replace-failed' } as never)],
+  ] as const)('maps an injected %s migration persistence failure to persistence-failed', async (_store, fail) => {
+    await writeFile(join(projectRoot, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+      version: 1,
+      decisions: [{
+        criterion: 'NC.1', summary: 'The original user-visible widening.', decision: 'accept',
+        rationale: 'The legacy decision was accepted.', operator: 'fixture-operator', decidedAt: '2026-10-01T00:00:00.000Z',
+      }],
+    }), 'utf8');
+    const spy = fail();
+    try {
+      await expect(prdAuditEntry().preparePrdWideningBeforeAudit()).resolves.toContain('persistence-failed');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps rejected cleared rows out of well-formed history while appending the valid decision only', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    const casesPath = join(projectRoot, '.pipeline', 'remediation-cases.json');
+    const casesBefore = await readFile(casesPath, 'utf8');
+    const valid = JSON.parse((await readFile(clearPath, 'utf8')).match(/\[.*\]/s)?.[0] ?? '[]')[0];
+    await writeFile(clearPath, [
+      '```json over-scope-decisions',
+      JSON.stringify([
+        valid,
+        {
+          criterion: 'S9.9', summary: 'An unoffered story criterion.', decision: 'accept',
+          rationale: 'This entry must be rejected because it was never offered.',
+        },
+      ]),
+      '```',
+    ].join('\n'));
+
+    await prdAuditEntry().preparePrdWideningBeforeAudit();
+    await expect(new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: '/fixture/repository', feature: 'prd-widening-routing',
+    }).read()).resolves.toMatchObject({
+      kind: 'valid', state: { decisions: [{ criterion: 'NC.1', authority: 'accept' }] },
+    });
+    await expect(readFile(casesPath, 'utf8')).resolves.toBe(casesBefore);
+  });
 
   it('uses the validator-emitted NC-1 presentation ordinal in the typed contract', () => {
     const result = validatePrdAuditJudgment({

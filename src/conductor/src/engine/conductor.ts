@@ -67,6 +67,7 @@ import { PRD_WIDENING_RECONCILIATION_SCHEMA } from './prd-widening-contract.js';
 import {
   renderPrdAuditProjectionHalt,
   renderPrdAuditScopeHalt,
+  PRD_WIDENING_MIGRATION_FAILURE_RECOVERY,
   renderPrdWideningRecovery,
 } from './prd-widening-recovery.js';
 import {
@@ -3699,12 +3700,9 @@ export class Conductor {
       capture: { operator, offerStore: caseStore, decisionStore },
     });
     if (prepared.migration.kind === 'failed') {
-      const recoveryReason = prepared.migration.reason.includes('unsupported')
-        ? 'unsupported-history'
-        : 'malformed-history';
       await this.emitPrdWideningRejections(prepared.migration.reason);
       return renderPrdWideningRecovery(
-        recoveryReason,
+        PRD_WIDENING_MIGRATION_FAILURE_RECOVERY[prepared.migration.reason],
         ['.pipeline/accepted-widenings.json', '.pipeline/remediation-cases.json'],
       );
     }
