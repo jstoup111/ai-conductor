@@ -156,6 +156,7 @@ describe('restack decision delivery (real local Git)', () => {
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
   });
 
+  // Covers: task:rem-prd-audit-10a
   it('delivers a matching decision, moves resolved closed children, queues child 2 before the leaf, then deletes it only with the applied move', async () => {
     const subject = await childThreeConflictFixture('two.txt');
     const events = new ConductorEventEmitter();
