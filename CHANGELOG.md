@@ -230,6 +230,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Routed remediation now re-runs stale child-region gates before allowing completion. ([implementation PR #3543](https://github.com/jstoup111/ai-conductor/pull/3543)).
 - Stacked feature restacks preserve the newest durable halt record. ([implementation PR #3553](https://github.com/jstoup111/ai-conductor/pull/3553)).
 - Stacked feature cleanup safely deletes accounted-for merged child branches even when their heads moved after publication. ([implementation PR #3563](https://github.com/jstoup111/ai-conductor/pull/3563)).
+- Stack preflight now halts with a working recovery when a routed host's closure ref was moved by hand, instead of continuing and silently dropping the repair from the children above it. ([implementation PR #3569](https://github.com/jstoup111/ai-conductor/pull/3569)).
 
 ## Migration
 
