@@ -220,6 +220,7 @@ import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptL
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
@@ -841,11 +842,12 @@ export class Conductor {
       readRevalidationQueue(this.projectRoot, slug), readRepairMarker(this.projectRoot, slug), diagnoseAffectedRounds(this.projectRoot, slug),
     ]);
     const generation = queue.kind === 'queue' ? queue.queue.generation : execution.generation ?? 'unreadable';
-    const owner = marker.kind === 'marker' ? `child ${marker.marker.host} in round ${marker.marker.roundId}` : marker.kind === 'absent' ? 'none' : 'unreadable';
+    const queueRefusal = queue.kind === 'unreadable' ? `; unreadable ref: ${revalidationQueueRefFor(slug)}` : '';
+    const owner = marker.kind === 'marker' ? `child ${marker.marker.host} in round ${marker.marker.roundId}` : marker.kind === 'absent' ? 'none' : `unreadable (${repairMarkerRefFor(slug)})`;
     const rounds = affected.kind === 'affected'
       ? affected.rounds.map((round) => round.readable ? `${round.roundId} (${Object.entries(round.unsettledHosts).map(([host, status]) => `${host}: ${status}`).join(', ')})` : `${round.roundId} (unreadable)`).join('; ') || 'none'
       : `unreadable (${affected.detail})`;
-    return `queued child ${execution.target.child}, queue generation ${generation}; non-closed rounds: ${rounds}; marker owner: ${owner}; ${detail}`;
+    return `queued child ${execution.target.child}, queue generation ${generation}; non-closed rounds: ${rounds}; marker owner: ${owner}${queueRefusal}; ${detail}`;
   }
 
   private async haltAdmissionStall(slug: string, execution: Extract<ExecutionChildResolution, { readonly source: 'revalidating' }>, detail: string): Promise<void> {
@@ -902,7 +904,7 @@ export class Conductor {
             const detail = admission.kind === 'admitted'
               ? `admitted round ${admission.roundId} for child ${admission.host} re-resolved as ${reResolved.source}`
               : 'queued child was not admitted into a revalidate round';
-            await this.haltChildRegionRefusal(detail);
+            await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, detail));
             return false;
           }
           enteredExecution = reResolved;
@@ -927,7 +929,11 @@ export class Conductor {
           }
         } else if (admission.kind === 'continue') {
           await this.haltChildRegionRefusal(
-            `region-entry queue admission returned ${admission.reconciled.kind}; resume preflight must recover it`,
+            await this.renderAdmissionRefusal(
+              slug,
+              enteredExecution,
+              `region-entry queue admission returned ${admission.reconciled.kind}; resume preflight must recover it`,
+            ),
             'mechanical',
           );
           return false;
@@ -944,7 +950,11 @@ export class Conductor {
       } else {
         const route = await readRouteRecord(this.projectRoot, slug, marker.marker.roundId);
         if (route.kind !== 'record') {
-          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidate route record is unreadable'));
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(
+            slug,
+            enteredExecution,
+            `revalidate route record is unreadable: ${routeRecordRefFor(slug, marker.marker.roundId)}`,
+          ));
           return false;
         }
         const revalidationOpen = (() => {
@@ -970,7 +980,10 @@ export class Conductor {
     }
 
     if (enteredExecution.source !== 'routed-host') {
-      await this.haltChildRegionRefusal('revalidation entry did not resolve to a routed host', 'mechanical');
+      await this.haltChildRegionRefusal(
+        await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidation entry did not resolve to a routed host'),
+        'mechanical',
+      );
       return false;
     }
 
@@ -1021,8 +1034,30 @@ export class Conductor {
       case 'detached-head':
         return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'detached-head', 'worktree is in detached HEAD while resolving the active child');
       case 'git-error':
-        return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'git-error', 'git failed while resolving the active child cursor');
+        return this.renderRoutingRefCursorRefusal();
     }
+  }
+
+  /** Name a routing ref when it is the concrete source of a cursor failure. */
+  private async renderRoutingRefCursorRefusal(): Promise<string> {
+    const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
+    const [queue, marker] = await Promise.all([
+      readRevalidationQueue(this.projectRoot, slug),
+      readRepairMarker(this.projectRoot, slug),
+    ]);
+    if (queue.kind === 'unreadable') {
+      return `cannot read ${revalidationQueueRefFor(slug)} while resolving the active child cursor`;
+    }
+    if (marker.kind === 'unreadable') {
+      return `cannot read ${repairMarkerRefFor(slug)} while resolving the active child cursor`;
+    }
+    if (marker.kind === 'marker') {
+      const route = await readRouteRecord(this.projectRoot, slug, marker.marker.roundId);
+      if (route.kind !== 'record') {
+        return `cannot read ${routeRecordRefFor(slug, marker.marker.roundId)} while resolving the active child cursor`;
+      }
+    }
+    return formatStackCursorRefusal(this.projectRoot, slug, 'git-error', 'git failed while resolving the active child cursor');
   }
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
@@ -6202,6 +6237,12 @@ export class Conductor {
       }
       return 'halt';
     }
+    if (continued.next.kind === 'unavailable') {
+      await this.haltChildRegionRefusal(
+        `child ${execution.target.child} routed round reconciliation refused: ${continued.next.detail}`,
+      );
+      return 'halt';
+    }
     // Queue admission always wins over a return to whole-feature gates.
     const admission = await admitQueuedRevalidation({
       worktree: this.projectRoot,
@@ -8342,6 +8383,21 @@ export class Conductor {
               // protocol at this point in the lifecycle.
               activeChildRequiresClosure = enteredExecution.source === 'routed-host'
                 || (enteredExecution.source === 'cursor' && !target.isLeaf);
+              // Revalidation restages exactly the gates invalidated by its
+              // queue entry.  The loop may have arrived at a later gate (for
+              // example after rebase), so return to the earliest pending
+              // region gate instead of silently skipping it positionally.
+              const firstPendingRegionGate = CHILD_REGION_STEPS.find((gate) =>
+                state[gate] !== 'done' && state[gate] !== 'skipped',
+              );
+              if (
+                execution.source === 'revalidating' &&
+                firstPendingRegionGate !== undefined &&
+                indexOf(firstPendingRegionGate) < i
+              ) {
+                i = indexOf(firstPendingRegionGate) - 1;
+                continue stepLoop;
+              }
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;

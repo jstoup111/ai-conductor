@@ -108,6 +108,38 @@ async function fixture() {
 }
 
 describe('routed round conductor resume', () => {
+  it('keeps the reconciliation refusal detail when a routed exit cannot reconcile', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'unavailable', detail: 'r1 route record is unreadable' } });
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = host;
+
+    await expect(resumed.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'child BUILD region refused: child 1 routed round reconciliation refused: r1 route record is unreadable',
+    );
+  });
+
   it('halts when routed-exit queue admission is unavailable', async () => {
     const subject = await fixture();
     const host = parseChildId(1)!;
