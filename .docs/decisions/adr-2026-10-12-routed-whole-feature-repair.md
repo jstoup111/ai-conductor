@@ -164,6 +164,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      and `task-cli` all honour it by reading the route record.
    - A test failure is never evidence that a child cannot host a fix.
 
+   > **Amended 2026-10-31 by #3550:** A cited path is evidence only once it is resolved against one recursive listing of the leaf tip. An exact file entry stands. Otherwise a citation that is the unique `/`-bounded suffix of one listed file, such as a bare basename or a partial path, resolves to that file. A citation that names a directory, or matches several files, is dropped: it is neither a prerequisite input nor an output, so it can never satisfy or fail a host check. A citation with no match remains an output. The inputs also cover the text allocation renders into the item's rem blocks: task titles, rationale, criterion and governing clause. The route record's `prerequisitePaths` holds resolved files only. Because every resolved input is present at the leaf tip, the host this decision selects always holds every file the item's rem blocks cite, and the amendment adds no halt (`architecture-review-2026-10-31-routed-repair-hosts-a-finding-on-a-stack-child-tha`).
+
 5. **A builder may claim a missing prerequisite, and the engine verifies it before re-routing.**
    - During a routed build, the builder may return a schema'd
      `blocked-by-prerequisite {paths[] | symbols[], child}`.
@@ -194,6 +196,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    - Reroutes move strictly upward, so a round has at most N−1.
 
    > **Amended 2026-10-24 by #3203:** Prerequisite claims are disabled in an `operator` round, so no reroute can move or reset an operator's change (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 1).
+
+   > **Amended 2026-10-31 by #3550:** Claimed paths and the stored prerequisite inputs are compared through decision 4's citation resolver, so the destination check compares files with files. A stored directory entry, which a route record written before this amendment may hold, is dropped and never fails a destination.
 
 6. **A ref-backed route record is the authority for a routing round.**
    - **Where.** `refs/conductor/<slug>/routes/<roundId>`, a blob ref written only through
