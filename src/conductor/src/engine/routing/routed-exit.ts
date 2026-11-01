@@ -391,7 +391,7 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
       : undefined;
     if (published !== undefined) {
       const member = published.record.members.find((candidate) => candidate.position === input.host);
-      const recordedTip = parseCommitSha(head!);
+      const recordedTip = typeof head === 'string' ? parseCommitSha(head) : undefined;
       const pushedTip = member === undefined ? undefined : await resolveGitRef(git, pushedTipRef(input.slug, member.branch));
       if (member === undefined || !recordedTip || typeof pushedTip !== 'string') {
         return halted(`routed exit host ${input.host}: published leaf refresh evidence is unavailable`);
