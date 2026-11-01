@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { type AcceptedWideningDecisionInput } from '../../src/engine/accepted-widenings.js';
 import { preparePrdWideningEntry } from '../../src/engine/prd-widening-entry.js';
 
 describe('preparePrdWideningEntry', () => {
@@ -37,7 +38,7 @@ describe('preparePrdWideningEntry', () => {
           noOwnerObservations: [{ presentationOrdinal: 'NC-2', grade: 'OVER_SCOPE', evidence: 'src/no-owner.ts:1', rationale: 'No owner.', intentRelation: 'outside-visible' }],
         }, diagnostics: [], recordedDispositions: [],
       }, { attemptId: 'attempt', codeStamp: 'head' });
-      const append = vi.fn(async (input: { readonly criterion: string }) => ({
+      const append = vi.fn(async (input: AcceptedWideningDecisionInput) => ({
         ok: true as const,
         decision: { id: input.criterion, revision: 1, ...input },
       }));

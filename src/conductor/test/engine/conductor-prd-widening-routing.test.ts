@@ -364,7 +364,7 @@ describe('typed PRD widening routing', () => {
     await writeTypedMixedOverScope();
     const events = new ConductorEventEmitter();
     const imported: unknown[] = [];
-    events.on('prd_widening_reconciled', event => { if (event.outcome === 'imported') imported.push(event); });
+    events.on('prd_widening_reconciled', event => { if (event.type === 'prd_widening_reconciled' && event.outcome === 'imported') imported.push(event); });
     const entry = new Conductor({
       projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
     }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
@@ -395,7 +395,7 @@ describe('typed PRD widening routing', () => {
       new Map([['S3.17', 'outside-visible' as const], ['NC.1', 'outside-visible' as const]]),
       decisions.state.decisions, routedCases,
     );
-    expect(route.kind).toBe('refusal-rework');
+    if (route.kind !== 'refusal-rework') throw new Error(`expected refusal-rework, got ${route.kind}`);
     expect(route.findings).toEqual(expect.arrayContaining([
       expect.objectContaining({ criterion: 'S3.17', decision: 'refuse' }),
       expect.objectContaining({ criterion: 'NC.1', decision: 'accept', accepted: true }),
@@ -414,7 +414,7 @@ describe('typed PRD widening routing', () => {
     await writeTypedMixedOverScope();
     const events = new ConductorEventEmitter();
     const rejected: unknown[] = [];
-    events.on('prd_widening_reconciled', event => { if (event.outcome === 'rejected') rejected.push(event); });
+    events.on('prd_widening_reconciled', event => { if (event.type === 'prd_widening_reconciled' && event.outcome === 'rejected') rejected.push(event); });
     const entry = new Conductor({
       projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
     }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
@@ -608,6 +608,7 @@ describe('typed PRD widening routing', () => {
       const result = await capturePrdWideningDecisions(cleared, {
         operator: 'operator', offerStore: caseStore,
         decisionStore: new AcceptedWideningDecisionStore(projectRoot, { ...feature, version: 1 }),
+        offeredStoryCriteria: { kind: 'available', criteria: new Set() },
       });
       expect(result.defects).toEqual([]);
       expect(result.captured).toEqual([expect.objectContaining({ authority: 'accept' })]);
