@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:4, task:8
+# Covers: task:4, task:8, task:11
 # Covers: task:3
 # Covers: task:5
 # BEGIN integrity failure reporting
