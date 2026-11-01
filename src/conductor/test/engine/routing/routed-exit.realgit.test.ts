@@ -10,6 +10,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import { pushedTipRef } from '../../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor } from '../../../src/engine/restack/cascade-cap.js';
 import { RESTACK_CASCADE_TIER_DEFAULTS } from '../../../src/engine/restack/cascade-allowance.js';
@@ -23,18 +24,19 @@ vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => 
   return { ...actual, requestRoutedExit: vi.fn(actual.requestRoutedExit) };
 });
 
-import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
-import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
+import { advanceRound, requestRoutedExit, returnToLeaf } from '../../../src/engine/routing/routed-exit.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
+import { readRefreshLedger, refreshLedgerRefFor } from '../../../src/engine/stack-refresh-ledger.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
 
 const cleanup: string[] = [];
 const host = parseChildId(1)!;
 const childTwo = parseChildId(2)!;
+const leaf = parseChildId(3)!;
 const roundId = parseRoundId('r1')!;
 const execFile = promisify(execFileCallback);
 
@@ -78,6 +80,51 @@ async function fixture(withRepair: boolean): Promise<SweepRepository & { readonl
   await gitRunner(['update-ref', routeRecordRefFor('demo', roundId), await blob(gitRunner, record)]);
   await gitRunner(['update-ref', repairMarkerRefFor('demo'), await blob(gitRunner, { host, roundId })]);
   return { ...subject, gitRunner, ...(repair === undefined ? {} : { repair }) };
+}
+
+async function leafFixture(withRepair: boolean): Promise<SweepRepository & {
+  readonly gitRunner: ReturnType<typeof makeGitRunner>;
+  readonly leafBase: string;
+  readonly repair?: string;
+}> {
+  const subject = await fixture(false);
+  await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+  const leafBase = (await subject.gitRunner(['rev-parse', 'HEAD'])).stdout.trim();
+  const tree = (await subject.gitRunner(['rev-parse', 'HEAD^{tree}'])).stdout.trim() as never;
+  const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+  const marker = await subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')]);
+  if (stored.kind !== 'record' || marker.exitCode !== 0) throw new Error('fixture route is missing');
+  const record: RouteRecord = {
+    ...stored.record,
+    items: [{ findingId: 'leaf-finding', kind: 'audit', owner: leaf, host: leaf, reason: 'repair', fallback: [] }],
+    allocation: { [leaf]: { remTaskIds: ['rem-leaf'], blockBodies: ['### Task rem-leaf\n'] } },
+    hosts: { [leaf]: 'repairing' },
+    entry: { host: leaf, pinnedBase: leafBase as never, tree },
+  };
+  await subject.gitRunner(['update-ref', routeRecordRefFor('demo', roundId), await blob(subject.gitRunner, record), stored.blob]);
+  await subject.gitRunner(['update-ref', repairMarkerRefFor('demo'), await blob(subject.gitRunner, { host: leaf, roundId }), marker.stdout.trim()]);
+  const repair = withRepair ? await subject.commit('leaf routed fix', 'leaf-fix.txt', 'fixed\n') : undefined;
+  return { ...subject, leafBase, ...(repair === undefined ? {} : { repair }) };
+}
+
+async function publishLeafFixture(
+  subject: SweepRepository & { readonly gitRunner: ReturnType<typeof makeGitRunner>; readonly leafBase: string },
+): Promise<void> {
+  await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+    version: 1,
+    members: [
+      { position: host, branch: 'feat/c1/demo', pr: 101 },
+      { position: childTwo, branch: 'feat/c2/demo', pr: 102 },
+      { position: leaf, branch: 'feat/daemon-demo', pr: 103 },
+    ],
+  }, { git: subject.gitRunner })).resolves.toEqual({ kind: 'updated' });
+  for (const [branch, tip] of [
+    ['feat/c1/demo', (await subject.gitRunner(['rev-parse', 'feat/c1/demo'])).stdout.trim()],
+    ['feat/c2/demo', (await subject.gitRunner(['rev-parse', 'feat/c2/demo'])).stdout.trim()],
+    ['feat/daemon-demo', subject.leafBase],
+  ] as const) {
+    await subject.gitRunner(['update-ref', pushedTipRef('demo', branch), tip]);
+  }
 }
 
 async function refExists(git: ReturnType<typeof makeGitRunner>, ref: string): Promise<boolean> {
@@ -137,6 +184,81 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  // Covers: task:4
+  it('records a published leaf host tip and its owed round comment in the settling transaction', async () => {
+    const subject = await leafFixture(true);
+    await publishLeafFixture(subject);
+    let rejected = false;
+    const rejectingGit: GitRunner = async (args, options) => {
+      if (!rejected && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(refreshLedgerRefFor('demo'))) {
+        rejected = true;
+        return { stdout: '', stderr: 'injected transaction failure', exitCode: 1 };
+      }
+      return subject.gitRunner(args, options);
+    };
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: leaf, git: rejectingGit }))
+      .resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('leaf compare-and-swap') });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 3: 'repairing' } },
+    });
+    expect(await refExists(subject.gitRunner, repairMarkerRefFor('demo'))).toBe(true);
+    await expect(readRefreshLedger(subject.repo, 'demo', { git: subject.gitRunner })).resolves.toEqual({ kind: 'absent' });
+
+    const recorded = recordingRunner(subject.gitRunner);
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: leaf, git: recorded.git }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+    const ledger = await readRefreshLedger(subject.repo, 'demo', { git: subject.gitRunner });
+    if (ledger.kind !== 'ledger') throw new Error('missing refresh ledger');
+    expect(ledger.ledger.members['feat/daemon-demo']).toMatchObject({
+      position: leaf, pr: 103, publishedTip: subject.leafBase, recordedTip: subject.repair,
+    });
+    expect(ledger.ledger.rounds).toEqual([{
+      roundId, kind: 'audit', host: leaf, marker: '<!-- conductor:routed-fix:r1:103 -->',
+    }]);
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 3: 'done' } },
+    });
+    expect(await refExists(subject.gitRunner, repairMarkerRefFor('demo'))).toBe(false);
+    const settle = updateTransactions(recorded.calls).find((input) => input.includes(refreshLedgerRefFor('demo')));
+    expect(settle).toContain(routeRecordRefFor('demo', roundId));
+    expect(settle).toContain(`delete ${repairMarkerRefFor('demo')}`);
+  });
+
+  // Covers: task:4
+  it('records no ledger entry or owed comment when a published leaf exits without a commit', async () => {
+    const subject = await leafFixture(false);
+    await publishLeafFixture(subject);
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: leaf, git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+
+    await expect(readRefreshLedger(subject.repo, 'demo', { git: subject.gitRunner })).resolves.toEqual({ kind: 'absent' });
+  });
+
+  // Covers: task:4
+  it('records no ledger entry or owed comment when stack land abandons an operator round', async () => {
+    const subject = await leafFixture(false);
+    await publishLeafFixture(subject);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      kind: 'operator',
+      hosts: { [leaf]: 'abandoned' },
+      operator: {
+        origin: 'land', reason: 'withdrawn reviewer change', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/daemon-demo': subject.leafBase as never },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      },
+    }));
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+    if (stored.kind !== 'record') throw new Error('fixture route is missing');
+
+    await expect(returnToLeaf(subject.repo, 'demo', stored, { git: subject.gitRunner, abandon: true }))
+      .resolves.toEqual({ kind: 'leaf-returned' });
+
+    await expect(readRefreshLedger(subject.repo, 'demo', { git: subject.gitRunner })).resolves.toEqual({ kind: 'absent' });
+  });
+
   // Covers: task:4
   it('drains routing outboxes before reconciling a restacked exit', async () => {
     const subject = await fixture(false);

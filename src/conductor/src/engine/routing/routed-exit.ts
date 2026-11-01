@@ -7,21 +7,27 @@ import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import type { RestackResolver } from '../restack/restack-resolver.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
 import { haltRestack } from '../restack/restack-move.js';
+import { journalRefFor, readRestackJournal } from '../restack/restack-journal.js';
 import { writeHaltMarker } from '../halt-marker.js';
 import { publishedStackRefusal } from '../stack-publication.js';
+import { activePublicationRecord } from '../stack-publication-record.js';
+import { refreshLedgerUpdateLines } from '../stack-refresh-ledger.js';
+import { pushedTipRef } from '../push-lease.js';
+import { parseCommitSha } from '../restack/restack-types.js';
 import {
   drainOutbox,
   drainQueueOutbox,
   readRevalidationQueue,
   readRepairMarker,
   readRouteRecord,
+  routingFenceOpen,
   transitionHost,
   writeRoutingTransaction,
   type PersistOutboxEvent,
   type StoredRouteRecord,
 } from './route-record-store.js';
 import { resolveGitRef } from './git-ref-resolver.js';
-import { closureRefFor } from './routing-refs.js';
+import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from './routing-refs.js';
 import { assertNever, type HostState, type RevalidationQueueRecord, type RouteRecord, type RoundId } from './route-types.js';
 import { leafBranchFor } from '../feature-branch-identity.js';
 import { switchToChild } from '../child-lifecycle.js';
@@ -315,6 +321,44 @@ function unlandedClosedChildCommitsHalt(slug: string, host: ChildId, child: Chil
   ].join('\n');
 }
 
+const ZERO_SHA = '0'.repeat(40);
+
+/**
+ * The normal route store deliberately owns ordinary routing mutations. A
+ * published leaf also needs the refresh ledger's CAS line in that exact
+ * settlement transaction, so this small companion preserves its journal
+ * fence while committing all three refs together.
+ */
+async function settlePublishedLeaf(
+  input: RequestRoutedExitInput,
+  stored: StoredRouteRecord,
+  marker: Extract<Awaited<ReturnType<typeof readRepairMarker>>, { readonly kind: 'marker' }>,
+  record: RouteRecord,
+  ledgerLines: readonly string[],
+  git: GitRunner,
+): Promise<'updated' | 'restack-journal-open' | 'failed'> {
+  const journal = await readRestackJournal(input.worktree, input.slug, { git });
+  if (!routingFenceOpen(journal)) return 'restack-journal-open';
+  const serialized = JSON.stringify(record);
+  const routeBlobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
+  const routeBlob = routeBlobResult.exitCode === 0 ? parseCommitSha(routeBlobResult.stdout.trim()) : undefined;
+  if (!routeBlob) return 'failed';
+  const journalBlob = journal.kind === 'journal' ? journal.blob : ZERO_SHA;
+  const settled = await git(['update-ref', '--stdin'], {
+    input: [
+      'start',
+      `update ${routeRecordRefFor(input.slug, input.roundId)} ${routeBlob} ${stored.blob}`,
+      `delete ${repairMarkerRefFor(input.slug)} ${marker.blob}`,
+      ...ledgerLines,
+      `verify ${journalRefFor(input.slug)} ${journalBlob}`,
+      'prepare',
+      'commit',
+      '',
+    ].join('\n'),
+  });
+  return settled.exitCode === 0 ? 'updated' : 'failed';
+}
+
 /**
  * Leaves a routed BUILD region.  The route record owns the small entry CAS;
  * the restack journal owns the later route/marker mutation, so a rollback can
@@ -340,6 +384,33 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   if (typeof closure !== 'string') {
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
+    const entry = stored.record.entry;
+    const head = await resolveGitRef(git, 'HEAD');
+    const published = entry?.host === input.host && typeof head === 'string' && head !== entry.pinnedBase
+      ? await activePublicationRecord(input.worktree, input.slug, { git })
+      : undefined;
+    if (published !== undefined) {
+      const member = published.record.members.find((candidate) => candidate.position === input.host);
+      const recordedTip = parseCommitSha(head!);
+      const pushedTip = member === undefined ? undefined : await resolveGitRef(git, pushedTipRef(input.slug, member.branch));
+      if (member === undefined || !recordedTip || typeof pushedTip !== 'string') {
+        return halted(`routed exit host ${input.host}: published leaf refresh evidence is unavailable`);
+      }
+      const ledger = await refreshLedgerUpdateLines(input.worktree, input.slug, {
+        moves: [{ position: member.position, branch: member.branch, pr: member.pr, pushedTip: pushedTip as never, recordedTip }],
+        round: {
+          roundId: input.roundId,
+          kind: stored.record.kind,
+          host: input.host,
+          marker: `<!-- conductor:routed-fix:${input.roundId}:${member.pr} -->`,
+        },
+      }, { git });
+      if (ledger.kind !== 'lines') return halted(`routed exit host ${input.host}: published leaf refresh ledger is unreadable`);
+      const wrote = await settlePublishedLeaf(input, stored, marker, done.record, ledger.lines, git);
+      return wrote === 'updated'
+        ? { kind: 'no-commit-done' }
+        : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote}`);
+    }
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
       { kind: 'update-record', previous: stored, record: done.record },
       { kind: 'delete-marker', old: marker.blob },
