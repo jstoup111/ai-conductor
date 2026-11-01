@@ -832,11 +832,38 @@ export class Conductor {
     await this.emitLoopHalt(body, prUrl);
   }
 
+  private async renderAdmissionRefusal(
+    slug: string,
+    execution: Extract<ExecutionChildResolution, { readonly source: 'revalidating' }>,
+    detail: string,
+  ): Promise<string> {
+    const [queue, marker, affected] = await Promise.all([
+      readRevalidationQueue(this.projectRoot, slug), readRepairMarker(this.projectRoot, slug), diagnoseAffectedRounds(this.projectRoot, slug),
+    ]);
+    const generation = queue.kind === 'queue' ? queue.queue.generation : execution.generation ?? 'unreadable';
+    const owner = marker.kind === 'marker' ? `child ${marker.marker.host} in round ${marker.marker.roundId}` : marker.kind === 'absent' ? 'none' : 'unreadable';
+    const rounds = affected.kind === 'affected'
+      ? affected.rounds.map((round) => round.readable ? `${round.roundId} (${Object.entries(round.unsettledHosts).map(([host, status]) => `${host}: ${status}`).join(', ')})` : `${round.roundId} (unreadable)`).join('; ') || 'none'
+      : `unreadable (${affected.detail})`;
+    return `queued child ${execution.target.child}, queue generation ${generation}; non-closed rounds: ${rounds}; marker owner: ${owner}; ${detail}`;
+  }
+
+  private async haltAdmissionStall(slug: string, execution: Extract<ExecutionChildResolution, { readonly source: 'revalidating' }>, detail: string): Promise<void> {
+    const affected = await diagnoseAffectedRounds(this.projectRoot, slug);
+    if (affected.kind !== 'affected') {
+      await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, execution, `${detail}; ${affected.detail}`), 'mechanical');
+      return;
+    }
+    const stall = await recordRoundStall(this.projectRoot, slug, { kind: 'stalled', detail, rounds: affected.rounds }, this.events);
+    await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, execution, stall.detail), stall.haltClass ?? 'needs-human');
+  }
+
   /** Enter routed hosts before the shared child-region lifecycle takes over. */
   private async enterRoutedHostRegion(
     execution: ExecutionChildResolution,
     slug: string,
     state: ConductState,
+    cursor?: ActiveChildResolution,
   ): Promise<ExecutionChildResolution | false> {
     if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return execution;
 
@@ -847,6 +874,12 @@ export class Conductor {
     // revalidating hint independently of that durable handshake, so validate
     // the marker and record here, before either entry side effect or dispatch.
     if (enteredExecution.source === 'revalidating') {
+      if (cursor !== undefined && !routingEligible(cursor, this.config)) {
+        await this.haltChildRegionRefusal(
+          `queued child ${enteredExecution.target.child}, queue generation ${enteredExecution.generation ?? 'unknown'}; routing is ineligible`,
+        );
+        return false;
+      }
       const marker = await readRepairMarker(this.projectRoot, slug);
       if (marker.kind !== 'marker') {
         const admission = await admitQueuedRevalidation({
@@ -859,8 +892,16 @@ export class Conductor {
           || (admission.kind === 'continue' && admission.reconciled.kind === 'navigate-host')
         ) {
           const reResolved = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
-          if (reResolved.source !== 'routed-host') {
-            await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
+          const mismatchedAdmission = admission.kind === 'admitted' && (
+            reResolved.source !== 'routed-host' ||
+            reResolved.target.child !== admission.host ||
+            reResolved.roundId !== admission.roundId
+          );
+          if (reResolved.source !== 'routed-host' || mismatchedAdmission) {
+            const detail = admission.kind === 'admitted'
+              ? `admitted round ${admission.roundId} for child ${admission.host} re-resolved as ${reResolved.source}`
+              : 'queued child was not admitted into a revalidate round';
+            await this.haltChildRegionRefusal(detail);
             return false;
           }
           enteredExecution = reResolved;
@@ -880,7 +921,7 @@ export class Conductor {
               ?? (markerAfterBusy?.kind === 'marker'
                 ? `repair marker is owned by child ${markerAfterBusy.marker.host} in round ${markerAfterBusy.marker.roundId}`
                 : 'revalidation queue admission is busy');
-            await this.haltChildRegionRefusal(detail, 'mechanical');
+            await this.haltAdmissionStall(slug, enteredExecution, detail);
             return false;
           }
         } else if (admission.kind === 'continue') {
@@ -889,18 +930,21 @@ export class Conductor {
             'mechanical',
           );
           return false;
+        } else if (admission.kind === 'stalled') {
+          await this.haltAdmissionStall(slug, enteredExecution, admission.detail);
+          return false;
         } else {
-          await this.haltChildRegionRefusal(`revalidating child ${enteredExecution.target.child} has no matching repair marker`);
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, admission.detail));
           return false;
         }
       } else if (marker.marker.host !== enteredExecution.target.child || marker.marker.roundId !== enteredExecution.roundId) {
-        await this.haltChildRegionRefusal(`revalidating child ${enteredExecution.target.child} has no matching repair marker`);
+        await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'repair marker does not match the revalidating child'));
         return false;
       }
       if (enteredExecution.source === 'revalidating') {
         const route = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
         if (route.kind !== 'record') {
-          await this.haltChildRegionRefusal(`revalidating child ${enteredExecution.target.child} has no open revalidate round`);
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidate route record is unreadable'));
           return false;
         }
         const revalidationOpen = (() => {
@@ -914,7 +958,7 @@ export class Conductor {
           return assertNever(route.record.kind);
         })();
         if (!revalidationOpen) {
-          await this.haltChildRegionRefusal(`revalidating child ${enteredExecution.target.child} has no open revalidate round`);
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidate route record is not open'));
           return false;
         }
       }
@@ -8267,7 +8311,7 @@ export class Conductor {
             }
             const execution = resolveExecutionChild(cursor, slug);
             if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
-              const enteredExecution = await this.enterRoutedHostRegion(execution, slug, state);
+              const enteredExecution = await this.enterRoutedHostRegion(execution, slug, state, cursor);
               if (!enteredExecution) return;
               const target: ActiveChildLifecycleTarget = enteredExecution.target;
               const entered = await this.enterChildRegion(
