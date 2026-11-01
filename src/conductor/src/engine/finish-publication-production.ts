@@ -2092,9 +2092,11 @@ export function createProductionFinishPublicationCoordinator(
       });
 
       // A transition is intentionally one effect per attempt. The core
-      // coordinator has verified the effect before reporting an advance, so
-      // re-enter FINISH without charging it to the retry budget.
+      // coordinator has verified the effect before reporting an advance. Keep
+      // a completed prose-authoring transition observable to callers; it is
+      // still routed as FINISH progress and therefore does not spend a retry.
       if (result.kind === 'advanced') {
+        if (result.transition === 'author_pr_prose') return result;
         return {
           kind: 'publication_progress',
           transition: result.transition,

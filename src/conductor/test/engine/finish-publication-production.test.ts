@@ -1975,7 +1975,7 @@ describe('production FINISH publication composition', () => {
       });
       body = `${PR_BODY_FLOOR_MARKER}\n\nDraft opened automatically.`;
       await expect(makeCoordinator().advance(input)).resolves.toEqual({
-        kind: 'publication_progress', transition: 'author_pr_prose',
+        kind: 'advanced', transition: 'author_pr_prose',
       });
       expect(input.dispatchJudgment).toHaveBeenCalledOnce();
       expect(input.dispatchAuthoring).toHaveBeenCalledOnce();
@@ -2543,8 +2543,9 @@ describe('production FINISH publication composition', () => {
         return { success: true };
       });
 
-      await expect(makeCoordinator(operations, featureEvents).advance(input(dispatchAuthoring))).resolves.toEqual({
-        kind: 'publication_progress', transition: 'author_pr_prose',
+      const authoringCoordinator = makeCoordinator(operations, featureEvents);
+      await expect(authoringCoordinator.advance(input(dispatchAuthoring))).resolves.toEqual({
+        kind: 'advanced', transition: 'author_pr_prose',
       });
       expect(writeShippedRecord).not.toHaveBeenCalled();
       expect(edits).toHaveLength(1);
@@ -2641,7 +2642,7 @@ describe('production FINISH publication composition', () => {
         dispatchJudgment,
         dispatchAuthoring,
         emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
 
       expect(dispatchAuthoring).toHaveBeenCalledOnce();
       expect(dispatchJudgment).not.toHaveBeenCalled();
@@ -2719,7 +2720,7 @@ describe('production FINISH publication composition', () => {
         dispatchJudgment,
         dispatchAuthoring,
         emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
 
       expect(dispatchAuthoring).toHaveBeenCalledOnce();
       expect(dispatchJudgment).not.toHaveBeenCalled();
