@@ -96,11 +96,14 @@ describe('BUILD-region admission (real local Git)', () => {
       enterChildRegion: vi.fn(async () => ({ kind: 'completed' }) as never),
     };
     let park = false;
+    const events = new ConductorEventEmitter();
+    const loopHalts: unknown[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event));
     const conductor = new Conductor({
       // Start after the invalidated gate.  Admission must rewind the loop to
       // acceptance_specs instead of silently continuing at build.
       projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
-      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: runner, acceptanceRedExec: vi.fn(), operatorParkBoundary: async () => park,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events, stepRunner: runner, acceptanceRedExec: vi.fn(), operatorParkBoundary: async () => park,
       childRegionLifecycle: lifecycle,
     });
     runner.run.mockImplementation(async () => { park = true; return { success: true }; });
@@ -111,9 +114,14 @@ describe('BUILD-region admission (real local Git)', () => {
     expect(marker).toMatchObject({ kind: 'marker', marker: { host: c1 } });
     const refs = (await git(['for-each-ref', '--format=%(objectname)', 'refs/conductor/demo/routes/'])).stdout.trim().split('\n').filter(Boolean);
     const records = await Promise.all(refs.map(async (ref) => JSON.parse((await git(['cat-file', '-p', ref])).stdout)));
-    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'revalidate', phase: 'open' })]));
-    expect(lifecycle.enterHostRegion).toHaveBeenCalledWith(expect.objectContaining({ host: c1, roundId: (marker as { marker: { roundId: unknown } }).marker.roundId }));
+    const record = records.find((candidate) => candidate.kind === 'revalidate' && candidate.phase === 'open');
+    expect(record).toBeDefined();
+    expect(marker).toMatchObject({ kind: 'marker', marker: { host: c1, roundId: record.roundId } });
+    expect(lifecycle.enterHostRegion).toHaveBeenCalledWith(expect.objectContaining({ host: c1, roundId: record.roundId }));
     expect(runner.run).toHaveBeenCalledWith('acceptance_specs', expect.anything(), expect.anything());
+    expect(lifecycle.enterChildRegion).toHaveBeenCalledWith(root, 'demo', expect.objectContaining({ child: c1, branch: 'feat/c1/demo' }), expect.anything(), undefined);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).toEqual([]);
   });
 
   it('does not mutate routing refs for a flat cursor', async () => {
