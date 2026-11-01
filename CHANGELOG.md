@@ -66,6 +66,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can record and resume a repaired stacked-restack conflict. ([implementation PR #3522](https://github.com/jstoup111/ai-conductor/pull/3522)).
 - Pi runs classify authentication and usage failures so recovery is actionable. ([implementation PR #3532](https://github.com/jstoup111/ai-conductor/pull/3532)).
 - Repository-local skills remain discoverable from both supported hosts. ([implementation PR #3554](https://github.com/jstoup111/ai-conductor/pull/3554)).
+- Operators can record restack-conflict decisions and resume stacked restacks safely. ([implementation PR #3556](https://github.com/jstoup111/ai-conductor/pull/3556)).
 
 ### Changed
 
