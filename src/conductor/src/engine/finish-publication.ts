@@ -1447,6 +1447,8 @@ export interface AdvanceFinishPublicationInput {
      * before an interrupted response.
      */
     establishChildPrs?: () => Promise<void>;
+    /** Refresh the already-published members recorded by a routed restack. */
+    refreshPublishedMembers?: () => Promise<void>;
     /** Create or extend and verify the native stack after retargeting the leaf. */
     assembleStack?: () => Promise<void>;
     /**
@@ -1974,6 +1976,34 @@ async function advanceFinishPublicationUnreconciled(
             transition: 'establish_child_prs',
             reason: 'publication_transition_not_verified_after_effect',
           };
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'refresh_published_members') {
+    return coalescePublicationEffect(input.effects, 'refresh_published_members', async () => {
+      if (!input.effects.refreshPublishedMembers) {
+        return { kind: 'publication_retry', transition: 'refresh_published_members', reason: 'publication_transition_indeterminate' };
+      }
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'refresh_published_members',
+      });
+      try {
+        await input.effects.refreshPublishedMembers();
+      } catch (error) {
+        if (error instanceof StackPublicationHaltError) {
+          return { kind: 'human_required', reason: error.reason, detail: error.message };
+        }
+        return {
+          kind: 'publication_retry', transition: 'refresh_published_members',
+          reason: 'publication_transition_indeterminate',
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const observed = await input.observe();
+      return (await advancedPublicationTransition(input.emit, 'refresh_published_members', snapshot, observed))
+        ?? (observed.stackRefresh !== 'push-pending'
+          ? { kind: 'advanced', transition: 'refresh_published_members' }
+          : { kind: 'publication_retry', transition: 'refresh_published_members', reason: 'publication_transition_indeterminate' });
     });
   }
 

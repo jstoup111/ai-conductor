@@ -188,6 +188,7 @@ export const EVENT_SINKS = {
   stack_assembled: { render: false, persist: true, audit: false, otel: false },
   stack_member_lifecycle: { render: false, persist: true, audit: false, otel: false },
   stack_members_unreachable: { render: false, persist: true, audit: false, otel: false },
+  stack_member_refreshed: { render: false, persist: true, audit: false, otel: false },
   stack_tip_diverged: { render: false, persist: true, audit: false, otel: false },
   feature_complete: { render: false, persist: true, audit: false, otel: true },
   dashboard_refresh: { render: false, persist: true, audit: false, otel: false },

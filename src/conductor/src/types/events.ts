@@ -253,6 +253,15 @@ export type StackPublicationEvent =
       eventId: string;
     }
   | { type: 'stack_members_unreachable'; child: ChildId; pr: number }
+  | {
+      type: 'stack_member_refreshed';
+      child: ChildId;
+      pr: number;
+      oldTip: string;
+      newTip: string;
+      /** A resumed FINISH may re-deliver this completed occurrence. */
+      eventId: string;
+    }
   | { type: 'stack_tip_diverged'; prs: readonly number[] };
 
 /** Closed, non-diagnostic context for credential-park progress telemetry. */

@@ -45,6 +45,7 @@ it('declares one persistent sink row for each stack event', () => {
     'stack_assembled',
     'stack_member_lifecycle',
     'stack_members_unreachable',
+    'stack_member_refreshed',
     'stack_tip_diverged',
   ] as const;
 
@@ -420,6 +421,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'stack_assembled',
   'stack_member_lifecycle',
   'stack_members_unreachable',
+  'stack_member_refreshed',
   'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',

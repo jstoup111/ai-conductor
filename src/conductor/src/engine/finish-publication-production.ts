@@ -66,7 +66,7 @@ import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import { pushedTipRef } from './push-lease.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
-import { readRefreshLedger, refreshPendingState } from './stack-refresh-ledger.js';
+import { authorizePublishedStackRefresh, readRefreshLedger, refreshPendingState } from './stack-refresh-ledger.js';
 import { parseCommitSha } from './restack/restack-types.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
@@ -418,6 +418,68 @@ export async function observePublishedStackRefresh(input: {
     pushedTips[branch] = tip;
   }
   return refreshPendingState(stored.ledger, pushedTips);
+}
+
+/**
+ * Apply the ledger in stack order.  Each member has its own guarded transport
+ * call so a restart can observe durable receipts and continue at the first
+ * member still owing a push.
+ */
+export async function refreshPublishedStackMembers(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+  mutation?: GithubMutationExecutionContext;
+  remoteGit?: typeof executeRemoteGit;
+  events?: { emit(event: Extract<ConductorEvent, { type: 'stack_member_refreshed' }>): Promise<void> };
+}): Promise<void> {
+  const stored = await readRefreshLedger(input.root, input.slug, { git: input.git });
+  if (stored.kind !== 'ledger') {
+    throw new StackPublicationHaltError('stack_tip_diverged', 'published stack refresh ledger is unreadable');
+  }
+  const authorization = authorizePublishedStackRefresh(input.slug);
+  const members = Object.entries(stored.ledger.members)
+    .map(([branch, member]) => ({ branch, member }))
+    .sort((left, right) => left.member.position - right.member.position);
+  for (const { branch, member } of members) {
+    const receipt = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, branch)]);
+    const oldTip = receipt.exitCode === 0 ? receipt.stdout.trim() : undefined;
+    if (oldTip === member.recordedTip) continue;
+    if (!oldTip) {
+      await haltStackTipDiverged(input.root, [{ pr: member.pr, position: member.position }], undefined,
+        `published stack refresh receipt is unreadable at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh receipt is unreadable at position ${member.position}`);
+    }
+    const remote = await (input.remoteGit ?? executeRemoteGit)([
+      'push', 'origin', `${member.recordedTip}:refs/heads/${branch}`,
+    ], {
+      cwd: input.root,
+      config: async (args) => input.git([...args]),
+      runRemoteGit: async (args, options) => {
+        const result = await input.git(args, { credential: options.credential, endpoint: options.endpoint });
+        if (result.exitCode !== 0) throw new Error(result.stderr ?? 'published stack refresh push failed');
+        return { stdout: result.stdout };
+      },
+      mutation: input.mutation,
+      pushLeaseGit: async (args, text) => {
+        const result = await input.git([...args], text === undefined ? undefined : { input: text });
+        return { stdout: result.stdout, exitCode: result.exitCode };
+      },
+      publishedStackRefreshAuthorization: authorization,
+    });
+    if (remote.kind !== 'executed') {
+      await haltStackTipDiverged(input.root, remote.kind === 'refused' && remote.members?.length
+        ? remote.members
+        : [{ pr: member.pr, position: member.position }], undefined,
+      `published stack refresh refused at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh refused at position ${member.position}`);
+    }
+    await input.events?.emit({
+      type: 'stack_member_refreshed', child: member.position, pr: member.pr,
+      oldTip, newTip: member.recordedTip,
+      eventId: `stack-refresh:${member.pr}:${oldTip}:${member.recordedTip}`,
+    });
+  }
 }
 
 /** Stack API calls are bound to the latest durable record immediately before transport. */
@@ -1938,6 +2000,17 @@ export function createProductionFinishPublicationCoordinator(
               operationsForTarget,
               remoteMutation: publicationMutation,
               remoteMutationForTarget: mutationForRemoteRef,
+              remoteGit: deps.remoteGit,
+              events: deps.events,
+            });
+          },
+          refreshPublishedMembers: async () => {
+            if (!state.feature_desc) throw new Error('missing stack refresh identity');
+            await refreshPublishedStackMembers({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              git: publicationRecordGit(deps.git, deps.projectRoot),
+              mutation: publicationMutation,
               remoteGit: deps.remoteGit,
               events: deps.events,
             });

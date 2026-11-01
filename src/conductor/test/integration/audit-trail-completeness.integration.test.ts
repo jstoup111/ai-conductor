@@ -292,6 +292,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   stack_assembled: 'not-audited-by-design',
   stack_member_lifecycle: 'not-audited-by-design',
   stack_members_unreachable: 'not-audited-by-design',
+  stack_member_refreshed: 'not-audited-by-design',
   stack_tip_diverged: 'not-audited-by-design',
   provider_transcripts_captured: 'not-audited-by-design',
   provider_transcripts_harvest_failed: 'not-audited-by-design',
@@ -1095,6 +1096,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'stack_member_lifecycle', child: parseChildId(1)!, pr: 101, state: 'merged', eventId: 'stack-lifecycle-1',
   },
   stack_members_unreachable: { type: 'stack_members_unreachable', child: parseChildId(1)!, pr: 101 },
+  stack_member_refreshed: { type: 'stack_member_refreshed', child: parseChildId(1)!, pr: 101, oldTip: 'old', newTip: 'new', eventId: 'refresh-101' },
   stack_tip_diverged: { type: 'stack_tip_diverged', prs: [101] },
 };
 

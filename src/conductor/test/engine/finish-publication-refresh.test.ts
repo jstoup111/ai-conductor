@@ -1,7 +1,8 @@
 // Covers: task:7
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   nextFinishPublicationTransition,
+  advanceFinishPublication,
   observePublicationSnapshot,
   type PublicationObservationPorts,
   type PublicationSnapshot,
@@ -90,5 +91,21 @@ describe('FINISH published-member refresh selection', () => {
 
     expect(observed.stackRefresh).toBe('not-applicable');
     expect(nextFinishPublicationTransition(observed)).toBe('record_outcome');
+  });
+
+  it('does not cross the refresh effect when FINISH preflight rejects implementation evidence', async () => {
+    const refreshPublishedMembers = vi.fn(async () => undefined);
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot({
+        implementationEvidence: 'invalid',
+        unsatisfiedImplementationEvidenceMembers: ['build_review'],
+        stackRefresh: 'push-pending',
+      }),
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        refreshPublishedMembers,
+      },
+    })).resolves.toMatchObject({ kind: 'implementation_invalid' });
+    expect(refreshPublishedMembers).not.toHaveBeenCalled();
   });
 });
