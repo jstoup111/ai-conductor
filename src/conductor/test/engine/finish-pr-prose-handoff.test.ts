@@ -82,4 +82,88 @@ describe('FINISH PR-prose handoff', () => {
     await expect(access(join(pipelineDir, HANDOFF_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(clearPrProseHandoff(pipelineDir)).resolves.toBeUndefined();
   });
+
+  // Covers: task:2
+  it('re-splices every current step region exactly once', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+    const currentBody = [
+      'Current introduction.',
+      '<!-- ai-conductor:step first -->\ncurrent first\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step second -->\ncurrent second\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step third -->\ncurrent third\n<!-- /ai-conductor:step -->',
+    ].join('\n\n');
+    const authoredBody = [
+      'Authored introduction.',
+      '<!-- ai-conductor:step second -->\nchanged second\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step third -->\nchanged third\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step third -->\nduplicate third\n<!-- /ai-conductor:step -->',
+    ].join('\n\n');
+
+    const result = applyAuthoredPrProse({
+      currentBody,
+      prose: { title: 'Returned title', body: authoredBody } as never,
+      isPlaceholder: () => false,
+    });
+
+    expect(result).toMatchObject({ kind: 'apply', title: 'Returned title' });
+    if (result.kind !== 'apply') throw new Error(`Expected prose application, got ${result.kind}`);
+    for (const [key, bytes] of [
+      ['first', 'current first'],
+      ['second', 'current second'],
+      ['third', 'current third'],
+    ]) {
+      expect(result.body.match(new RegExp(`<!-- ai-conductor:step ${key} -->`, 'g'))).toHaveLength(1);
+      expect(result.body).toContain(`<!-- ai-conductor:step ${key} -->\n${bytes}\n<!-- /ai-conductor:step -->`);
+    }
+    expect(result.body).not.toContain('changed second');
+    expect(result.body).not.toContain('changed third');
+    expect(result.body).not.toContain('duplicate third');
+  });
+
+  // Covers: task:2
+  it('rejects spliced prose that remains placeholder', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    const result = applyAuthoredPrProse({
+      currentBody: 'Current body.',
+      prose: { title: 'Returned title', body: 'Returned body.' } as never,
+      isPlaceholder: (title, body) => title === 'Returned title' && body === 'Returned body.',
+    });
+
+    expect(result).toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining('body is still placeholder'),
+    });
+  });
+
+  // Covers: task:2
+  it('rejects prose that drops the current Closes reference', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    const result = applyAuthoredPrProse({
+      currentBody: 'Current body.\n\nCloses owner/repo#42',
+      prose: { title: 'Returned title', body: 'Returned body.' } as never,
+      isPlaceholder: () => false,
+    });
+
+    expect(result).toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining('Closes owner/repo#42'),
+    });
+  });
+
+  // Covers: task:2
+  it('applies prose without a Closes reference when none is currently present', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    await expect(applyAuthoredPrProse({
+      currentBody: 'Current body.',
+      prose: { title: 'Returned title', body: 'Returned body.' } as never,
+      isPlaceholder: () => false,
+    })).toEqual({
+      kind: 'apply',
+      title: 'Returned title',
+      body: 'Returned body.',
+    });
+  });
 });
