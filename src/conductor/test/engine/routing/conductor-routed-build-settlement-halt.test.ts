@@ -377,6 +377,7 @@ describe('routed BUILD settlement cap halt', () => {
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1', 1],
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file', 1],
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file', 1],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] }, 'claimed destination 2 lacks prerequisite paths', 1],
   ])('passes a rejected claim through as an unsuccessful attempt without a routing halt', async (claim, detail, activeChild) => {
     claimSeam.detail = `routed prerequisite claim unverified: ${detail}`;
     const fixture = await subject({ cap: 15, activeChild, buildResult: claim });
