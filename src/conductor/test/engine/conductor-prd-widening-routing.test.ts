@@ -433,13 +433,13 @@ describe('typed PRD widening routing', () => {
   });
 
   it.each([
-    ['changed offer reference', async (nc: Record<string, unknown>) => [{ ...nc, criterion: 'NC-2', offerEntryId: undefined }], 'changed-offer-reference', 'NC-2'],
-    ['missing rationale', async () => [{ criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse', rationale: '' }], 'missing-rationale', 'S3.17'],
-    ['duplicated offer entry', async (nc: Record<string, unknown>) => [nc, nc], 'duplicate-decision-entry', 'NC.1'],
-    ['unparsable block', async () => '{not-json', 'unreadable-decision-block', undefined],
-    ['non-object entry', async (nc: Record<string, unknown>) => [nc, null], 'unreadable-decision-entry', undefined],
-    ['unoffered story criterion', async () => [{ criterion: 'S9.9', summary: 'An unoffered story criterion.', decision: 'accept', rationale: 'It was not offered.' }], 'unknown-criterion', 'S9.9'],
-  ] as const)('returns its own recovery and rejection source for a %s', async (_name, entries, reason, criterion) => {
+    ['changed offer reference', async (nc: Record<string, unknown>) => [{ ...nc, criterion: 'NC-2', offerEntryId: undefined }], 'changed-offer-reference', 'NC-2', 'correct that entry against the latest halt'],
+    ['missing rationale', async () => [{ criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse', rationale: '' }], 'missing-rationale', 'S3.17', 'provide a rationale for that entry'],
+    ['duplicated offer entry', async (nc: Record<string, unknown>) => [nc, nc], 'duplicate-decision-entry', 'NC.1', 'keep one entry per criterion'],
+    ['unparsable block', async () => '{not-json', 'unreadable-decision-block', undefined, "repair the block's JSON"],
+    ['non-object entry', async (nc: Record<string, unknown>) => [nc, null], 'unreadable-decision-entry', undefined, 'repair the named decision entry'],
+    ['unoffered story criterion', async () => [{ criterion: 'S9.9', summary: 'An unoffered story criterion.', decision: 'accept', rationale: 'It was not offered.' }], 'unknown-criterion', 'S9.9', 'remove the unoffered criterion'],
+  ] as const)('returns its own recovery and rejection source for a %s', async (_name, entries, reason, criterion, action) => {
     const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
     const nc = JSON.parse((await readFile(clearPath, 'utf8')).match(/\[.*\]/s)?.[0] ?? '[]')[0] as Record<string, unknown>;
     const body = await entries(nc);
@@ -456,6 +456,7 @@ describe('typed PRD widening routing', () => {
     }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> }).preparePrdWideningBeforeAudit();
 
     expect(recovery).toContain(reason);
+    expect(recovery).toContain(action);
     if (criterion !== undefined) {
       expect(recovery).toContain(criterion);
       expect(rejected).toContainEqual(expect.objectContaining({ sourceId: criterion }));
@@ -474,11 +475,17 @@ describe('typed PRD widening routing', () => {
     const verdictPath = join(projectRoot, '.pipeline', 'prd-audit-verdict.json');
     if (verdictState === 'absent') await rm(verdictPath, { force: true });
     else await writeFile(verdictPath, '{not-json');
-    const recovery = await prdAuditEntry().preparePrdWideningBeforeAudit();
+    const events = new ConductorEventEmitter();
+    const rejected: unknown[] = [];
+    events.on('prd_widening_reconciled', event => { if (event.type === 'prd_widening_reconciled' && event.outcome === 'rejected') rejected.push(event); });
+    const recovery = await (new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
+    }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> }).preparePrdWideningBeforeAudit();
 
     expect(recovery).toContain('offered-set-unavailable');
     expect(recovery).toContain('S3.17');
     expect(recovery).toContain('leave the named entry pending so the next audit offers it again');
+    expect(rejected).toContainEqual(expect.objectContaining({ sourceId: 'S3.17', reason: 'offered-set-unavailable' }));
     await expect(new AcceptedWideningDecisionStore(projectRoot, {
       version: 1, repository: '/fixture/repository', feature: 'prd-widening-routing',
     }).read()).resolves.toMatchObject({ kind: 'absent' });
