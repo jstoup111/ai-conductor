@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "rebase-base-refresh-revalidation-halts-needs-human",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/rebase-base-refresh-revalidation-halts-needs-human.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/rebase-base-refresh-revalidation-halts-needs-human.md"
+    }
+  ]
+}
