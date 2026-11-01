@@ -561,6 +561,19 @@ describe('capturePrdWideningDecisions', () => {
     });
     expect(duplicate.defects).toContainEqual({ kind: 'duplicate-offer-entry', criterion: 'NC.1', offerEntryId: 'case-1' });
 
+    const duplicateAndNonObject = await capturePrdWideningDecisions(cleared([
+      decision(), decision(), null, siblingDecision(),
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(), offeredStoryCriteria: offeredStories(),
+    });
+    expect(duplicateAndNonObject).toMatchObject({
+      captured: [{ criterion: 'NC.1' }, { criterion: 'NC.2' }],
+      defects: expect.arrayContaining([
+        { kind: 'duplicate-offer-entry', criterion: 'NC.1', offerEntryId: 'case-1' },
+        { kind: 'malformed-entry' },
+      ]),
+    });
+
     const noOwner = await capturePrdWideningDecisions(cleared([story, siblingDecision()]), {
       operator: undefined, offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(),
       offeredStoryCriteria: offeredStories('S3.17'),

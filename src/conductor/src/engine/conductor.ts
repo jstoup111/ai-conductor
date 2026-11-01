@@ -3738,8 +3738,7 @@ export class Conductor {
       for (const defect of prepared.capture.defects) {
         const reason = PRD_WIDENING_CAPTURE_DEFECT_RECOVERY[defect.kind];
         const records = grouped.get(reason) ?? [];
-        const record = defect.criterion ?? defect.offerEntryId;
-        if (record !== undefined) records.push(record);
+        records.push(defect.criterion ?? defect.offerEntryId ?? 'prd-audit:entry');
         grouped.set(reason, records);
       }
       return [...grouped].map(([reason, records]) => renderPrdWideningRecovery(reason, records)).join('\n');
