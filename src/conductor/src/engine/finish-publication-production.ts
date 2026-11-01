@@ -64,7 +64,7 @@ import {
 import { createShipDraftPublicationDependencies, createTargetBoundGithubOperationRunner } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
-import { pushedTipRef } from './push-lease.js';
+import { pushedTipIntentRef, pushedTipRef, recordPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { authorizePublishedStackRefresh, readRefreshLedger, refreshPendingState } from './stack-refresh-ledger.js';
 import { parseCommitSha } from './restack/restack-types.js';
@@ -421,6 +421,50 @@ export async function observePublishedStackRefresh(input: {
 }
 
 /**
+ * A transport may reach the remote immediately before executeRemoteGit records
+ * its pushed-tip receipt.  Reconcile only an exact durable intent before a
+ * retry asks the guard to evaluate that now-moved remote tip.
+ */
+async function adoptCompletedPushIntent(input: {
+  root: string;
+  slug: string;
+  branch: string;
+  git: PublicationRecordGitRunner;
+}): Promise<boolean> {
+  let remoteTip: string | undefined;
+  try {
+    const remote = await input.git(['ls-remote', '--heads', 'origin', `refs/heads/${input.branch}`]);
+    if (remote.exitCode !== 0) return false;
+    remoteTip = remote.stdout.split('\n').find((line) => line.endsWith(`\trefs/heads/${input.branch}`))?.split('\t', 1)[0]?.trim();
+    if (!remoteTip) return true;
+
+    const intentRef = await input.git(['rev-parse', '--verify', '--quiet', pushedTipIntentRef(input.slug, input.branch)]);
+    const intentObject = intentRef.exitCode === 0 ? intentRef.stdout.trim() : '';
+    if (!intentObject) return true;
+    const content = await input.git(['cat-file', '-p', intentObject]);
+    if (content.exitCode !== 0) return false;
+    const parsed: unknown = JSON.parse(content.stdout);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || typeof (parsed as { new?: unknown }).new !== 'string'
+      || ((parsed as { expected?: unknown }).expected !== undefined
+        && typeof (parsed as { expected?: unknown }).expected !== 'string')) return false;
+    const intent = parsed as { readonly new: string; readonly expected?: string };
+    if (intent.new !== remoteTip) return true;
+    const pushLeaseGit: PushLeaseGitRunner = async (args, text) => {
+      const result = await input.git([...args], text === undefined ? undefined : { input: text });
+      return { stdout: result.stdout, exitCode: result.exitCode };
+    };
+    return recordPushedTip({
+      cwd: input.root,
+      prepared: { slug: input.slug, branch: input.branch, expected: intent.expected, new: intent.new, intentObject },
+      git: pushLeaseGit,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Apply the ledger in stack order.  Each member has its own guarded transport
  * call so a restart can observe durable receipts and continue at the first
  * member still owing a push.
@@ -450,6 +494,13 @@ export async function refreshPublishedStackMembers(input: {
         `published stack refresh receipt is unreadable at position ${member.position}`);
       throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh receipt is unreadable at position ${member.position}`);
     }
+    if (!await adoptCompletedPushIntent({ root: input.root, slug: input.slug, branch, git: input.git })) {
+      await haltStackTipDiverged(input.root, [{ pr: member.pr, position: member.position }], input.events,
+        `published stack refresh push intent is unreadable at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh push intent is unreadable at position ${member.position}`);
+    }
+    const adoptedReceipt = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, branch)]);
+    if (adoptedReceipt.exitCode === 0 && adoptedReceipt.stdout.trim() === member.recordedTip) continue;
     const remote = await (input.remoteGit ?? executeRemoteGit)([
       'push', 'origin', `${member.recordedTip}:refs/heads/${branch}`,
     ], {

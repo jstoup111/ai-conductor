@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execa } from 'execa';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -28,6 +29,7 @@ import type { GithubOperationRequest, GithubOperationRunner } from '../../src/en
 import { parseChildId } from '../../src/engine/child-context.js';
 import { haltStackTipDiverged, observeStackDimension } from '../../src/engine/stack-publication.js';
 import type { PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -765,6 +767,57 @@ describe('Conductor FINISH publication routing', () => {
       step: 'manual_test',
       reason: 'manual test evidence contains FAIL rows',
     }]);
+  });
+
+  it('stops at a failed routed leaf gate before FINISH can refresh the published bare remote', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Routed round r9\n\n| Story | Result |\n|---|---|\n| Leaf gate | FAIL |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M',
+      architecture_review: 'skipped',
+      manual_test: 'done',
+    });
+
+    const repo = join(dir, 'leaf');
+    const remote = join(dir, 'origin.git');
+    await mkdir(repo);
+    await initTestRepo(repo);
+    await writeFile(join(repo, 'leaf.txt'), 'published leaf\n');
+    await execa('git', ['add', '.'], { cwd: repo });
+    await execa('git', ['commit', '-m', 'published leaf'], { cwd: repo });
+    await execa('git', ['init', '--bare', remote], { cwd: dir });
+    await execa('git', ['remote', 'add', 'origin', remote], { cwd: repo });
+    await execa('git', ['push', 'origin', 'HEAD:refs/heads/feat/daemon-finish-publication'], { cwd: repo });
+    const before = (await execa('git', ['ls-remote', '--heads', remote], { cwd: dir })).stdout;
+
+    const executeRemoteGit = vi.fn(async () => ({ kind: 'executed' as const }));
+    const advance = vi.fn(async () => {
+      await executeRemoteGit(['push', 'origin', 'unexpected']);
+      return { kind: 'complete' } as const;
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events: new ConductorEventEmitter(),
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: true,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).not.toHaveBeenCalled();
+    expect(executeRemoteGit).not.toHaveBeenCalled();
+    expect((await execa('git', ['ls-remote', '--heads', remote], { cwd: dir })).stdout).toBe(before);
   });
 
   it('blocks publication when a retained done prd_audit has an unsatisfied on-disk verdict', async () => {
