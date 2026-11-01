@@ -1,5 +1,5 @@
 import { parseChildId, type ChildId } from './child-context.js';
-import { makeGitRunner, type GitRunner } from './rebase.js';
+import { makeLocalGitRunner, type LocalGitRunner } from './local-git-runner.js';
 import { parseCommitSha, type CommitSha } from './restack/restack-types.js';
 
 const ZERO_SHA = '0'.repeat(40);
@@ -48,7 +48,7 @@ export type WritePublicationRecordResult =
   | { readonly kind: 'unavailable' };
 
 export interface PublicationRecordDependencies {
-  readonly git?: GitRunner;
+  readonly git?: LocalGitRunner;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,7 +137,7 @@ export async function readPublicationRecord(
   slug: string,
   dependencies: PublicationRecordDependencies = {},
 ): Promise<ReadPublicationRecordResult> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = dependencies.git ?? makeLocalGitRunner(worktree);
   try {
     const ref = await git(['rev-parse', '-q', '--verify', publicationRefFor(slug)]);
     if (ref.exitCode === 1) return { kind: 'absent' };
@@ -178,7 +178,7 @@ export async function writePublicationRecord(
   if (expectedOld?.slug !== undefined && expectedOld.slug !== slug) return { kind: 'unavailable' };
   const serialized = JSON.stringify(next);
   if (!('record' in parsePublicationRecord(serialized))) return { kind: 'unavailable' };
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = dependencies.git ?? makeLocalGitRunner(worktree);
   try {
     const hashed = await git(['hash-object', '-w', '--stdin'], { input: serialized });
     const blob = hashed.exitCode === 0 ? parseCommitSha(hashed.stdout.trim()) : undefined;

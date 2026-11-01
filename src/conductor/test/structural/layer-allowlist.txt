@@ -116,7 +116,6 @@ engine/remediation-append.ts -> engine/plan-task-parse.ts
 engine/remediation-case-effects.ts -> engine/build-review-adjudication.ts
 engine/remote-git-operations.ts -> engine/child-cursor.ts
 engine/remote-git-operations.ts -> engine/rebase.ts
-engine/remote-git-operations.ts -> engine/stack-tip-guard.ts
 engine/repair-obligations.ts -> engine/autoheal.ts
 engine/repair-plan-binding.ts -> engine/artifacts.ts
 engine/repair-plan-binding.ts -> engine/repair-obligations.ts
@@ -201,12 +200,9 @@ engine/slice-topology.ts -> engine/artifacts.ts
 engine/slice-topology.ts -> engine/plan-slices.ts
 engine/slice-topology.ts -> engine/rebase.ts
 engine/slice-topology.ts -> engine/remediation-append.ts
-engine/stack-publication-record.ts -> engine/rebase.ts
 engine/stack-publication.ts -> engine/halt-marker.ts
 engine/stack-publication.ts -> engine/rebase.ts
 engine/stack-publication.ts -> engine/remote-git-operations.ts
-engine/stack-publication.ts -> engine/stack-publication-record.ts
-engine/stack-tip-guard.ts -> engine/stack-publication-record.ts
 engine/state.ts -> engine/filesystem-conduct-state-store.ts
 engine/task-attribution.ts -> engine/plan-task-parse.ts
 engine/task-digests.ts -> engine/repair-obligations.ts

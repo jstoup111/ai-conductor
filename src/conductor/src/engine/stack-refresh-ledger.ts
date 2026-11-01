@@ -1,5 +1,5 @@
 import { parseChildId, type ChildId } from './child-context.js';
-import { makeGitRunner, type GitRunner } from './rebase.js';
+import { makeLocalGitRunner, type LocalGitRunner } from './local-git-runner.js';
 import { parseCommitSha, type CommitSha, type RefName } from './restack/restack-types.js';
 import { refreshLedgerRefFor } from './routing/routing-refs.js';
 import { parseRoundId, type RoundId } from './routing/route-types.js';
@@ -74,7 +74,7 @@ export interface RefreshLedgerMergeInput {
 }
 
 export interface RefreshLedgerDependencies {
-  readonly git?: GitRunner;
+  readonly git?: LocalGitRunner;
 }
 
 const publishedStackRefreshAuthorization: unique symbol = Symbol('publishedStackRefreshAuthorization');
@@ -189,7 +189,7 @@ export async function readRefreshLedger(
   slug: string,
   dependencies: RefreshLedgerDependencies = {},
 ): Promise<ReadRefreshLedgerResult> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = dependencies.git ?? makeLocalGitRunner(worktree);
   const ref = refreshLedgerRefFor(slug);
   try {
     const resolved = await git(['rev-parse', '-q', '--verify', ref]);
@@ -241,7 +241,7 @@ export async function refreshLedgerUpdateLines(
   input: RefreshLedgerMergeInput,
   dependencies: RefreshLedgerDependencies = {},
 ): Promise<RefreshLedgerUpdateLinesResult> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = dependencies.git ?? makeLocalGitRunner(worktree);
   const current = await readRefreshLedger(worktree, slug, { git });
   const ref = refreshLedgerRefFor(slug);
   if (current.kind === 'unreadable') return current;
