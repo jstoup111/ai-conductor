@@ -1048,31 +1048,13 @@ export class Conductor {
       }
       case 'detached-head':
         return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'detached-head', 'worktree is in detached HEAD while resolving the active child');
-      case 'git-error':
-        return this.renderRoutingRefCursorRefusal();
-    }
-  }
-
-  /** Name a routing ref when it is the concrete source of a cursor failure. */
-  private async renderRoutingRefCursorRefusal(): Promise<string> {
-    const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
-    const [queue, marker] = await Promise.all([
-      readRevalidationQueue(this.projectRoot, slug),
-      readRepairMarker(this.projectRoot, slug),
-    ]);
-    if (queue.kind === 'unreadable') {
-      return `cannot read ${revalidationQueueRefFor(slug)} while resolving the active child cursor`;
-    }
-    if (marker.kind === 'unreadable') {
-      return `cannot read ${repairMarkerRefFor(slug)} while resolving the active child cursor`;
-    }
-    if (marker.kind === 'marker') {
-      const route = await readRouteRecord(this.projectRoot, slug, marker.marker.roundId);
-      if (route.kind !== 'record') {
-        return `cannot read ${routeRecordRefFor(slug, marker.marker.roundId)} while resolving the active child cursor`;
+      case 'git-error': {
+        const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
+        return cursor.unreadableRef === undefined
+          ? formatStackCursorRefusal(this.projectRoot, slug, 'git-error', 'git failed while resolving the active child cursor')
+          : `cannot read ${cursor.unreadableRef} while resolving the active child cursor`;
       }
     }
-    return formatStackCursorRefusal(this.projectRoot, slug, 'git-error', 'git failed while resolving the active child cursor');
   }
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */

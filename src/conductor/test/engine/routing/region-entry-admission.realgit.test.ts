@@ -154,7 +154,7 @@ describe('BUILD-region admission (real local Git)', () => {
     const conductor = new Conductor({
       projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
-      childRegionLifecycle: { resolveActiveChild: async () => revalidating(), enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'git-error', unreadableRef: brokenRef }), enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
     });
     await conductor.run();
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(brokenRef);
@@ -174,7 +174,7 @@ describe('BUILD-region admission (real local Git)', () => {
     const conductor = new Conductor({
       projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
-      childRegionLifecycle: { resolveActiveChild: async () => revalidating(), enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'git-error', unreadableRef: routeRecordRefFor('demo', round) }), enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
     });
     await conductor.run();
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(routeRecordRefFor('demo', round));

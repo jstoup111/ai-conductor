@@ -9,6 +9,7 @@ import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './s
 export { hasDurableChildState } from './slice-topology.js';
 import { resolveThroughMap } from './rebase-translate.js';
 import { readRepairMarker, readRevalidationQueue, readRouteRecord } from './routing/route-record-store.js';
+import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import type { RoundId } from './routing/route-types.js';
 import { assertNever, routingSettingOn } from './routing/route-types.js';
 
@@ -38,7 +39,7 @@ export type ActiveChildResolution =
   | { kind: 'no-child' }
   | ({ kind: 'topology-unavailable' } & Omit<Extract<SliceTopology, { kind: 'unavailable' }>, 'kind'>)
   | { kind: 'detached-head' }
-  | { kind: 'git-error' }
+  | { kind: 'git-error'; unreadableRef?: string }
   | { kind: 'divergent'; child: ChildId; check: 'closed-child-rewritten' | 'range-not-ancestor' }
   | (ActiveChildTarget & { kind: 'active' })
   | RepairPendingChildResolution;
@@ -276,7 +277,14 @@ export async function resolveActiveChild(
   const routingOn = artifacts === true && routingSettingOn(config.ok ? config.config : undefined);
   const repair = routingOn ? await readRepairMarker(worktree, slug, { git }) : { kind: 'absent' as const };
   const queue = routingOn ? await readRevalidationQueue(worktree, slug, { git }) : { kind: 'absent' as const };
-  if (repair.kind === 'unreadable' || queue.kind === 'unreadable') return { kind: 'git-error' };
+  if (queue.kind === 'unreadable') return { kind: 'git-error', unreadableRef: revalidationQueueRefFor(slug) };
+  if (repair.kind === 'unreadable') return { kind: 'git-error', unreadableRef: repairMarkerRefFor(slug) };
+  const route = repair.kind === 'marker'
+    ? await readRouteRecord(worktree, slug, repair.marker.roundId, { git })
+    : undefined;
+  if (route?.kind === 'unreadable') {
+    return { kind: 'git-error', unreadableRef: routeRecordRefFor(slug, repair.marker.roundId) };
+  }
 
   const symbolic = await runGit(git, ['symbolic-ref', '-q', 'HEAD']);
   if (!symbolic || (symbolic.exitCode !== 0 && symbolic.exitCode !== 1)) return { kind: 'git-error' };
@@ -295,8 +303,7 @@ export async function resolveActiveChild(
   const foreignRounds: Record<number, string> = {};
   const carriedOperatorChildren = new Set<ChildId>();
   if (repair.kind === 'marker') {
-    const route = await readRouteRecord(worktree, slug, repair.marker.roundId, { git });
-    if (route.kind === 'record' && route.record.kind === 'operator' && route.record.phase === 'open') {
+    if (route?.kind === 'record' && route.record.kind === 'operator' && route.record.phase === 'open') {
       for (const carried of route.record.operator!.carried) carriedOperatorChildren.add(carried.child);
     }
   }
