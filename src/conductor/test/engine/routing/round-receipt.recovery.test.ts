@@ -150,7 +150,7 @@ describe('round receipt recovery', () => {
         budgets: [{ gate: 'prd_audit', lapCap: 2, growthCap: 4, growth: { authored: 4, added: 0, byGate: {}, remaining: 4 }, authoredSource: 'plan' }],
         routing: { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } },
         git: subject.git,
-      })).resolves.toEqual({ kind: 'halted', reason: 'route record r8 is absent' });
+      })).resolves.toEqual({ kind: 'halted', reason: 'route record refs/conductor/demo/routes/r8 is absent' });
 
       const malformed = await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' });
       await subject.git(['update-ref', routeRecordRefFor('demo', round8), malformed.stdout.trim()]);
@@ -163,7 +163,7 @@ describe('round receipt recovery', () => {
         budgets: [{ gate: 'prd_audit', lapCap: 2, growthCap: 4, growth: { authored: 4, added: 0, byGate: {}, remaining: 4 }, authoredSource: 'plan' }],
         routing: { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } },
         git: subject.git,
-      })).resolves.toEqual({ kind: 'halted', reason: 'route record r8 is unreadable' });
+      })).resolves.toEqual({ kind: 'halted', reason: 'route record refs/conductor/demo/routes/r8 is unreadable' });
     } finally {
       await rm(subject.root, { recursive: true, force: true });
     }
