@@ -19,7 +19,7 @@ import {
 } from '../../src/engine/accepted-widenings.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
-const feature = { version: 'v1' as const, repository: 'example/repository', feature: 'wording-drift' };
+const feature = { version: 1 as const, repository: 'example/repository', feature: 'wording-drift' };
 const originalSource = { id: 'NC.source.1', snapshot: 'The originally offered visible behavior.' };
 
 function cleared(entries: unknown): string {
