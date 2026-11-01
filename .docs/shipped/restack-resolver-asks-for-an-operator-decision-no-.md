@@ -4,39 +4,26 @@ spec_hash: 37e2c3a235b87dbfd0a57b2139cc5975cd8de35fc6d3e753d018711cceee78c7
 pr: https://github.com/jstoup111/ai-conductor/pull/3556
 shipped: 2026-11-01
 engine_version: 20261031T181032Z-1677e5b98206
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This is test-isolation plumbing outside the operator-decision intent. Default production behavior is unchanged: the hook text is identical when no launcher is passed. It is not user-visible."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-2
-    summary: "This is an unplanned production change to the Claude provider's temp-file lifecycle, unrelated to restack decisions. It only fixes a leak on error paths and does not change prompts, arguments or dispatch results, so it is outside intent but not user-visible."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
-input: 4097667
-output: 321717
-cache_read: 66897802
+input: 4108395
+output: 321833
+cache_read: 66932106
 cache_creation: 1409521
 cost_usd: 41.5425
-dispatches: 66
+dispatches: 67
 retries: 14
 halts: 0
 unmetered: count: 0, duration_ms: 0
-cost_unmetered: count: 10
+cost_unmetered: count: 11
 providers:
-  codex: input: 4097537, output: 244369, cache_read: 63773312, cache_creation: 0, cost_usd: 28.0939, dispatches: 48, cost_unmetered: 10
+  codex: input: 4108265, output: 244485, cache_read: 63807616, cache_creation: 0, cost_usd: 28.0939, dispatches: 49, cost_unmetered: 11
   claude: input: 130, output: 77348, cache_read: 3124490, cache_creation: 1409521, cost_usd: 13.4485, dispatches: 18, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","3a2e512d-5c82-4f87-98ee-49f8c87af056","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 2
