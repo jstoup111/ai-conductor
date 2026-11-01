@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4
+// Covers: task:2, task:3, task:4, task:5
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -478,6 +478,50 @@ describe('capturePrdWideningDecisions', () => {
     });
   });
 
+  it('names each readable per-entry capture defect while retaining valid siblings', async () => {
+    const story = {
+      criterion: 'S3.17', summary: 'The offered story criterion.', decision: 'refuse',
+      rationale: 'The operator refuses the offered criterion.',
+    };
+    const missingRationale = await capturePrdWideningDecisions(cleared([
+      { ...story, rationale: '' }, siblingDecision(),
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(),
+      offeredStoryCriteria: offeredStories('S3.17'),
+    });
+    expect(missingRationale).toMatchObject({
+      captured: [{ criterion: 'NC.2' }], defects: [{ kind: 'missing-rationale', criterion: 'S3.17' }],
+    });
+
+    const changedOffer = await capturePrdWideningDecisions(cleared([
+      story, decision(), { ...siblingDecision(), offerEntryId: undefined },
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(),
+      offeredStoryCriteria: offeredStories('S3.17'),
+    });
+    expect(changedOffer).toMatchObject({
+      captured: [{ criterion: 'S3.17' }, { criterion: 'NC.1' }],
+      defects: [{ kind: 'changed-offer-reference', criterion: 'NC.2' }],
+    });
+
+    const duplicate = await capturePrdWideningDecisions(cleared([decision(), decision()]), {
+      operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(), offeredStoryCriteria: offeredStories(),
+    });
+    expect(duplicate.defects).toContainEqual({ kind: 'duplicate-offer-entry', criterion: 'NC.1', offerEntryId: 'case-1' });
+
+    const noOwner = await capturePrdWideningDecisions(cleared([story, siblingDecision()]), {
+      operator: undefined, offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(),
+      offeredStoryCriteria: offeredStories('S3.17'),
+    });
+    expect(noOwner).toMatchObject({
+      captured: [],
+      defects: expect.arrayContaining([
+        { kind: 'missing-operator', criterion: 'S3.17' },
+        { kind: 'missing-operator', criterion: 'NC.2', offerEntryId: 'case-2' },
+      ]),
+    });
+  });
+
   it.each([
     ['criterion', decision({ criterion: 'S1.1' })],
     ['summary', decision({ summary: 'An operator-edited evidence summary.' })],
@@ -520,9 +564,9 @@ describe('capturePrdWideningDecisions', () => {
     expect(recorded).toEqual([]);
     expect(results).toEqual([
       { kind: 'captured', captured: [], defects: [] },
-      expect.objectContaining({ defects: [{ kind: 'changed-offer-reference', offerEntryId: 'unrelated-case' }] }),
+      expect.objectContaining({ defects: [{ kind: 'changed-offer-reference', criterion: 'NC.1', offerEntryId: 'unrelated-case' }] }),
       { kind: 'absent', captured: [], defects: [] },
-      expect.objectContaining({ defects: [{ kind: 'missing-operator', offerEntryId: 'case-1' }] }),
+      expect.objectContaining({ defects: [{ kind: 'missing-operator', criterion: 'NC.1', offerEntryId: 'case-1' }] }),
     ]);
   });
 

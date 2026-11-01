@@ -1,4 +1,4 @@
-// Covers: task:21, task:25, task:4, task:7
+// Covers: task:21, task:25, task:4, task:5, task:6, task:7, task:8
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -321,6 +321,25 @@ describe('typed PRD widening routing', () => {
     }, { attemptId: `typed-${criterion}`, codeStamp: null });
   }
 
+  async function writeTypedMixedOverScope(): Promise<void> {
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '3', ordinal: 17 }, criterionId: 'S3.17', grade: 'OVER_SCOPE',
+          evidence: 'The story widening is outside visible scope.', rationale: 'Fixture scope evidence.',
+          requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'outside-visible',
+        }],
+        noOwnerObservations: [{
+          presentationOrdinal: 'NC.1', grade: 'OVER_SCOPE', evidence: 'The original user-visible widening.',
+          rationale: 'Fixture scope evidence.', intentRelation: 'outside-visible',
+        }],
+      },
+      diagnostics: [], recordedDispositions: [],
+    }, { attemptId: 'typed-mixed', codeStamp: null });
+  }
+
   function prdAuditEntry(): { preparePrdWideningBeforeAudit(): Promise<string | undefined> } {
     return new Conductor({
       projectRoot,
@@ -329,6 +348,88 @@ describe('typed PRD widening routing', () => {
       events: new ConductorEventEmitter(),
     }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
   }
+
+  it('proves the #3548 mixed story and NC reproduction through PRD-audit entry', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    const nc = JSON.parse((await readFile(clearPath, 'utf8')).match(/\[.*\]/s)?.[0] ?? '[]')[0];
+    await writeFile(clearPath, [
+      '```json over-scope-decisions', JSON.stringify([
+        {
+          criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse',
+          rationale: 'The operator refuses this newly raised story criterion.',
+        },
+        nc,
+      ]), '```',
+    ].join('\n'));
+    await writeTypedMixedOverScope();
+    const events = new ConductorEventEmitter();
+    const imported: unknown[] = [];
+    events.on('prd_widening_reconciled', event => { if (event.outcome === 'imported') imported.push(event); });
+    const entry = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
+    }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
+
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    expect(imported).toHaveLength(2);
+    const feature = { version: 1 as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
+    const decisions = await new AcceptedWideningDecisionStore(projectRoot, feature).read();
+    const cases = await new RemediationCaseStore(projectRoot, { ...feature, version: 'v1' }).read();
+    if (decisions.kind !== 'valid' || !cases.ok || cases.state.version !== 'v4') throw new Error('expected captured authority');
+    const routedCases = cases.state.prdWideningCases.map((candidate) => candidate.offeredCriterion !== 'NC.1' ? candidate : {
+      ...candidate,
+      currentSources: [{
+        sourceId: sourceId('The original user-visible widening.', 'NC.1'),
+        snapshot: 'The original user-visible widening.', recordedAt: '2026-01-01T00:00:00.000Z',
+      }],
+      relationships: [{
+        currentSourceId: sourceId('The original user-visible widening.', 'NC.1'), kind: 'same-case' as const,
+        caseId: candidate.id, reason: 'The current observation is the persisted offer.',
+      }],
+      reconciliationDigest: 'fixture-3548-publication',
+    });
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [
+        { criterion: 'S3.17', grade: 'OVER_SCOPE' as const, prdIds: [], evidence: 'The story widening is outside visible scope.' },
+        { criterion: 'NC.1', grade: 'OVER_SCOPE' as const, prdIds: [], evidence: 'The original user-visible widening.' },
+      ], rejectedRows: [] },
+      new Map([['S3.17', 'outside-visible' as const], ['NC.1', 'outside-visible' as const]]),
+      decisions.state.decisions, routedCases,
+    );
+    expect(route.kind).toBe('refusal-rework');
+    expect(route.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ criterion: 'S3.17', decision: 'refuse' }),
+      expect.objectContaining({ criterion: 'NC.1', decision: 'accept', accepted: true }),
+    ]));
+  });
+
+  it('renders one criterion-named recovery per capture-defect reason at PRD-audit entry', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    const nc = JSON.parse((await readFile(clearPath, 'utf8')).match(/\[.*\]/s)?.[0] ?? '[]')[0];
+    await writeFile(clearPath, [
+      '```json over-scope-decisions', JSON.stringify([
+        { ...nc, criterion: 'NC.1', offerEntryId: undefined },
+        { criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse', rationale: '' },
+      ]), '```',
+    ].join('\n'));
+    await writeTypedMixedOverScope();
+    const events = new ConductorEventEmitter();
+    const rejected: unknown[] = [];
+    events.on('prd_widening_reconciled', event => { if (event.outcome === 'rejected') rejected.push(event); });
+    const entry = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
+    }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
+
+    const recovery = await entry.preparePrdWideningBeforeAudit();
+    expect(recovery).toContain('changed-offer-reference');
+    expect(recovery).toContain('NC.1');
+    expect(recovery).toContain('missing-rationale');
+    expect(recovery).toContain('S3.17');
+    expect(recovery).not.toMatch(/malformed-history|known-good copy|no specific record/);
+    expect(rejected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: 'NC.1', reason: 'changed-offer-reference' }),
+      expect.objectContaining({ sourceId: 'S3.17', reason: 'missing-rationale' }),
+    ]));
+  });
 
   it.each([
     ['accepted-widenings.json', '{not-json', 'malformed-history'],
