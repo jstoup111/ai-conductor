@@ -363,3 +363,13 @@ Task 1 ─┬─ Task 2 ─┐
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-refusal-2e08dfd9-0dd3-4346-9bcc-f24e113a889b: Rework `continueRoutedHostExit` in `src/conductor/src/engine/conductor.ts`: restore the removed branch that halts a `continued.next.kind === 'unavailable'` reconciliation with `child N routed round reconciliation refused: <detail>` before calling `admitQueuedRevalidation`, keep `cannot consume routed revalidation queue` for unavailable consumption only, and assert both reasons in `src/conductor/test/engine/routing/conductor-routing-resume.test.ts`
+**Gate:** prd-audit
+**Rationale:** Rework only, per the recorded decision. Verified: the base commit halted `continued.next.kind === 'unavailable'` with `child N routed round reconciliation refused: <detail>`, and the diff removed that branch, so the helper's pass-through renders the fixed text. Restoring the branch ahead of the `admitQueuedRevalidation` call brings back the diagnostic and adds no behavior. The fixed text stays for an unavailable queue consumption only, as Story 6 requires, so S6.5 and its test survive. Confidence 95%.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 2e08dfd9-0dd3-4346-9bcc-f24e113a889b r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 2e08dfd9-0dd3-4346-9bcc-f24e113a889b r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-2e08dfd9-0dd3-4346-9bcc-f24e113a889b is committed and its targeted tests pass.
