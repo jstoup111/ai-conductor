@@ -4,7 +4,7 @@ import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import { readPrdAuditVerdict } from './prd-audit-verdict-store.js';
 import {
   capturePrdWideningDecisions,
-  parseLegacyPrdWideningClear,
+  parsePrdWideningClearEligibility,
   type CapturePrdWideningDecisionsOptions,
   type CapturePrdWideningDecisionsResult,
 } from './prd-widening-capture.js';
@@ -12,7 +12,6 @@ import {
   migrateLegacyPrdWideningDecisions,
   type MigrateLegacyPrdWideningDecisionsResult,
 } from './prd-widening-migration.js';
-import { prdWideningCasesForState } from './remediation-case-store.js';
 
 export type PreparePrdWideningEntryResult = {
   readonly migration: MigrateLegacyPrdWideningDecisionsResult;
@@ -43,31 +42,17 @@ export async function preparePrdWideningEntry(input: {
         };
       })()
     : { kind: 'unavailable' as const };
-  // Read the fenced legacy clear before the v1 replacement so migration can
-  // retain valid histories in authored order. It must never use the retired
-  // import path to grant a row D3 would reject during current-format capture.
-  const legacyClear = parseLegacyPrdWideningClear(input.priorHalt);
-  const carriesOfferReference = (() => {
-    const match = input.priorHalt.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
-    if (!match) return false;
-    try {
-      const rows: unknown = JSON.parse(match[1]!);
-      return Array.isArray(rows) && rows.some((row) => typeof row === 'object' && row !== null && !Array.isArray(row) &&
-        (Object.hasOwn(row, 'offerEntryId') || Object.hasOwn(row, 'originalCaseId') || Object.hasOwn(row, 'originalSource')));
-    } catch { return false; }
-  })();
-  const hasNoOwnerLegacyEntry = legacyClear.kind === 'supported' && legacyClear.entries.some((entry) => isPrdAuditNoOwnerOrdinal(entry.criterion));
-  const offers = hasNoOwnerLegacyEntry && offeredStoryCriteria.kind === 'available' && !carriesOfferReference
-    ? await input.capture.offerStore.mutate(async (state) => ({ value: prdWideningCasesForState(state) }))
-    : undefined;
-  const eligibleLegacyEntries = legacyClear.kind === 'supported' && offeredStoryCriteria.kind === 'available' && !carriesOfferReference && (offers === undefined || offers.ok)
-    ? legacyClear.entries.filter((entry) => isPrdAuditNoOwnerOrdinal(entry.criterion)
-      ? !offers?.value.some((offer) => offer.offeredCriterion === entry.criterion)
-      : offeredStoryCriteria.criteria.has(entry.criterion))
-    : [];
+  // Read the fence before v1 replacement. This is the same eligibility
+  // decision capture uses, so migration cannot retain a stripped row that D3
+  // would reject after migration.
+  const legacyEligibility = await parsePrdWideningClearEligibility(input.priorHalt, {
+    offerStore: input.capture.offerStore,
+    offeredStoryCriteria,
+  });
   const migration = await migrateLegacyPrdWideningDecisions(input.projectRoot, input.feature, {
-    legacyClear: eligibleLegacyEntries.length > 0 && typeof input.capture.operator === 'string' && input.capture.operator.trim()
-      ? { entries: eligibleLegacyEntries, operator: input.capture.operator.trim() }
+    legacyClear: legacyEligibility.kind === 'parsed' && legacyEligibility.eligibleLegacyEntries.length > 0 &&
+      typeof input.capture.operator === 'string' && input.capture.operator.trim()
+      ? { entries: legacyEligibility.eligibleLegacyEntries, operator: input.capture.operator.trim() }
       : undefined,
   });
   const capture = await capturePrdWideningDecisions(input.priorHalt, { ...input.capture, offeredStoryCriteria });

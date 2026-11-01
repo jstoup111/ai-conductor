@@ -37,10 +37,12 @@ export interface CapturePrdWideningDecisionsOptions {
   readonly offerStore: PrdWideningCaptureOfferStore;
   readonly decisionStore: PrdWideningCaptureDecisionStore;
   /** Typed PRD-audit story criteria eligible for offerless authority. */
-  readonly offeredStoryCriteria:
-    | { readonly kind: 'available'; readonly criteria: ReadonlySet<string> }
-    | { readonly kind: 'unavailable' };
+  readonly offeredStoryCriteria: PrdWideningOfferedStoryCriteria;
 }
+
+export type PrdWideningOfferedStoryCriteria =
+  | { readonly kind: 'available'; readonly criteria: ReadonlySet<string> }
+  | { readonly kind: 'unavailable' };
 
 export type PrdWideningCaptureDefectKind =
   | 'malformed-block'
@@ -280,6 +282,58 @@ async function persistedOffers(
   }));
 }
 
+export type PrdWideningClearEligibility =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'malformed-block' }
+  | { readonly kind: 'unsupported-legacy-clear' }
+  | {
+      readonly kind: 'parsed';
+      readonly rawEntries: readonly unknown[];
+      readonly legacy: LegacyPrdWideningClearParse;
+      readonly carriesOfferReference: boolean;
+      readonly offers: RemediationCaseStoreMutationResult<readonly RemediationCasePrdWideningRecord[]> | undefined;
+      /** Legacy rows which both migration and capture may treat as authority. */
+      readonly eligibleLegacyEntries: readonly LegacyPrdWideningClear[];
+      readonly legacyHasPersistedNcOffer: boolean;
+    };
+
+/**
+ * Parses a cleared fence once and centralizes the legacy authority boundary.
+ * A persisted NC offer makes the whole reference-free clear ineligible: capture
+ * then reports each stripped row instead of letting migration retain a sibling.
+ */
+export async function parsePrdWideningClearEligibility(
+  clearedBlock: string,
+  options: Pick<CapturePrdWideningDecisionsOptions, 'offerStore' | 'offeredStoryCriteria'>,
+): Promise<PrdWideningClearEligibility> {
+  const match = clearedBlock.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
+  if (!match) return { kind: hasUnsupportedLegacyClear(clearedBlock) ? 'unsupported-legacy-clear' : 'absent' };
+  let parsed: unknown;
+  try { parsed = JSON.parse(match[1]!); } catch { return { kind: 'malformed-block' }; }
+  if (!Array.isArray(parsed)) return { kind: 'unsupported-legacy-clear' };
+
+  const rawEntries = parsed;
+  const legacy = parseLegacyPrdWideningClear(clearedBlock);
+  const carriesOfferReference = rawEntries.some((entry) =>
+    typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+    (Object.hasOwn(entry, 'offerEntryId') || Object.hasOwn(entry, 'originalCaseId') || Object.hasOwn(entry, 'originalSource')));
+  const needsPersistedOffers = carriesOfferReference || rawEntries.some((entry) => {
+    const criterion = readableCriterion(entry);
+    return criterion !== undefined && isPrdAuditNoOwnerOrdinal(criterion);
+  });
+  const offers = needsPersistedOffers ? await persistedOffers(options.offerStore) : undefined;
+  const legacyHasPersistedNcOffer = legacy.kind === 'supported' && offers?.ok === true && legacy.entries.some((entry) =>
+    isPrdAuditNoOwnerOrdinal(entry.criterion) && offers.value.some((offer) => offer.offeredCriterion === entry.criterion));
+  const eligibleLegacyEntries = legacy.kind === 'supported' && options.offeredStoryCriteria.kind === 'available' &&
+    !carriesOfferReference && offers?.ok !== false && !legacyHasPersistedNcOffer
+    ? (() => {
+        const criteria = options.offeredStoryCriteria.criteria;
+        return legacy.entries.filter((entry) => isPrdAuditNoOwnerOrdinal(entry.criterion) || criteria.has(entry.criterion));
+      })()
+    : [];
+  return { kind: 'parsed', rawEntries, legacy, carriesOfferReference, offers, eligibleLegacyEntries, legacyHasPersistedNcOffer };
+}
+
 async function captureOfferlessStoryDecision(
   entry: ClearedDecisionEntry,
   options: CapturePrdWideningDecisionsOptions,
@@ -314,32 +368,14 @@ export async function capturePrdWideningDecisions(
   clearedBlock: string,
   options: CapturePrdWideningDecisionsOptions,
 ): Promise<CapturePrdWideningDecisionsResult> {
-  const match = clearedBlock.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
-  if (!match) {
-    return hasUnsupportedLegacyClear(clearedBlock)
-      ? { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] }
-      : { kind: 'absent', captured: [], defects: [] };
+  const parsed = await parsePrdWideningClearEligibility(clearedBlock, options);
+  if (parsed.kind === 'absent') return { kind: 'absent', captured: [], defects: [] };
+  if (parsed.kind === 'malformed-block') return { kind: 'captured', captured: [], defects: [{ kind: 'malformed-block' }] };
+  if (parsed.kind === 'unsupported-legacy-clear') {
+    return { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] };
   }
-  let rawEntries: unknown;
-  try {
-    rawEntries = JSON.parse(match[1]!);
-  } catch {
-    return { kind: 'captured', captured: [], defects: [{ kind: 'malformed-block' }] };
-  }
-  if (!Array.isArray(rawEntries)) return { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] };
-
-  const legacy = parseLegacyPrdWideningClear(clearedBlock);
-  const carriesOfferReference = rawEntries.some((entry) =>
-    typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
-    (Object.hasOwn(entry, 'offerEntryId') || Object.hasOwn(entry, 'originalCaseId') || Object.hasOwn(entry, 'originalSource')));
-  const needsPersistedOffers = carriesOfferReference || rawEntries.some((entry) => {
-    const criterion = readableCriterion(entry);
-    return criterion !== undefined && isPrdAuditNoOwnerOrdinal(criterion);
-  });
-  const offers = needsPersistedOffers ? await persistedOffers(options.offerStore) : undefined;
+  const { rawEntries, legacy, carriesOfferReference, offers, legacyHasPersistedNcOffer } = parsed;
   if (offers !== undefined && !offers.ok) return { kind: 'captured', captured: [], defects: [{ kind: 'offer-read-failed' }] };
-  const legacyHasPersistedNcOffer = legacy.kind === 'supported' && legacy.entries.some((entry) =>
-    isPrdAuditNoOwnerOrdinal(entry.criterion) && offers?.value.some((offer) => offer.offeredCriterion === entry.criterion));
   if (legacy.kind === 'supported' && !carriesOfferReference && !legacyHasPersistedNcOffer) {
     const captured: AcceptedWideningDecision[] = [];
     const defects: PrdWideningCaptureDefect[] = [];
