@@ -53,7 +53,7 @@ export class PrProseAuthoringFailedError extends Error {
   override readonly name = 'PrProseAuthoringFailedError';
 
   constructor(
-    readonly cause: 'not_returned' | 'invalid',
+    override readonly cause: 'not_returned' | 'invalid',
     readonly detail: string,
   ) {
     super(detail);
