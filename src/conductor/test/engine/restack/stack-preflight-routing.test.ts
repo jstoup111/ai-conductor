@@ -98,7 +98,97 @@ async function writeGitBlob(subject: Awaited<ReturnType<typeof fixture>>, conten
   return (await subject.git(['hash-object', '-w', path])).stdout.trim();
 }
 
+/**
+ * An audit round whose host 1 entered its region at the closure, with one
+ * repair commit on the host branch past that closure.
+ */
+async function routedHostFixture(hostState: 'repairing' | 'built') {
+  const subject = await fixture();
+  const host = parseChildId(1)!;
+  const roundId = parseRoundId('r1')!;
+  const created = await createRouteRecord(subject.repo, 'demo', {
+    roundId,
+    sealedAuthored: 1,
+    kind: 'audit',
+    items: [{ findingId: 'finding', kind: 'audit', owner: host, host, reason: 'task-slice', fallback: [] }],
+    allocation: { [host]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
+  });
+  if (created.kind !== 'created') throw new Error(created.kind);
+  const admitted = await admitRound(subject.repo, 'demo', created.record, host, { persist: async () => undefined });
+  if (admitted.kind !== 'admitted') throw new Error(admitted.kind);
+  const closureRef = 'refs/conductor/demo/closed/c1';
+  const pinned = (await subject.git(['rev-parse', closureRef])).stdout.trim();
+  const tree = (await subject.git(['rev-parse', `${pinned}^{tree}`])).stdout.trim();
+  const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+  if (stored.kind !== 'record') throw new Error(stored.kind);
+  const blob = await writeGitBlob(subject, JSON.stringify({
+    ...stored.record,
+    hosts: { ...stored.record.hosts, [host]: hostState },
+    entry: { host, pinnedBase: pinned, tree },
+    outbox: [],
+  }));
+  await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+  await subject.git(['checkout', '-q', 'feat/c1/demo']);
+  await writeFile(join(subject.repo, 'repair.txt'), 'repair\n');
+  await subject.git(['add', 'repair.txt']);
+  await subject.git(['commit', '-qm', 'repair']);
+  const repairedTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+  await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+  return { ...subject, host, roundId, closureRef, pinned, repairedTip };
+}
+
 describe('stack preflight routing', () => {
+  // Covers: #3436
+  it('halts on a host closure moved off the round pin, and its printed recovery makes the feature dispatchable', async () => {
+    const subject = await routedHostFixture('repairing');
+    await subject.git(['update-ref', subject.closureRef, subject.repairedTip]);
+    const markerBlob = (await subject.git(['rev-parse', repairMarkerRefFor('demo')])).stdout.trim();
+    const before = await conductorRefSnapshot(subject.repo);
+    const reconcile = vi.fn(async () => ({ kind: 'none' as const }));
+
+    const halted = await runStackPreflight({ worktree: subject.repo, slug: 'demo', reconcileRounds: reconcile });
+
+    expect(halted.kind).toBe('halted');
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(await conductorRefSnapshot(subject.repo)).toBe(before);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(`${subject.closureRef} is ${subject.repairedTip}`);
+    expect(halt).toContain(`round r1 pinned host 1 at ${subject.pinned}`);
+    expect(halt).toContain(`${repairMarkerRefFor('demo')} (${markerBlob})`);
+    expect(halt).toContain('ai-conductor halt clear --feature demo');
+
+    // Follow the recovery literally: its update-ref, then what `halt clear` removes.
+    const restore = halt.split('\n').find((line) => line.startsWith('git update-ref '));
+    expect(restore).toBe(`git update-ref ${subject.closureRef} ${subject.pinned} ${subject.repairedTip}`);
+    await subject.git(restore!.split(' ').slice(1));
+    await rm(join(subject.repo, '.pipeline', 'HALT'));
+    await rm(join(subject.repo, '.pipeline', 'HALT.class'));
+
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo' })).resolves.toMatchObject({
+      kind: 'navigate-leaf-to-build', roundId: subject.roundId, host: subject.host,
+    });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: #3436
+  it.each([
+    { name: 'a repairing host at its pinned closure', hostState: 'repairing' as const, moveClosure: false },
+    // A restack moves the closure from `built`, so a crash there must stay recoverable.
+    { name: 'a built host whose closure has moved', hostState: 'built' as const, moveClosure: true },
+  ])('does not treat $name as a moved closure', async ({ hostState, moveClosure }) => {
+    const subject = await routedHostFixture(hostState);
+    if (moveClosure) await subject.git(['update-ref', subject.closureRef, subject.repairedTip]);
+    const navigation = { kind: 'navigate-host' as const, roundId: subject.roundId, host: subject.host };
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      reconcileRounds: async () => navigation,
+    })).resolves.toEqual(navigation);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does not reconcile or admit a successor when routing outbox persistence fails', async () => {
     const subject = await fixture();
     const settled = parseChildId(1)!;

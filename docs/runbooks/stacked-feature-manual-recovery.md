@@ -279,6 +279,21 @@ It returns `{"kind":"halted","detail":"..."}` with the real reason. Delete the c
 
 **Recovery.** Follow the section that matches the reason.
 
+### Halt: `routed host closure moved`
+
+**Symptom.** The HALT's first line reads `routed host closure moved: refs/conductor/<slug>/closed/c<k> is <current>, but open round r<N> pinned host <k> at <pinned>`.
+
+**Cause.** Something outside the engine moved a closure ref while its routed round was repairing that child. If the dispatch continued, the routed exit could read the moved closure as "no commits" and never carry the repair to the children above.
+
+**Recovery.** Run the two commands the HALT prints. The first restores the ref, and fails if it has moved again. Any repair commits stay on the child's branch, and the round carries them when it exits.
+
+```bash
+git update-ref refs/conductor/<slug>/closed/c<k> <pinned> <current>
+ai-conductor halt clear --feature <slug> --rationale "restored closed/c<k> to the round r<N> pin"
+```
+
+**Verification.** The next dispatch re-enters host `<k>` with no HALT.
+
 ## 5. Seal or generic HALTs on older engines
 
 Both are fixed by [#3444](https://github.com/jstoup111/ai-conductor/pull/3444). Check the running
