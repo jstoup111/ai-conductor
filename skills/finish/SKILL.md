@@ -24,8 +24,8 @@ and publication evidence, creating or reusing a PR identity, pushing commits,
 creating durable shipment evidence, marking a PR ready, and recording the
 final outcome.
 
-For `author_pr_prose` and `judge_pr_prose` alike, this skill may
-inspect and repair only the retained PR's title and body.
+For `author_pr_prose` and `judge_pr_prose` alike, this skill may inspect and repair only the retained PR's title and body. An author pass repairs them by
+writing the returned prose handoff; a judgment pass returns its bounded verdict.
 It must not create, push, merge, ready, or otherwise change a PR; write shipment
 evidence, completion markers, or outcome records; or infer deterministic
 repository or external state.
@@ -71,21 +71,20 @@ invent an alternative outcome.
 
 ## PR Prose Authoring
 
-The engine seeds the SHIP-entry draft with the PR body template already in
-place — `## Why`, `## What Changed`, `## Testing`, and the `Closes` reference —
+The engine seeds the SHIP-entry draft with the PR body template already
+present — `## Why`, `## What Changed`, `## Testing`, and the `Closes` reference —
 with each section explicitly marked "not yet authored", plus its own body-floor
 marker. A body still carrying those markers is **unauthored by construction**,
 and the coordinator detects that deterministically rather than asking anyone to
 judge it.
 
-When the coordinator dispatches `author_pr_prose`, write the prose. Read the
-full diff of the feature branch against its base branch together with the
-feature's specification, plan, and story artifacts, then rewrite the retained
-PR's title and body in place following the `/pr` authoring contract (Claude Code
-invokes that skill as `/pr`; Codex invokes it as `$pr`). Keep the template
-section shape, replace every "not yet authored" marker and the body-floor marker
-with specific reader-facing content, and preserve every `ai-conductor:step`
-region and its markers unchanged.
+When the coordinator dispatches `author_pr_prose`, write the prose handoff.
+Read the full diff of the feature branch against its base branch together with
+the feature's specification, plan, and story artifacts, then write `.pipeline/finish-pr-prose.json` with `version`, `title`, and `body` following
+the `/pr` authoring contract (Claude Code invokes that skill as `/pr`; Codex
+invokes it as `$pr`). Keep the template section shape, replace every "not yet
+authored" marker and the body-floor marker with specific reader-facing content,
+and preserve every `ai-conductor:step` region and its markers unchanged. The engine validates the handoff and performs the PR title and body write.
 
 Never return a verdict instead of prose here, and never report that the body
 cannot be authored because the diff was not supplied — obtaining the diff is

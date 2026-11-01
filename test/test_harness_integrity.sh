@@ -1715,6 +1715,34 @@ else
     finish_no_legacy_outcomes_status=1
   fi
   assert "skills/finish/SKILL.md — contains no legacy merge-local/discard outcome instructions" "$finish_no_legacy_outcomes_status"
+
+  finish_pr_prose_handoff_status=0
+  grep -qF 'write `.pipeline/finish-pr-prose.json`' "$finish_skill" \
+    && grep -qiE 'engine.*performs.*PR title and body write' "$finish_skill" || finish_pr_prose_handoff_status=$?
+  assert "skills/finish/SKILL.md — states the FINISH PR-prose handoff and engine-owned write" "$finish_pr_prose_handoff_status"
+
+  finish_no_in_place_status=0
+  if grep -qiF 'in place' "$finish_skill"; then
+    finish_no_in_place_status=1
+  fi
+  assert "skills/finish/SKILL.md — contains no in-place PR prose instruction" "$finish_no_in_place_status"
+fi
+
+pr_skill="${HARNESS_DIR}/skills/pr/SKILL.md"
+if [ ! -f "$pr_skill" ]; then
+  assert "skills/pr/SKILL.md exists" 1
+else
+  pr_pr_prose_handoff_status=0
+  grep -qiE 'during FINISH' "$pr_skill" \
+    && grep -qF 'write `.pipeline/finish-pr-prose.json`' "$pr_skill" \
+    && grep -qiE 'engine.*performs.*PR title and body write' "$pr_skill" || pr_pr_prose_handoff_status=$?
+  assert "skills/pr/SKILL.md — states the FINISH PR-prose handoff and engine-owned write" "$pr_pr_prose_handoff_status"
+
+  pr_no_in_place_status=0
+  if grep -qiF 'in place' "$pr_skill"; then
+    pr_no_in_place_status=1
+  fi
+  assert "skills/pr/SKILL.md — contains no in-place PR prose instruction" "$pr_no_in_place_status"
 fi
 
 # ── 19. Migration block authoring contract ──────────────────────────────────
