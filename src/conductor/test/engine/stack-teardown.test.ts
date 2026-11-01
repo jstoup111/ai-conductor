@@ -10,6 +10,7 @@ import { enrollWatch, readWatch, sweepMergeableLabels } from '../../src/engine/m
 import { accountForChildCommits, deleteStackChildren } from '../../src/engine/stack-teardown.js';
 import { readPublicationRecord, writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
 import { featureConductorRefNames } from '../../src/engine/restack/restack-refs-cleanup.js';
+import type { GitResult } from '../../src/engine/rebase.js';
 
 const record: PublicationRecord = {
   version: 1,
@@ -35,8 +36,13 @@ function mergedGh() {
 
 const cleanup: string[] = [];
 
-async function runGit(cwd: string, args: string[], input?: string) {
-  return execa('git', args, { cwd, input, reject: false });
+async function runGit(cwd: string, args: string[], input?: string): Promise<GitResult> {
+  const result = await execa('git', args, { cwd, input, reject: false });
+  return {
+    exitCode: result.exitCode ?? 1,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 async function accountingFixture(name: string) {
@@ -726,7 +732,7 @@ describe('stack teardown', () => {
     await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
     await writePublicationRecord(root, 'demo', undefined, record);
     const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
-    const gh = vi.fn(async (args: string[]) => ({
+    const gh = vi.fn(async (_args: string[]) => ({
       stdout: JSON.stringify({ state: 'MERGED', headRefOid: head, mergeCommit: { oid: head } }),
     }));
 
