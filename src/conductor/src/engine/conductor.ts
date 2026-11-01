@@ -225,7 +225,7 @@ import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-ro
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
-import { consumeLowestQueued } from './routing/revalidation-queue.js';
+import { admitQueuedRevalidation } from './routing/queue-admission.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
@@ -6099,41 +6099,26 @@ export class Conductor {
       }
       return 'halt';
     }
-    if (continued.next.kind === 'unavailable') {
-      await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${continued.next.detail}`);
-      return 'halt';
-    }
-    if (continued.next.kind === 'stalled') {
-      const stall = await recordRoundStall(this.projectRoot, slug, continued.next, this.events);
-      await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
-      return 'halt';
-    }
-
-    let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
     // Queue admission always wins over a return to whole-feature gates.
-    if (
-      continued.next.kind === 'deferred' ||
-      continued.next.kind === 'none' ||
-      continued.next.kind === 'aborted' ||
-      continued.next.kind === 'leaf-returned' ||
-      continued.next.kind === 'quiescent'
-    ) {
-      consumed = await consumeLowestQueued(this.projectRoot, slug);
-      if (consumed.kind === 'unavailable') {
+    const admission = await admitQueuedRevalidation({
+      worktree: this.projectRoot,
+      slug,
+      reconciled: continued.next,
+    });
+    switch (admission.kind) {
+      case 'unavailable':
         await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
         return 'halt';
-      }
-      if (consumed.kind === 'stalled') {
-        const stalled = await reconcileRounds(this.projectRoot, slug);
-        if (stalled.kind === 'stalled') {
-          const stall = await recordRoundStall(this.projectRoot, slug, stalled, this.events);
+      case 'stalled': {
+        if ('haltClass' in admission) {
+          await this.haltChildRegionRefusal(admission.detail, admission.haltClass);
+        } else {
+          const stall = await recordRoundStall(this.projectRoot, slug, admission, this.events);
           await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
-          return 'halt';
         }
-        await this.haltChildRegionRefusal(consumed.detail ?? 'routing queue consumption stalled', 'mechanical');
         return 'halt';
       }
-      if (consumed.kind === 'admitted') {
+      case 'admitted': {
         const next = await this.resolveActiveChild(this.projectRoot, slug);
         const nextExecution = resolveExecutionChild(next, slug);
         if (nextExecution.source !== 'revalidating' && nextExecution.source !== 'routed-host') {
@@ -6143,21 +6128,27 @@ export class Conductor {
         await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
         return { index: indexOf('acceptance_specs'), activeChild: nextExecution.target };
       }
-    }
-    if (
-      (
-        continued.next.kind === 'none' ||
-        continued.next.kind === 'aborted' ||
-        continued.next.kind === 'leaf-returned' ||
-        continued.next.kind === 'quiescent'
-      ) &&
-      consumed?.kind === 'none' &&
-      !await routedRoundOpen(this.projectRoot, slug)
-    ) {
-      // returnToLeaf re-pends whole-feature gates in the root state file.
-      // Do not keep the former routed host's overlay or its CAS baseline.
-      await this.restoreWholeFeatureState(state);
-      return { index: indexOf('manual_test') };
+      case 'none':
+        if (
+          (
+            continued.next.kind === 'none' ||
+            continued.next.kind === 'aborted' ||
+            continued.next.kind === 'leaf-returned' ||
+            continued.next.kind === 'quiescent'
+          ) &&
+          !await routedRoundOpen(this.projectRoot, slug)
+        ) {
+          // returnToLeaf re-pends whole-feature gates in the root state file.
+          // Do not keep the former routed host's overlay or its CAS baseline.
+          await this.restoreWholeFeatureState(state);
+          return { index: indexOf('manual_test') };
+        }
+        break;
+      case 'busy':
+      case 'continue':
+        break;
+      default:
+        assertNever(admission);
     }
 
     // The exit may have admitted a following host. Rebind the overlay before
