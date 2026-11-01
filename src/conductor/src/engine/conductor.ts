@@ -862,14 +862,12 @@ export class Conductor {
     await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, execution, stall.detail), stall.haltClass ?? 'needs-human');
   }
 
-  /** Enter routed hosts before the shared child-region lifecycle takes over. */
-  private async enterRoutedHostRegion(
+  /** Resolve a routed host or refuse admission before region entry has side effects. */
+  private async resolveRoutedHostAdmission(
     execution: ExecutionChildResolution,
     slug: string,
-    state: ConductState,
     cursor?: ActiveChildResolution,
-  ): Promise<ExecutionChildTargetResolution | false> {
-    if (execution.source === 'cursor') return execution;
+  ): Promise<Extract<ExecutionChildResolution, { readonly source: 'routed-host' }> | false> {
     if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return false;
 
     let enteredExecution: Extract<ExecutionChildResolution, { readonly source: 'routed-host' | 'revalidating' }> = execution;
@@ -988,6 +986,21 @@ export class Conductor {
       );
       return false;
     }
+
+    return enteredExecution;
+  }
+
+  /** Enter routed hosts before the shared child-region lifecycle takes over. */
+  private async enterRoutedHostRegion(
+    execution: ExecutionChildResolution,
+    slug: string,
+    state: ConductState,
+    cursor?: ActiveChildResolution,
+  ): Promise<ExecutionChildTargetResolution | false> {
+    if (execution.source === 'cursor') return execution;
+
+    const enteredExecution = await this.resolveRoutedHostAdmission(execution, slug, cursor);
+    if (enteredExecution === false) return false;
 
     const hostEntry = await this.enterHostRegion({
       worktree: this.projectRoot,
