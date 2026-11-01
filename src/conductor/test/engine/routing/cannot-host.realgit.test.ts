@@ -8,7 +8,7 @@ import { parseChildId, type ChildId } from '../../../src/engine/child-context.js
 import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { classifyCitedPaths, resolveCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
+import { resolveCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
 import { initTestRepo } from '../../fixtures/git-repo.js';
 
 const roots: string[] = [];
@@ -127,7 +127,7 @@ describe('cannot-host (real local Git)', () => {
   it('moves a T1 repair for a leaf prerequisite to child 2 without changing task ownership', async () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
-    const classified = await classifyCitedPaths(['src/b.ts'], leafTip, stack.git);
+    const classified = await resolveCitedPaths(['src/b.ts'], leafTip, stack.git);
     if ('kind' in classified) throw new Error(classified.detail);
     const selected = await selectHost({
       owner: child(1),
@@ -151,7 +151,7 @@ describe('cannot-host (real local Git)', () => {
   it('treats a path absent from the leaf as an output and leaves its T1 repair with child 1', async () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
-    const classified = await classifyCitedPaths(['src/new.ts'], leafTip, stack.git);
+    const classified = await resolveCitedPaths(['src/new.ts'], leafTip, stack.git);
     if ('kind' in classified) throw new Error(classified.detail);
     const selected = await selectHost({
       owner: child(1),
@@ -162,7 +162,7 @@ describe('cannot-host (real local Git)', () => {
     });
 
     expect({ classified, selected }).toEqual({
-      classified: { inputs: [], outputs: ['src/new.ts'] },
+      classified: { inputs: [], outputs: ['src/new.ts'], dropped: [] },
       selected: { host: child(1), reason: 'owner' },
     });
   });
@@ -173,7 +173,7 @@ describe('cannot-host (real local Git)', () => {
     await writeFile(join(stack.repo, 'src', 'leaf-only.ts'), 'export const leaf = true;\n');
     await mustSucceed(makeGitRunner(stack.repo), ['add', 'src/leaf-only.ts']);
     await mustSucceed(makeGitRunner(stack.repo), ['commit', '-qm', 'leaf only']);
-    const classified = await classifyCitedPaths(['src/b.ts', 'src/leaf-only.ts'], leafTip, stack.git);
+    const classified = await resolveCitedPaths(['src/b.ts', 'src/leaf-only.ts'], leafTip, stack.git);
     if ('kind' in classified) throw new Error(classified.detail);
     expect(await selectHost({
       owner: child(1), inputs: classified.inputs, positions: [child(1), child(2), child(3)], leafTip, git: stack.git,
@@ -189,7 +189,7 @@ describe('cannot-host (real local Git)', () => {
     expect(await selectHost({
       owner: child(1), inputs: ['src/b.ts'], positions: [child(1), child(2), child(3)], leafTip, git: failingClosure,
     })).toMatchObject({ kind: 'halt', detail: expect.stringContaining('2') });
-    expect(await classifyCitedPaths(['src/b.ts'], 'feat/daemon-missing', stack.git))
+    expect(await resolveCitedPaths(['src/b.ts'], 'feat/daemon-missing', stack.git))
       .toMatchObject({ kind: 'halt', detail: expect.stringContaining('feat/daemon-missing') });
   });
 

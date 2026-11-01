@@ -4,7 +4,7 @@ import type { AsBuiltGoverningReference } from '../as-built-contract.js';
 import type { CriterionBoundRemediationGap, FrozenHostPlan } from '../remediation-append.js';
 import { allocateFrozenBlocks } from '../remediation-append.js';
 import type { GitRunner } from '../rebase.js';
-import { classifyCitedPaths, selectHost } from './cannot-host.js';
+import { resolveCitedPaths, selectHost } from './cannot-host.js';
 import { deriveTaskBoundOwner } from './owner-derivation.js';
 import { resolveResidueOwner, runResidueRoutingCall, type ResidueRoutingJudge } from './residue-routing-call.js';
 import type { ExistingTaskRoutedItem, FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
@@ -157,7 +157,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
       planText: input.planText, appendedChildren: input.appendedChildren, declaredPositions: input.declaredPositions,
     });
     if (ownership.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: ownership.detail };
-    const paths = await classifyCitedPaths(source.citedPaths, input.leafTip, input.git);
+    const paths = await resolveCitedPaths(source.citedPaths, input.leafTip, input.git);
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: ownership.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
@@ -172,7 +172,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   for (const answer of judged.answers) {
     const source = residue.find((item) => item.id === answer.itemId)!;
     const owner = resolveResidueOwner(answer);
-    const paths = await classifyCitedPaths(source.citedPaths, input.leafTip, input.git);
+    const paths = await resolveCitedPaths(source.citedPaths, input.leafTip, input.git);
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: owner.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };

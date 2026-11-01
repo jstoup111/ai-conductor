@@ -3,11 +3,6 @@ import { parseFeatureBranch } from '../feature-branch-identity.js';
 import type { GitRunner } from '../rebase.js';
 import { closureRefFor } from './routing-refs.js';
 
-export type CitedPathClassification = {
-  readonly inputs: readonly string[];
-  readonly outputs: readonly string[];
-} | { readonly kind: 'halt'; readonly detail: string };
-
 export type ResolvedCitedPaths = {
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
@@ -48,22 +43,6 @@ async function containsEveryPath(git: GitRunner, tree: string, paths: readonly s
 function slugForLeafTip(leafTip: string): string | undefined {
   const identity = parseFeatureBranch(leafTip);
   return identity.kind === 'leaf' ? identity.slug : undefined;
-}
-
-/** Separates prerequisite inputs already present on the leaf from repair outputs. */
-export async function classifyCitedPaths(
-  paths: readonly string[],
-  leafTip: string,
-  git: GitRunner,
-): Promise<CitedPathClassification> {
-  const inputs: string[] = [];
-  const outputs: string[] = [];
-  for (const path of paths) {
-    const exists = await hasPath(git, leafTip, path);
-    if (exists === undefined) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
-    (exists ? inputs : outputs).push(path);
-  }
-  return { inputs, outputs };
 }
 
 /** Resolves citations against one recursive listing of the leaf's files. */
