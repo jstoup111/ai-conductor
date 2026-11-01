@@ -91,7 +91,7 @@ describe('PRD widening events', () => {
       persister.start();
       await events.emit({ type: 'step_started', step: 'prd_audit', index: 0 });
 
-      await expect(entry.preparePrdWideningBeforeAudit()).resolves.toContain('malformed');
+      await expect(entry.preparePrdWideningBeforeAudit()).resolves.toContain('unreadable-decision-block');
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
@@ -143,7 +143,7 @@ describe('PRD widening events', () => {
       ].join('\n'));
       persister.start();
 
-      await expect(entry.preparePrdWideningBeforeAudit()).resolves.toContain('malformed');
+      await expect(entry.preparePrdWideningBeforeAudit()).resolves.toContain('unreadable-decision-entry');
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))

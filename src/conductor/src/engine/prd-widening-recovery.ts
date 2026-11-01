@@ -1,9 +1,47 @@
+import type { PrdWideningCaptureDefectKind } from './prd-widening-capture.js';
+import type { PrdWideningMigrationFailureReason } from './prd-widening-migration.js';
+
 /** Bounded, record-specific recovery text for PRD widening failures. */
 export type PrdWideningRecoveryReason =
   | 'malformed-history' | 'unsupported-history' | 'foreign-feature' | 'missing-operator'
   | 'persistence-failed' | 'invalid-decision' | 'invalid-provider-result' | 'stale-relation' | 'context-overflow'
   | 'projection-failed' | 'uncertain-relation' | 'provider-timeout'
-  | 'provider-unavailable' | 'attempts-exhausted';
+  | 'provider-unavailable' | 'attempts-exhausted'
+  | 'changed-offer-reference' | 'missing-rationale' | 'duplicate-decision-entry'
+  | 'unreadable-decision-block' | 'unreadable-decision-entry' | 'unknown-criterion'
+  | 'offered-set-unavailable';
+
+export const PRD_WIDENING_CAPTURE_DEFECT_RECOVERY: Record<
+  PrdWideningCaptureDefectKind,
+  PrdWideningRecoveryReason
+> = {
+  'malformed-block': 'unreadable-decision-block',
+  'malformed-entry': 'unreadable-decision-entry',
+  'changed-offer-reference': 'changed-offer-reference',
+  'duplicate-offer-entry': 'duplicate-decision-entry',
+  'invalid-decision': 'invalid-decision',
+  'missing-rationale': 'missing-rationale',
+  'missing-operator': 'missing-operator',
+  'offer-read-failed': 'persistence-failed',
+  'write-failed': 'persistence-failed',
+  'unsupported-legacy-clear': 'unsupported-history',
+  'unknown-criterion': 'unknown-criterion',
+  'offered-set-unavailable': 'offered-set-unavailable',
+};
+
+export const PRD_WIDENING_MIGRATION_FAILURE_RECOVERY: Record<
+  PrdWideningMigrationFailureReason,
+  PrdWideningRecoveryReason
+> = {
+  'corrupt-history': 'malformed-history',
+  'unsupported-history': 'unsupported-history',
+  'foreign-feature-history': 'foreign-feature',
+  'unknown-history-version': 'unsupported-history',
+  'unreadable-legacy': 'persistence-failed',
+  'unsupported-legacy-row': 'unsupported-history',
+  'case-write-failed': 'persistence-failed',
+  'decision-write-failed': 'persistence-failed',
+};
 
 const ACTIONS: Record<PrdWideningRecoveryReason, string> = {
   'malformed-history': 'restore the original .pipeline widening history from a known-good copy, then resume.',
@@ -20,6 +58,13 @@ const ACTIONS: Record<PrdWideningRecoveryReason, string> = {
   'context-overflow': 'reduce the reported input at its source; no history was pruned.',
   'projection-failed': 'repair the named stored evidence or renderer, then resume without re-deciding valid authority.',
   'uncertain-relation': 'review the preserved original and current evidence and submit a new explicit decision if desired.',
+  'changed-offer-reference': 'correct that entry against the latest halt or leave its decision pending before clearing again.',
+  'missing-rationale': 'provide a rationale for that entry, or leave its decision pending before clearing again.',
+  'duplicate-decision-entry': 'keep one entry per criterion, then clear the halt again.',
+  'unreadable-decision-block': "repair the block's JSON before clearing again.",
+  'unreadable-decision-entry': 'repair the named decision entry, or leave it pending before clearing again.',
+  'unknown-criterion': 'remove the unoffered criterion or leave its decision pending before clearing again.',
+  'offered-set-unavailable': 'leave the named entry pending so the next audit offers it again, then clear the halt again.',
 };
 
 export function renderPrdWideningRecovery(
