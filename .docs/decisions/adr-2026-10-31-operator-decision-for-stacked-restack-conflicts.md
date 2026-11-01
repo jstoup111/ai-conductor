@@ -74,6 +74,9 @@ Option B.
    - **Halt text.** The halt prints both recipes: the scratch-branch rebase with
      `stack restack-resolve --tip`, and `stack restack-resolve --decision`.
    - **Out of scope.** Merge-bearing `flatten_refused` halts stay unchanged.
+
+> **Amended 2026-11-01 by #3438:** A merge-bearing restack conflict no longer halts `flatten_refused`. It reaches the resolver, receives a matching decision like any other conflict, and takes this decision's record and recipes when unresolved (adr-2026-10-10-stacked-restack-journaled-replay decision 6).
+
 2. **`stack restack-resolve --slug <slug> --child <k> --decision "<answer>"` records a decision.**
    - **Flags.** `--decision` and `--tip` are mutually exclusive. Passing both or neither is refused.
    - **Shared refusals.** The command applies every up-front refusal of #3522 decision 3: daemon

@@ -84,7 +84,7 @@ As the operator, I want a flattened merge that conflicts with the new base to be
 - Given a merge-bearing branch whose first dry-run conflict against the target falls on a flattened merge commit, when `performRebase` runs, then it returns a `flatten_refused` outcome carrying the merge sha, both parent shas, the flattened sha, and the conflicting paths, without issuing any rebase command.
 - Given a `flatten_refused` outcome on the rebase step or the re-kick path of a feature without children, when the caller handles it, then `.pipeline/HALT` is written whose only recovery note is the recipe: park, `git -C <worktree> rebase -i --rebase-merges <base>`, re-apply `git diff <first parent> <merge>` at the merge stop, `git rebase --continue`, clear the HALT; and `rebase_conflict_halt` is emitted with its `mergeAudit` field populated.
 
-- Given a stacked feature whose restack halts `flatten_refused` on the rebase step or the re-kick path, when the caller handles it, then every child branch, closure ref and the leaf are unmoved, the restack journal is aborted with no paused rebase, and the halt's recovery goes through the restack rather than a manual single-branch rebase recipe.
+- Given a stacked feature whose restack halts on an unsettled merge-bearing conflict on the rebase step or the re-kick path, when the caller handles it, then every child branch, closure ref and the leaf are unmoved, the restack journal is aborted with no paused rebase, and the halt's recovery goes through the restack rather than a manual single-branch rebase recipe.
 
 #### Negative Paths
 - Given a `flatten_refused` outcome, when the rebase step or the re-kick path handles it, then the gated rebase resolver is never dispatched and no resolution attempt event is emitted.
