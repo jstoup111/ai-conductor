@@ -131,4 +131,50 @@ describe('preparePrdWideningEntry', () => {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it.each(['v3', 'v4'] as const)('keeps a stripped NC offer clear out of migration for a %s case store', async (version) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-entry-'));
+    try {
+      const feature = { version: 1 as const, repository: 'acme/repo', feature: 'feature' };
+      const remediationFeature = { version: 'v1' as const, repository: 'acme/repo', feature: 'feature' };
+      const offeredCase = {
+        id: 'offer-nc-2', domain: 'prd_widening' as const, offeredCriterion: 'NC.2',
+        originalSources: [{ sourceId: 'NC-2', snapshot: 'Offered no-owner expansion.' }], currentSources: [], relationships: [],
+      };
+      const state = version === 'v3'
+        ? { version, feature: remediationFeature, cases: [], prdWideningCases: [offeredCase], suppressions: [], outbox: [] }
+        : { version, feature: remediationFeature, cases: [], prdWideningCases: [offeredCase], asBuiltCases: [], suppressions: [], outbox: [] };
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), JSON.stringify({ version: 1, decisions: [{
+        criterion: 'S1.1', summary: 'Prior v1 decision.', decision: 'accept', rationale: 'Previously accepted.',
+        operator: 'operator@example.test', decidedAt: '2026-09-01T00:00:00.000Z',
+      }] }));
+      const decisionStore = new AcceptedWideningDecisionStore(projectRoot, feature);
+
+      const result = await preparePrdWideningEntry({
+        projectRoot, feature,
+        priorHalt: '```json over-scope-decisions\n' + JSON.stringify([
+          { criterion: 'NC.2', summary: 'Offered no-owner expansion.', decision: 'accept', rationale: 'Attempted stripped offer.' },
+        ]) + '\n```',
+        capture: {
+          operator: 'operator@example.test', decisionStore,
+          offerStore: { mutate: async (operation) => {
+            const result = await operation(state);
+            return { ok: true as const, value: result.value };
+          } },
+        },
+      });
+      const persisted = await decisionStore.read();
+
+      expect(result).toMatchObject({
+        capture: { captured: [], defects: [{ kind: 'changed-offer-reference', criterion: 'NC.2' }] },
+      });
+      expect(persisted).toMatchObject({
+        kind: 'valid', state: { decisions: [expect.objectContaining({ criterion: 'S1.1' })] },
+      });
+      expect(persisted.kind === 'valid' && persisted.state.decisions.some((decision) => decision.criterion === 'NC.2')).toBe(false);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });

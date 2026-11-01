@@ -12,6 +12,7 @@ import {
   migrateLegacyPrdWideningDecisions,
   type MigrateLegacyPrdWideningDecisionsResult,
 } from './prd-widening-migration.js';
+import { prdWideningCasesForState } from './remediation-case-store.js';
 
 export type PreparePrdWideningEntryResult = {
   readonly migration: MigrateLegacyPrdWideningDecisionsResult;
@@ -57,7 +58,7 @@ export async function preparePrdWideningEntry(input: {
   })();
   const hasNoOwnerLegacyEntry = legacyClear.kind === 'supported' && legacyClear.entries.some((entry) => isPrdAuditNoOwnerOrdinal(entry.criterion));
   const offers = hasNoOwnerLegacyEntry && offeredStoryCriteria.kind === 'available' && !carriesOfferReference
-    ? await input.capture.offerStore.mutate(async (state) => ({ value: state.version === 'v2' ? state.prdWideningCases : [] }))
+    ? await input.capture.offerStore.mutate(async (state) => ({ value: prdWideningCasesForState(state) }))
     : undefined;
   const eligibleLegacyEntries = legacyClear.kind === 'supported' && offeredStoryCriteria.kind === 'available' && !carriesOfferReference && (offers === undefined || offers.ok)
     ? legacyClear.entries.filter((entry) => isPrdAuditNoOwnerOrdinal(entry.criterion)
