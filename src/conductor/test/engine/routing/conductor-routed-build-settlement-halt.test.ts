@@ -21,6 +21,11 @@ const settlementSeam = vi.hoisted(() => ({
   haltedReason: undefined as string | undefined,
 }));
 
+const claimSeam = vi.hoisted(() => ({
+  detail: undefined as string | undefined,
+  calls: [] as unknown[],
+}));
+
 vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
   return {
@@ -31,12 +36,27 @@ vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) =
   };
 });
 
+vi.mock('../../../src/engine/routing/prerequisite-claim.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/prerequisite-claim.js')>();
+  return {
+    ...actual,
+    settleRoutedBuildClaim: vi.fn(async (input) => {
+      claimSeam.calls.push(input.structuredResult);
+      return claimSeam.detail === undefined
+        ? actual.settleRoutedBuildClaim(input)
+        : { kind: 'failed' as const, detail: claimSeam.detail };
+    }),
+  };
+});
+
 const child = parseChildId(1)!;
 const roots: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
   settlementSeam.haltedReason = undefined;
+  claimSeam.detail = undefined;
+  claimSeam.calls.length = 0;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -55,6 +75,8 @@ async function subject(options: {
   omitEffectiveGrowthCap?: boolean;
   roundId?: string;
   settledEarlierGrowth?: number;
+  buildResult?: unknown;
+  activeChild?: number;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
@@ -110,7 +132,7 @@ async function subject(options: {
   let parkAfterBuild = false;
   const build = vi.fn(async () => {
     parkAfterBuild = true;
-    return { success: true };
+    return { success: true, ...(options.buildResult === undefined ? {} : { finalStructuredResult: options.buildResult }) };
   });
   const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
   const conductor = new Conductor({
@@ -120,7 +142,7 @@ async function subject(options: {
     operatorParkBoundary: async () => parkAfterBuild,
     config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: options.configGrowthCap ?? 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
-      resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/demo', routedRepair: { child, roundId: routeRoundId } }) as never,
+      resolveActiveChild: async () => ({ kind: 'active', child: options.activeChild ?? child, position: options.activeChild ?? child, isLeaf: true, branch: 'feat/demo', routedRepair: { child: options.activeChild ?? child, roundId: routeRoundId } }) as never,
       enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
       enterChildRegion: async () => ({ kind: 'completed' }) as never,
     },
@@ -345,5 +367,26 @@ describe('routed BUILD settlement cap halt', () => {
     expect(halt).toContain(`Pending remediation findings are unavailable: ${reason}.`);
     if (reason.includes('restack')) expect(halt).not.toContain('malformed');
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  // Covers: task:8 — rejected prerequisite claims are ordinary, region-local
+  // failed BUILD attempts. The actual claim normalization is covered by the
+  // real-Git settlement tests; this keeps the conductor assertion at its
+  // orchestration boundary.
+  it.each([
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1', 1],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file', 1],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file', 1],
+  ])('passes a rejected claim through as an unsuccessful attempt without a routing halt', async (claim, detail, activeChild) => {
+    claimSeam.detail = `routed prerequisite claim unverified: ${detail}`;
+    const fixture = await subject({ cap: 15, activeChild, buildResult: claim });
+
+    await fixture.conductor.run();
+
+    expect(claimSeam.calls).toContainEqual(claim);
+    expect(fixture.build).toHaveBeenCalled();
+    // Generic retry exhaustion remains owned by BUILD. A rejected claim must
+    // not become a routed-prerequisite needs-human halt.
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('routed prerequisite claim unverified');
   });
 });
