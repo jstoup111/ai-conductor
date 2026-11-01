@@ -394,6 +394,7 @@ export async function changedRoutedAppliedRef(
       { ref: repairMarkerRefFor(journal.slug), old: routed.markerOld },
     ]),
     ...(journal.journal.queueTracked === true ? [{ ref: revalidationQueueRefFor(journal.slug), old: journal.journal.queueOld }] : []),
+    ...(journal.journal.refreshTracked === true ? [{ ref: refreshLedgerRefFor(journal.slug), old: journal.journal.refreshOld }] : []),
   ];
   for (const entry of expected) {
     const result = await runGit(git, ['rev-parse', '-q', '--verify', entry.ref]);

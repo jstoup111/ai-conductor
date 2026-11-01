@@ -1,10 +1,11 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { pushedTipRef } from '../../../src/engine/push-lease.js';
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { refreshLedgerRefFor } from '../../../src/engine/stack-refresh-ledger.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
@@ -153,5 +154,53 @@ describe('runRestack refresh ledger (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'applied' });
 
     expect((await git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/refresh'])).exitCode).toBe(1);
+  });
+
+  it('halts when the refresh ledger changes before the routed applied transaction', async () => {
+    const subject = await createSweepRepository('restack-executor-refresh-race-', cleanup);
+    const native = makeGitRunner(subject.repo);
+    await subject.commit('base', 'base.txt', 'base\n');
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    const firstClosed = await subject.commit('first closed', 'one.txt', 'one\n');
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', firstClosed]);
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    const secondClosed = await subject.commit('second closed', 'two.txt', 'two\n');
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', secondClosed]);
+    await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+    await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+    await sealStack(subject.repo);
+    await writePublicationRecord(subject.repo, 'demo', undefined, { version: 1, members: [
+      { position: host, branch: 'feat/c1/demo', pr: 101 },
+      { position: aboveHost, branch: 'feat/c2/demo', pr: 102 },
+      { position: leaf, branch: 'feat/daemon-demo', pr: 103 },
+    ] }, { git: native });
+    for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) {
+      await native(['update-ref', pushedTipRef('demo', branch), (await native(['rev-parse', branch])).stdout.trim()]);
+    }
+    const route: RouteRecord = { roundId, kind: 'audit', phase: 'open',
+      items: [{ findingId: 'finding-1', kind: 'audit', owner: host, host, reason: 'repair', fallback: [] }],
+      allocation: { [host]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
+      hosts: { [host]: 'built' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [] };
+    const routeOld = await writeBlob(native, route);
+    const markerOld = await writeBlob(native, { host, roundId });
+    await native(['update-ref', routeRecordRefFor('demo', roundId), routeOld]);
+    await native(['update-ref', repairMarkerRefFor('demo'), markerOld]);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('routed repair', 'repair.txt', 'repair\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const changed = await writeBlob(native, { changed: true });
+    let raced = false;
+    const git: GitRunner = async (args, options) => {
+      if (!raced && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(refreshLedgerRefFor('demo'))) {
+        raced = true;
+        await native(['update-ref', refreshLedgerRefFor('demo'), changed]);
+      }
+      return native(args, options);
+    };
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [host],
+      routed: { roundId, host, routeOld, markerOld }, git,
+    })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining(refreshLedgerRefFor('demo')) });
   });
 });
