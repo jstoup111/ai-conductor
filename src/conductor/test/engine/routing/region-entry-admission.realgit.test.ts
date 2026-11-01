@@ -1,4 +1,4 @@
-// Covers: tasks:6,7,9,10
+// Covers: task:6, task:7, task:8, task:9, task:10
 //
 // These tests deliberately use a real local repository for the routing refs,
 // while keeping the child-region and provider boundaries injected.  The
