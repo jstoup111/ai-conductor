@@ -370,88 +370,13 @@ describe('typed PRD widening routing', () => {
     }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
   }
 
-  it('keeps the offerless-NC mixed block on the legacy whole-block capture path', async () => {
-    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
-    const ncEvidence = 'The second visible widening is outside approved scope.';
-    await writeFile(clearPath, [
-      '```json over-scope-decisions', JSON.stringify([
-        {
-          criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse',
-          rationale: 'The operator refuses this newly raised story criterion.',
-        },
-        {
-          criterion: 'NC-2', summary: ncEvidence, decision: 'accept',
-          rationale: 'The operator accepts this newly raised no-owner criterion.',
-        },
-      ]), '```',
-    ].join('\n'));
+  async function verifyMixedStoryAndNcReproduction(ncEvidence: string): Promise<void> {
     await writeTypedMixedOverScope('NC-2', ncEvidence);
     const events = new ConductorEventEmitter();
     const imported: Array<{ readonly decisionId?: string }> = [];
-    events.on('prd_widening_reconciled', event => { if (event.type === 'prd_widening_reconciled' && event.outcome === 'imported') imported.push(event); });
-    const entry = new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
-    }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
-
-    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    const feature = { version: 1 as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
-    const decisions = await new AcceptedWideningDecisionStore(projectRoot, feature).read();
-    const cases = await new RemediationCaseStore(projectRoot, { ...feature, version: 'v1' }).read();
-    if (decisions.kind !== 'valid' || !cases.ok || cases.state.version !== 'v4') throw new Error('expected captured authority');
-    expect(imported).toHaveLength(2);
-    expect(imported.map(({ decisionId }) => decisions.state.decisions.find((decision) => decision.id === decisionId)?.criterion)
-      .sort()).toEqual(['NC-2', 'S3.17']);
-    const ncDecision = decisions.state.decisions.find((decision) => decision.criterion === 'NC-2');
-    if (!ncDecision?.originalCaseId) throw new Error('expected captured NC-2 authority');
-    const routedCases = cases.state.prdWideningCases.map((candidate) => candidate.id !== ncDecision.originalCaseId ? candidate : {
-      ...candidate,
-      currentSources: [{
-        sourceId: sourceId(ncEvidence, 'NC-2'),
-        snapshot: ncEvidence, recordedAt: '2026-01-01T00:00:00.000Z',
-      }],
-      relationships: [{
-        currentSourceId: sourceId(ncEvidence, 'NC-2'), kind: 'same-case' as const,
-        caseId: candidate.id, reason: 'The current observation is the persisted offer.',
-      }],
-      reconciliationDigest: 'fixture-3548-publication',
+    events.on('prd_widening_reconciled', event => {
+      if (event.type === 'prd_widening_reconciled' && event.outcome === 'imported') imported.push(event);
     });
-    const route = routeTypedPrdAuditOverScope(
-      { prd: 'present', findings: [
-        { criterion: 'S3.17', grade: 'OVER_SCOPE' as const, prdIds: [], evidence: 'The story widening is outside visible scope.' },
-        { criterion: 'NC-2', grade: 'OVER_SCOPE' as const, prdIds: [], evidence: ncEvidence },
-      ], rejectedRows: [] },
-      new Map([['S3.17', 'outside-visible' as const], ['NC-2', 'outside-visible' as const]]),
-      decisions.state.decisions, routedCases,
-    );
-    if (route.kind !== 'refusal-rework') throw new Error(`expected refusal-rework, got ${route.kind}`);
-    expect(route.findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ criterion: 'S3.17', decision: 'refuse' }),
-      expect.objectContaining({ criterion: 'NC-2', decision: 'accept', accepted: true }),
-    ]));
-  });
-
-  it('proves the #3548 mixed story and offer-backed NC reproduction through PRD-audit entry', async () => {
-    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
-    const ncEvidence = 'The second visible widening is outside approved scope.';
-    const offers = await persistPrdWideningOffers(projectRoot, {
-      version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
-    }, [{
-      criterion: 'NC-2', sourceId: sourceId(ncEvidence, 'NC-2'), evidence: ncEvidence,
-      reportSnapshot: 'second original report', relation: 'outside-visible',
-    }]);
-    if (!offers.ok) throw new Error('fixture NC-2 offer did not persist');
-    const nc = JSON.parse(offers.block.match(/\[.*\]/s)?.[0] ?? '[]')[0];
-    await writeFile(clearPath, ['```json over-scope-decisions', JSON.stringify([
-      {
-        criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse',
-        rationale: 'The operator refuses this newly raised story criterion.',
-      },
-      { ...nc, decision: 'accept', rationale: 'The operator accepts this newly raised no-owner criterion.' },
-    ]), '```'].join('\n'));
-    await writeTypedMixedOverScope('NC-2', ncEvidence);
-    const events = new ConductorEventEmitter();
-    const imported: Array<{ readonly decisionId?: string }> = [];
-    events.on('prd_widening_reconciled', event => { if (event.type === 'prd_widening_reconciled' && event.outcome === 'imported') imported.push(event); });
     const entry = new Conductor({
       projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events,
     }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
@@ -490,6 +415,45 @@ describe('typed PRD widening routing', () => {
       expect.objectContaining({ criterion: 'S3.17', decision: 'refuse' }),
       expect.objectContaining({ criterion: 'NC-2', decision: 'accept', accepted: true }),
     ]));
+  }
+
+  it('keeps the offerless-NC mixed block on the legacy whole-block capture path', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    const ncEvidence = 'The second visible widening is outside approved scope.';
+    await writeFile(clearPath, [
+      '```json over-scope-decisions', JSON.stringify([
+        {
+          criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse',
+          rationale: 'The operator refuses this newly raised story criterion.',
+        },
+        {
+          criterion: 'NC-2', summary: ncEvidence, decision: 'accept',
+          rationale: 'The operator accepts this newly raised no-owner criterion.',
+        },
+      ]), '```',
+    ].join('\n'));
+    await verifyMixedStoryAndNcReproduction(ncEvidence);
+  });
+
+  it('proves the #3548 mixed story and offer-backed NC reproduction through PRD-audit entry', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    const ncEvidence = 'The second visible widening is outside approved scope.';
+    const offers = await persistPrdWideningOffers(projectRoot, {
+      version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
+    }, [{
+      criterion: 'NC-2', sourceId: sourceId(ncEvidence, 'NC-2'), evidence: ncEvidence,
+      reportSnapshot: 'second original report', relation: 'outside-visible',
+    }]);
+    if (!offers.ok) throw new Error('fixture NC-2 offer did not persist');
+    const nc = JSON.parse(offers.block.match(/\[.*\]/s)?.[0] ?? '[]')[0];
+    await writeFile(clearPath, ['```json over-scope-decisions', JSON.stringify([
+      {
+        criterion: 'S3.17', summary: 'The story widening is outside visible scope.', decision: 'refuse',
+        rationale: 'The operator refuses this newly raised story criterion.',
+      },
+      { ...nc, decision: 'accept', rationale: 'The operator accepts this newly raised no-owner criterion.' },
+    ]), '```'].join('\n'));
+    await verifyMixedStoryAndNcReproduction(ncEvidence);
   });
 
   it('records an accepted offerless S4.2 beside a pending offer-backed NC.1', async () => {
