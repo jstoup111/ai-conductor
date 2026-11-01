@@ -495,7 +495,7 @@ describe('N=1 golden renderings', () => {
       const gitArgv = await withGitArgvShim(root, async () => {
         let coordinator = makeCoordinator();
         const first = await advance(coordinator);
-        expect(first).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+        expect(first).toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
         if (resumeAfterAuthoring) coordinator = makeCoordinator();
         const outcomes: unknown[] = [];
         for (let attempt = 0; attempt < 4; attempt += 1) {

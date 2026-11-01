@@ -133,7 +133,7 @@ async function dispatchPersistedRevisionAuthoring(
       emit: async () => {},
     };
     await expect(coordinator.advance(input)).resolves.toEqual({
-      kind: 'publication_progress', transition: 'author_pr_prose',
+      kind: 'advanced', transition: 'author_pr_prose',
     });
     if (continueToNextTransition) await coordinator.advance(input);
 
@@ -658,7 +658,7 @@ describe('production FINISH invalid prose handoffs', () => {
           return { success: true };
         },
         emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
       expect(operations.run).toHaveBeenCalledOnce();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -739,7 +739,7 @@ describe('production FINISH authoring retry guidance', () => {
     expect(result.requests[1]).toEqual(expect.objectContaining({
       revisionGuidance: 'No PR-prose handoff was written to .pipeline/finish-pr-prose.json.',
     }));
-    expect(result.second).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+    expect(result.second).toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
     expect(result.operations.run).toHaveBeenCalledOnce();
   });
 
@@ -913,7 +913,7 @@ describe('production FINISH engine-owned PR-prose edits', () => {
           return { success: true };
         },
         emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
       expect(operations.run).toHaveBeenCalledOnce();
     } finally {
       await rm(root, { recursive: true, force: true });
