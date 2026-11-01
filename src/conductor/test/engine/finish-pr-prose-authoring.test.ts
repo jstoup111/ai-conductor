@@ -735,6 +735,65 @@ describe('production FINISH authoring retry guidance', () => {
     expect(result.second).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
     expect(result.operations.run).toHaveBeenCalledOnce();
   });
+
+  // Covers: task:7
+  it('publishes a persisted revision pass through the engine before re-judging it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-persisted-revision-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      let title = 'fix: needs a revision';
+      let body = '## Why\n\nThe original prose omits reader evidence.\n';
+      const initialRevision = `${PR_URL}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(initialRevision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1,
+        records: { [digest]: { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'Name the reader evidence.' } },
+      }));
+      const operations = {
+        run: vi.fn(async (request: { payload?: { title?: string; body?: string } }) => {
+          title = request.payload?.title ?? title;
+          body = request.payload?.body ?? body;
+          return {};
+        }),
+      };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/persisted-revision\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const input = {
+        state: {
+          feature_desc: 'persisted-revision', worktree_branch: 'feat/persisted-revision', pr_url: PR_URL,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const, daemon: true, dispatchJudgment,
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1, title: 'fix: reader evidence', body: '## Why\n\nReaders can now verify the evidence.\n',
+          }));
+          return { success: true };
+        },
+        emit: async () => {},
+      };
+
+      await coordinator.advance(input);
+      await coordinator.advance(input);
+
+      expect({ edits: operations.run.mock.calls.length, judgments: dispatchJudgment.mock.calls.length }).toEqual({
+        edits: 1, judgments: 1,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('production FINISH engine-owned PR-prose edits', () => {
