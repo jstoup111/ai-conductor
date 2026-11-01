@@ -9,7 +9,6 @@ import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
-import { routeAdmittedRound } from '../../../src/engine/routing/round-router.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { Conductor } from '../../../src/engine/conductor.js';
@@ -56,34 +55,87 @@ async function fixture() {
   return { repo, git };
 }
 
-async function routedCandidate(git: ReturnType<typeof makeGitRunner>) {
-  return routeAdmittedRound({
-    admitted: [{
-      id: 'S3.5', gateSource: 'prd_audit', provenance: { kind: 'task-bound' }, ownerTaskIds: ['T1'],
-      citedPaths: ['src/engine/a.ts'],
-      gap: {
-        id: 'S3.5', rationale: 'Repair the missing route.', criterion: 'The repair block cites a leaf-only file.',
-        governingClause: 'Update src/engine/register-artifact-cli.ts.', tasks: [{ id: 'repair', title: 'Repair the route.' }],
-      } as never,
-    }],
-    sliceMembership: { taskSlices: { T1: 1 }, titles: ['owner'] }, planText: '### Task T1: owner\n',
-    appendedChildren: {}, declaredPositions: [c1, c3], leafTip: leafBranchFor('demo'), roundId: r2, git,
+async function seedClosedRound(repo: string, git: ReturnType<typeof makeGitRunner>) {
+  const created = await createRouteRecord(repo, 'demo', {
+    roundId: r1, sealedAuthored: 1, kind: 'audit',
+    items: [{ findingId: 'old', kind: 'audit', owner: c1, host: c1, reason: 'task-slice', fallback: [] }],
+    allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
   });
+  if (created.kind !== 'created') throw new Error(created.kind);
+  const closed = { ...created.record, phase: 'closed' as const, hosts: { [c1]: 'done' as const } };
+  await git(['update-ref', 'refs/conductor/demo/routes/r1', (await git(['hash-object', '-w', '--stdin'], {
+    input: JSON.stringify(closed),
+  })).stdout.trim()]);
 }
 
-async function ownerCandidate(git: ReturnType<typeof makeGitRunner>) {
-  return routeAdmittedRound({
-    admitted: [{
-      id: 'S3.6', gateSource: 'prd_audit', provenance: { kind: 'task-bound' }, ownerTaskIds: ['T1'],
-      citedPaths: ['src/engine/a.ts'],
-      gap: {
-        id: 'S3.6', rationale: 'Repair the owner route.', criterion: 'The repair block cites the owner file.',
-        governingClause: 'Update src/engine/a.ts.', tasks: [{ id: 'repair', title: 'Repair the owner route.' }],
-      } as never,
-    }],
-    sliceMembership: { taskSlices: { T1: 1 }, titles: ['owner'] }, planText: '### Task T1: owner\n',
-    appendedChildren: {}, declaredPositions: [c1, c3], leafTip: leafBranchFor('demo'), roundId: r2, git,
+async function runRoutedAudit(
+  repo: string,
+  ownerTaskId: 'T1' | 'T2',
+  criterionId: 'S1.1' | 'S2.1',
+  citedPath: string,
+) {
+  await createProtectedArtifactSeal({
+    projectRoot: repo, baselineCommit: (await makeGitRunner(repo)(['rev-parse', 'HEAD'])).stdout.trim(),
   });
+  const statePath = join(repo, '.pipeline', 'conduct-state.json');
+  const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'skipped']));
+  for (const step of ALL_STEPS) {
+    if (step.name === 'prd_audit') break;
+    state[step.name] = 'done';
+  }
+  await writeState(statePath, { ...state, feature_desc: 'demo', complexity_tier: 'M', prd_audit: 'pending' });
+  await writeFile(join(repo, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+    { id: 'T1', status: 'completed' }, { id: 'T2', status: 'completed' },
+  ] }));
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(repo, '.pipeline', 'events.jsonl'), events);
+  persister.start();
+  try {
+    const conductor = new Conductor({
+      projectRoot: repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'prd_audit',
+      mode: 'auto', daemon: true, verifyArtifacts: true, events,
+      config: {
+        stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: true },
+        prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
+        gate_code_validity: { enabled: false },
+      } as never,
+      stepRunner: {
+        run: async (step, _state, options) => {
+          if (step === 'prd_audit') {
+            await persistPrdAuditVerdict(repo, {
+              complete: true,
+              judgment: {
+                version: 'v1',
+                criterionJudgments: [{
+                  criterion: { storyId: ownerTaskId === 'T1' ? '1' : '2', ordinal: 1 }, criterionId, grade: 'FIXABLE',
+                  evidence: `The ${citedPath} implementation is absent.`,
+                  rationale: `Repair ${citedPath} through the routed host.`,
+                  requirementAssociations: [], evidenceTaskIds: [ownerTaskId], ownerTaskId,
+                }],
+                noOwnerObservations: [],
+              }, diagnostics: [], recordedDispositions: [],
+            }, { attemptId: options?.runId!, codeStamp: null });
+          }
+          if (step === 'remediate') {
+            await persistFixtureProjectedRemediationPlan(repo, options, [{
+              id: criterionId, disposition: 'existing-task', category: null,
+              rationale: `Repair ${citedPath} through the routed host.`,
+              tasks: [], boundTaskIds: [ownerTaskId],
+            }]);
+          }
+          return { success: true };
+        },
+      },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active', child: c3, position: c3, isLeaf: true, branch: leafBranchFor('demo'),
+        }) as never,
+      },
+    });
+    await conductor.run();
+  } finally {
+    persister.stop();
+  }
 }
 
 describe('conductor routed citation admission fence', () => {
@@ -97,63 +149,8 @@ describe('conductor routed citation admission fence', () => {
         allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
       });
       if (open.kind !== 'created') throw new Error(open.kind);
-      await git(['update-ref', 'refs/conductor/demo/routes/r1', (await git(['hash-object', '-w', '--stdin'], {
-        input: JSON.stringify({ ...open.record, phase: 'open', hosts: { [c1]: 'pending' } }),
-      })).stdout.trim()]);
-      await createProtectedArtifactSeal({
-        projectRoot: repo, baselineCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
-      });
-
-      const statePath = join(repo, '.pipeline', 'conduct-state.json');
-      await writeState(statePath, {
-        ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
-        feature_desc: 'demo', complexity_tier: 'M', prd_audit: 'pending',
-      });
-      const events = new ConductorEventEmitter();
-      const persister = new EventPersister(join(repo, '.pipeline', 'events.jsonl'), events);
-      persister.start();
-      const conductor = new Conductor({
-        projectRoot: repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'prd_audit',
-        mode: 'auto', daemon: true, verifyArtifacts: false, events,
-        config: {
-          stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: true },
-          prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
-        } as never,
-        stepRunner: {
-          run: async (step, _state, options) => {
-            if (step === 'prd_audit') {
-              await persistPrdAuditVerdict(repo, {
-                complete: true,
-                judgment: {
-                  version: 'v1',
-                  criterionJudgments: [{
-                    criterion: { storyId: '2', ordinal: 1 }, criterionId: 'S2.1', grade: 'FIXABLE',
-                    evidence: 'The leaf-only implementation is absent.', rationale: 'Repair the routed leaf.',
-                    requirementAssociations: [], evidenceTaskIds: ['T2'], ownerTaskId: 'T2',
-                  }],
-                  noOwnerObservations: [],
-                }, diagnostics: [], recordedDispositions: [],
-              }, { attemptId: options?.runId!, codeStamp: null });
-            }
-            if (step === 'remediate') {
-              await persistFixtureProjectedRemediationPlan(repo, options, [{
-                id: 'S2.1', disposition: 'existing-task', category: null,
-                rationale: 'Task T2 already owns the leaf-only implementation.',
-                tasks: [], boundTaskIds: ['T2'],
-              }]);
-            }
-            return { success: true };
-          },
-        },
-        childRegionLifecycle: {
-          resolveActiveChild: async () => ({
-            kind: 'active', child: c3, position: c3, isLeaf: true, branch: leafBranchFor('demo'),
-          }) as never,
-        },
-      });
-
-      await conductor.run();
-      persister.stop();
+      await expect(admitRound(repo, 'demo', open.record, c1, { git })).resolves.toMatchObject({ kind: 'admitted' });
+      await runRoutedAudit(repo, 'T2', 'S2.1', 'src/engine/register-artifact-cli.ts');
 
       await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
       const firstHaltLine = (await readFile(join(repo, '.pipeline', 'HALT'), 'utf8')).split('\n', 1)[0]!;
@@ -165,16 +162,11 @@ describe('conductor routed citation admission fence', () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it('admits the resolved leaf host after the old round is closed', async () => {
+  it('creates and admits the resolved leaf host after the old round is closed', async () => {
     const { repo, git } = await fixture();
     try {
-      const routed = await routedCandidate(git);
-      if (routed.kind !== 'routed') throw new Error(routed.detail);
-      const created = await createRouteRecord(repo, 'demo', {
-        roundId: r2, sealedAuthored: 1, kind: 'audit', items: routed.items, allocation: routed.allocation,
-      }, { git });
-      if (created.kind !== 'created') throw new Error(created.kind);
-      await expect(admitRound(repo, 'demo', created.record, c3, { git })).resolves.toMatchObject({ kind: 'admitted' });
+      await seedClosedRound(repo, git);
+      await runRoutedAudit(repo, 'T2', 'S2.1', 'src/engine/register-artifact-cli.ts');
       await expect(readRouteRecord(repo, 'demo', r2, { git })).resolves.toMatchObject({
         kind: 'record', record: { items: expect.arrayContaining([
           expect.objectContaining({ host: c3, prerequisitePaths: expect.arrayContaining(['src/engine/register-artifact-cli.ts']) }),
@@ -185,23 +177,18 @@ describe('conductor routed citation admission fence', () => {
   });
 
   // Covers: task:6
-  it('keeps a child-1-owned finding on child 1 when its closed tree already contains every cited file', async () => {
+  it('creates and admits child 1 when its closed tree already contains every cited file', async () => {
     const { repo, git } = await fixture();
     try {
-      const routed = await ownerCandidate(git);
-      if (routed.kind !== 'routed') throw new Error(routed.detail);
-      expect(routed.items).toEqual([expect.objectContaining({ owner: c1, host: c1 })]);
-
-      const created = await createRouteRecord(repo, 'demo', {
-        roundId: r2, sealedAuthored: 1, kind: 'audit', items: routed.items, allocation: routed.allocation,
-      }, { git });
-      if (created.kind !== 'created') throw new Error(created.kind);
-      await expect(admitRound(repo, 'demo', created.record, c1, { git })).resolves.toMatchObject({ kind: 'admitted' });
+      await seedClosedRound(repo, git);
+      await runRoutedAudit(repo, 'T1', 'S1.1', 'src/engine/a.ts');
       await expect(readRepairMarker(repo, 'demo', { git })).resolves.toMatchObject({
         kind: 'marker', marker: { roundId: r2, host: c1 },
       });
       await expect(readRouteRecord(repo, 'demo', r2, { git })).resolves.toMatchObject({
-        kind: 'record', record: { hosts: { [c1]: 'admitted' } },
+        kind: 'record', record: {
+          items: [expect.objectContaining({ owner: c1, host: c1 })], hosts: { [c1]: 'admitted' },
+        },
       });
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
