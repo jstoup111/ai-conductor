@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-01T22:43:27.470Z
 Slug: finish-author-pr-prose-halts-unmoved-provider-has-
 Class: needs-human
 Halting step: unknown
