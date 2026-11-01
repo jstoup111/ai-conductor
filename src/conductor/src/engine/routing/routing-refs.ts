@@ -1,4 +1,5 @@
 import { MAX_CHILD_ID, type ChildId } from '../child-context.js';
+import { refreshLedgerRefFor } from '../stack-refresh-ledger.js';
 import { MAX_ROUTE_ROUNDS, type RoundId } from './route-types.js';
 
 /** A round can pin every child except its host. */
@@ -45,7 +46,7 @@ export function closureRefFor(slug: string, child: ChildId): string {
  * a finite enumeration: teardown must never discover a namespace by prefix.
  */
 export function routingTeardownRefNames(slug: string): readonly string[] {
-  const refs = [repairMarkerRefFor(slug), revalidationQueueRefFor(slug)];
+  const refs = [repairMarkerRefFor(slug), revalidationQueueRefFor(slug), refreshLedgerRefFor(slug)];
   for (let child = 1; child <= MAX_CHILD_ID; child += 1) {
     refs.push(redRefFor(slug, child as ChildId));
   }
