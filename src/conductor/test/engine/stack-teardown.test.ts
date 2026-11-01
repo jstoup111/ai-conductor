@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -110,6 +110,52 @@ async function teardownFailureFixture(name: string) {
   await writePublicationRecord(root, 'demo', undefined, record);
 
   return { root, pushedOne, localOne, headOne, headThree };
+}
+
+async function unaccountedDeleteFixture(
+  name: string,
+  arrange: (fixture: { readonly root: string; readonly base: string; readonly pushed: string }) => Promise<{
+    readonly local: string;
+    readonly head: string;
+    readonly merge: string;
+    readonly retainPushedRef?: boolean;
+  }>,
+) {
+  const root = await mkdtemp(join(tmpdir(), `stack-teardown-unaccounted-delete-${name}-`));
+  cleanup.push(root);
+  await runGit(root, ['init', '-q', '-b', 'main']);
+  await runGit(root, ['config', 'user.email', 'stack@example.test']);
+  await runGit(root, ['config', 'user.name', 'Stack teardown']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await runGit(root, ['add', 'base.txt']);
+  await runGit(root, ['commit', '-qm', 'base']);
+  const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['checkout', '-qb', 'child-work']);
+  await writeFile(join(root, 'child.txt'), 'child\n');
+  await runGit(root, ['add', 'child.txt']);
+  await runGit(root, ['commit', '-qm', 'child pushed']);
+  const pushed = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  const arranged = await arrange({ root, base, pushed });
+  await runGit(root, ['update-ref', 'refs/heads/feat/c1/demo', arranged.local]);
+  await runGit(root, ['update-ref', 'refs/remotes/origin/main', arranged.merge]);
+  if (arranged.retainPushedRef !== false) {
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushed]);
+  }
+  const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,5]');
+  await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+  const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
+  const gh = vi.fn(async () => ({
+    stdout: JSON.stringify({ state: 'MERGED', headRefOid: arranged.head, mergeCommit: { oid: arranged.merge } }),
+  }));
+  const oneChildRecord: PublicationRecord = {
+    version: 1,
+    members: [
+      { position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 },
+      { position: parseChildId(5)!, branch: 'feat/daemon-demo', pr: 500 },
+    ],
+  };
+
+  return { root, local: arranged.local, git, gh, oneChildRecord };
 }
 
 describe('stack teardown', () => {
@@ -970,6 +1016,73 @@ describe('stack teardown', () => {
     await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ exitCode: 1 });
     expect(calls).toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c3/demo', headThree] }));
     expect(calls.some(({ args }) => args[0] === 'for-each-ref')).toBe(false);
+  });
+
+  it('keeps child one when its only local commit is another slug’s halt record', async () => {
+    const fixture = await unaccountedDeleteFixture('other-slug-halt', async ({ root, pushed }) => {
+      await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+      await writeFile(join(root, '.docs', 'halted', 'other.md'), 'other feature\n');
+      await runGit(root, ['add', '.docs/halted/other.md']);
+      await runGit(root, ['commit', '-qm', 'other halt record']);
+      const local = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+      return { local, head: pushed, merge: pushed };
+    });
+
+    await expect(deleteStackChildren(fixture.root, 'demo', fixture.oneChildRecord, {
+      git: fixture.git, gh: fixture.gh, repository: 'acme/demo',
+    })).resolves.toEqual({ kind: 'kept' });
+    await expect(runGit(fixture.root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: fixture.local });
+  });
+
+  it('keeps child one when its only local commit mixes its halt record with source', async () => {
+    const fixture = await unaccountedDeleteFixture('halt-and-source', async ({ root, pushed }) => {
+      await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+      await mkdir(join(root, 'src'));
+      await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'this feature\n');
+      await writeFile(join(root, 'src', 'app.ts'), 'export const app = true;\n');
+      await runGit(root, ['add', '.docs/halted/demo.md', 'src/app.ts']);
+      await runGit(root, ['commit', '-qm', 'halt record plus source']);
+      const local = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+      return { local, head: pushed, merge: pushed };
+    });
+
+    await expect(deleteStackChildren(fixture.root, 'demo', fixture.oneChildRecord, {
+      git: fixture.git, gh: fixture.gh, repository: 'acme/demo',
+    })).resolves.toEqual({ kind: 'kept' });
+    await expect(runGit(fixture.root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: fixture.local });
+  });
+
+  it('keeps child one when its local tip is a no-ff merge beyond its pushed and merged heads', async () => {
+    const fixture = await unaccountedDeleteFixture('no-ff-merge', async ({ root, pushed }) => {
+      await runGit(root, ['checkout', '-qb', 'merged-head', pushed]);
+      await writeFile(join(root, 'head.txt'), 'head\n');
+      await runGit(root, ['add', 'head.txt']);
+      await runGit(root, ['commit', '-qm', 'merged head advance']);
+      const head = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+      await runGit(root, ['checkout', '-q', 'child-work']);
+      await runGit(root, ['merge', '--no-ff', head, '-m', 'merge merged head onto pushed child']);
+      const local = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+      return { local, head, merge: head };
+    });
+
+    await expect(deleteStackChildren(fixture.root, 'demo', fixture.oneChildRecord, {
+      git: fixture.git, gh: fixture.gh, repository: 'acme/demo',
+    })).resolves.toEqual({ kind: 'kept' });
+    await expect(runGit(fixture.root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: fixture.local });
+  });
+
+  it('keeps child one when no pushed receipt exists and its child commit is absent from the merged head', async () => {
+    const fixture = await unaccountedDeleteFixture('missing-pushed-receipt', async ({ base, pushed }) => ({
+      local: pushed,
+      head: base,
+      merge: base,
+      retainPushedRef: false,
+    }));
+
+    await expect(deleteStackChildren(fixture.root, 'demo', fixture.oneChildRecord, {
+      git: fixture.git, gh: fixture.gh, repository: 'acme/demo',
+    })).resolves.toEqual({ kind: 'kept' });
+    await expect(runGit(fixture.root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: fixture.local });
   });
 
   it('deletes every sealed child by its recorded head before deleting stack-only conductor refs', async () => {
