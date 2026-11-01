@@ -1693,8 +1693,14 @@ A revision entry left `pending` keeps the prior decision unchanged. A revision t
 prior decision (for example, `refuse` on an existing refusal) is inert: it records nothing new and
 does not fail the recovery. Only a changed decision creates a new revision.
 
+Each entry is captured on its own. Valid decisions in the block are recorded even when a sibling
+entry is defective; each defective entry is named by its criterion, and the halt prints one
+recovery line per reason. A decision is accepted only for a criterion the latest PRD-audit verdict
+offered as an outside-visible `OVER_SCOPE` finding.
+
 For a durable PRD-widening recovery, keep every unaffected decision and refusal in place. The
-halt body names the affected source, case, decision, or artifact and one of these actions:
+halt body names the affected criterion, source, case, decision, or artifact and one of these
+actions:
 
 - `malformed-history`: restore the original widening history from a known-good copy, then resume.
 - `unsupported-history`: preserve the history and upgrade to a conductor version that supports it.
@@ -1706,6 +1712,13 @@ halt body names the affected source, case, decision, or artifact and one of thes
 - `context-overflow`: the halt and event name the dimension, actual size, and limit; reduce the cited source input without pruning history.
 - `projection-failed`: repair the named stored evidence or verdict renderer without re-deciding valid authority.
 - `uncertain-relation`: review the preserved original and current evidence, then submit a new explicit decision if desired.
+- `changed-offer-reference`: correct the entry against the latest halt, or leave it `pending`, then clear again.
+- `missing-rationale`: add a rationale to the entry, or leave it `pending`, then clear again.
+- `duplicate-decision-entry`: keep one entry per criterion, then clear again.
+- `unreadable-decision-block`: repair the block's JSON, then clear again.
+- `unreadable-decision-entry`: repair the named entry, or leave it `pending`, then clear again.
+- `unknown-criterion`: remove the criterion the audit did not offer, or leave it `pending`, then clear again.
+- `offered-set-unavailable`: the PRD-audit verdict could not be read; leave the entry `pending` so the next audit offers it again, then clear again.
 
 Version-2 `accepted-widenings.json` preserves valid legacy attributed evidence in its original
 order. A refusal is also preserved: revise it only through its offered explicit revision entry,
