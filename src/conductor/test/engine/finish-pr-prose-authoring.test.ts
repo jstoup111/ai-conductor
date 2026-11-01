@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import type { GithubOperationRequest, GithubOperationRunner, GithubPullRequestEditPayload } from '../../src/engine/github-operations.js';
 import type { ConductState } from '../../src/types/index.js';
 
 /**
@@ -27,6 +28,18 @@ type PrProseAuthoringRequest =
   import('../../src/engine/finish-publication.js').PrProseAuthoringRequest;
 
 const PR_URL = 'https://github.com/acme/widget/pull/1364';
+
+function prEditOperations(onEdit: (payload: GithubPullRequestEditPayload) => void) {
+  return {
+    run: vi.fn(async (request: GithubOperationRequest) => {
+      if (request.operation !== 'pull-request.edit') {
+        throw new Error(`unexpected GitHub operation: ${request.operation}`);
+      }
+      onEdit(request.payload as GithubPullRequestEditPayload);
+      return {};
+    }),
+  } satisfies GithubOperationRunner;
+}
 
 function snapshot(overrides: Partial<PublicationSnapshot> = {}): PublicationSnapshot {
   return {
@@ -622,13 +635,10 @@ describe('production FINISH invalid prose handoffs', () => {
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
       let title = 'fix: draft';
       let body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
-      const operations = {
-        run: vi.fn(async (request: { payload?: { title?: string; body?: string } }) => {
-          title = request.payload?.title ?? title;
-          body = request.payload?.body ?? body;
-          return {};
-        }),
-      };
+      const operations = prEditOperations((payload) => {
+        title = payload.title ?? title;
+        body = payload.body ?? body;
+      });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
         git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-no-closes\n' },
@@ -664,13 +674,10 @@ describe('production FINISH authoring retry guidance', () => {
     await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
     let title = 'fix: draft';
     let body = initialBody;
-    const operations = {
-      run: vi.fn(async (request: { payload?: { title?: string; body?: string } }) => {
-        title = request.payload?.title ?? title;
-        body = request.payload?.body ?? body;
-        return {};
-      }),
-    };
+    const operations = prEditOperations((payload) => {
+      title = payload.title ?? title;
+      body = payload.body ?? body;
+    });
     const coordinator = createProductionFinishPublicationCoordinator({
       projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
       git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-retry-guidance\n' },
@@ -682,7 +689,7 @@ describe('production FINISH authoring retry guidance', () => {
       observeReleaseReadiness: async () => 'present',
     });
     let calls = 0;
-    const dispatchAuthoring = vi.fn(async () => {
+    const dispatchAuthoring = vi.fn(async (_request: PrProseAuthoringRequest) => {
       calls++;
       if (calls === 1) {
         if (firstHandoff !== undefined) await writeFile(join(pipeline, 'finish-pr-prose.json'), firstHandoff);
@@ -751,13 +758,10 @@ describe('production FINISH authoring retry guidance', () => {
         version: 1,
         records: { [digest]: { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'Name the reader evidence.' } },
       }));
-      const operations = {
-        run: vi.fn(async (request: { payload?: { title?: string; body?: string } }) => {
-          title = request.payload?.title ?? title;
-          body = request.payload?.body ?? body;
-          return {};
-        }),
-      };
+      const operations = prEditOperations((payload) => {
+        title = payload.title ?? title;
+        body = payload.body ?? body;
+      });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
         git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/persisted-revision\n' },
