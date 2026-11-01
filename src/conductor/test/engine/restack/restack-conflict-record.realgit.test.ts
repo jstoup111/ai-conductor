@@ -261,7 +261,7 @@ describe('restack conflict record (real local Git)', () => {
   });
 
   // Covers: task:2
-  it('rejects an answer transaction when the absent opposite answer appears concurrently', async () => {
+  it('rejects an answer transaction when the absent opposite answer appears concurrently, leaving neither requested ref changed', async () => {
     const subject = await createRepo();
     const decision: RestackDecision = {
       child: child(2), oldParent: subject.head, oldTip: subject.head, commit: subject.head,
@@ -282,6 +282,8 @@ describe('restack conflict record (real local Git)', () => {
 
     await expect(recordAnswer(subject.repo, 'demo', { kind: 'tip', child: child(2), tip: subject.head }, { git: racingGit }))
       .resolves.toEqual({ kind: 'stale' });
+    // The transaction's `verify <decision-ref> <zero>` rejects the newly
+    // created opposite answer, so it cannot also create the requested tip.
     await expect(native(['rev-parse', decisionRef])).resolves.toMatchObject({ exitCode: 0, stdout: concurrent });
     await expect(native(['rev-parse', '-q', '--verify', resolution])).resolves.toMatchObject({ exitCode: 1 });
   });

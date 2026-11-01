@@ -1,4 +1,4 @@
-// Covers: task:10, task:13, task:15
+// Covers: task:10, task:13, task:15, task:rem-prd-audit-10a
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -155,7 +155,7 @@ describe('restack decision delivery (real local Git)', () => {
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
   });
 
-  it('delivers a matching decision, journals it, then deletes it only with the applied move', async () => {
+  it('delivers a matching decision, moves the resolved closed child, then deletes it only with the applied move', async () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
@@ -170,24 +170,32 @@ describe('restack decision delivery (real local Git)', () => {
       commit: conflict.record.commit, paths: conflict.record.paths,
       answer: 'keep upstream', operator: 'operator@example.test',
     } }, { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+    let resolvedChildCommit: string | undefined;
     const resolver = vi.fn(async ({ projectRoot, environment }) => {
       await writeFile(join(projectRoot, 'two.txt'), 'two\nrouted\n');
       const local = makeGitRunner(projectRoot);
       await local(['add', 'two.txt'], { env: environment });
       await local(['rebase', '--continue'], { env: environment });
+      const settled = await local(['rev-parse', 'HEAD'], { env: environment });
+      if (settled.exitCode !== 0) throw new Error('resolver did not settle child 2');
+      resolvedChildCommit = settled.stdout.trim();
       return { resolved: true as const };
     });
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
       .resolves.toEqual({ kind: 'restacked' });
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ operatorDecision: expect.objectContaining({ answer: 'keep upstream' }) }));
+    expect(resolvedChildCommit).toMatch(/^[0-9a-f]{40}$/);
     const resolvedChild = (await subject.git(['rev-parse', 'refs/heads/feat/c2/demo'])).stdout.trim();
+    expect(resolvedChild).toBe(resolvedChildCommit);
     await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).resolves.toMatchObject({
-      exitCode: 0, stdout: resolvedChild,
+      exitCode: 0, stdout: resolvedChildCommit,
     });
     const queue = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
     expect(queue).toMatchObject({ kind: 'queue', queue: { entries: expect.any(Array) } });
     if (queue.kind !== 'queue') throw new Error('expected routed revalidation queue');
-    expect(queue.queue.entries.map((entry) => entry.child)).toEqual([child, parseChildId(3)!]);
+    // Revalidation queues contain moved *closed* children only. The leaf has
+    // no closure ref and resumes after this queued child has been handled.
+    expect(queue.queue.entries.map((entry) => entry.child)).toEqual([child]);
     await expect(resolveActiveChild(subject.repo, 'demo', { git: subject.git })).resolves.not.toMatchObject({
       kind: 'divergent', check: 'closed-child-rewritten',
     });

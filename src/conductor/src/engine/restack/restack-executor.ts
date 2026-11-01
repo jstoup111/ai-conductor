@@ -355,12 +355,13 @@ export async function appliedTransactionLines(
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
   }
   if (journal.journal.deliveredDecision !== undefined) {
+    const decision = journal.journal.deliveredDecision;
     lines.push(...decisionDeleteLines(journal.slug, {
-      blob: journal.journal.deliveredDecision.blob,
-      decision: { child: journal.journal.deliveredDecision.child },
+      blob: decision.blob,
+      decision: { child: decision.child },
     }));
-    lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${journal.journal.deliveredDecision.record}`);
-    lines.push(`delete ${conflictParentRefFor(journal.slug)} ${journal.journal.deliveredDecision.parent}`);
+    lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${decision.record}`);
+    lines.push(`delete ${conflictParentRefFor(journal.slug)} ${decision.parent}`);
   }
   lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
   return { journal: { slug: journal.slug, blob, journal: next }, lines };

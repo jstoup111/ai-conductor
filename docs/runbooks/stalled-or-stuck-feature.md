@@ -1330,7 +1330,8 @@ record a decision and let the daemon resume the replay:
 ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer>"
 ```
 
-Use exactly one of `--tip` and `--decision`. `--decision` refuses a wrong child, no matching live
+Use exactly one of `--tip` and `--decision`; a `--tip`/`--decision` flag conflict is refused.
+`--decision` also refuses a wrong child, no matching live
 HALT, an unstacked feature, a held feature-dispatch lease, and invocation from a daemon session.
 On success it clears the HALT and the next restack supplies the answer to the resolver. For
 validation rules and refusals, see

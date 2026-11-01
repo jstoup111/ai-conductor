@@ -1717,7 +1717,8 @@ record the operator's decision and let the next restack resume the replay:
 ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer>"
 ```
 
-`--decision` and `--tip` are mutually exclusive. The decision command requires the recorded child,
+`--decision` and `--tip` are mutually exclusive: a `--tip`/`--decision` flag conflict is refused.
+The decision command requires the recorded child,
 a matching live conflict HALT, durable stacked child state, and an available feature dispatch lease;
 it is refused for a wrong child, a cleared or unrelated HALT, an unstacked feature, or a held lease.
 It is also refused from a daemon session. On success it stores the answer, clears the HALT, and the
