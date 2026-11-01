@@ -73,6 +73,7 @@ describe('FINISH PR-prose handoff', () => {
     });
   });
 
+  // Covers: task:rem-as-built-handoff-path-constant
   it('reads and clears the handoff file named by PR_PROSE_HANDOFF_PATH', async () => {
     await writeHandoff({ version: 1, title: 'Title', body: 'Body' });
     const { PR_PROSE_HANDOFF_PATH, clearPrProseHandoff, readPrProseHandoff } = await loadHandoff();
@@ -153,6 +154,7 @@ describe('FINISH PR-prose handoff', () => {
     });
   });
 
+  // Covers: task:rem-prd-audit-closes-ref
   it.each([
     ['a short reference', 'Closes #42', 'Returned body.'],
     ['a qualified reference replaced by a longer one', 'Closes owner/repo#42', 'Returned body.\n\nCloses owner/repo#421'],

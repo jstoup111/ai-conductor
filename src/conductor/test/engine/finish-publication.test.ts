@@ -586,6 +586,7 @@ describe('author_pr_prose handoff failure', () => {
   }
 
   // Covers: task:3
+  // Covers: task:rem-as-built-revision-failure-cause
   it.each([
     ['not_returned', 'The authoring handoff was not returned.', 'prose_not_returned'],
     ['invalid', 'The returned handoff body is still placeholder.', 'prose_invalid'],
@@ -2168,6 +2169,7 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     });
   });
 
+  // Covers: task:rem-prd-audit-judge-stale-rejudge
   it('retries judgment when a revision-required verdict races a changed stale revision', async () => {
     const stale = readyPublicationSnapshot({
       pr: {

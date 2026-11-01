@@ -437,6 +437,7 @@ describe('FINISH authors PR prose before it judges it', () => {
 });
 
 describe('production FINISH authoring dispatch failure', () => {
+  // Covers: task:rem-prd-audit-refusal-14558e1f-3ea0-4334-bfab-c1ba3f7e75b9
   it('classifies a floored halted body as halt before authoring, while an empty halted body is placeholder', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-prose-halt-order-'));
     try {
