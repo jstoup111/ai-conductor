@@ -1,4 +1,4 @@
-// Covers: task:22, task:rem-prd-audit-W5
+// Covers: task:2, task:22, task:rem-prd-audit-W5
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { parseChildId, type ChildId } from '../../../src/engine/child-context.js
 import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { classifyCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
+import { classifyCitedPaths, resolveCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
 import { initTestRepo } from '../../fixtures/git-repo.js';
 
 const roots: string[] = [];
@@ -56,6 +56,17 @@ async function threeChildStack() {
   await mustSucceed(realGit, ['update-ref', closureRefFor('demo', child(2)), 'HEAD']);
 
   await mustSucceed(realGit, ['checkout', '-qb', leafBranchFor('demo')]);
+  await mkdir(join(repo, 'src', 'engine', 'restack'), { recursive: true });
+  await mkdir(join(repo, 'src', 'cli'), { recursive: true });
+  await Promise.all([
+    writeFile(join(repo, 'src', 'engine', 'a.ts'), 'export const engineA = 1;\n'),
+    writeFile(join(repo, 'src', 'engine', 'register-artifact-cli.ts'), 'export const register = true;\n'),
+    writeFile(join(repo, 'src', 'engine', 'restack', 'restack-sync.ts'), 'export const sync = true;\n'),
+    writeFile(join(repo, 'src', 'engine', 'index.ts'), 'export {};\n'),
+    writeFile(join(repo, 'src', 'cli', 'index.ts'), 'export {};\n'),
+  ]);
+  await mustSucceed(realGit, ['add', '.']);
+  await mustSucceed(realGit, ['commit', '-qm', 'leaf citation paths']);
   const calls: string[][] = [];
   const git: GitRunner = async (args, options) => {
     calls.push([...args]);
@@ -65,6 +76,54 @@ async function threeChildStack() {
 }
 
 describe('cannot-host (real local Git)', () => {
+  it('resolves exact and unique suffix citations from one leaf listing', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const resolved = await resolveCitedPaths([
+      'register-artifact-cli.ts',
+      'restack/restack-sync.ts',
+      'src/engine/a.ts',
+      'brand-new.ts',
+      'index.ts',
+    ], leafTip, stack.git);
+
+    expect(resolved).toEqual({
+      inputs: [
+        'src/engine/register-artifact-cli.ts',
+        'src/engine/restack/restack-sync.ts',
+        'src/engine/a.ts',
+      ],
+      outputs: ['brand-new.ts'],
+      dropped: [{ path: 'index.ts', kind: 'dropped-ambiguous' }],
+    });
+    expect(stack.calls.filter((args) => args.join(' ') === `ls-tree -r --name-only ${leafTip}`)).toHaveLength(1);
+  });
+
+  it('drops directory citations rather than treating them as files or outputs', async () => {
+    const stack = await threeChildStack();
+    const resolved = await resolveCitedPaths(['src/engine/', 'src/engine'], leafBranchFor('demo'), stack.git);
+
+    expect(resolved).toEqual({
+      inputs: [],
+      outputs: [],
+      dropped: [
+        { path: 'src/engine/', kind: 'dropped-directory' },
+        { path: 'src/engine', kind: 'dropped-directory' },
+      ],
+    });
+  });
+
+  it('halts when its one leaf listing cannot be read', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const unreadable: GitRunner = async (args, options) => args.join(' ') === `ls-tree -r --name-only ${leafTip}`
+      ? { exitCode: 1, stdout: '', stderr: 'missing leaf' }
+      : stack.git(args, options);
+
+    expect(await resolveCitedPaths(['src/engine/a.ts'], leafTip, unreadable))
+      .toMatchObject({ kind: 'halt', detail: expect.stringContaining(leafTip) });
+  });
+
   it('moves a T1 repair for a leaf prerequisite to child 2 without changing task ownership', async () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
