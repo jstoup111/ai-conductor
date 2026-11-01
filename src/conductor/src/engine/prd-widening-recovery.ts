@@ -64,7 +64,7 @@ const ACTIONS: Record<PrdWideningRecoveryReason, string> = {
   'unreadable-decision-block': "repair the block's JSON before clearing again.",
   'unreadable-decision-entry': 'repair the named decision entry, or leave it pending before clearing again.',
   'unknown-criterion': 'remove the unoffered criterion or leave its decision pending before clearing again.',
-  'offered-set-unavailable': 'restore a readable offered-criteria result, then correct the named entry or leave it pending before clearing again.',
+  'offered-set-unavailable': 'leave the named entry pending so the next audit offers it again, then clear the halt again.',
 };
 
 export function renderPrdWideningRecovery(

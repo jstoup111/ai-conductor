@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
-import { type AcceptedWideningDecisionInput } from '../../src/engine/accepted-widenings.js';
+import { ACCEPTED_WIDENINGS_PATH, AcceptedWideningDecisionStore, type AcceptedWideningDecisionInput } from '../../src/engine/accepted-widenings.js';
 import { preparePrdWideningEntry } from '../../src/engine/prd-widening-entry.js';
 
 describe('preparePrdWideningEntry', () => {
@@ -84,6 +84,49 @@ describe('preparePrdWideningEntry', () => {
       expect(result.capture).toEqual({
         kind: 'captured', captured: [], defects: [{ kind: 'offered-set-unavailable', criterion: 'S3.17' }],
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not import an unoffered clear through v1 migration while retaining an offered sibling', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-entry-'));
+    try {
+      await persistPrdAuditVerdict(projectRoot, {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [{
+            criterion: { storyId: '3', ordinal: 17 }, criterionId: 'S3.17', grade: 'OVER_SCOPE',
+            evidence: 'src/visible.ts:1', rationale: 'Visible scope expansion.', requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'outside-visible',
+          }],
+          noOwnerObservations: [],
+        }, diagnostics: [], recordedDispositions: [],
+      }, { attemptId: 'attempt', codeStamp: 'head' });
+      await writeFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), JSON.stringify({ version: 1, decisions: [{
+        criterion: 'NC.1', summary: 'Existing v1 history.', decision: 'accept', rationale: 'Previously accepted.',
+        operator: 'operator@example.test', decidedAt: '2026-09-01T00:00:00.000Z',
+      }] }));
+      const store = new AcceptedWideningDecisionStore(projectRoot, { version: 1, repository: 'acme/repo', feature: 'feature' });
+      const result = await preparePrdWideningEntry({
+        projectRoot, feature: { version: 1, repository: 'acme/repo', feature: 'feature' },
+        priorHalt: '```json over-scope-decisions\n' + JSON.stringify([
+          { criterion: 'S3.17', summary: 'Visible expansion.', decision: 'refuse', rationale: 'Refused.' },
+          { criterion: 'S9.9', summary: 'Never offered.', decision: 'accept', rationale: 'Must not import.' },
+        ]) + '\n```',
+        capture: {
+          operator: 'operator@example.test',
+          offerStore: { mutate: async (operation) => ({ ok: true, value: (await operation({ version: 'v2', feature: { version: 'v1', repository: 'acme/repo', feature: 'feature' }, cases: [], suppressions: [], prdWideningCases: [] })).value }) },
+          decisionStore: store,
+        },
+      });
+      const persisted = await store.read();
+
+      expect({ result, persisted }).toMatchObject({
+        result: { capture: { captured: [{ criterion: 'S3.17' }], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }] } },
+        persisted: { kind: 'valid', state: { decisions: expect.arrayContaining([expect.objectContaining({ criterion: 'S3.17' })]) } },
+      });
+      expect(persisted.kind === 'valid' && persisted.state.decisions.some((decision) => decision.criterion === 'S9.9')).toBe(false);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

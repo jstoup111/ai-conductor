@@ -136,6 +136,13 @@ function parseEntry(value: unknown): ClearedDecisionEntry | undefined {
   };
 }
 
+/** Preserve a usable record identity even when another field makes the row invalid. */
+function readableCriterion(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const criterion = (value as Record<string, unknown>).criterion;
+  return bounded(criterion, MAX_REFERENCE_LENGTH) ? criterion.trim() : undefined;
+}
+
 /**
  * Read only the retired fenced JSON decision shape. It deliberately does not
  * compare current ordinals or summaries and returns unsupported rather than
@@ -229,11 +236,14 @@ async function captureLegacyClear(
     offerEntryId: legacyClearReference('entry', entry),
   };
   const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
-  const prior = existing?.kind === 'valid'
+  const sameSource = existing?.kind === 'valid'
     ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
-      decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot).at(-1)
-    : undefined;
-  if (prior && sameLegacyAuthority(prior, entry, input.operator)) return { decision: prior };
+      decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot)
+    : [];
+  const prior = sameSource.at(-1);
+  // A historical replay is inert even when a later explicit reversal is now
+  // effective. Returning the latest decision preserves that reversal.
+  if (prior && sameSource.some((decision) => sameLegacyAuthority(decision, entry, input.operator))) return { decision: prior };
 
   const appended = await options.decisionStore.append({
     ...input,
@@ -319,9 +329,18 @@ export async function capturePrdWideningDecisions(
   if (!Array.isArray(rawEntries)) return { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] };
 
   const legacy = parseLegacyPrdWideningClear(clearedBlock);
-  const containsModernOffer = rawEntries.some((entry) =>
-    typeof entry === 'object' && entry !== null && !Array.isArray(entry) && Object.hasOwn(entry, 'offerEntryId'));
-  if (legacy.kind === 'supported' && !containsModernOffer) {
+  const carriesOfferReference = rawEntries.some((entry) =>
+    typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+    (Object.hasOwn(entry, 'offerEntryId') || Object.hasOwn(entry, 'originalCaseId') || Object.hasOwn(entry, 'originalSource')));
+  const needsPersistedOffers = carriesOfferReference || rawEntries.some((entry) => {
+    const criterion = readableCriterion(entry);
+    return criterion !== undefined && isPrdAuditNoOwnerOrdinal(criterion);
+  });
+  const offers = needsPersistedOffers ? await persistedOffers(options.offerStore) : undefined;
+  if (offers !== undefined && !offers.ok) return { kind: 'captured', captured: [], defects: [{ kind: 'offer-read-failed' }] };
+  const legacyHasPersistedNcOffer = legacy.kind === 'supported' && legacy.entries.some((entry) =>
+    isPrdAuditNoOwnerOrdinal(entry.criterion) && offers?.value.some((offer) => offer.offeredCriterion === entry.criterion));
+  if (legacy.kind === 'supported' && !carriesOfferReference && !legacyHasPersistedNcOffer) {
     const captured: AcceptedWideningDecision[] = [];
     const defects: PrdWideningCaptureDefect[] = [];
     for (const entry of legacy.entries) {
@@ -344,16 +363,13 @@ export async function capturePrdWideningDecisions(
     return { kind: 'captured', captured, defects };
   }
 
-  const offers = await persistedOffers(options.offerStore);
-  if (!offers.ok) return { kind: 'captured', captured: [], defects: [{ kind: 'offer-read-failed' }] };
-
   const captured: AcceptedWideningDecision[] = [];
   const defects: PrdWideningCaptureDefect[] = [];
   const handledOffers = new Set<string>();
   for (const raw of rawEntries) {
     const entry = parseEntry(raw);
     if (!entry) {
-      defects.push({ kind: 'malformed-entry' });
+      defects.push({ kind: 'malformed-entry', ...(readableCriterion(raw) === undefined ? {} : { criterion: readableCriterion(raw) }) });
       continue;
     }
     // An untouched rendered entry is an offer, never implicit machine authority.
@@ -369,7 +385,7 @@ export async function capturePrdWideningDecisions(
       else if (result.decision) captured.push(result.decision);
       continue;
     }
-    if (!matchesPersistedOffer(entry, offers.value)) {
+    if (offers === undefined || !matchesPersistedOffer(entry, offers.value)) {
       defects.push({ kind: 'changed-offer-reference', criterion: entry.criterion, ...(entry.offerEntryId ? { offerEntryId: entry.offerEntryId } : {}) });
       continue;
     }

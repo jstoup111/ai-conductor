@@ -55,6 +55,7 @@ describe('renderPrdWideningRecovery', () => {
     ['missing-rationale', ['S3.17'], /rationale.*entry/i],
     ['duplicate-decision-entry', ['S3.17'], /keep one entry per criterion/i],
     ['unreadable-decision-block', [], /repair the block's JSON before clearing again/i],
+    ['offered-set-unavailable', ['S3.17'], /leave the named entry pending so the next audit offers it again/i],
   ] as const)('uses the %s action without treating a cleared-block defect as history damage', (reason, affected, action) => {
     const recovery = renderPrdWideningRecovery(reason, affected);
 
@@ -65,6 +66,12 @@ describe('renderPrdWideningRecovery', () => {
     expect(recovery).not.toMatch(/malformed-history/i);
     expect(recovery).not.toMatch(/known-good copy/i);
     expect(recovery).not.toMatch(/restore the original \.pipeline widening history/i);
+  });
+
+  it('keeps a readable malformed entry named in recovery', () => {
+    const recovery = renderPrdWideningRecovery('unreadable-decision-entry', ['NC-1']);
+    expect(recovery).toContain('NC-1');
+    expect(recovery).not.toContain('no specific record');
   });
 
   it('keeps the reason, bounded record references, and actionable recovery together', () => {

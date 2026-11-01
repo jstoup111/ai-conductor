@@ -1,6 +1,6 @@
 // Covers: task:2, task:3, task:4, task:5
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,7 @@ import {
   type AcceptedWideningDecisionInput,
 } from '../../src/engine/accepted-widenings.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
+import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 
 const feature = { version: 'v1' as const, repository: 'example/repository', feature: 'wording-drift' };
 const originalSource = { id: 'NC.source.1', snapshot: 'The originally offered visible behavior.' };
@@ -289,6 +290,7 @@ describe('capturePrdWideningDecisions', () => {
   it('captures an offerless story refusal beside an offer-backed NC acceptance', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-capture-'));
     try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
       const store = new AcceptedWideningDecisionStore(projectRoot, {
         version: 1, repository: feature.repository, feature: feature.feature,
       }, { newDecisionId: (() => {
@@ -330,6 +332,30 @@ describe('capturePrdWideningDecisions', () => {
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects stripped or partially stripped NC offer references without discarding a valid story sibling', async () => {
+    const story = {
+      criterion: 'S3.17', summary: 'A newly raised story criterion.', decision: 'refuse',
+      rationale: 'The operator refuses this story criterion.',
+    };
+    for (const strippedNc of [
+      { criterion: 'NC.2', summary: siblingDecision().summary, decision: 'accept', rationale: 'Attempted stripped offer.' },
+      { ...siblingDecision(), offerEntryId: undefined, originalSource: undefined },
+    ]) {
+      const recorded: AcceptedWideningDecisionInput[] = [];
+      const result = await capturePrdWideningDecisions(cleared([story, strippedNc]), {
+        operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(recorded),
+        offeredStoryCriteria: offeredStories('S3.17'),
+      });
+      expect({ result, recorded }).toMatchObject({
+        result: {
+          captured: [{ criterion: 'S3.17', authority: 'refuse' }],
+          defects: [{ kind: 'changed-offer-reference', criterion: 'NC.2' }],
+        },
+        recorded: [{ criterion: 'S3.17', authority: 'refuse' }],
+      });
     }
   });
 
@@ -393,6 +419,31 @@ describe('capturePrdWideningDecisions', () => {
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
+  });
+
+  it('keeps a later refusal effective when an earlier legacy acceptance is replayed', async () => {
+    const captured: Array<AcceptedWideningDecisionInput & { id: string; revision: number }> = [];
+    const store: PrdWideningCaptureDecisionStore = {
+      read: async () => ({ kind: 'valid', state: { version: 2, feature, decisions: captured } }),
+      append: async (input) => {
+        const decision = { id: `decision-${captured.length + 1}`, revision: captured.length + 1, ...input };
+        captured.push(decision);
+        return { ok: true, decision };
+      },
+    };
+    const accept = cleared([{ criterion: 'S3.17', summary: 'Original scope decision.', decision: 'accept', rationale: 'Initial acceptance.' }]);
+    const refuse = cleared([{ criterion: 'S3.17', summary: 'Original scope decision.', decision: 'refuse', rationale: 'Later refusal.' }]);
+    const options = { operator: 'operator@example.test', offerStore: offerStore(), decisionStore: store, offeredStoryCriteria: offeredStories('S3.17') };
+
+    await capturePrdWideningDecisions(accept, options);
+    await capturePrdWideningDecisions(refuse, options);
+    const replay = await capturePrdWideningDecisions(accept, options);
+
+    expect({ replay, captured }).toMatchObject({
+      replay: { captured: [{ authority: 'refuse' }], defects: [] },
+      captured: [{ authority: 'accept' }, { authority: 'refuse' }],
+    });
+    expect(captured).toHaveLength(2);
   });
 
   it('threads a rendered prior-decision reference into a valid supersession append', async () => {
@@ -520,6 +571,15 @@ describe('capturePrdWideningDecisions', () => {
         { kind: 'missing-operator', criterion: 'S3.17' },
         { kind: 'missing-operator', criterion: 'NC.2', offerEntryId: 'case-2' },
       ]),
+    });
+
+    const malformedPrior = await capturePrdWideningDecisions(cleared([
+      { criterion: 'NC-1', priorDecision: 'x', decision: 'accept' }, siblingDecision(),
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: decisionStore(), offeredStoryCriteria: offeredStories(),
+    });
+    expect(malformedPrior).toMatchObject({
+      captured: [{ criterion: 'NC.2' }], defects: [{ kind: 'malformed-entry', criterion: 'NC-1' }],
     });
   });
 

@@ -206,7 +206,7 @@ describe('Conductor PRD widening capture entry', () => {
     expect(emitted).not.toContainEqual(expect.objectContaining({ outcome: 'rejected', reason: 'write-failed' }));
   });
 
-  it('retains a newer fenced refusal beside a migrated v1 acceptance before audit dispatch', async () => {
+  it('rejects a stripped NC offer beside migrated v1 history before audit dispatch', async () => {
     const accepted = {
       criterion: 'NC.1', summary: 'The original visible widening.', decision: 'accept',
       rationale: 'Initially approved.', operator: 'operator@example.test', decidedAt: '2026-09-01T00:00:00.000Z',
@@ -228,10 +228,36 @@ describe('Conductor PRD widening capture entry', () => {
     }) };
     await writeState(statePath, stateWithPending('prd_audit'));
     await new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(), fromStep: 'prd_audit', maxRetries: 1 }).run();
-    expect(calls).toEqual(['prd_audit']);
+    expect(calls).toEqual([]);
     await expect(new AcceptedWideningDecisionStore(projectRoot, { version: 1, repository: feature.repository, feature: feature.feature }).read())
       .resolves.toMatchObject({ kind: 'valid', state: { decisions: [
-        { authority: 'accept', revision: 1 }, { authority: 'refuse', revision: 2, supersedes: { revision: 1 } },
+        { authority: 'accept', revision: 1 },
       ] } });
+  });
+
+  it.each(['absent', 'non-json'] as const)('leaves an unavailable-offer story pending and unrecorded when the verdict is %s', async (kind) => {
+    if (kind === 'non-json') await writeFile(join(projectRoot, '.pipeline', 'prd-audit.json'), 'not json');
+    await writeFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), JSON.stringify({ version: 1, decisions: [{
+      criterion: 'NC.9', summary: 'Prior v1 history.', decision: 'accept', rationale: 'Unrelated retained authority.',
+      operator: 'fixture-operator', decidedAt: '2026-09-01T00:00:00.000Z',
+    }] }));
+    await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), [
+      '```json over-scope-decisions', JSON.stringify([{
+        criterion: 'S3.17', summary: 'New story criterion.', decision: 'refuse', rationale: 'Must remain pending until reoffered.',
+      }]), '```',
+    ].join('\n'));
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('prd_widening_reconciled', (event) => { emitted.push(event); });
+
+    const recovery = await prdEntry(events).preparePrdWideningBeforeAudit();
+
+    expect(recovery).toContain('offered-set-unavailable');
+    expect(recovery).toContain('S3.17');
+    expect(recovery).toContain('leave the named entry pending so the next audit offers it again');
+    expect(await decisionInventory()).not.toContainEqual({ criterion: 'S3.17', authority: 'refuse' });
+    expect(emitted).toContainEqual(expect.objectContaining({
+      type: 'prd_widening_reconciled', sourceId: 'S3.17', outcome: 'rejected', reason: 'offered-set-unavailable',
+    }));
   });
 });
