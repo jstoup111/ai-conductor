@@ -1321,6 +1321,74 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  // Covers: task:8
+  it('carries the last publication retry detail into the exhausted FINISH halt', async () => {
+    const dispositions: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const attempt = advance.mock.calls.length;
+      return {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'prose_invalid',
+        detail: attempt === 3 ? 'last failed check: title is blank' : `failed check on attempt ${attempt}`,
+      };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(3);
+    expect(dispositions).toEqual(['retry_finish', 'retry_finish', 'retry_finish']);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'FINISH publication retry exhausted: prose_invalid Detail: last failed check: title is blank',
+    );
+  });
+
+  // Covers: task:8
+  it('keeps the exhausted FINISH halt unchanged when the retry has no detail', async () => {
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => ({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'prose_not_returned',
+    }));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(3);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(
+      'FINISH publication retry exhausted: prose_not_returned\n',
+    );
+  });
+
   it.each([
     {
       name: 'repeated ready_pr progress',

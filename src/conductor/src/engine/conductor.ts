@@ -12431,7 +12431,9 @@ export class Conductor {
                 });
                 continue;
               }
-              const reason = `FINISH publication retry exhausted: ${route.reason}`;
+              const reason =
+                `FINISH publication retry exhausted: ${route.reason}` +
+                (route.detail === undefined ? '' : ` Detail: ${route.detail}`);
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason,
