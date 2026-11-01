@@ -15,6 +15,8 @@ import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
+import { resolveGitRef } from '../routing/git-ref-resolver.js';
+import { closureRefFor, repairMarkerRefFor } from '../routing/routing-refs.js';
 import { diagnoseAffectedRounds, exitRoutedHostAndReconcile, reconcileRounds, recordRoundStall, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
@@ -187,6 +189,27 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
     // remains the admission fence, and reconciliation below turns every
     // unreadable durable round (including an earlier one) into one named,
     // mechanical stall.
+    // Only a restack moves a host's closure, and only from `built`, so an active
+    // host off its pin was moved by hand. Its routed exit would read the moved
+    // closure as "no commits" and never carry the repair above this child.
+    const { host, roundId } = marker.marker;
+    const record = stored.kind === 'record' ? stored.record : undefined;
+    const entry = record?.entry;
+    if (entry?.host === host && (record?.hosts[host] === 'admitted' || record?.hosts[host] === 'repairing')) {
+      const closureRef = closureRefFor(options.slug, host);
+      const closure = await resolveGitRef(options.git ?? makeGitRunner(options.worktree), closureRef);
+      if (typeof closure === 'string' && closure !== entry.pinnedBase) {
+        return {
+          kind: 'halted',
+          detail: `routed host closure moved: ${closureRef} is ${closure}, but open round ${roundId} pinned host ${host} at ${entry.pinnedBase}; ` +
+            `${repairMarkerRefFor(options.slug)} (${marker.blob}) still names that round, so its repair would never reach the children above host ${host}\n` +
+            `Recovery:\ngit update-ref ${closureRef} ${entry.pinnedBase} ${closure}\n` +
+            // ai-conductor:session-command-context=operator-only
+            `ai-conductor halt clear --feature ${options.slug} --rationale "restored ${closureRef} to the round ${roundId} pin"`,
+            // /ai-conductor:session-command-context
+        };
+      }
+    }
     if (stored.kind === 'record' && stored.record.kind === 'operator') {
       const tips = await checkOperatorTips({
         worktree: options.worktree,
