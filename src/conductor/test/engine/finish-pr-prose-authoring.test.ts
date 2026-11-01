@@ -477,3 +477,181 @@ describe('production FINISH authoring dispatch failure', () => {
     }
   });
 });
+
+describe('production FINISH invalid prose handoffs', () => {
+  // Covers: task:5
+  it.each([
+    ['unparseable JSON', '{not JSON', 'could not be parsed'],
+    ['an unsupported version', JSON.stringify({ version: 2, title: 'fix: title', body: 'Reader-facing body.' }), 'version'],
+    ['a missing title', JSON.stringify({ version: 1, body: 'Reader-facing body.' }), 'title'],
+    ['a missing body', JSON.stringify({ version: 1, title: 'fix: title' }), 'body'],
+    ['a non-string title', JSON.stringify({ version: 1, title: 7, body: 'Reader-facing body.' }), 'title'],
+    ['a non-string body', JSON.stringify({ version: 1, title: 'fix: title', body: 7 }), 'body'],
+    ['a whitespace-only title', JSON.stringify({ version: 1, title: ' \t ', body: 'Reader-facing body.' }), 'title'],
+    ['a whitespace-only body', JSON.stringify({ version: 1, title: 'fix: title', body: ' \n ' }), 'body'],
+  ])('returns prose_invalid and never edits the PR for %s', async (_label, handoff, detail) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-invalid-handoff-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      const operations = { run: vi.fn(async () => ({})) };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/prose-invalid\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: draft', body, isDraft: true, labels: [] }) };
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        operations,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'prose-invalid', worktree_branch: 'feat/prose-invalid', pr_url: PR_URL,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), handoff);
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({
+        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_invalid',
+        detail: expect.stringContaining(detail),
+      });
+      expect(operations.run).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:5
+  it('rejects an unchanged engine-floor handoff before it edits the retained PR', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-placeholder-handoff-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      const operations = { run: vi.fn(async () => ({})) };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-placeholder\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: draft', body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-placeholder', worktree_branch: 'feat/prose-placeholder', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: draft', body }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({
+        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_invalid',
+        detail: 'PR-prose handoff body is still placeholder.',
+      });
+      expect(operations.run).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:5
+  it('rejects a handoff that loses the retained PR closing reference', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-closes-handoff-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const currentBody = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n\nCloses acme/widget#1364\n';
+      const operations = { run: vi.fn(async () => ({})) };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-closes\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: draft', body: currentBody, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-closes', worktree_branch: 'feat/prose-closes', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nReplacement prose.' }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({
+        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_invalid',
+        detail: 'PR-prose handoff body must retain Closes acme/widget#1364.',
+      });
+      expect(operations.run).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:5
+  it('publishes valid prose when neither retained nor returned body has a closing reference', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-no-closes-handoff-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      let title = 'fix: draft';
+      let body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      const operations = {
+        run: vi.fn(async (request: { payload?: { title?: string; body?: string } }) => {
+          title = request.payload?.title ?? title;
+          body = request.payload?.body ?? body;
+          return {};
+        }),
+      };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-no-closes\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-no-closes', worktree_branch: 'feat/prose-no-closes', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nReplacement prose.' }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      expect(operations.run).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
