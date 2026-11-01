@@ -20,6 +20,10 @@ import { consumeLowestQueued } from '../../../src/engine/routing/revalidation-qu
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
+const mocks = vi.hoisted(() => ({
+  queueAdmission: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
+}));
+
 vi.mock('../../../src/engine/restack/restack-executor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-executor.js')>();
   return { ...actual, runRestack: vi.fn(actual.runRestack) };
@@ -40,6 +44,15 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
   return { ...actual, consumeLowestQueued: vi.fn(actual.consumeLowestQueued) };
 });
 
+vi.mock('../../../src/engine/routing/queue-admission.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/queue-admission.js')>();
+  return {
+    ...actual,
+    admitQueuedRevalidation: (...args: Parameters<typeof actual.admitQueuedRevalidation>) =>
+      mocks.queueAdmission === undefined ? actual.admitQueuedRevalidation(...args) : mocks.queueAdmission(...args),
+  };
+});
+
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
 const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
@@ -50,6 +63,7 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 };
 
 afterEach(async () => {
+  mocks.queueAdmission = undefined;
   vi.clearAllMocks();
   await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -178,6 +192,65 @@ describe('stack preflight routing', () => {
     expect(refusals).toHaveLength(1);
     expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'deferred-base-refresh' })]);
     expect(consumed).toEqual([]);
+  });
+
+  // Covers: task:2
+  it('navigates to the queued host only through shared queue admission', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r7')!;
+    const admission = vi.fn(async () => ({ kind: 'admitted' as const, roundId, host }));
+    mocks.queueAdmission = admission;
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      reconcileRounds: async () => ({ kind: 'none' as const }),
+    })).resolves.toEqual({ kind: 'navigate-host', roundId, host });
+
+    expect(admission).toHaveBeenCalledOnce();
+    expect(admission).toHaveBeenCalledWith(expect.objectContaining({
+      worktree: subject.repo,
+      slug: 'demo',
+      reconciled: { kind: 'none' },
+    }));
+  });
+
+  // Covers: task:2
+  it('records a re-reconciled queue stall and preserves an unavailable queue refusal', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r8')!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      mocks.queueAdmission = async () => ({
+        kind: 'stalled' as const,
+        detail: 'queue CAS lost',
+        rounds: [{ roundId, readable: true as const, unsettledHosts: { [host]: 'pending' as const } }],
+      });
+      await expect(runStackPreflight({
+        worktree: subject.repo,
+        slug: 'demo',
+        events,
+        git: makeGitRunner(subject.repo),
+        reconcileRounds: async () => ({ kind: 'none' as const }),
+      })).resolves.toMatchObject({ kind: 'halted', haltClass: 'mechanical', detail: expect.stringContaining('queue CAS lost') });
+
+      await rm(join(subject.repo, '.pipeline', 'HALT'));
+      await rm(join(subject.repo, '.pipeline', 'HALT.class'));
+      mocks.queueAdmission = async () => ({ kind: 'unavailable' as const, detail: 'queue unavailable' });
+      await expect(runStackPreflight({
+        worktree: subject.repo,
+        slug: 'demo',
+        git: makeGitRunner(subject.repo),
+        reconcileRounds: async () => ({ kind: 'none' as const }),
+      })).resolves.toEqual({ kind: 'unavailable', detail: 'cannot consume revalidation queue' });
+    } finally {
+      persister.stop();
+    }
   });
 
   it('escalates repeated routing stalls across their loop halts and resets after routed progress', async () => {
