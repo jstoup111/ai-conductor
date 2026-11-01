@@ -35,7 +35,7 @@ describe('admitQueuedRevalidation', () => {
     { kind: 'none' },
     { kind: 'aborted', roundId: 'r1' },
     { kind: 'deferred' },
-    { kind: 'leaf-returned', roundId: 'r1' },
+    { kind: 'leaf-returned', roundId: r1 },
     { kind: 'quiescent' },
   ] as const)('consumes a queued child after a $kind reconciliation', async (reconciled) => {
     vi.mocked(consumeLowestQueued).mockResolvedValueOnce({ kind: 'admitted', roundId: r2, host: child2 } as never);
