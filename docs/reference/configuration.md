@@ -1756,8 +1756,12 @@ unchanged.
   feature (`skipped(published-stack)`).
 - **Teardown.** After the shipped record is on `origin/main`, the mergeable sweep removes the
   worktree, then deletes each child's local branch by name, only when its PR is merged, its merge
-  commit is on `origin/main`, and the local tip equals the merged head. Any kept member retains the
-  watch entry; see [retained worktrees](../guides/running-the-daemon.md#retained-worktrees).
+  commit is on `origin/main`, and every local commit is accounted for: it is reachable from the
+  merged PR head or the recorded pushed tip (`refs/conductor/<slug>/pushed/<branch>`), or it is an
+  engine halt-record bookkeeping commit for the feature. A merged head missing locally is fetched
+  from `origin` by SHA. A child with any other commit is kept; a failed fetch or unreadable proof
+  fails teardown retryably. Deletion compares and swaps against the local tip. Any kept member
+  retains the watch entry; see [retained worktrees](../guides/running-the-daemon.md#retained-worktrees).
 
 Publication state is recorded at `refs/conductor/<slug>/publication`; see
 [branch naming](artifacts.md#worktree-and-branch-names).
