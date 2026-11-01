@@ -91,7 +91,7 @@ export function parseBuilderClaim(result: unknown): ParsedBuilderClaim {
 }
 
 export type VerifyPrerequisiteClaimResult =
-  | { readonly kind: 'verified'; readonly destination: ChildId; readonly ref: string }
+  | { readonly kind: 'verified'; readonly destination: ChildId; readonly ref: string; readonly claimedPaths: readonly string[] }
   | { readonly kind: 'unverified'; readonly detail: string }
   | { readonly kind: 'refused-not-above'; readonly detail: string };
 
@@ -195,7 +195,7 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
   if (!await existingRef(git, destination.ref)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} is unavailable` };
   if (!await hasPaths(git, destination.ref, destinationPaths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
   if (!await hasSymbols(git, destination.ref, input.claim.symbols ?? [])) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite symbols` };
-  return { kind: 'verified', destination: input.claim.child, ref: destination.ref };
+  return { kind: 'verified', destination: input.claim.child, ref: destination.ref, claimedPaths };
 }
 
 export type RerouteRoundResult =
@@ -417,7 +417,10 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,
     from: input.host, to: verified.destination, leaf,
-    evidence: [...(parsed.claim.paths ?? []), ...(parsed.claim.symbols ?? [])],
+    // Persist the verified repository paths, rather than the builder's raw
+    // spelling. A bare suffix is useful to the builder but not durable route
+    // evidence: the fallback must identify the concrete file that was found.
+    evidence: [...verified.claimedPaths, ...(parsed.claim.symbols ?? [])],
     git,
   });
   if (moved.kind !== 'rerouted') return { kind: 'needs-human', detail: moved.detail };

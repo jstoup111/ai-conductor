@@ -63,9 +63,12 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
   await mkdir(join(repo, 'src', 'engine'), { recursive: true });
+  await mkdir(join(repo, 'test'), { recursive: true });
   await writeFile(join(repo, '.docs', 'plans', 'demo.md'), '### Task T1: Existing work\n');
   await writeFile(join(repo, 'src-a.ts'), 'export const parseA = 1;\n');
   await writeFile(join(repo, 'src', 'engine', 'a.ts'), 'export const a = 1;\n');
+  await writeFile(join(repo, 'src', 'index.ts'), 'export const sourceIndex = 1;\n');
+  await writeFile(join(repo, 'test', 'index.ts'), 'export const testIndex = 1;\n');
   await git(['add', '.']);
   await git(['commit', '-qm', 'base']);
 
@@ -83,6 +86,7 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
 
   await git(['checkout', '-qb', `feat/c${destination}/demo`, closed1]);
   await writeFile(join(repo, 'parse-b.ts'), 'export const parseB = 1;\n');
+  await writeFile(join(repo, 'src', 'engine', 'register-artifact-cli.ts'), 'export const registerArtifact = 1;\n');
   await git(['add', '.']);
   await git(['commit', '-qm', 'child 2 prerequisite']);
   const closed2 = (await git(['rev-parse', 'HEAD'])).stdout.trim();
@@ -164,10 +168,14 @@ describe('verified prerequisite reroute (real local Git)', () => {
         .resolves.toEqual({ kind: 'updated' });
 
       await expect(settleRoutedBuildClaim({
-        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['parse-b.ts'] },
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['register-artifact-cli.ts'] },
         worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toMatchObject({ kind: 'rerouted' });
       await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { host: c2 } });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record',
+        record: { fallback: [expect.objectContaining({ evidence: ['src/engine/register-artifact-cli.ts'] })] },
+      });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
@@ -183,12 +191,27 @@ describe('verified prerequisite reroute (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  it.each([
+    ['already-present', { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1'],
+    ['ambiguous', { outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file'],
+  ])('keeps the routed host and refs for a %s rejected claim', async (_name, structuredResult, detail) => {
+    const subject = await fixture();
+    try {
+      const before = await routingRefs(subject.git);
+      await expect(settleRoutedBuildClaim({
+        structuredResult, worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining(detail) });
+      expect(await routingRefs(subject.git)).toBe(before);
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId, host: c1 } });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   it('verifies only an upward immutable destination before any ref move', async () => {
     const subject = await fixture();
     try {
       expect(await verifyPrerequisiteClaim({
         claim: { outcome: 'blocked-by-prerequisite', child: c2, symbols: ['parseB'] }, host: c1, slug: 'demo', git: subject.git,
-      })).toEqual({ kind: 'verified', destination: c2, ref: closureRefFor('demo', c2) });
+      })).toEqual({ kind: 'verified', destination: c2, ref: closureRefFor('demo', c2), claimedPaths: [] });
       expect(await verifyPrerequisiteClaim({
         claim: { outcome: 'blocked-by-prerequisite', child: c1, symbols: ['parseB'] }, host: c2, slug: 'demo', git: subject.git,
       })).toMatchObject({ kind: 'refused-not-above' });
