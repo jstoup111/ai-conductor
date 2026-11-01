@@ -369,6 +369,12 @@ describe('verified prerequisite reroute (real local Git)', () => {
       // case, distinct from the direct child-3 leaf verification above.
       await subject.git(['branch', 'feat/c2/demo', subject.closed1]);
       await subject.git(['update-ref', closureRefFor('demo', c2), subject.closed1]);
+      const beforeSettlement = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (beforeSettlement.kind !== 'record') throw new Error('missing routed work order before settlement');
+      await expect(writeRouteRecord(subject.repo, beforeSettlement, {
+        ...beforeSettlement.record,
+        items: beforeSettlement.record.items.map((item) => ({ ...item, prerequisitePaths: ['src/engine/register-artifact-cli.ts'] })),
+      }, { git: subject.git })).resolves.toMatchObject({ kind: 'updated' });
       const before = await routingRefs(subject.git);
       await expect(settleRoutedBuildClaim({
         structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] },
