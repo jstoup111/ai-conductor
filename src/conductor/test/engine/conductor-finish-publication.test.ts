@@ -799,7 +799,7 @@ describe('Conductor FINISH publication routing', () => {
 
     const executeRemoteGit = vi.fn(async () => ({ kind: 'executed' as const }));
     const advance = vi.fn(async () => {
-      await executeRemoteGit(['push', 'origin', 'unexpected']);
+      await executeRemoteGit();
       return { kind: 'complete' } as const;
     });
     const runner: StepRunner = {

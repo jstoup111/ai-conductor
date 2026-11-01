@@ -245,7 +245,7 @@ describe('FINISH published member refresh (real Git)', () => {
       root: subject.repo, slug: 'demo', mutation: mutation(),
       remoteGit: async (args, dependencies) => {
         if (args[2]?.endsWith(`refs/heads/${subject.branches[1]}`)) {
-          return { kind: 'refused', reason: 'stack-tip-mismatch', members: [{ pr: 102, position: subject.positions[1] }] } as const;
+          return { kind: 'refused', reason: 'stack-tip-mismatch', members: [{ pr: 102, position: subject.positions[1], branch: subject.branches[1]! }] } as const;
         }
         return localRemoteGit(args, dependencies);
       },
