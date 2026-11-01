@@ -39,7 +39,7 @@ async function fixture() {
   return { repo, git };
 }
 
-async function routedCandidate(repo: string, git: ReturnType<typeof makeGitRunner>) {
+async function routedCandidate(git: ReturnType<typeof makeGitRunner>) {
   return routeAdmittedRound({
     admitted: [{
       id: 'S3.5', gateSource: 'prd_audit', provenance: { kind: 'task-bound' }, ownerTaskIds: ['T1'],
@@ -68,7 +68,7 @@ describe('conductor routed citation admission fence', () => {
         input: JSON.stringify({ ...open.record, phase: 'open', hosts: { [c1]: 'pending' } }),
       })).stdout.trim()]);
 
-      const routed = await routedCandidate(repo, git);
+      const routed = await routedCandidate(git);
       expect(routed).toMatchObject({ kind: 'routed', items: expect.arrayContaining([
         expect.objectContaining({ host: c3, prerequisitePaths: expect.arrayContaining(['src/engine/register-artifact-cli.ts']) }),
       ]) });
@@ -83,7 +83,7 @@ describe('conductor routed citation admission fence', () => {
   it('admits the resolved leaf host after the old round is closed', async () => {
     const { repo, git } = await fixture();
     try {
-      const routed = await routedCandidate(repo, git);
+      const routed = await routedCandidate(git);
       if (routed.kind !== 'routed') throw new Error(routed.detail);
       const created = await createRouteRecord(repo, 'demo', {
         roundId: r2, sealedAuthored: 1, kind: 'audit', items: routed.items, allocation: routed.allocation,
