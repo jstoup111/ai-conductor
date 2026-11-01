@@ -147,7 +147,7 @@ describe('Conductor PRD widening capture entry', () => {
     const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
     await new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(), fromStep: 'manual_test', mode: 'auto', maxRetries: 1 }).run();
     expect(runner.run).not.toHaveBeenCalled();
-    expect(await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).toContain('malformed');
+    expect(await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).toContain('unreadable-decision-block');
   });
 
   it('names unsupported legacy recovery before dispatch and retains the original clear', async () => {
@@ -197,10 +197,10 @@ describe('Conductor PRD widening capture entry', () => {
     const recovery = await prdEntry(events).preparePrdWideningBeforeAudit();
 
     expect(recovery).toContain('invalid-decision');
-    expect(recovery).toContain(offer.offerEntryId);
+    expect(recovery).toContain(offer.criterion);
     expect(recovery).not.toContain('persistence-failed');
     expect(emitted).toContainEqual(expect.objectContaining({
-      type: 'prd_widening_reconciled', sourceId: offer.offerEntryId,
+      type: 'prd_widening_reconciled', sourceId: offer.criterion,
       outcome: 'rejected', reason: 'invalid-decision',
     }));
     expect(emitted).not.toContainEqual(expect.objectContaining({ outcome: 'rejected', reason: 'write-failed' }));
