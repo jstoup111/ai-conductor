@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:1, task:2, task:3, task:4, task:5, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,6 +57,59 @@ async function accountingFixture(name: string) {
   await runGit(root, ['branch', 'feat/c1/demo', pushed]);
   await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushed]);
   return { root, base, pushed };
+}
+
+async function teardownFailureFixture(name: string) {
+  const root = await mkdtemp(join(tmpdir(), `stack-teardown-failure-${name}-`));
+  cleanup.push(root);
+  await runGit(root, ['init', '-q', '-b', 'main']);
+  await runGit(root, ['config', 'user.email', 'stack@example.test']);
+  await runGit(root, ['config', 'user.name', 'Stack teardown']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await runGit(root, ['add', 'base.txt']);
+  await runGit(root, ['commit', '-qm', 'base']);
+  const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+  await runGit(root, ['checkout', '-qb', 'child-one']);
+  await writeFile(join(root, 'child-one.txt'), 'pushed\n');
+  await runGit(root, ['add', 'child-one.txt']);
+  await runGit(root, ['commit', '-qm', 'child one pushed']);
+  const pushedOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['branch', 'feat/c1/demo', pushedOne]);
+  await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+  await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'local bookkeeping\n');
+  await runGit(root, ['add', '.docs/halted/demo.md']);
+  await runGit(root, ['commit', '-qm', 'local halt record']);
+  const localOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['update-ref', 'refs/heads/feat/c1/demo', localOne]);
+
+  await runGit(root, ['checkout', '-qb', 'merged-head-one', pushedOne]);
+  await writeFile(join(root, 'merged-one.txt'), 'merged\n');
+  await runGit(root, ['add', 'merged-one.txt']);
+  await runGit(root, ['commit', '-qm', 'merged child one head']);
+  const headOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+  await runGit(root, ['checkout', '-qb', 'child-three', base]);
+  await writeFile(join(root, 'child-three.txt'), 'merged\n');
+  await runGit(root, ['add', 'child-three.txt']);
+  await runGit(root, ['commit', '-qm', 'child three merged']);
+  const headThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['branch', 'feat/c3/demo', headThree]);
+
+  await runGit(root, ['checkout', '-q', 'main']);
+  await runGit(root, ['merge', '--no-ff', headOne, '-m', 'merge child one head']);
+  await runGit(root, ['merge', '--no-ff', headThree, '-m', 'merge child three']);
+  const main = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['update-ref', 'refs/remotes/origin/main', main]);
+  await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushedOne]);
+  await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c3/demo', headThree]);
+  const pushIntent = await runGit(root, ['hash-object', '-w', '--stdin'], JSON.stringify({ new: pushedOne }));
+  await runGit(root, ['update-ref', 'refs/conductor/demo/push-intent/feat/c1/demo', pushIntent.stdout.trim()]);
+  const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+  await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+  await writePublicationRecord(root, 'demo', undefined, record);
+
+  return { root, pushedOne, localOne, headOne, headThree };
 }
 
 describe('stack teardown', () => {
@@ -591,6 +644,113 @@ describe('stack teardown', () => {
       await expect(runGit(root, ['rev-parse', '--quiet', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
     }
     expect(calls.some(({ args }) => args[0] === 'for-each-ref')).toBe(false);
+  });
+
+  it('fails before mutation when the merged head cannot be fetched for a locally advanced child', async () => {
+    const { root, localOne, headOne, headThree } = await teardownFailureFixture('missing-head-fetch');
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      if (args.join(' ') === `cat-file -e ${headOne}^{commit}`) return { exitCode: 1, stdout: '', stderr: 'injected missing head' };
+      if (args.join(' ') === `fetch origin ${headOne}`) return { exitCode: 128, stdout: '', stderr: 'injected fetch failure' };
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => ({
+      stdout: JSON.stringify({
+        state: 'MERGED', headRefOid: Number(args[2]) === 101 ? headOne : headThree,
+        mergeCommit: { oid: Number(args[2]) === 101 ? headOne : headThree },
+      }),
+    }));
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'failed' });
+
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: localOne });
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ stdout: headThree });
+    for (const ref of [
+      'refs/conductor/demo/pushed/feat/c1/demo',
+      'refs/conductor/demo/pushed/feat/c3/demo',
+      'refs/conductor/demo/push-intent/feat/c1/demo',
+      'refs/conductor/demo/positions',
+      'refs/conductor/demo/publication',
+    ]) {
+      await expect(runGit(root, ['rev-parse', '--quiet', '--verify', ref])).resolves.toMatchObject({ exitCode: 0 });
+    }
+    expect(calls.some(({ args }) => args.join(' ') === 'update-ref --stdin')).toBe(false);
+  });
+
+  it('fails without cleaning receipts when the child branch moves after accounting and before its CAS delete', async () => {
+    const { root, localOne, headOne, headThree } = await teardownFailureFixture('moved-before-cas');
+    const moved = (await runGit(root, ['commit-tree', `${localOne}^{tree}`, '-p', localOne, '-m', 'branch moved after proof'])).stdout.trim();
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    let movedBranch = false;
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      if (!movedBranch && args.join(' ') === `update-ref -d refs/heads/feat/c1/demo ${localOne}`) {
+        movedBranch = true;
+        await runGit(root, ['update-ref', 'refs/heads/feat/c1/demo', moved]);
+      }
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => ({
+      stdout: JSON.stringify({
+        state: 'MERGED', headRefOid: Number(args[2]) === 101 ? headOne : headThree,
+        mergeCommit: { oid: Number(args[2]) === 101 ? headOne : headThree },
+      }),
+    }));
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'failed' });
+
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: moved });
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/conductor/demo/publication'])).resolves.toMatchObject({ exitCode: 0 });
+    expect(calls.some(({ args }) => args.join(' ') === 'update-ref --stdin')).toBe(false);
+  });
+
+  it('stops before the next child when range enumeration fails during accounting', async () => {
+    const { root, localOne, headOne, headThree } = await teardownFailureFixture('rev-list-failure');
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      if (args[0] === 'rev-list') return { exitCode: 128, stdout: '', stderr: 'injected rev-list failure' };
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => ({
+      stdout: JSON.stringify({
+        state: 'MERGED', headRefOid: Number(args[2]) === 101 ? headOne : headThree,
+        mergeCommit: { oid: Number(args[2]) === 101 ? headOne : headThree },
+      }),
+    }));
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'failed' });
+
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: localOne });
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ stdout: headThree });
+    expect(calls).not.toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c3/demo', headThree] }));
+  });
+
+  it('stops before the next child when commit-path classification fails during accounting', async () => {
+    const { root, localOne, headOne, headThree } = await teardownFailureFixture('diff-tree-failure');
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      if (args[0] === 'diff-tree') return { exitCode: 128, stdout: '', stderr: 'injected diff-tree failure' };
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => ({
+      stdout: JSON.stringify({
+        state: 'MERGED', headRefOid: Number(args[2]) === 101 ? headOne : headThree,
+        mergeCommit: { oid: Number(args[2]) === 101 ? headOne : headThree },
+      }),
+    }));
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'failed' });
+
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: localOne });
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ stdout: headThree });
+    expect(calls).not.toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c3/demo', headThree] }));
   });
 
   it('keeps an unaccounted child while deleting a sibling whose local and merged heads agree', async () => {
