@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   admission: vi.fn(),
   consumeQueued: vi.fn(),
+  diagnoseAffectedRounds: vi.fn(),
   readRepairMarker: vi.fn(),
 }));
 
@@ -37,9 +38,19 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
   };
 });
 
+vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/round-admission.js')>();
+  return {
+    ...actual,
+    diagnoseAffectedRounds: (...args: Parameters<typeof actual.diagnoseAffectedRounds>) => {
+      const implementation = mocks.diagnoseAffectedRounds.getMockImplementation();
+      return implementation === undefined ? actual.diagnoseAffectedRounds(...args) : implementation(...args);
+    },
+  };
+});
+
 import { Conductor } from '../../../src/engine/conductor.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { recordRoundStall } from '../../../src/engine/routing/round-admission.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -52,6 +63,7 @@ const round = parseRoundId('r7')!;
 afterEach(async () => {
   mocks.admission.mockReset();
   mocks.consumeQueued.mockReset();
+  mocks.diagnoseAffectedRounds.mockReset();
   mocks.readRepairMarker.mockReset();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -177,15 +189,37 @@ describe('BUILD-region queue admission', () => {
     const root = await fixture();
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
-    const stall = { kind: 'stalled' as const, detail: 'routing round r6 has an active host; cannot admit r7', rounds: [] };
+    const resolveActiveChild = vi.fn(async () => ({
+      kind: 'repair-pending' as const, child, position: parseChildId(2)!, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [child], revalidating: { child, generation: 3 },
+    }));
+    const classes: string[] = [];
+    mocks.diagnoseAffectedRounds.mockResolvedValue({
+      kind: 'affected',
+      rounds: [{ roundId: parseRoundId('r6')!, readable: true, unsettledHosts: { [child]: 'admitted' } }],
+    });
     persister.start();
     try {
-      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
-      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
-      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toEqual({ detail: expect.any(String) });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        mocks.admission.mockResolvedValue({ kind: 'busy', detail: 'routing round r6 has an active host; cannot admit r7' });
+        const conductor = new Conductor({
+          projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+          fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+          config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+          events, stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
+          childRegionLifecycle: { resolveActiveChild, enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+        });
+
+        await conductor.run();
+        classes.push(await readFile(join(root, '.pipeline', 'HALT.class'), 'utf8'));
+        if (attempt < 2) {
+          await rm(join(root, '.pipeline', 'HALT'), { force: true });
+          await rm(join(root, '.pipeline', 'HALT.class'), { force: true });
+        }
+      }
     } finally {
       persister.stop();
     }
+    expect(classes).toEqual(['mechanical', 'mechanical', 'needs-human']);
   });
 
   it('re-resolves a marker-race busy result once and enters the marker host', async () => {
