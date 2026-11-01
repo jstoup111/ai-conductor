@@ -55,7 +55,10 @@ function sha(raw: string): CommitSha {
 async function fixture(input: { source?: typeof c1; destination?: typeof c2; destinationInRecord?: boolean; leafDestination?: boolean } = {}) {
   const source = input.source ?? c1;
   const destination = input.destination ?? c2;
-  const repo = await mkdtemp(join(tmpdir(), 'prerequisite-reroute-'));
+  const repo = await mkdtemp(join(
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir(),
+    'prerequisite-reroute-',
+  ));
   const git = makeGitRunner(repo);
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 'routing@example.test']);
