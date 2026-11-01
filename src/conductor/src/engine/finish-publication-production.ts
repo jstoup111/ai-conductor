@@ -431,7 +431,7 @@ export async function refreshPublishedStackMembers(input: {
   git: PublicationRecordGitRunner;
   mutation?: GithubMutationExecutionContext;
   remoteGit?: typeof executeRemoteGit;
-  events?: { emit(event: Extract<ConductorEvent, { type: 'stack_member_refreshed' }>): Promise<void> };
+  events?: { emit(event: Extract<ConductorEvent, { type: 'stack_member_refreshed' | 'stack_tip_diverged' }>): Promise<void> };
 }): Promise<void> {
   const stored = await readRefreshLedger(input.root, input.slug, { git: input.git });
   if (stored.kind !== 'ledger') {
@@ -446,7 +446,7 @@ export async function refreshPublishedStackMembers(input: {
     const oldTip = receipt.exitCode === 0 ? receipt.stdout.trim() : undefined;
     if (oldTip === member.recordedTip) continue;
     if (!oldTip) {
-      await haltStackTipDiverged(input.root, [{ pr: member.pr, position: member.position }], undefined,
+      await haltStackTipDiverged(input.root, [{ pr: member.pr, position: member.position }], input.events,
         `published stack refresh receipt is unreadable at position ${member.position}`);
       throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh receipt is unreadable at position ${member.position}`);
     }
@@ -470,7 +470,7 @@ export async function refreshPublishedStackMembers(input: {
     if (remote.kind !== 'executed') {
       await haltStackTipDiverged(input.root, remote.kind === 'refused' && remote.members?.length
         ? remote.members
-        : [{ pr: member.pr, position: member.position }], undefined,
+        : [{ pr: member.pr, position: member.position }], input.events,
       `published stack refresh refused at position ${member.position}`);
       throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh refused at position ${member.position}`);
     }
