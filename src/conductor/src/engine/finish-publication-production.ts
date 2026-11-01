@@ -1661,7 +1661,12 @@ export function createProductionFinishPublicationCoordinator(
                 };
                 if (typeof pr.url === 'string') {
                   const ready = await observeStackReadiness(pr.url, pr.isDraft === false);
-                  const halted = prHaltState(pr.title, pr.body, pr.labels);
+                  // Empty retained title/body text is an unauthored PR even
+                  // when a stale halt label remains on it. Keep this derived
+                  // halt state in the same order as `prProse`: only prose
+                  // that exists can select the halt terminal state.
+                  const halted = `${typeof pr.title === 'string' ? pr.title : ''}\n${typeof pr.body === 'string' ? pr.body : ''}`.trim() !== ''
+                    && prHaltState(pr.title, pr.body, pr.labels);
                   // The declaration is mechanically maintained shipment
                   // metadata, not reader-facing prose. Its append/replacement
                   // must not invalidate the verdict for an otherwise identical

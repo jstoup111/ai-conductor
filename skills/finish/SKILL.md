@@ -24,8 +24,9 @@ and publication evidence, creating or reusing a PR identity, pushing commits,
 creating durable shipment evidence, marking a PR ready, and recording the
 final outcome.
 
-For `author_pr_prose` and `judge_pr_prose` alike, this skill may inspect only the retained PR's title and body. An author pass changes prose only by
-writing the returned prose handoff; a judgment pass returns only its bounded verdict.
+An author pass may inspect only the retained PR's title and body, and changes
+prose only by writing the returned prose handoff. A judgment pass may inspect
+that same retained title and body, but returns only its bounded verdict.
 It must not create, push, merge, ready, or otherwise change a PR; write shipment
 evidence, completion markers, or outcome records; or infer deterministic
 repository or external state.

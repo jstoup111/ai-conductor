@@ -1723,7 +1723,10 @@ else
 
   # Covers: task:rem-prd-audit-finish-skill-judge-no-repair
   finish_judgment_repair_status=0
-  if grep -qiE 'judg(e|ment).*(repair|write|change).*prose|(repair|write|change).*prose.*judg(e|ment)' "$finish_skill"; then
+  # Match a repair grant within one contract sentence. A broad whole-line
+  # match falsely joined an author's permitted handoff write to the judgment
+  # clause later on that line, rejecting the verdict-only contract itself.
+  if grep -qiE 'judg(e|ment).{0,120}(repair|write|change).{0,80}prose|prose.{0,80}(repair|write|change).{0,120}judg(e|ment)' "$finish_skill"; then
     finish_judgment_repair_status=1
   fi
   assert "skills/finish/SKILL.md — keeps PR-prose judgment verdict-only" "$finish_judgment_repair_status"

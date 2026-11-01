@@ -446,12 +446,13 @@ describe('production FINISH authoring dispatch failure', () => {
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
       let title = 'fix: halt ordering';
       let body = `<!-- conductor:pr-body-floor -->\n\n${HALT_PR_BANNER_SENTINEL}`;
+      let labels: { name: string }[] = [];
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main',
         git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-halt-order\n' },
         gh: async (args) => {
           if (args[0] === 'auth') return { stdout: '' };
-          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels: [] }) };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels }) };
           throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
         },
         observeReleaseReadiness: async () => 'present',
@@ -469,6 +470,10 @@ describe('production FINISH authoring dispatch failure', () => {
 
       title = '';
       body = '';
+      // The halt signal remains present even when the title/body text is
+      // empty. Empty prose deliberately wins this ordering and is authored.
+      // This label is the retained PR's machine-readable halt signal.
+      labels = [{ name: 'needs-remediation' }];
       await expect(coordinator.advance(input)).resolves.toMatchObject({ kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_not_returned' });
       expect(dispatchAuthoring).toHaveBeenCalledOnce();
     } finally {
