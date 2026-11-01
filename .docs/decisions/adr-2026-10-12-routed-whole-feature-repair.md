@@ -660,6 +660,9 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       closed-child rewind refusal now names #3203.
 - [ ] #2945: post a PR comment on a published child that received a routed fix, and refresh a
       published stack.
+
+      > **Amended 2026-11-01 by #3269:** Both now land together under `adr-2026-11-01-routed-fix-refreshes-a-published-stack`. The routed exit no longer refuses a published stack, and it records moved tips in the refresh ledger.
+
 - [ ] #2947: per-child custom steps route their own kickbacks inside the region.
 - [ ] Runbook: routed repair, re-validation and cascade-cap exhaustion with the marker set, in
       `docs/runbooks/stalled-or-stuck-feature.md`.
