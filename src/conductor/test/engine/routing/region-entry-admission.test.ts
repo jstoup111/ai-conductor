@@ -260,4 +260,69 @@ describe('BUILD-region queue admission', () => {
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(kind);
     await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
   });
+
+  it('names queue state and halts needs-human only when admission is unavailable', async () => {
+    const root = await fixture();
+    const resolveActiveChild = vi.fn(async () => ({
+      kind: 'repair-pending' as const, child, position: parseChildId(2)!, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [child], revalidating: { child, generation: 3 },
+    }));
+    mocks.admission.mockResolvedValue({ kind: 'unavailable', detail: 'revalidation queue is unreadable' });
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild, enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+    });
+    await conductor.run();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/child BUILD region refused: queued child 1, queue generation 3;.*marker owner: .*revalidation queue is unreadable/);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('has no matching repair marker');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('refuses an ineligible revalidating cursor before queue admission', async () => {
+    const root = await fixture();
+    const resolveActiveChild = vi.fn(async () => ({
+      kind: 'repair-pending' as const, child, position: parseChildId(2)!, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [child], revalidating: { child, generation: 3 },
+    }));
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: false } }, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild, enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+    });
+    await conductor.run();
+    expect(mocks.admission).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('queued child 1, queue generation 3; routing is ineligible');
+  });
+
+  it('does not dispatch when an admitted queue head re-resolves to another execution source', async () => {
+    const root = await fixture();
+    let admitted = false;
+    const resolveActiveChild = vi.fn(async () => admitted
+      ? { kind: 'active' as const, child, position: child, isLeaf: true, branch: 'feat/daemon-demo' }
+      : { kind: 'repair-pending' as const, child, position: parseChildId(2)!, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [child], revalidating: { child, generation: 3 } });
+    mocks.admission.mockImplementation(async () => { admitted = true; return { kind: 'admitted', roundId: round, host: child }; });
+    const runner = { run: vi.fn() };
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: runner, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild, enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+    });
+    await conductor.run();
+    expect(runner.run).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('admitted round r7 for child 1 re-resolved as cursor');
+  });
+
+  it('leaves an ordinary cursor region untouched by queue admission', async () => {
+    const root = await fixture();
+    const resolveActiveChild = vi.fn(async () => ({ kind: 'active' as const, child, position: child, isLeaf: true, branch: 'feat/daemon-demo' }));
+    let park = false;
+    const runner = { run: vi.fn(async () => { park = true; return { success: true }; }) };
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: runner, acceptanceRedExec: vi.fn(), operatorParkBoundary: async () => park,
+      childRegionLifecycle: { resolveActiveChild, enterHostRegion: vi.fn(), enterChildRegion: vi.fn(async () => ({ kind: 'completed' }) as never) },
+    });
+    await conductor.run();
+    expect(mocks.admission).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith('acceptance_specs', expect.anything(), expect.anything());
+  });
 });
