@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import { leafBranchFor } from '../../src/engine/feature-branch-identity.js';
@@ -79,24 +79,20 @@ async function fixture() {
 }
 
 async function withHookModules<T>(root: string, action: (modules: {
-  readonly writeGitHooksAndWire: (worktree: string) => Promise<void>;
+  readonly launcher: string;
+  readonly writeGitHooksAndWire: (worktree: string, log?: (message: string) => void) => Promise<void>;
   readonly openOperatorRound: typeof import('../../src/engine/routing/operator-round.js')['openOperatorRound'];
 }) => Promise<T>): Promise<T> {
   const launcher = await writeHookLauncher(root);
-  const previous = process.env.AI_CONDUCTOR_ENGINE_BIN;
-  process.env.AI_CONDUCTOR_ENGINE_BIN = launcher;
-  vi.resetModules();
-  try {
-    const [{ writeGitHooksAndWire }, { openOperatorRound }] = await Promise.all([
-      import('../../src/engine/worktree-prepare.js'),
-      import('../../src/engine/routing/operator-round.js'),
-    ]);
-    return await action({ writeGitHooksAndWire, openOperatorRound });
-  } finally {
-    if (previous === undefined) delete process.env.AI_CONDUCTOR_ENGINE_BIN;
-    else process.env.AI_CONDUCTOR_ENGINE_BIN = previous;
-    vi.resetModules();
-  }
+  const [{ writeGitHooksAndWire }, { openOperatorRound }] = await Promise.all([
+    import('../../src/engine/worktree-prepare.js'),
+    import('../../src/engine/routing/operator-round.js'),
+  ]);
+  return action({
+    launcher,
+    writeGitHooksAndWire: (worktree, log) => writeGitHooksAndWire(worktree, log, { launcher }),
+    openOperatorRound,
+  });
 }
 
 async function commit(root: string, file: string): Promise<void> {
@@ -109,10 +105,11 @@ describe('stack commit guard pre-commit hook (real local Git)', () => {
   it('refreshes the hook while opening a round and refuses non-host commits without a phase marker', async () => {
     const root = await fixture();
 
-    await withHookModules(root, async ({ writeGitHooksAndWire, openOperatorRound }) => {
+    await withHookModules(root, async ({ launcher, writeGitHooksAndWire, openOperatorRound }) => {
       await writeGitHooksAndWire(root);
       const hookPath = join(root, '.pipeline', 'git-hooks', 'pre-commit');
       const currentHook = await readFile(hookPath, 'utf8');
+      expect(currentHook).toContain(launcher);
       await writeFile(hookPath, currentHook.replace(/^.*stack-commit-guard.*\n/m, ''));
       await expect(readFile(hookPath, 'utf8')).resolves.not.toContain('stack-commit-guard');
 
