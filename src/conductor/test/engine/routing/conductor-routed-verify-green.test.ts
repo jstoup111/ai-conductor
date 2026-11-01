@@ -608,7 +608,7 @@ describe('Conductor routed acceptance verify-green path', () => {
     expect(mocks.observedRevalidationRecordKind).toBe('operator');
     expect(enterHostRegion).not.toHaveBeenCalled();
     expect(operatorRunner.run).not.toHaveBeenCalled();
-    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('no open revalidate round');
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('revalidate route record is not open');
 
     const { root: contrast } = await routedFixture();
     mocks.revalidationRecord = revalidateRecord;
