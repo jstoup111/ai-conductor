@@ -1722,14 +1722,25 @@ else
   assert "skills/finish/SKILL.md — states the FINISH PR-prose handoff and engine-owned write" "$finish_pr_prose_handoff_status"
 
   # Covers: task:rem-prd-audit-finish-skill-judge-no-repair
+  finish_judgment_grants_repair() {
+    local contract=$1
+    grep -qiE 'judge_pr_prose[^.]{0,160}(repair|write|change)|judgment[^.]{0,160}(repair|write|change)|provider judged[^.]{0,160}(repair|write|change)' <<<"$contract"
+  }
+
   finish_judgment_repair_status=0
-  # Match a repair grant within one contract sentence. A broad whole-line
-  # match falsely joined an author's permitted handoff write to the judgment
-  # clause later on that line, rejecting the verdict-only contract itself.
-  if grep -qiE 'judg(e|ment).{0,120}(repair|write|change).{0,80}prose|prose.{0,80}(repair|write|change).{0,120}judg(e|ment)' "$finish_skill"; then
+  if finish_judgment_grants_repair "$(<"$finish_skill")"; then
     finish_judgment_repair_status=1
   fi
   assert "skills/finish/SKILL.md — keeps PR-prose judgment verdict-only" "$finish_judgment_repair_status"
+
+  # These were the three repair grants removed by the remediation. Keep a
+  # historical fixture so a weakened matcher cannot silently accept them.
+  finish_judgment_repair_fixture=$'For `author_pr_prose` and `judge_pr_prose` alike, this skill may inspect and repair only the retained PR\'s title and body.\nWhen the coordinator supplies a retained PR for judgment, make one bounded title/body quality and repair pass:\n- [ ] The provider judged and, when needed, repaired only the retained PR title/body.'
+  finish_judgment_repair_fixture_status=0
+  if ! finish_judgment_grants_repair "$finish_judgment_repair_fixture"; then
+    finish_judgment_repair_fixture_status=1
+  fi
+  assert "FINISH judgment repair guard rejects the pre-remediation contract" "$finish_judgment_repair_fixture_status"
 
   finish_no_in_place_status=0
   if grep -qiF 'in place' "$finish_skill"; then
