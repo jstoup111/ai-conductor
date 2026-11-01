@@ -79,6 +79,7 @@ async function subject(options: {
   buildResult?: unknown;
   activeChild?: number;
   maxRetries?: number;
+  operatorParkAfterBuild?: boolean;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
@@ -133,10 +134,10 @@ async function subject(options: {
   }
   let parkAfterBuild = false;
   const build = vi.fn(async () => {
-    parkAfterBuild = true;
+    parkAfterBuild = options.operatorParkAfterBuild ?? true;
     return { success: true, ...(options.buildResult === undefined ? {} : { finalStructuredResult: options.buildResult }) };
   });
-  const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
+  const runner: StepRunner = { run: async (step, _state, options) => step === 'build' ? build(options) : { success: true } };
   const events = new ConductorEventEmitter();
   const conductor = new Conductor({
     projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
@@ -410,5 +411,39 @@ describe('routed BUILD settlement cap halt', () => {
       type: 'step_failed', step: 'build', child: child,
       error: `routed prerequisite claim unverified: ${detail}`,
     }));
+  });
+
+  it.each([
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1'],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file'],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file'],
+    [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] }, 'claimed destination 2 lacks prerequisite paths'],
+  ])('bounds repeated rejected claims within the child-one BUILD retry allowance: %o', async (claim, detail) => {
+    const maxRetries = 3;
+    claimSeam.detail = `routed prerequisite claim unverified: ${detail}`;
+    const fixture = await subject({
+      cap: 15,
+      activeChild: child,
+      buildResult: claim,
+      maxRetries,
+      operatorParkAfterBuild: false,
+    });
+    await fixture.conductor.run();
+
+    expect(fixture.build).toHaveBeenCalledTimes(maxRetries);
+    expect(claimSeam.calls).toEqual(Array(maxRetries).fill(claim));
+    expect(fixture.build.mock.calls.map(([options]) => options?.attempt)).toEqual([1, 2, 3]);
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      "step 'build' failed in auto mode (retries exhausted)",
+    );
+    await expect(readBuildOutcome(fixture.root)).resolves.toMatchObject({
+      records: expect.arrayContaining([expect.objectContaining({
+        reason: 'routed-prerequisite-claim',
+        note: [`routed prerequisite claim unverified: ${detail}`],
+      })]),
+    });
+    await expect(readRouteRecord(fixture.root, 'demo', fixture.roundId, { git: fixture.git })).resolves.toMatchObject({
+      kind: 'record', record: { items: expect.arrayContaining([expect.objectContaining({ host: child })]) },
+    });
   });
 });

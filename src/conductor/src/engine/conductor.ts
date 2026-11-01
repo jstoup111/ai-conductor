@@ -11992,10 +11992,12 @@ export class Conductor {
                 type: 'step_failed', step: 'build', error: settled.detail,
                 retryCount: attempt, executionContext: serialExecutionContext,
               });
-              // Re-enter the normal dispatch boundary. An operator park can
-              // stop there; otherwise the host receives another BUILD turn.
-              i = indexOf('build') - 1;
-              continue stepLoop;
+              // Keep this rejected claim in this step's ordinary failure
+              // flow: it consumes the host region's retry allowance, emits
+              // the normal retry event, and revisits the operator-park
+              // boundary before another builder dispatch.  Re-entering
+              // `stepLoop` would reset the local `attempt` counter.
+              result = { ...result, success: false, output: settled.detail };
             }
           }
 
