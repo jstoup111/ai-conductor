@@ -142,11 +142,20 @@ export async function deleteStackChildren(
       }
       // A missing local branch is an already-completed member deletion.
       if (local.exitCode === 1) continue;
-      if (local.stdout.trim() !== head) {
+      const localTip = local.stdout.trim();
+      const accounting = await accountForChildCommits({
+        slug,
+        branch: branch.branch,
+        localTip,
+        mergedHead: head,
+        git: dependencies.git,
+      });
+      if (accounting.kind === 'failed') return { kind: 'failed' };
+      if (accounting.kind === 'unaccounted') {
         kept = true;
         continue;
       }
-      const deleted = await dependencies.git(['update-ref', '-d', `refs/heads/${branch.branch}`, head]);
+      const deleted = await dependencies.git(['update-ref', '-d', `refs/heads/${branch.branch}`, localTip]);
       // This is the authority-changing compare-and-swap. A nonzero result is
       // never a completed deletion, including a disappeared ref race.
       if (deleted.exitCode !== 0) return { kind: 'failed' };

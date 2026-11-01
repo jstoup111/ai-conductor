@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:1, task:2, task:3, task:4, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -423,6 +423,233 @@ describe('stack teardown', () => {
     await expect(readWatch(root)).resolves.toEqual([]);
   });
 
+  it('reaps merged children whose heads moved after their pushed tips and removes their explicit receipts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-moved-head-sweep-'));
+    cleanup.push(root);
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-one']);
+    await writeFile(join(root, 'child-one.txt'), 'pushed\n');
+    await runGit(root, ['add', 'child-one.txt']);
+    await runGit(root, ['commit', '-qm', 'child one pushed']);
+    const pushedOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', pushedOne]);
+
+    await runGit(root, ['checkout', '-q', 'main']);
+    await writeFile(join(root, 'main.txt'), 'main\n');
+    await runGit(root, ['add', 'main.txt']);
+    await runGit(root, ['commit', '-qm', 'main advance']);
+    await runGit(root, ['checkout', '-q', 'child-one']);
+    await runGit(root, ['merge', '--no-ff', 'main', '-m', 'merge main']);
+    await writeFile(join(root, 'ci-fix.txt'), 'fix\n');
+    await runGit(root, ['add', 'ci-fix.txt']);
+    await runGit(root, ['commit', '-qm', 'CI fix']);
+    const headOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-three', base]);
+    await writeFile(join(root, 'child-three.txt'), 'pushed\n');
+    await runGit(root, ['add', 'child-three.txt']);
+    await runGit(root, ['commit', '-qm', 'child three pushed']);
+    const pushedThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'first\n');
+    await runGit(root, ['add', '.docs/halted/demo.md']);
+    await runGit(root, ['commit', '-qm', 'halt one']);
+    await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'second\n');
+    await runGit(root, ['add', '.docs/halted/demo.md']);
+    await runGit(root, ['commit', '-qm', 'halt two']);
+    const localThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c3/demo', localThree]);
+
+    await runGit(root, ['checkout', '-q', 'main']);
+    await runGit(root, ['merge', '--no-ff', 'child-one', '-m', 'merge child one']);
+    await runGit(root, ['merge', '--no-ff', pushedThree, '-m', 'merge child three']);
+    const main = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', main]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushedOne]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c3/demo', pushedThree]);
+    const pushIntent = await runGit(root, ['hash-object', '-w', '--stdin'], JSON.stringify({ new: pushedOne }));
+    await runGit(root, ['update-ref', 'refs/conductor/demo/push-intent/feat/c1/demo', pushIntent.stdout.trim()]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    await writePublicationRecord(root, 'demo', undefined, record);
+    await enrollWatch(root, { prUrl: 'https://github.com/acme/demo/pull/500', slug: 'demo', repoCwd: root });
+
+    const gh = vi.fn(async (args: string[]) => {
+      const pr = Number(args[2]);
+      const heads: Record<number, string> = { 101: headOne, 103: pushedThree, 500: main };
+      return { stdout: JSON.stringify({ state: 'MERGED', headRefOid: heads[pr], mergeCommit: { oid: heads[pr] } }) };
+    });
+    await sweepMergeableLabels({
+      projectRoot: root,
+      runGh: gh,
+      tracker: { readPullRequestMergeState: async () => ({
+        state: 'MERGED' as const, mergeable: 'UNKNOWN' as const, hasFailingOrPendingChecks: false,
+        labels: [], checksOutcome: 'none' as const,
+      }) },
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: vi.fn(async () => undefined),
+    });
+
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(readWatch(root)).resolves.toEqual([]);
+    for (const ref of [
+      'refs/conductor/demo/pushed/feat/c1/demo',
+      'refs/conductor/demo/push-intent/feat/c1/demo',
+      'refs/conductor/demo/positions',
+      'refs/conductor/demo/publication',
+    ]) {
+      await expect(runGit(root, ['rev-parse', '--quiet', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
+    }
+  });
+
+  it('deletes moved merged heads by their local tips and explicitly cleans their receipts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-moved-head-direct-'));
+    cleanup.push(root);
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-one']);
+    await writeFile(join(root, 'child-one.txt'), 'pushed\n');
+    await runGit(root, ['add', 'child-one.txt']);
+    await runGit(root, ['commit', '-qm', 'child one pushed']);
+    const pushedOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', pushedOne]);
+    await runGit(root, ['checkout', '-q', 'main']);
+    await writeFile(join(root, 'main.txt'), 'main\n');
+    await runGit(root, ['add', 'main.txt']);
+    await runGit(root, ['commit', '-qm', 'main advance']);
+    await runGit(root, ['checkout', '-q', 'child-one']);
+    await runGit(root, ['merge', '--no-ff', 'main', '-m', 'merge main']);
+    await writeFile(join(root, 'ci-fix.txt'), 'fix\n');
+    await runGit(root, ['add', 'ci-fix.txt']);
+    await runGit(root, ['commit', '-qm', 'CI fix']);
+    const headOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-three', base]);
+    await writeFile(join(root, 'child-three.txt'), 'pushed\n');
+    await runGit(root, ['add', 'child-three.txt']);
+    await runGit(root, ['commit', '-qm', 'child three pushed']);
+    const pushedThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'first\n');
+    await runGit(root, ['add', '.docs/halted/demo.md']);
+    await runGit(root, ['commit', '-qm', 'halt one']);
+    await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'second\n');
+    await runGit(root, ['add', '.docs/halted/demo.md']);
+    await runGit(root, ['commit', '-qm', 'halt two']);
+    const localThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c3/demo', localThree]);
+
+    await runGit(root, ['checkout', '-q', 'main']);
+    await runGit(root, ['merge', '--no-ff', 'child-one', '-m', 'merge child one']);
+    await runGit(root, ['merge', '--no-ff', pushedThree, '-m', 'merge child three']);
+    const main = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', main]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushedOne]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c3/demo', pushedThree]);
+    const pushIntent = await runGit(root, ['hash-object', '-w', '--stdin'], JSON.stringify({ new: pushedOne }));
+    await runGit(root, ['update-ref', 'refs/conductor/demo/push-intent/feat/c1/demo', pushIntent.stdout.trim()]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    await writePublicationRecord(root, 'demo', undefined, record);
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      const pr = Number(args[2]);
+      const heads: Record<number, string> = { 101: headOne, 103: pushedThree };
+      return { stdout: JSON.stringify({ state: 'MERGED', headRefOid: heads[pr], mergeCommit: { oid: heads[pr] } }) };
+    });
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'deleted' });
+    expect(calls).toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c1/demo', pushedOne] }));
+    expect(calls).toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c3/demo', localThree] }));
+    const cleanupInputs = calls.filter(({ args }) => args.join(' ') === 'update-ref --stdin').map(({ input }) => input ?? '').join('\n');
+    for (const ref of [
+      'refs/conductor/demo/pushed/feat/c1/demo',
+      'refs/conductor/demo/push-intent/feat/c1/demo',
+      'refs/conductor/demo/positions',
+      'refs/conductor/demo/publication',
+    ]) {
+      expect(cleanupInputs).toContain(`delete ${ref}`);
+      await expect(runGit(root, ['rev-parse', '--quiet', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
+    }
+    expect(calls.some(({ args }) => args[0] === 'for-each-ref')).toBe(false);
+  });
+
+  it('keeps an unaccounted child while deleting a sibling whose local and merged heads agree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-unaccounted-child-'));
+    cleanup.push(root);
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-one']);
+    await writeFile(join(root, 'child-one.txt'), 'pushed\n');
+    await runGit(root, ['add', 'child-one.txt']);
+    await runGit(root, ['commit', '-qm', 'child one pushed']);
+    const pushedOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'app.ts'), 'export const app = true;\n');
+    await runGit(root, ['add', 'src/app.ts']);
+    await runGit(root, ['commit', '-qm', 'unaccounted app change']);
+    const localOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', localOne]);
+
+    await runGit(root, ['checkout', '-qb', 'child-three', base]);
+    await writeFile(join(root, 'child-three.txt'), 'merged\n');
+    await runGit(root, ['add', 'child-three.txt']);
+    await runGit(root, ['commit', '-qm', 'child three merged']);
+    const headThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c3/demo', headThree]);
+
+    await runGit(root, ['checkout', '-q', 'main']);
+    await runGit(root, ['merge', '--no-ff', pushedOne, '-m', 'merge child one pushed']);
+    await runGit(root, ['merge', '--no-ff', headThree, '-m', 'merge child three']);
+    const main = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', main]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushedOne]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      const pr = Number(args[2]);
+      const heads: Record<number, string> = { 101: pushedOne, 103: headThree };
+      return { stdout: JSON.stringify({ state: 'MERGED', headRefOid: heads[pr], mergeCommit: { oid: heads[pr] } }) };
+    });
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'kept' });
+    await expect(runGit(root, ['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ stdout: localOne });
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ exitCode: 1 });
+    expect(calls).toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c3/demo', headThree] }));
+    expect(calls.some(({ args }) => args[0] === 'for-each-ref')).toBe(false);
+  });
+
   it('deletes every sealed child by its recorded head before deleting stack-only conductor refs', async () => {
     const calls: Array<{ args: string[]; input?: string }> = [];
     const git = vi.fn(async (args: string[], options?: { input?: string }) => {
@@ -564,10 +791,24 @@ describe('stack teardown', () => {
     const calls: string[][] = [];
     const git = vi.fn(async (args: string[]) => {
       calls.push(args);
-      if (args[0] === 'cat-file') return { exitCode: 0, stdout: '[1,3,5]', stderr: '' };
+      if (args.join(' ') === 'cat-file -p refs/conductor/demo/positions') {
+        return { exitCode: 0, stdout: '[1,3,5]', stderr: '' };
+      }
+      if (args[0] === 'cat-file') return { exitCode: 0, stdout: '', stderr: '' };
       if (args[0] === 'merge-base') return { exitCode: 0, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse') {
-        return { exitCode: 0, stdout: args.at(-1) === 'refs/heads/feat/c1/demo' ? 'advanced-101\n' : 'head-103\n', stderr: '' };
+        if (args.at(-1) === 'refs/heads/feat/c1/demo') return { exitCode: 0, stdout: 'advanced-101\n', stderr: '' };
+        if (args.at(-1) === 'refs/conductor/demo/pushed/feat/c1/demo') return { exitCode: 0, stdout: 'head-101\n', stderr: '' };
+        return { exitCode: 0, stdout: 'head-103\n', stderr: '' };
+      }
+      if (args.join(' ') === 'rev-list advanced-101 --not head-101 head-101') {
+        return { exitCode: 0, stdout: 'advanced-101\n', stderr: '' };
+      }
+      if (args.join(' ') === 'rev-list --parents -n 1 advanced-101') {
+        return { exitCode: 0, stdout: 'advanced-101 parent-101\n', stderr: '' };
+      }
+      if (args.join(' ') === 'diff-tree --no-commit-id --name-only -r advanced-101^ advanced-101') {
+        return { exitCode: 0, stdout: 'src/app.ts\n', stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     });
@@ -598,7 +839,14 @@ describe('stack teardown', () => {
     await runGit(root, ['commit', '-qm', 'merged head']);
     const tip = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
     await runGit(root, ['branch', 'feat/c1/demo', tip]);
-    await runGit(root, ['branch', 'feat/c3/demo', lagging]);
+    await runGit(root, ['checkout', '-qb', 'lagging-child', lagging]);
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'app.ts'), 'export const app = true;\n');
+    await runGit(root, ['add', 'src/app.ts']);
+    await runGit(root, ['commit', '-qm', 'unaccounted app change']);
+    const unaccounted = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c3/demo', unaccounted]);
+    await runGit(root, ['checkout', '-q', 'main']);
     await runGit(root, ['update-ref', 'refs/remotes/origin/main', tip]);
     const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
     await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
@@ -630,7 +878,7 @@ describe('stack teardown', () => {
       '[mergeable-sweep] reaped demo — reason: shipped-record-on-main (stack members kept, record tornDown)',
     );
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).exitCode).toBe(1);
-    expect((await runGit(root, ['rev-parse', 'refs/heads/feat/c3/demo'])).stdout.trim()).toBe(lagging);
+    expect((await runGit(root, ['rev-parse', 'refs/heads/feat/c3/demo'])).stdout.trim()).toBe(unaccounted);
     await expect(readPublicationRecord(root, 'demo')).resolves.toMatchObject({ kind: 'record', record: { tornDown: true } });
 
     const readsAfterFirstSweep = gh.mock.calls.length;
