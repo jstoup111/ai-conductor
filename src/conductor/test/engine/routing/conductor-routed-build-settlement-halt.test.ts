@@ -373,7 +373,7 @@ describe('routed BUILD settlement cap halt', () => {
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
-  // Covers: task:8
+  // Covers: task:8, task:rem-prd-audit-refusal-82f49fa3-6a12-4844-9ad6-de5621a7aa15
   // Rejected prerequisite claims are ordinary, region-local failed BUILD
   // attempts. The actual claim normalization is covered by the real-Git
   // settlement tests; this keeps the conductor assertion at its orchestration
