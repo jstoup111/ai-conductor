@@ -1721,6 +1721,12 @@ else
     && grep -qiE 'engine.*performs.*PR title and body write' "$finish_skill" || finish_pr_prose_handoff_status=$?
   assert "skills/finish/SKILL.md — states the FINISH PR-prose handoff and engine-owned write" "$finish_pr_prose_handoff_status"
 
+  finish_judgment_repair_status=0
+  if grep -qiE 'judg(e|ment).*(repair|write|change).*prose|(repair|write|change).*prose.*judg(e|ment)' "$finish_skill"; then
+    finish_judgment_repair_status=1
+  fi
+  assert "skills/finish/SKILL.md — keeps PR-prose judgment verdict-only" "$finish_judgment_repair_status"
+
   finish_no_in_place_status=0
   if grep -qiF 'in place' "$finish_skill"; then
     finish_no_in_place_status=1

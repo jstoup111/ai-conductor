@@ -4,8 +4,6 @@ import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const HANDOFF_FILE = 'finish-pr-prose.json';
-
 async function loadHandoff() {
   return import('../../src/engine/finish-pr-prose-handoff.js');
 }
@@ -25,7 +23,8 @@ describe('FINISH PR-prose handoff', () => {
   });
 
   async function writeHandoff(value: unknown): Promise<void> {
-    await writeFile(join(pipelineDir, HANDOFF_FILE), JSON.stringify(value));
+    const { PR_PROSE_HANDOFF_PATH } = await loadHandoff();
+    await writeFile(join(projectRoot, PR_PROSE_HANDOFF_PATH), JSON.stringify(value));
   }
 
   it('returns not_returned when no handoff was written', async () => {
@@ -35,7 +34,7 @@ describe('FINISH PR-prose handoff', () => {
   });
 
   it('rejects unparsable JSON', async () => {
-    await writeFile(join(pipelineDir, HANDOFF_FILE), '{not json');
+    await writeFile(join(projectRoot, '.pipeline/finish-pr-prose.json'), '{not json');
     const { readPrProseHandoff } = await loadHandoff();
 
     await expect(readPrProseHandoff(pipelineDir)).resolves.toEqual({
@@ -74,12 +73,14 @@ describe('FINISH PR-prose handoff', () => {
     });
   });
 
-  it('clears an existing handoff and ignores an absent handoff', async () => {
+  it('reads and clears the handoff file named by PR_PROSE_HANDOFF_PATH', async () => {
     await writeHandoff({ version: 1, title: 'Title', body: 'Body' });
-    const { clearPrProseHandoff } = await loadHandoff();
+    const { PR_PROSE_HANDOFF_PATH, clearPrProseHandoff, readPrProseHandoff } = await loadHandoff();
+
+    await expect(readPrProseHandoff(pipelineDir)).resolves.toMatchObject({ kind: 'returned' });
 
     await clearPrProseHandoff(pipelineDir);
-    await expect(access(join(pipelineDir, HANDOFF_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(join(projectRoot, PR_PROSE_HANDOFF_PATH))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(clearPrProseHandoff(pipelineDir)).resolves.toBeUndefined();
   });
 
@@ -150,6 +151,33 @@ describe('FINISH PR-prose handoff', () => {
       kind: 'invalid',
       detail: expect.stringContaining('Closes owner/repo#42'),
     });
+  });
+
+  it.each([
+    ['a short reference', 'Closes #42', 'Returned body.'],
+    ['a qualified reference replaced by a longer one', 'Closes owner/repo#42', 'Returned body.\n\nCloses owner/repo#421'],
+    ['a qualified reference replaced by a shorter-prefix issue', 'Closes owner/repo#42', 'Returned body.\n\nCloses owner/repo#420'],
+  ])('rejects prose that drops %s', async (_caseName, currentReference, body) => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    await expect(applyAuthoredPrProse({
+      currentBody: `Current body.\n\n${currentReference}`,
+      prose: { title: 'Returned title', body } as never,
+      isPlaceholder: () => false,
+    })).toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining(currentReference),
+    });
+  });
+
+  it('retains exact qualified and short Closes references', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    await expect(applyAuthoredPrProse({
+      currentBody: 'Current body.\n\nCloses #42\nCloses owner/repo#43',
+      prose: { title: 'Returned title', body: 'Returned body.\n\nCloses #42\nCloses owner/repo#43' } as never,
+      isPlaceholder: () => false,
+    })).toMatchObject({ kind: 'apply' });
   });
 
   // Covers: task:2

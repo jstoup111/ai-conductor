@@ -1242,8 +1242,9 @@ function prProse(
 ): 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
-  if (isPlaceholderPrProse(prTitle, prBody, templateBytes)) return 'placeholder';
+  if (`${prTitle}\n${prBody}`.trim() === '') return 'placeholder';
   if (halted) return 'halt';
+  if (isPlaceholderPrProse(prTitle, prBody, templateBytes)) return 'placeholder';
   // The floor marker is provenance, not a verdict: it is an invisible comment
   // an authoring pass can preserve while rewriting every word around it, and
   // marker-presence-alone classification then pinned genuine prose at
@@ -1717,6 +1718,7 @@ export function createProductionFinishPublicationCoordinator(
                       state: 'one' as const,
                       url: pr.url,
                       prose,
+                      proseRevision: revisionDigest(revision),
                       ...(halted ? { halted: true as const } : {}),
                       ...(revisionGuidance === undefined ? {} : { revisionGuidance }),
                       ready,

@@ -154,6 +154,8 @@ export type PublicationPullRequest =
       identity: 'one';
       url: string;
       prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      /** Opaque digest of the observed title/body revision, when available. */
+      proseRevision?: string;
       /** The persisted objection for this exact judged-deficient revision, when available. */
       revisionGuidance?: string;
       /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
@@ -211,6 +213,8 @@ export type PullRequestObservation =
       state: 'one';
       url: string;
       prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt';
+      /** Opaque digest of the observed title/body revision, when available. */
+      proseRevision?: string;
       /** Persisted objection for this exact judged-deficient PR revision. */
       revisionGuidance?: string;
       /** The observer found a `needs-remediation` title, label, or body marker. */
@@ -409,6 +413,7 @@ function mapPullRequest(
         identity: 'one',
         url: observation.url,
         prose: observation.prose,
+        ...(observation.proseRevision === undefined ? {} : { proseRevision: observation.proseRevision }),
         ...(observation.revisionGuidance === undefined
           ? {}
           : { revisionGuidance: observation.revisionGuidance }),
@@ -1830,7 +1835,8 @@ export async function advanceFinishPublication(
     result.kind === 'publication_revision_progress' ||
     (result.kind === 'publication_retry' &&
       'transition' in result &&
-      result.reason !== 'publication_transition_indeterminate')
+      result.reason !== 'publication_transition_indeterminate' &&
+      result.reason !== 'judgment_revision_changed')
   )
     ? reconcileSelectablePublicationRetry(result, input.observe)
     : result;
@@ -2024,7 +2030,8 @@ async function advanceFinishPublicationUnreconciled(
         if (
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
-          observedAfterAuthoring.pr.prose !== 'indeterminate'
+          observedAfterAuthoring.pr.prose !== 'indeterminate' &&
+          observedAfterAuthoring.pr.prose !== snapshot.pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
@@ -2044,7 +2051,8 @@ async function advanceFinishPublicationUnreconciled(
         if (
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
-          observedAfterAuthoring.pr.prose !== 'indeterminate'
+          observedAfterAuthoring.pr.prose !== 'indeterminate' &&
+          observedAfterAuthoring.pr.prose !== snapshot.pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
@@ -2070,7 +2078,8 @@ async function advanceFinishPublicationUnreconciled(
         if (
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
-          observedAfterAuthoring.pr.prose !== 'indeterminate'
+          observedAfterAuthoring.pr.prose !== 'indeterminate' &&
+          observedAfterAuthoring.pr.prose !== snapshot.pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
@@ -2142,15 +2151,47 @@ async function advanceFinishPublicationUnreconciled(
         };
       }
 
-      if (
-        result.kind === 'publication_revision_progress' ||
-        (result.kind === 'publication_retry' && 'transition' in result)
-      ) {
+      if (result.kind === 'publication_revision_progress') {
+        // The production observer supplies an opaque digest for the exact
+        // title/body revision. A provider-side edit can race its own verdict;
+        // a changed stale revision must be judged anew, while stale-to-stale
+        // without a changed digest remains the existing fixed point.
+        if (pr.proseRevision !== undefined) {
+          const observedAfterJudgment = await input.observe();
+          if (
+            observedAfterJudgment.pr.identity === 'one' &&
+            observedAfterJudgment.pr.prose === 'stale' &&
+            observedAfterJudgment.pr.proseRevision !== undefined &&
+            observedAfterJudgment.pr.proseRevision !== pr.proseRevision
+          ) {
+            return {
+              kind: 'publication_retry',
+              transition: 'judge_pr_prose',
+              reason: 'judgment_revision_changed',
+            };
+          }
+        }
+        return result;
+      }
+      if (result.kind === 'publication_retry' && 'transition' in result) {
         return result;
       }
       if (result.kind !== 'advanced') return result;
 
       const observedAfterJudgment = await input.observe();
+      if (
+        observedAfterJudgment.pr.identity === 'one' &&
+        observedAfterJudgment.pr.prose === 'stale' &&
+        pr.proseRevision !== undefined &&
+        observedAfterJudgment.pr.proseRevision !== undefined &&
+        observedAfterJudgment.pr.proseRevision !== pr.proseRevision
+      ) {
+        return {
+          kind: 'publication_retry',
+          transition: 'judge_pr_prose',
+          reason: 'judgment_revision_changed',
+        };
+      }
       return (await advancedPublicationTransition(
         input.emit,
         'judge_pr_prose',

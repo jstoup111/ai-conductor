@@ -28,10 +28,10 @@ export type ApplyAuthoredPrProseInput = {
   readonly isPlaceholder: (title: string, body: string) => boolean;
 };
 
-const CLOSES_REFERENCE = /\bCloses\s+([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*#\d+)\b/g;
+const CLOSES_REFERENCE = /\bCloses\s+((?:[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*)?#\d+)\b/g;
 
 function handoffPath(pipelineDir: string): string {
-  return join(pipelineDir, 'finish-pr-prose.json');
+  return join(pipelineDir, '..', PR_PROSE_HANDOFF_PATH);
 }
 
 function invalid(detail: string): ReadPrProseHandoffResult {
@@ -117,8 +117,9 @@ export function applyAuthoredPrProse(input: ApplyAuthoredPrProseInput): ApplyAut
     return { kind: 'invalid', detail: 'PR-prose handoff body is still placeholder.' };
   }
 
+  const returnedReferences = new Set(closesReferences(body));
   const missingReference = closesReferences(input.currentBody)
-    .find((reference) => !body.includes(reference));
+    .find((reference) => !returnedReferences.has(reference));
   if (missingReference !== undefined) {
     return { kind: 'invalid', detail: `PR-prose handoff body must retain ${missingReference}.` };
   }

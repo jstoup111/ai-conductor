@@ -489,6 +489,18 @@ describe('author_pr_prose publish failure', () => {
     })).resolves.toEqual({ kind: 'human_required', reason: 'ambiguous_pr_identity' });
   });
 
+  it('keeps the publish failure when a judged revision remains unchanged', async () => {
+    const failure = await publicationOperationFailedError(operation, error);
+    const revisionRequired = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: false },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => revisionRequired,
+      effects: { authorProse: async () => { throw failure; }, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_operation_failed' });
+  });
+
   it('exports a discriminator for guarded publication failures', async () => {
     const failure = await publicationOperationFailedError(operation, error);
 
@@ -596,6 +608,32 @@ describe('author_pr_prose handoff failure', () => {
       });
     },
   );
+
+  it.each([
+    ['not_returned', 'The authoring handoff was not returned.', 'prose_not_returned'],
+    ['invalid', 'The returned handoff body is still placeholder.', 'prose_invalid'],
+  ] as const)('keeps %s handoff failure when revision_required prose is unchanged', async (cause, detail, reason) => {
+    const failure = await prProseAuthoringFailedError(cause, detail);
+    const revisionRequired = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: false },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => revisionRequired,
+      effects: { authorProse: async () => { throw failure; }, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({ kind: 'publication_retry', transition: 'author_pr_prose', reason, detail });
+  });
+
+  it('keeps a dispatch failure when revision_required prose is unchanged', async () => {
+    const revisionRequired = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: false },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => revisionRequired,
+      effects: { authorProse: async () => { throw new Error('provider transport failed'); }, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({ kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_dispatch_failed' });
+  });
 
   // Covers: task:3
   it.each([
@@ -2130,31 +2168,58 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     });
   });
 
-  it('keeps an unselectable revision-progress retry byte-identical without guidance', async () => {
+  it('retries judgment when a revision-required verdict races a changed stale revision', async () => {
     const stale = readyPublicationSnapshot({
       pr: {
         identity: 'one',
         url: 'https://github.com/acme/widget/pull/1172',
         prose: 'stale',
+        proseRevision: 'before',
         ready: false,
       },
     });
 
-    await expect(advanceFinishPublication({
-      observe: vi.fn<() => Promise<PublicationSnapshot>>()
-        .mockResolvedValueOnce(stale)
-        .mockResolvedValueOnce(stale),
-      effects: {
-        dispatchJudgment: async () => ({
-          kind: 'revision_required',
-          reason: 'structurally_incomplete',
-        }),
-      },
-    })).resolves.toEqual({
-      kind: 'human_required',
-      reason: 'publication_transition_unmoved',
-      detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.',
+    const changed = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', proseRevision: 'after', ready: false },
     });
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(stale)
+        .mockResolvedValueOnce(changed);
+    const accepted = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', proseRevision: 'after', ready: false },
+    });
+    const dispatchJudgment = vi.fn()
+      .mockResolvedValueOnce({ kind: 'revision_required' as const, reason: 'structurally_incomplete' as const })
+      .mockResolvedValueOnce({ kind: 'accepted' as const });
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: {
+        dispatchJudgment,
+      },
+    })).resolves.toEqual({ kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_revision_changed' });
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>().mockResolvedValueOnce(changed).mockResolvedValueOnce(accepted),
+      effects: { dispatchJudgment },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries judgment when an accepted verdict races a changed stale revision', async () => {
+    const stale = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', proseRevision: 'before', ready: false },
+    });
+    const changed = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', proseRevision: 'after', ready: false },
+    });
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' as const }));
+
+    await expect(advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>().mockResolvedValueOnce(stale).mockResolvedValueOnce(changed),
+      effects: { dispatchJudgment },
+    })).resolves.toEqual({ kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_revision_changed' });
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
   });
 
   it('advances when authoring rewrites a judged revision to a newly stale body', async () => {

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import type { GithubOperationRequest, GithubOperationRunner, GithubPullRequestEditPayload } from '../../src/engine/github-operations.js';
 import type { ConductState } from '../../src/types/index.js';
 
@@ -436,6 +437,44 @@ describe('FINISH authors PR prose before it judges it', () => {
 });
 
 describe('production FINISH authoring dispatch failure', () => {
+  it('classifies a floored halted body as halt before authoring, while an empty halted body is placeholder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-halt-order-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      let title = 'fix: halt ordering';
+      let body = `<!-- conductor:pr-body-floor -->\n\n${HALT_PR_BANNER_SENTINEL}`;
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-halt-order\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+      const dispatchAuthoring = vi.fn(async () => ({ success: true }));
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const input = {
+        state: { feature_desc: 'prose-halt-order', worktree_branch: 'feat/prose-halt-order', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto' as const, daemon: true, dispatchAuthoring, dispatchJudgment, emit: async () => {},
+      };
+
+      await expect(coordinator.advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+      expect(dispatchAuthoring).not.toHaveBeenCalled();
+      expect(dispatchJudgment).not.toHaveBeenCalled();
+
+      title = '';
+      body = '';
+      await expect(coordinator.advance(input)).resolves.toMatchObject({ kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_not_returned' });
+      expect(dispatchAuthoring).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('retries a failed authoring run instead of halting it as an unmoved transition', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-prose-authoring-failure-'));
     try {

@@ -24,8 +24,8 @@ and publication evidence, creating or reusing a PR identity, pushing commits,
 creating durable shipment evidence, marking a PR ready, and recording the
 final outcome.
 
-For `author_pr_prose` and `judge_pr_prose` alike, this skill may inspect and repair only the retained PR's title and body. An author pass repairs them by
-writing the returned prose handoff; a judgment pass returns its bounded verdict.
+For `author_pr_prose` and `judge_pr_prose` alike, this skill may inspect only the retained PR's title and body. An author pass changes prose only by
+writing the returned prose handoff; a judgment pass returns only its bounded verdict.
 It must not create, push, merge, ready, or otherwise change a PR; write shipment
 evidence, completion markers, or outcome records; or infer deterministic
 repository or external state.
@@ -94,8 +94,8 @@ not an accepted one, and no self-report substitutes for that observation.
 
 ## PR Prose Judgment
 
-When the coordinator supplies a retained PR for judgment, make one bounded
-title/body quality and repair pass:
+When the coordinator supplies a retained PR for judgment, inspect the retained
+title/body and return one bounded quality verdict:
 
 - Accept prose that is specific, reader-oriented, and structurally complete.
 - Identify a concrete title/body defect when prose is placeholder, halt text, or
@@ -157,8 +157,9 @@ is proven on origin/default branch. FINISH does not delete a worktree.
       publication activity.
 - [ ] An unauthored PR body was authored from the feature's own diff before any
       prose judgment was requested.
-- [ ] The provider judged and, when needed, repaired only the retained PR
-      title/body, at most once per observed prose revision.
+- [ ] The provider judged only the retained PR title/body, at most once per
+      observed prose revision; only the authoring pass changed prose through
+      the handoff.
 - [ ] No provider action created, pushed, merged, readied, or recorded
       publication state.
 - [ ] The coordinator, rather than prompt compliance, determined the terminal
