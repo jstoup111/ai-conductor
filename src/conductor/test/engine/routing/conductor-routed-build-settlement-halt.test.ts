@@ -371,10 +371,11 @@ describe('routed BUILD settlement cap halt', () => {
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
-  // Covers: task:8 — rejected prerequisite claims are ordinary, region-local
-  // failed BUILD attempts. The actual claim normalization is covered by the
-  // real-Git settlement tests; this keeps the conductor assertion at its
-  // orchestration boundary.
+  // Covers: task:8
+  // Rejected prerequisite claims are ordinary, region-local failed BUILD
+  // attempts. The actual claim normalization is covered by the real-Git
+  // settlement tests; this keeps the conductor assertion at its orchestration
+  // boundary.
   it.each([
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1', 1],
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file', 1],
