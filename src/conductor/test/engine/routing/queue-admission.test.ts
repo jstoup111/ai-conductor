@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/engine/routing/revalidation-queue.js', () => ({
