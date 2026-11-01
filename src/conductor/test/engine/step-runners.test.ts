@@ -3078,6 +3078,7 @@ describe('DefaultStepRunner', () => {
   // The authoring pass is the fix for a PR that reached FINISH with an
   // unauthored body: the provider is told to WRITE the prose from the diff,
   // and is given the authoring contract instead of a grading rubric.
+  // Covers: task:9
   it('finish authoring pass returns the prose through the engine handoff and names both hosts', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
@@ -3109,6 +3110,7 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).not.toContain('pull-request.edit');
   });
 
+  // Covers: task:9
   it('finish revision-lap authoring pass returns the revised prose through the engine handoff', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
