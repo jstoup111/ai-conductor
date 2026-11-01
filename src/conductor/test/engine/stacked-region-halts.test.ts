@@ -22,7 +22,7 @@ const cursorRefusals: Array<[ActiveChildResolution, string]> = [
   [{ kind: 'topology-unavailable', cause: 'plan-missing' }, 'slice topology is unavailable while child state exists (plan-missing)\nRecovery:\nai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt'],
   [{ kind: 'topology-unavailable', cause: 'positions-changed', planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: [1, 3] }, 'slice topology is unavailable while child state exists (positions-changed); plan path .docs/plans/demo.md; recorded positions [1,2]; plan positions [1,3]\nRecovery:\nai-conductor reseal --slug demo --path .docs/plans/demo.md --reason "«why»" --clear-halt'],
   [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child\nRecovery:\ngit switch feat/daemon-demo'],
-  [{ kind: 'git-error' }, 'git failed while resolving the active child cursor\nRecovery:\nrm -f .pipeline/HALT .pipeline/HALT.class'],
+  [{ kind: 'git-error' }, 'cannot read refs/conductor/demo/revalidate while resolving the active child cursor'],
 ];
 
 beforeEach(async () => {
