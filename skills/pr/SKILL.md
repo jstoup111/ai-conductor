@@ -12,6 +12,7 @@ requires: []
 
 Creates high-quality pull requests by analyzing the actual changes, not parroting planning
 artifacts. The PR should tell a reviewer what changed, why, and how to verify it — nothing more.
+Publication is engine-owned: return the title and body to the guarded remote write and PR operation.
 
 ## Practices
 

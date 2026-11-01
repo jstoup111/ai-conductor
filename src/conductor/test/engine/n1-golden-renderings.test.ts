@@ -481,8 +481,11 @@ describe('N=1 golden renderings', () => {
         mode: 'auto',
         daemon: true,
         dispatchAuthoring: async () => {
-          title = 'feat: freeze N=1 FINISH';
-          body = '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n';
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: freeze N=1 FINISH',
+            body: '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n',
+          }));
           return { success: true };
         },
         dispatchJudgment: async () => ({ success: true, output: '{"kind":"accepted"}' }),
@@ -509,7 +512,7 @@ describe('N=1 golden renderings', () => {
     const normal = await run(false);
     await expectFinishGolden('leaf-body', normal.body);
     await expectFinishGolden('conduct-state', JSON.stringify(JSON.parse(await readFile(statePath, 'utf8')), null, 2));
-    await expectFinishGolden('gh-argv', JSON.stringify(normal.ghArgv, null, 2));
+    await expectFinishGolden('gh-argv', `${JSON.stringify(normal.ghArgv, null, 2)}\n`);
     // ADR 2026-10-17 D1 (amended 2026-10-20): local read-only conductor-ref
     // probes are recorded separately; remote and mutating argv stay pinned.
     const normalGit = partitionConductorRefProbes(normal.gitArgv, 'n1-golden');

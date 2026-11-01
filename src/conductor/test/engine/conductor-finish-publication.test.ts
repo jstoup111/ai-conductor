@@ -1554,12 +1554,14 @@ describe('Conductor FINISH publication routing', () => {
     state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
     const runner: StepRunner = {
-      run: vi.fn(async () => {
-        pullRequest = {
-          ...pullRequest,
-          title: 'feat: publish coherent finish',
-          body: 'Reader-facing summary of the completed change.',
-        };
+      run: vi.fn(async (_step, _state, options) => {
+        if (options.finishProsePass === 'author') {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: publish coherent finish',
+            body: 'Reader-facing summary of the completed change.',
+          }));
+        }
         return { success: true, publicationDisposition: { kind: 'accepted' } };
       }),
     };
@@ -1621,8 +1623,8 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    // Placeholder prose requires authoring. Its resulting retained-PR
-    // title/body is accepted by the GitHub observation without another pass.
+    // Placeholder prose requires authoring; the authenticated engine handoff
+    // marks its newly published revision accepted without a second pass.
     expect(runner.run).toHaveBeenCalledTimes(1);
     expect(recordFinish).toHaveBeenCalledOnce();
     await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).resolves.toBe('pr\n');
@@ -1666,7 +1668,14 @@ describe('Conductor FINISH publication routing', () => {
       type: 'github_operation_failed'; operation: 'pull-request.edit';
       target: { kind: 'pull-request'; repository: string; number: number }; error: string; ts: string;
     }> = [];
-    const runner: StepRunner = { run: vi.fn(async () => {
+    const runner: StepRunner = { run: vi.fn(async (_step, _state, options) => {
+      if (options.finishProsePass === 'author') {
+        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+          version: 1,
+          title: 'feat: publish coherent finish',
+          body: 'Reader-facing summary of the completed change.',
+        }));
+      }
       if (writeFailures) {
         queuedPublishFailures.push(
           { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: 'first missing-scope error', ts: '2026-10-25T00:00:00.000Z' },
@@ -1693,7 +1702,13 @@ describe('Conductor FINISH publication routing', () => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
         throw new Error(`unexpected gh command: ${args.join(' ')}`);
       },
-      operations: { run: async () => ({}) }, observeReleaseReadiness: async () => 'present',
+      operations: {
+        run: async () => {
+          if (writeFailures) throw new Error(missingScope);
+          return {};
+        },
+      },
+      observeReleaseReadiness: async () => 'present',
       events,
       flushSessionEvents: async () => {
         for (const event of queuedPublishFailures) await events.emit(event);
@@ -1708,13 +1723,13 @@ describe('Conductor FINISH publication routing', () => {
     await conductor.run();
 
     const halt = await readFile(join(pipeline, 'HALT'), 'utf8');
-    expect(runner.run).toHaveBeenCalledOnce();
+    expect(runner.run).toHaveBeenCalledTimes(1);
     if (writeFailures) {
       expect(halt).toContain('A FINISH pull-request publish failed');
       expect(halt).toContain(missingScope);
       expect(halt).not.toContain('left pr.prose unchanged at placeholder');
       expect(dispositions).toEqual([expect.objectContaining({
-        reason: 'publication_operation_failed', detail: `pull-request.edit failed: ${missingScope}`,
+        reason: 'publication_operation_failed', detail: `pull-request.edit failed: guarded pull-request.edit failed: ${missingScope}`,
       })]);
       expect(loopHalts).toEqual([
         expect.stringContaining('A FINISH pull-request publish failed'),

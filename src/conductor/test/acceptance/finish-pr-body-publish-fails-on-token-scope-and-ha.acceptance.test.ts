@@ -120,7 +120,14 @@ describe('FINISH publish-failure diagnosis', () => {
     const events = new ConductorEventEmitter();
     const queuedPublishFailures: ConductorEvent[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async () => {
+      run: vi.fn(async (_step, _state, options) => {
+        if (options.finishProsePass === 'author') {
+          await writeFile(join(projectRoot, '.pipeline', 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: publish coherent finish',
+            body: 'Reader-facing summary of the completed change.',
+          }));
+        }
         if (recordPublishFailure) {
           for (const error of ['first publish failure', 'GraphQL: missing required scope read:org']) {
             queuedPublishFailures.push({
@@ -152,6 +159,14 @@ describe('FINISH publish-failure diagnosis', () => {
       observeReleaseReadiness: async () => 'present',
       acquireInteractiveIntent: async () => 'pr',
       recordFinish: async () => 0,
+      operations: {
+        run: async () => {
+          if (recordPublishFailure) {
+            throw new Error('GraphQL: missing required scope read:org');
+          }
+          return {};
+        },
+      },
       events,
       flushSessionEvents: async () => {
         for (const event of queuedPublishFailures) await events.emit(event);
