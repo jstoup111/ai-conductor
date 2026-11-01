@@ -6240,13 +6240,12 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // FINISH publication mechanics are engine-owned. The provider crosses this
-    // boundary only for one reader-facing PR-prose judgment and may repair
-    // only that retained PR's title/body; it must never create/push/merge/ready
-    // a PR or write completion state itself.
+    // boundary only for one reader-facing PR-prose judgment; it must never
+    // create/push/merge/ready a PR or write completion state itself.
     if (step === 'finish' && this.mode === 'auto') {
       prompt +=
         '\n\nUNATTENDED FINISH JUDGMENT — inspect only the retained PR title and body for reader-facing quality. ' +
-        'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
+        'Return exactly one JSON object: ' +
         '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
         '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
         'For every revision_required verdict, include a concrete `detail` describing what is deficient. ' +
@@ -6261,9 +6260,10 @@ export class DefaultStepRunner implements StepRunner {
     if (step === 'finish' && this.mode !== 'auto') {
       prompt +=
         '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
-        'inspect only its title/body quality. For the bounded prose judgment you may repair only that retained PR title/body once, ' +
-        'then return exactly one JSON object using accepted, revision_required (placeholder|halt|structurally_incomplete), timed_out, ' +
-        'provider_unavailable, or refused. If the body is unauthored placeholder text, return revision_required with ' +
+        'inspect only its title/body quality. For the bounded prose judgment, return exactly one JSON object: ' +
+        '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
+        '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'If the body is unauthored placeholder text, return revision_required with ' +
         'reason placeholder and stop — the coordinator owns a separate authoring pass for that. Do not create, push, ' +
         'merge, or ready a PR; do not alter labels, shipment evidence, ' +
         'or completion files; the publication coordinator performs every other authorized transition.';
