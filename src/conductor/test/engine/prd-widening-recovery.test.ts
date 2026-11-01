@@ -7,10 +7,30 @@ import {
   renderPrdAuditScopeHalt,
   renderPrdWideningRecovery,
 } from '../../src/engine/prd-widening-recovery.js';
+import type { PrdWideningCaptureDefectKind } from '../../src/engine/prd-widening-capture.js';
+
+const CAPTURE_DEFECT_KINDS: Record<PrdWideningCaptureDefectKind, true> = {
+  'malformed-block': true,
+  'malformed-entry': true,
+  'changed-offer-reference': true,
+  'duplicate-offer-entry': true,
+  'invalid-decision': true,
+  'missing-rationale': true,
+  'missing-operator': true,
+  'offer-read-failed': true,
+  'write-failed': true,
+  'unsupported-legacy-clear': true,
+  'unknown-criterion': true,
+  'offered-set-unavailable': true,
+};
 
 describe('renderPrdWideningRecovery', () => {
   it('maps every capture defect away from malformed history', () => {
-    expect(Object.values(PRD_WIDENING_CAPTURE_DEFECT_RECOVERY)).not.toContain('malformed-history');
+    expect(Object.keys(PRD_WIDENING_CAPTURE_DEFECT_RECOVERY).sort()).toEqual(Object.keys(CAPTURE_DEFECT_KINDS).sort());
+
+    for (const kind of Object.keys(CAPTURE_DEFECT_KINDS) as PrdWideningCaptureDefectKind[]) {
+      expect(PRD_WIDENING_CAPTURE_DEFECT_RECOVERY[kind]).not.toBe('malformed-history');
+    }
   });
 
   it('classifies every widening-history migration failure precisely', () => {
