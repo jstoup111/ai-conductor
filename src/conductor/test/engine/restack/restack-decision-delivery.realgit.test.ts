@@ -24,7 +24,13 @@ const roundId = parseRoundId('r1')!;
 
 afterEach(async () => removeAll(cleanup));
 
-async function fixture() {
+async function fixture({
+  extraChild = false,
+  conflictPath = 'two.txt',
+}: {
+  extraChild?: boolean;
+  conflictPath?: 'two.txt' | 'three.txt';
+} = {}) {
   const subject = await createSweepRepository('restack-decision-delivery-', cleanup);
   await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
   await subject.git(['add', '.ai-conductor/config.yml']);
@@ -36,41 +42,11 @@ async function fixture() {
   await subject.git(['checkout', '-qb', 'feat/c2/demo']);
   const closedTwo = await subject.commit('closed two', 'two.txt', 'two\n');
   await subject.git(['update-ref', closureRefFor('demo', child), closedTwo]);
-  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
-  await subject.commit('leaf', 'leaf.txt', 'leaf\n');
-  await sealStack(subject.repo);
-  await subject.git(['checkout', '-q', 'feat/c1/demo']);
-  await subject.commit('routed fix touching child 2', 'two.txt', 'routed\n');
-  const git = makeGitRunner(subject.repo);
-  const route: RouteRecord = {
-    roundId, kind: 'audit', phase: 'open',
-    items: [{ findingId: 'finding-1', kind: 'audit', owner: host, host, reason: 'repair', fallback: [] }],
-    allocation: { [host]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
-    hosts: { [host]: 'repairing' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [],
-    entry: { host, pinnedBase: closedOne, tree: (await git(['rev-parse', `${closedOne}^{tree}`])).stdout.trim() as never },
-  };
-  const blob = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(route) })).stdout.trim();
-  const marker = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host, roundId }) })).stdout.trim();
-  await git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
-  await git(['update-ref', repairMarkerRefFor('demo'), marker]);
-  return { ...subject, git, closedOne, closedTwo };
-}
-
-async function childThreeConflictFixture(conflictPath: 'two.txt' | 'three.txt' = 'three.txt') {
-  const subject = await createSweepRepository('restack-decision-child-three-', cleanup);
-  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
-  await subject.git(['add', '.ai-conductor/config.yml']);
-  await subject.git(['commit', '-qm', 'configure stack']);
-  await subject.commit('base', 'base.txt', 'base\n');
-  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
-  const closedOne = await subject.commit('closed one', 'one.txt', 'one\n');
-  await subject.git(['update-ref', closureRefFor('demo', host), closedOne]);
-  await subject.git(['checkout', '-qb', 'feat/c2/demo']);
-  const closedTwo = await subject.commit('closed two', 'two.txt', 'two\n');
-  await subject.git(['update-ref', closureRefFor('demo', child), closedTwo]);
-  await subject.git(['checkout', '-qb', 'feat/c3/demo']);
-  const closedThree = await subject.commit('closed three', 'three.txt', 'child three\n');
-  await subject.git(['update-ref', closureRefFor('demo', parseChildId(3)!), closedThree]);
+  if (extraChild) {
+    await subject.git(['checkout', '-qb', 'feat/c3/demo']);
+    const closedThree = await subject.commit('closed three', 'three.txt', 'child three\n');
+    await subject.git(['update-ref', closureRefFor('demo', leaf), closedThree]);
+  }
   await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
   await subject.commit('leaf', 'leaf.txt', 'leaf\n');
   await sealStack(subject.repo);
@@ -158,7 +134,7 @@ describe('restack decision delivery (real local Git)', () => {
 
   // Covers: task:rem-prd-audit-10a
   it('delivers a matching decision, moves resolved closed children, queues child 2 before the leaf, then deletes it only with the applied move', async () => {
-    const subject = await childThreeConflictFixture('two.txt');
+    const subject = await fixture({ extraChild: true, conflictPath: 'two.txt' });
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
     persister.start();
@@ -324,7 +300,7 @@ describe('restack decision delivery (real local Git)', () => {
 
   // Covers: task:13
   it('does not deliver child 2\'s decision while replaying child 3', async () => {
-    const subject = await childThreeConflictFixture();
+    const subject = await fixture({ extraChild: true, conflictPath: 'three.txt' });
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
     persister.start();
