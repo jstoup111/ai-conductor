@@ -400,3 +400,57 @@ Notation: `<file>` in a quoted check is a placeholder argument, not a repository
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-refusal-14558e1f-3ea0-4334-bfab-c1ba3f7e75b9: In prProse in src/conductor/src/engine/finish-publication-production.ts, restore the base order: only empty title-and-body text returns placeholder before `if (halted) return 'halt'`, and the floored-body and draft-text check through isPlaceholderPrProse runs after that guard; add a failing-first test in src/conductor/test/engine/finish-pr-prose-authoring.test.ts proving a floored body with a halt signal classifies as halt and reaches halt_state_pr with no author pass, while an empty halted body still classifies as placeholder
+**Gate:** prd-audit
+**Rationale:** Removal-only rework of refused NC-1, verified against base: 5fa41e731c returned placeholder only for empty text, then halt, then checked the floored body, while HEAD runs isPlaceholderPrProse before the halted guard. The task restores the base order and adds no behavior. The Task 5 shared helper stays for applyAuthoredPrProse.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 14558e1f-3ea0-4334-bfab-c1ba3f7e75b9 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 14558e1f-3ea0-4334-bfab-c1ba3f7e75b9 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-14558e1f-3ea0-4334-bfab-c1ba3f7e75b9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-closes-ref: In src/conductor/src/engine/finish-pr-prose-handoff.ts, make applyAuthoredPrProse extract complete closing references from both the current body and the spliced body with one matcher accepting `Closes owner/repo#N` and `Closes #N`, and compare whole extracted references instead of using substring membership; add failing-first cases in src/conductor/test/engine/finish-pr-prose-handoff.test.ts proving a dropped `Closes #42` and a `Closes owner/repo#42` replaced by `Closes owner/repo#421` or `#420` each return invalid naming the missing reference, while retained-reference and no-reference cases still return apply
+**Gate:** prd-audit
+**Rationale:** Implementation defect, verified by reading finish-pr-prose-handoff.ts: applyAuthoredPrProse uses body.includes(reference), so 'Closes owner/repo#421' satisfies 'Closes owner/repo#42'. ADR D2 is authoritative and no architecture decision is needed. Task 2 admits this repair, but its Done-when items already pass, so an explicit appended task carries the concrete fix. Existing qualified-reference and no-reference coverage survives. Confidence 95%.
+**Criterion:** S1.10
+**Parent task:** 2
+**Done when:**
+- [test] S1.10 is satisfied by this task.
+- The repair for task rem-prd-audit-closes-ref is committed and its targeted tests pass.
+
+### Task rem-prd-audit-judge-stale-rejudge: In src/conductor/src/engine/finish-publication.ts, when a judge_pr_prose dispatch returns accepted or a revision_required progress result and the fresh observation reads pr.prose as stale selecting judge_pr_prose, return a bounded publication_retry for judge_pr_prose under a named retry reason instead of publication_transition_unmoved; add failing-first tests in src/conductor/test/engine/finish-publication.test.ts whose judgment dispatch actually changes the PR body revision, for both verdicts, proving the new revision is judged again and never accepted without its own verdict
+**Gate:** prd-audit
+**Rationale:** Verified from source: the judge branch of finish-publication.ts sends an accepted verdict through advancedPublicationTransition, which compares only the prose value, so stale-to-stale after a judge edit returns publication_transition_unmoved. A revision_required verdict goes through reconcileSelectablePublicationRetry, which also returns publication_transition_unmoved when the fresh observation selects judge_pr_prose. Story 3 and Task 10 already require the changed revision to be judged again, so this is conforming BUILD work. The fixed-point guard for an unchanged authoring pass stays as it is. Confidence 85%.
+**Criterion:** S3.4
+**Parent task:** 10
+**Done when:**
+- [test] S3.4 is satisfied by this task.
+- The repair for task rem-prd-audit-judge-stale-rejudge is committed and its targeted tests pass.
+
+### Task rem-prd-audit-finish-skill-judge-no-repair: In skills/finish/SKILL.md, reword the Responsibility Boundary (line 27), the PR Prose Judgment intro (line 98) and the checklist item (line 160) so the judge inspects the retained PR title/body and returns only its verdict, and only the author pass changes prose, through the handoff; extend the FINISH skill check in test/test_harness_integrity.sh to fail if the judgment contract grants repair, keeping the existing handoff-phrase and 'in place' assertions
+**Gate:** prd-audit
+**Rationale:** Verified by grep: skills/finish/SKILL.md lines 27, 98 and 160 still give the judge repair language, contradicting ADR D3 and D6, and the integrity check only rejects the phrase 'in place'. This is a clear skill-text and check repair admitted by Task 11's one-contract goal; no decision is needed. The existing handoff and 'in place' assertions stay. Confidence 90% on the contradiction.
+**Criterion:** S4.6
+**Parent task:** 11
+**Done when:**
+- [test] S4.6 is satisfied by this task.
+- The repair for task rem-prd-audit-finish-skill-judge-no-repair is committed and its targeted tests pass.
+
+### Task rem-as-built-revision-failure-cause: In the author_pr_prose branch of src/conductor/src/engine/finish-publication.ts, make the publication-failure, authoring-failure and dispatch-failure arms advance only when re-observed pr.prose actually moved from the snapshot value, so unchanged revision_required prose keeps human_required publication_operation_failed, publication_retry prose_not_returned or prose_invalid with its detail, or authoring_dispatch_failed; add failing-first revision_required cases for each arm in src/conductor/test/engine/finish-publication.test.ts, keeping the existing placeholder and moved-prose cases passing
+**Gate:** as-built
+**Rationale:** Verified from source: the publicationFailure and authoringFailure arms of the author_pr_prose branch only test that prose is not placeholder or indeterminate, then call advancedPublicationTransition. Unchanged revision_required prose therefore returns publication_transition_unmoved and loses the cause ADR D4 requires. The dispatchFailure arm has the same shape, and D4 names its retry, so it is included. Tasks 3 and 6 coverage survives, including advanced when prose really moved and unmoved after a completed edit.
+**Governing clause:** adr-2026-10-31-engine-performs-finish-pr-prose-write decision 4
+**Done when:**
+- adr-2026-10-31-engine-performs-finish-pr-prose-write decision 4 is satisfied by this task.
+- The repair for task rem-as-built-revision-failure-cause is committed and its targeted tests pass.
+
+### Task rem-as-built-handoff-path-constant: In src/conductor/src/engine/finish-pr-prose-handoff.ts, derive handoffPath from the exported PR_PROSE_HANDOFF_PATH so the production read and clear paths use one definition and the separate filename literal is gone; add or extend a failing-first case in src/conductor/test/engine/finish-pr-prose-handoff.test.ts proving readPrProseHandoff and clearPrProseHandoff act on the file that constant names
+**Gate:** as-built
+**Rationale:** Verified by reading finish-pr-prose-handoff.ts: PR_PROSE_HANDOFF_PATH is declared at line 5 while handoffPath builds the path from a separate 'finish-pr-prose.json' literal. Task 1 requires this export, so wiring it in is conforming cleanup with no behavior change. Existing read and clear coverage survives.
+**Parent task:** 1
+**Governing clause:** Task 1
+**Done when:**
+- Task 1 is satisfied by this task.
+- The repair for task rem-as-built-handoff-path-constant is committed and its targeted tests pass.
