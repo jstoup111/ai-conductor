@@ -29,6 +29,7 @@ describe('remediation projection corpus limits', () => {
       tasksBytes: expect.any(Number),
       pendingAsBuiltFindingsBytes: expect.any(Number),
       priorLapsBytes: expect.any(Number),
+      priorAsBuiltCasesBytes: expect.any(Number),
       refusalsBytes: expect.any(Number),
       totalBytes: expect.any(Number),
       perFileHunksBytes: expect.any(Number),
@@ -54,13 +55,14 @@ describe('remediation projection corpus limits', () => {
     )));
     for (const [limit, measured] of [
       [limits.priorLapsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes],
+      [limits.priorAsBuiltCasesBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes],
       [limits.refusalsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes],
     ] as const) {
       expect(limit).toBe(roundUpPowerOfTwo(Math.max(REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES, measured)));
     }
     expect(limits.totalBytes).toBe(roundUpPowerOfTwo(
       limits.requiredReferencesBytes + limits.tasksBytes + limits.pendingAsBuiltFindingsBytes +
-      limits.priorLapsBytes + limits.refusalsBytes + REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
+      limits.priorLapsBytes + limits.priorAsBuiltCasesBytes + limits.refusalsBytes + REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
     ));
   });
 });

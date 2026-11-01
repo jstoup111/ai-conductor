@@ -544,6 +544,34 @@ the run was not a daemon, or the planner produced no usable plan, and lists ever
 An invalid report halts with its parse fault. After a later successful as-built verdict, each remediated
 finding is retained in the verdict artifact and the shipped record.
 
+#### As-built case reconciliation
+
+Each as-built finding id is minted per attempt, so a reworded re-raise of an already-repaired finding
+carries a new id. Identity across attempts is therefore a planner judgement, recorded as durable case
+history in `remediation-cases.json` (`asBuiltCases`):
+
+1. The remediation projection supplies `priorAsBuiltCases` — each case's id, status, recurrence count,
+   source summaries and references, and repair tasks with their resolution.
+2. The planner answers every as-built finding with a `reconciliation` relation and a non-empty reason:
+   `same` (the same unresolved case), `recurrence` (an earlier repair recurred), `materially-changed`
+   (related, but a materially different failure), or `new`. Every relation except `new` names a
+   projected `priorCaseId`; `new` must not.
+3. The engine rejects a plan that breaks these rules. `same` and `recurrence` admit only `existing-task` or
+   `halt`: an `existing-task` binding must name at least one repair task from the prior case, plus the
+   finding's owner task when it cites one, and no other task. They never append replacement work.
+   `materially-changed` and `new` follow normal admission and open a new case.
+4. Before BUILD dispatches, the engine records the admitted results atomically and emits one
+   `as_built_finding_reconciled` per finding. A `same` or `recurrence` source joins and reopens its prior
+   case; `recurrence` increments its recurrence count. A finding is recorded once; a repeat of an
+   already-recorded finding id is ignored.
+5. A `DESIGN` halt or a planner `halt` disposition records each affected finding as a `needs-human` case
+   before the halt. An `APPROVED`, `APPROVED WITH DRIFT NOTES`, or outcome-delivered `PLAN_GAP` verdict
+   resolves every open case. Resolved and `needs-human` cases stay in the history.
+
+These faults halt `needs-human` rather than `mechanical`: an unreadable case store or case-store write
+fault, prior-case history over its projection size limit, and a prior case's repair task missing from
+the active plan.
+
 ### Per-task `Done when:` evidence
 
 Per-task delivery is evidenced at `build` when a task closes: each `Done when:` check parsed from the
