@@ -1105,15 +1105,18 @@ describe('finish-publication domain types', () => {
     } as PublicationSnapshot)).resolves.toBe(2 * 9);
   });
 
-  it('routes revision-required prose to authoring without constructing a judgment request', async () => {
+  // Covers: task:10
+  it('routes a persisted revision-required verdict to authoring with its guidance', async () => {
     const authorProse = vi.fn(async () => undefined);
     const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' as const }));
+    const revisionGuidance = 'Name the validation evidence readers can reproduce.';
     const snapshot = readyPublicationSnapshot({
       pr: {
         identity: 'one',
         url: 'https://github.com/acme/widget/pull/1172',
         prose: 'revision_required',
         ready: false,
+        revisionGuidance,
       },
     });
 
@@ -1127,8 +1130,49 @@ describe('finish-publication domain types', () => {
       pullRequestUrl: snapshot.pr.identity === 'one' ? snapshot.pr.url : '',
       authoringScope: ['title', 'body'],
       maximumPasses: 1,
+      revisionGuidance,
     });
     expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:10
+  it('accepts a verdict without dispatching the authoring boundary', async () => {
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const authorProse = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' as const };
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+      }),
+      effects: { authorProse, dispatchJudgment },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
+    expect(authorProse).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:10
+  it('judges a newly stale prose revision instead of treating the prior acceptance as current', async () => {
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' as const };
+    });
+
+    const observe = async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+    });
+    await advanceFinishPublication({ observe, effects: { dispatchJudgment } });
+
+    // A changed title/body digest is represented by a fresh stale classification.
+    prose = 'stale';
+    await expect(advanceFinishPublication({ observe, effects: { dispatchJudgment } }))
+      .resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a PR outcome record without an external PR identity', async () => {
