@@ -573,6 +573,7 @@ describe('author_pr_prose handoff failure', () => {
     });
   }
 
+  // Covers: task:3
   it.each([
     ['not_returned', 'The authoring handoff was not returned.', 'prose_not_returned'],
     ['invalid', 'The returned handoff body is still placeholder.', 'prose_invalid'],
@@ -596,6 +597,7 @@ describe('author_pr_prose handoff failure', () => {
     },
   );
 
+  // Covers: task:3
   it.each([
     ['not_returned', 'The authoring handoff was not returned.'],
     ['invalid', 'The returned handoff body is still placeholder.'],
