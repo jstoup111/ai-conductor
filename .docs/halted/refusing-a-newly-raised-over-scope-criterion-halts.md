@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-01T17:37:30.326Z
 Slug: refusing-a-newly-raised-over-scope-criterion-halts
 Class: needs-human
 Halting step: unknown
