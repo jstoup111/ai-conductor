@@ -20,15 +20,21 @@ async function sourceFiles(directory: string): Promise<string[]> {
 function protectedRoutingRefWrites(source: string, fileName = 'fixture.ts'): string[] {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const writes: string[] = [];
-  const isUpdateRefCall = (node: ts.CallExpression): boolean => node.arguments.some((argument) => ts.isArrayLiteralExpression(argument)
-    && argument.elements.some((element) => ts.isStringLiteral(element) && (element.text === 'update-ref' || element.text === 'symbolic-ref')));
+  const isRoutingRefMutation = (node: ts.CallExpression): boolean => node.arguments.some((argument) => {
+    if (!ts.isArrayLiteralExpression(argument)) return false;
+    const values = argument.elements.filter(ts.isStringLiteral).map((element) => element.text);
+    if (values[0] === 'update-ref') return true;
+    // `symbolic-ref -q HEAD` is a read. Its mutating form supplies both the
+    // symbolic-ref name and its target after any options.
+    return values[0] === 'symbolic-ref' && values.filter((value) => !value.startsWith('-')).length >= 3;
+  });
   const enclosingFunctionText = (node: ts.Node): string => {
     let current: ts.Node | undefined = node;
     while (current !== undefined && !ts.isFunctionLike(current)) current = current.parent;
     return (current ?? node).getText(file);
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && isUpdateRefCall(node)) {
+    if (ts.isCallExpression(node) && isRoutingRefMutation(node)) {
       const text = node.getText(file);
       const functionText = enclosingFunctionText(node);
       if (functionText.includes('routeRecordRefFor(')
@@ -54,6 +60,16 @@ describe('routing ref writer fence', () => {
       "await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));",
     ].join('\n');
     expect(protectedRoutingRefWrites(source, 'fixture-helper-derived-routing-write.ts')).toHaveLength(1);
+  });
+
+  it('does not mistake a symbolic-ref lookup for a routing write', () => {
+    const source = "async function inspect() { await git(['symbolic-ref', '-q', 'HEAD']); return routeRecordRefFor('demo', 'r1'); }";
+    expect(protectedRoutingRefWrites(source, 'fixture-symbolic-ref-read.ts')).toEqual([]);
+  });
+
+  it('still rejects a symbolic-ref routing write', () => {
+    const source = "await git(['symbolic-ref', 'refs/conductor/demo/repairing', 'refs/heads/repair']);";
+    expect(protectedRoutingRefWrites(source, 'fixture-symbolic-ref-write.ts')).toHaveLength(1);
   });
 
   it('allows the bounded teardown deletion through routingTeardownRefNames', async () => {

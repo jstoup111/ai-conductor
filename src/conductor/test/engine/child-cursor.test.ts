@@ -1,19 +1,21 @@
 // Covers: task:2, task:4, task:5, task:7, task:20, task:29, task:rem-as-built-1-r2, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Conductor } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { hasDurableChildState, resolveActiveChild, resolveChildBase, resolveSealedFirst, resolveSealedLeaf } from '../../src/engine/child-cursor.js';
 import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import { loadSliceTopology } from '../../src/engine/slice-topology.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import type { GitRunner } from '../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
 import { admitRound } from '../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
-import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
+import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 
 const execFile = promisify(execFileCallback);
@@ -365,6 +367,115 @@ describe('resolveActiveChild', () => {
 
     const failingGit: GitRunner = async () => ({ exitCode: 1, stdout: '', stderr: 'git unavailable' });
     await expect(resolveActiveChild(repository, 'demo', { git: failingGit })).resolves.toEqual({ kind: 'git-error' });
+  });
+
+  // Covers: task:6
+  it.each([
+    ['queue', async () => {
+      const path = join(repository, '.pipeline', 'bad-queue.json');
+      await writeFile(path, '{not json');
+      const blob = (await git(['hash-object', '-w', path], repository)).trim();
+      await git(['update-ref', revalidationQueueRefFor('demo'), blob], repository);
+      return revalidationQueueRefFor('demo');
+    }],
+    ['marker', async () => {
+      const path = join(repository, '.pipeline', 'bad-marker.json');
+      await writeFile(path, '{not json');
+      const blob = (await git(['hash-object', '-w', path], repository)).trim();
+      await git(['update-ref', repairMarkerRefFor('demo'), blob], repository);
+      return repairMarkerRefFor('demo');
+    }],
+    ['route record', async () => {
+      const round = parseRoundId('r1')!;
+      const markerPath = join(repository, '.pipeline', 'marker.json');
+      const routePath = join(repository, '.pipeline', 'bad-route.json');
+      await writeFile(markerPath, JSON.stringify({ host: 1, roundId: round }));
+      await writeFile(routePath, '{not json');
+      const marker = (await git(['hash-object', '-w', markerPath], repository)).trim();
+      const route = (await git(['hash-object', '-w', routePath], repository)).trim();
+      await git(['update-ref', repairMarkerRefFor('demo'), marker], repository);
+      await git(['update-ref', routeRecordRefFor('demo', round), route], repository);
+      return routeRecordRefFor('demo', round);
+    }],
+  ])('carries the unreadable routing $kind on its git-error cursor', async (_kind, breakRef) => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2]);
+    await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
+    const ref = await breakRef();
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'git-error', unreadableRef: ref });
+  });
+
+  // Covers: task:6
+  it('does not probe routing refs after a git error with routing disabled', async () => {
+    await configureStacked(repository, false);
+    await seal(repository, [1, 2]);
+    await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'rebase-rewrites.json'), '{not json');
+    const calls: string[][] = [];
+    const realGit = makeGitRunner(repository);
+    const recordingGit: GitRunner = async (args, options) => {
+      calls.push([...args]);
+      return realGit(args, options);
+    };
+
+    let callsAtCursorResolution = 0;
+    await writeFile(join(repository, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo', acceptance_specs: 'pending' }));
+    const conductor = new Conductor({
+      projectRoot: repository,
+      stateFilePath: join(repository, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'acceptance_specs',
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      config: { stacked_prs: { enabled: true } } as never,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          const cursor = await resolveActiveChild(repository, 'demo', { git: recordingGit });
+          callsAtCursorResolution = calls.length;
+          return cursor;
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(calls.slice(callsAtCursorResolution).map((args) => args.join(' ')).filter((command) => /routes|repairing|revalidate/.test(command))).toEqual([]);
+    await expect(readFile(join(repository, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('git failed while resolving the active child cursor');
+  });
+
+  // Covers: task:6
+  it('does not probe routing refs when durable child-state detection fails', async () => {
+    const calls: string[][] = [];
+    const failingGit: GitRunner = async (args) => {
+      calls.push([...args]);
+      return { exitCode: 2, stdout: '', stderr: 'git unavailable' };
+    };
+
+    let callsAtCursorResolution = 0;
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo', acceptance_specs: 'pending' }));
+    const conductor = new Conductor({
+      projectRoot: repository,
+      stateFilePath: join(repository, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'acceptance_specs',
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      config: { stacked_prs: { enabled: true } } as never,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          const cursor = await resolveActiveChild(repository, 'demo', { git: failingGit });
+          callsAtCursorResolution = calls.length;
+          return cursor;
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(calls.slice(callsAtCursorResolution).map((args) => args.join(' ')).filter((command) => /routes|repairing|revalidate/.test(command))).toEqual([]);
+    await expect(readFile(join(repository, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('git failed while resolving the active child cursor');
   });
 
   it('returns no-child only when no child artifacts exist and stack eligibility is absent', async () => {
