@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -644,6 +644,168 @@ describe('stack teardown', () => {
       await expect(runGit(root, ['rev-parse', '--quiet', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
     }
     expect(calls.some(({ args }) => args[0] === 'for-each-ref')).toBe(false);
+  });
+
+  it('deletes a child whose merged head is a server-side rebase sharing no child commit with its pushed local tip', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-delete-rebased-head-'));
+    cleanup.push(root);
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-work']);
+    await writeFile(join(root, 'child-one.txt'), 'one\n');
+    await runGit(root, ['add', 'child-one.txt']);
+    await runGit(root, ['commit', '-qm', 'child one']);
+    await writeFile(join(root, 'child-two.txt'), 'two\n');
+    await runGit(root, ['add', 'child-two.txt']);
+    await runGit(root, ['commit', '-qm', 'child two']);
+    const pushed = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', pushed]);
+
+    await runGit(root, ['checkout', '-q', 'main']);
+    await writeFile(join(root, 'new-base.txt'), 'new base\n');
+    await runGit(root, ['add', 'new-base.txt']);
+    await runGit(root, ['commit', '-qm', 'new base']);
+    await runGit(root, ['checkout', '-q', 'child-work']);
+    await runGit(root, ['rebase', 'main']);
+    const head = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', head]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushed]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    await writePublicationRecord(root, 'demo', undefined, record);
+    const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
+    const gh = vi.fn(async (args: string[]) => ({
+      stdout: JSON.stringify({ state: 'MERGED', headRefOid: head, mergeCommit: { oid: head } }),
+    }));
+
+    await expect(runGit(root, ['merge-base', pushed, head])).resolves.toMatchObject({ stdout: base });
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'deleted' });
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ exitCode: 1 });
+  });
+
+  it('deletes an advanced local child accounted by its head and an exact-head sibling with its head CAS', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-delete-contained-and-exact-'));
+    cleanup.push(root);
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await runGit(root, ['checkout', '-qb', 'child-one']);
+    await writeFile(join(root, 'pushed.txt'), 'pushed\n');
+    await runGit(root, ['add', 'pushed.txt']);
+    await runGit(root, ['commit', '-qm', 'pushed child one']);
+    const pushed = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(root, 'contained.txt'), 'contained\n');
+    await runGit(root, ['add', 'contained.txt']);
+    await runGit(root, ['commit', '-qm', 'contained local child one']);
+    const localOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(root, 'head.txt'), 'head\n');
+    await runGit(root, ['add', 'head.txt']);
+    await runGit(root, ['commit', '-qm', 'merged child one head']);
+    const headOne = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', localOne]);
+
+    await runGit(root, ['checkout', '-qb', 'child-three', base]);
+    await writeFile(join(root, 'child-three.txt'), 'three\n');
+    await runGit(root, ['add', 'child-three.txt']);
+    await runGit(root, ['commit', '-qm', 'child three']);
+    const headThree = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c3/demo', headThree]);
+
+    await runGit(root, ['checkout', '-q', 'main']);
+    await runGit(root, ['merge', '--no-ff', headOne, '-m', 'merge child one']);
+    await runGit(root, ['merge', '--no-ff', headThree, '-m', 'merge child three']);
+    const main = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', main]);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushed]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    await writePublicationRecord(root, 'demo', undefined, record);
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push({ args, input: options?.input });
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      const head = Number(args[2]) === 101 ? headOne : headThree;
+      return { stdout: JSON.stringify({ state: 'MERGED', headRefOid: head, mergeCommit: { oid: head } }) };
+    });
+
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'deleted' });
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).resolves.toMatchObject({ exitCode: 1 });
+    expect(calls).toContainEqual(expect.objectContaining({ args: ['update-ref', '-d', 'refs/heads/feat/c3/demo', headThree] }));
+  });
+
+  it('fetches an origin-only merged head before deleting the child it accounts for', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-teardown-delete-fetched-head-'));
+    cleanup.push(root);
+    const origin = join(root, 'origin.git');
+    const publisher = join(root, 'publisher');
+    await runGit(root, ['init', '-q', '-b', 'main']);
+    await runGit(root, ['config', 'user.email', 'stack@example.test']);
+    await runGit(root, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(root, 'base.txt'), 'base\n');
+    await runGit(root, ['add', 'base.txt']);
+    await runGit(root, ['commit', '-qm', 'base']);
+    await runGit(root, ['checkout', '-qb', 'child-work']);
+    await writeFile(join(root, 'child.txt'), 'child\n');
+    await runGit(root, ['add', 'child.txt']);
+    await runGit(root, ['commit', '-qm', 'child']);
+    const local = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['branch', 'feat/c1/demo', local]);
+    await runGit(root, ['init', '--bare', '-q', origin]);
+    await runGit(root, ['remote', 'add', 'origin', origin]);
+    await runGit(root, ['push', '-q', 'origin', 'child-work:main']);
+    await runGit(root, ['update-ref', 'refs/remotes/origin/main', local]);
+    await runGit(root, ['clone', '-q', origin, publisher]);
+    await runGit(publisher, ['config', 'user.email', 'stack@example.test']);
+    await runGit(publisher, ['config', 'user.name', 'Stack teardown']);
+    await writeFile(join(publisher, 'merged.txt'), 'merged\n');
+    await runGit(publisher, ['add', 'merged.txt']);
+    await runGit(publisher, ['commit', '-qm', 'merged head']);
+    const head = (await runGit(publisher, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(publisher, ['push', '-q', 'origin', 'HEAD:merged-head']);
+    await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', local]);
+    const positions = await runGit(root, ['hash-object', '-w', '--stdin'], '[1,3,5]');
+    await runGit(root, ['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    await writePublicationRecord(root, 'demo', undefined, record);
+    const calls: string[][] = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push(args);
+      return runGit(root, args, options?.input);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      const childOne = Number(args[2]) === 101;
+      return {
+        stdout: JSON.stringify({
+          state: 'MERGED',
+          headRefOid: childOne ? head : local,
+          mergeCommit: { oid: local },
+        }),
+      };
+    });
+
+    expect((await runGit(root, ['cat-file', '-e', `${head}^{commit}`])).exitCode).not.toBe(0);
+    await expect(deleteStackChildren(root, 'demo', record, { git, gh, repository: 'acme/demo' }))
+      .resolves.toEqual({ kind: 'deleted' });
+    const fetchIndex = calls.findIndex((args) => args.join(' ') === `fetch origin ${head}`);
+    const revListIndex = calls.findIndex((args) => args[0] === 'rev-list');
+    expect(fetchIndex).toBeGreaterThanOrEqual(0);
+    expect(fetchIndex).toBeLessThan(revListIndex);
+    await expect(runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({ exitCode: 1 });
   });
 
   it('fails before mutation when the merged head cannot be fetched for a locally advanced child', async () => {
