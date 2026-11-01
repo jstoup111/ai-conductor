@@ -5,6 +5,8 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { pushedTipRef } from '../../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { readRestackJournal, writeRestackJournalBlob } from '../../../src/engine/restack/restack-journal.js';
+import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { refreshLedgerRefFor } from '../../../src/engine/stack-refresh-ledger.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
@@ -202,5 +204,48 @@ describe('runRestack refresh ledger (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [host],
       routed: { roundId, host, routeOld, markerOld }, git,
     })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining(refreshLedgerRefFor('demo')) });
+  });
+
+  it('recovers the exact journalled refresh ledger after a crash before apply', async () => {
+    const subject = await createSweepRepository('restack-executor-refresh-recovery-', cleanup);
+    const native = makeGitRunner(subject.repo);
+    await subject.commit('base', 'base.txt', 'base\n');
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    const c1 = await subject.commit('c1', 'one.txt', 'one\n');
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    const c2 = await subject.commit('c2', 'two.txt', 'two\n');
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
+    await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+    await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+    await sealStack(subject.repo);
+    await writePublicationRecord(subject.repo, 'demo', undefined, { version: 1, members: [
+      { position: host, branch: 'feat/c1/demo', pr: 101 }, { position: aboveHost, branch: 'feat/c2/demo', pr: 102 }, { position: leaf, branch: 'feat/daemon-demo', pr: 103 },
+    ] }, { git: native });
+    for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) await native(['update-ref', pushedTipRef('demo', branch), (await native(['rev-parse', branch])).stdout.trim()]);
+    const route: RouteRecord = { roundId, kind: 'audit', phase: 'open', items: [{ findingId: 'finding-1', kind: 'audit', owner: host, host, reason: 'repair', fallback: [] }], allocation: { [host]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } }, hosts: { [host]: 'built' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [] };
+    const routeOld = await writeBlob(native, route);
+    const markerOld = await writeBlob(native, { host, roundId });
+    await native(['update-ref', routeRecordRefFor('demo', roundId), routeOld]);
+    await native(['update-ref', repairMarkerRefFor('demo'), markerOld]);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('repair', 'repair.txt', 'repair\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    let crashed = false;
+    const crashBeforeApplied: GitRunner = async (args, options) => {
+      if (!crashed && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(refreshLedgerRefFor('demo'))) {
+        crashed = true;
+        throw new Error('crash before applied');
+      }
+      return native(args, options);
+    };
+    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [host], routed: { roundId, host, routeOld, markerOld }, git: crashBeforeApplied })).resolves.toMatchObject({ kind: 'unavailable' });
+    const synced = await readRestackJournal(subject.repo, 'demo', { git: native });
+    if (synced.kind !== 'journal' || synced.journal.refreshNew === undefined) throw new Error('refresh plan was not journalled');
+    const expected = synced.journal.refreshNew;
+    const dead = await writeRestackJournalBlob(subject.repo, { ...synced.journal, owner: { host: 'dead', pid: 999999, processStartTime: '0' } }, { git: native });
+    await native(['update-ref', 'refs/conductor/demo/restack/journal', dead, synced.blob]);
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: native })).resolves.toEqual({ kind: 'recovered', fromState: 'synced' });
+    expect((await native(['rev-parse', refreshLedgerRefFor('demo')])).stdout.trim()).toBe(expected);
   });
 });
