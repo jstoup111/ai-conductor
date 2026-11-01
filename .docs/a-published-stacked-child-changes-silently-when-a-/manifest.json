@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "slug": "a-published-stacked-child-changes-silently-when-a-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-17-stacked-feature-publication-as-native-stack.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-24-operator-route-round-for-closed-stacked-children.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-01-routed-fix-refreshes-a-published-stack.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/a-published-stacked-child-changes-silently-when-a-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/a-published-stacked-child-changes-silently-when-a-.md"
+    }
+  ]
+}

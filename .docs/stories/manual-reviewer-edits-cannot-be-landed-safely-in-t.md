@@ -40,7 +40,7 @@ As an operator or agent with a reviewer's change for a closed child, I want one 
 - Given a landing on child 1 that crashed after its marker transaction and before the worktree switched, when the operator re-runs the same `stack land --child 1` command, then it completes the switch, the entry pin and the restage once each, exits 0, and the feature still has exactly one open route record.
 
 #### Negative Paths
-- Given the three-child stack with an active publication record, when the operator runs `stack land --child 1`, then it exits non-zero naming `published-stack` and #3268, and no ref, park marker or state file changes.
+- Given the three-child stack with an active publication record and a member whose remote tip differs from its receipt, when the operator runs `stack land --child 1`, then it exits non-zero naming that member and #3268, and no ref, park marker or state file changes.
 - Given the three-child stack, when the operator runs `stack land --child 3`, then it exits non-zero naming child 3 as the leaf; and when the operator names a position the plan does not declare, then it exits non-zero naming the declared positions `1`, `2` and `3`.
 - Given a flat feature, when the operator runs `stack land --child 1`, then it exits non-zero naming the feature as not stacked, and no routing ref or lease is read or written.
 - Given the three-child stack with `stacked_prs.route_whole_feature_fixes: false`, when the operator runs `stack land --child 1`, then it exits non-zero naming that setting.

@@ -194,6 +194,9 @@ Option A.
        #3365 cause);
      - the routing setting is on;
      - no active publication record, naming #3268;
+
+       > **Amended 2026-11-01 by #3269:** `stack land` now opens on an active publication record when every member's remote tip equals its pushed receipt and no member has a recorded `lastSeen`; otherwise it refuses, naming the member and #3268. `rewind --child` still refuses on a published stack (`adr-2026-11-01-routed-fix-refreshes-a-published-stack` decisions 1 and 10).
+
      - `k` is closed and below the leaf;
      - `k` has a verify-green contract: its `red/c<k>` blob, its
        `children/<k>/acceptance-specs-run.json`, or no owned acceptance criteria at all, in which case
@@ -271,6 +274,9 @@ Option A.
      post-closure commits keeps the shipped `published-stack` halt naming the child, plus #3268
      (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11). It is never told to
      run a `stack land` that would refuse.
+
+     > **Amended 2026-11-01 by #3269:** When the tip preflight passes, this halt now names `stack land` as the recovery, because a landing on a published stack is allowed (`adr-2026-11-01-routed-fix-refreshes-a-published-stack` decision 1). A failed preflight keeps naming #3268.
+
    - The automatic co-origin is retired for every kind. A closed non-host child with unstamped
      post-closure commits is a co-origin only when it is in the open operator round's `carried`
      list. `requestRoutedExit` halts with the same reason when the cursor reports any other
