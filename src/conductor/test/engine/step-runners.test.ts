@@ -3193,6 +3193,7 @@ describe('DefaultStepRunner', () => {
     expect(interactivePrompt).toContain('separate authoring pass');
 
     for (const prompt of [autoPrompt, interactivePrompt]) {
+      if (prompt === undefined) throw new Error('FINISH judgment prompt was not supplied');
       for (const forbidden of [
         'may repair', 'repair only', 'may edit', 'edit the PR', 'edit only', 'may rewrite', 'rewrite', 'in place',
         'ai-conductor github-operation', '--request-file', 'pull-request.edit',
