@@ -59,12 +59,15 @@ import {
   type PrProseJudgmentRequest,
   type PrProseJudgmentResult,
   type ReleaseReadinessObservation,
+  type StackRefresh,
 } from './finish-publication.js';
 import { createShipDraftPublicationDependencies, createTargetBoundGithubOperationRunner } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import { pushedTipRef } from './push-lease.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import { readRefreshLedger, refreshPendingState } from './stack-refresh-ledger.js';
+import { parseCommitSha } from './restack/restack-types.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
@@ -395,6 +398,26 @@ function publicationRecordGit(git: GitRunner, cwd: string): PublicationRecordGit
       return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
     }
   };
+}
+
+/** Read the durable refresh ledger and every member's pushed receipt for FINISH. */
+export async function observePublishedStackRefresh(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+}): Promise<StackRefresh> {
+  const stored = await readRefreshLedger(input.root, input.slug, { git: input.git });
+  if (stored.kind === 'absent') return 'not-applicable';
+  if (stored.kind === 'unreadable') return 'unreadable';
+
+  const pushedTips: Record<string, ReturnType<typeof parseCommitSha> | undefined> = {};
+  for (const branch of Object.keys(stored.ledger.members)) {
+    const receipt = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, branch)]);
+    const tip = receipt.exitCode === 0 ? parseCommitSha(receipt.stdout.trim()) : undefined;
+    if (!tip) return 'unreadable';
+    pushedTips[branch] = tip;
+  }
+  return refreshPendingState(stored.ledger, pushedTips);
 }
 
 /** Stack API calls are bound to the latest durable record immediately before transport. */
@@ -1761,6 +1784,18 @@ export function createProductionFinishPublicationCoordinator(
                   deps.events,
                   detail,
                 ),
+              });
+            },
+            observeStackRefresh: async () => {
+              if (!state.feature_desc) return 'not-applicable';
+              // A refresh ledger is only meaningful for a published stack.
+              // Preserve the N=1 FINISH path without probing an unrelated ref.
+              const cursor = await resolveObservationChild();
+              if (cursor.kind === 'no-child') return 'not-applicable';
+              return observePublishedStackRefresh({
+                root: deps.projectRoot,
+                slug: state.feature_desc,
+                git: publicationRecordGit(deps.git, deps.projectRoot),
               });
             },
           },

@@ -8,6 +8,7 @@ import type {
 } from '../types/events.js';
 import { isRegionRestoreError } from './region-restore-error.js';
 import type { StackDimension, StackObservation } from './stack-publication.js';
+import type { RefreshPendingState } from './stack-refresh-ledger.js';
 
 /** Typed effect failure: retrying would mutate a diverged or unsafe stack. */
 export class StackPublicationHaltError extends Error {
@@ -128,8 +129,12 @@ type PublicationEvidence = {
   stack?: StackDimension;
   /** Positions from the same authoritative observation that found divergence. */
   stackDivergenceDetail?: string;
+  /** Pending published-member work derived from the durable refresh ledger. */
+  stackRefresh?: StackRefresh;
   pr: PublicationPullRequest;
 };
+
+export type StackRefresh = 'not-applicable' | RefreshPendingState | 'unreadable';
 
 export type PublicationPullRequest =
   | {
@@ -230,6 +235,8 @@ export interface PublicationObservationPorts {
   /** Optional while N=1 callers retain their byte-for-byte publication path. */
   stack?: {
     observeStackDimension(): Promise<StackObservation>;
+    /** Optional while existing non-refresh stack observers retain their seam. */
+    observeStackRefresh?(): Promise<StackRefresh>;
   };
 }
 
@@ -275,6 +282,9 @@ export async function observePublicationSnapshot(
   const stackObservation = stack === undefined
     ? undefined
     : await safelyObserve(stack.observeStackDimension);
+  const stackRefreshObservation = stack?.observeStackRefresh === undefined
+    ? 'not-applicable'
+    : await safelyObserve(stack.observeStackRefresh);
   const stackDimension = typeof stackObservation === 'object' && stackObservation !== null
     ? stackObservation.dimension
     : stackObservation;
@@ -292,6 +302,7 @@ export async function observePublicationSnapshot(
     pr,
     shippedRecord: shipped,
     outcomeRecord,
+    stackRefresh: stackRefreshObservation === 'unavailable' ? 'unreadable' : stackRefreshObservation,
     ...(stackDimension === undefined || stackDimension === 'unavailable'
       ? {}
       : {
@@ -467,6 +478,7 @@ export type PublicationTransitionDimensions = Record<
   | 'pr.prose'
   | 'shippedRecord'
   | 'stack'
+  | 'stackRefresh'
   | 'pr.ready'
   | 'outcomeRecord'
 >;
@@ -474,6 +486,7 @@ export type PublicationTransitionDimensions = Record<
 export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions = {
   establish_pr: 'pr.identity + branchPushed',
   establish_child_prs: 'stack',
+  refresh_published_members: 'stackRefresh',
   verify_release_readiness: 'releaseReadiness',
   author_pr_prose: 'pr.prose',
   judge_pr_prose: 'pr.prose',
@@ -509,6 +522,13 @@ export function nextFinishPublicationTransition(
   // not manufacture a PR merely to satisfy the PR publication ordering.
   if (snapshot.intent.outcome === 'keep') {
     return 'record_outcome';
+  }
+
+  // A routed restack is durable unfinished publication work. It must win over
+  // normal PR establishment so the refreshed member receipts are reconciled
+  // before FINISH creates or changes any ordinary publication state.
+  if (snapshot.stackRefresh === 'push-pending' || snapshot.stackRefresh === 'unreadable') {
+    return 'refresh_published_members';
   }
 
   if (snapshot.pr.identity !== 'one' || snapshot.branchPushed !== 'valid') {
@@ -748,6 +768,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'publication_transition_failed',
     'publication_transition_not_verified_after_effect',
   ],
+  refresh_published_members: ['publication_transition_indeterminate'],
   verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
     'publication_transition_indeterminate',
@@ -994,6 +1015,7 @@ function isPublicationTransition(value: unknown): value is PublicationTransition
   return (
     value === 'establish_pr' ||
     value === 'establish_child_prs' ||
+    value === 'refresh_published_members' ||
     value === 'verify_release_readiness' ||
     value === 'write_shipped_record' ||
     value === 'assemble_stack' ||
@@ -1756,6 +1778,8 @@ function publicationTransitionDimensionValue(
     // Task 5 introduces the authoritative stack observation. These transitions
     case 'stack':
       return stackDimension(snapshot) === 'indeterminate' ? undefined : stackDimension(snapshot);
+    case 'stackRefresh':
+      return snapshot.stackRefresh === 'unreadable' ? undefined : snapshot.stackRefresh;
     case 'pr.ready':
       return publicationPrReady(snapshot);
     case 'outcomeRecord':
