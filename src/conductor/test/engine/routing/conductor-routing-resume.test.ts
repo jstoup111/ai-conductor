@@ -304,6 +304,27 @@ describe('routed round conductor resume', () => {
     expect(loopHalts).toEqual([{ reason: 'routed exit needs remediation', prUrl: 'https://example.test/remediation/123' }]);
   });
 
+  // Covers: task:8
+  it('keeps a restack-reported routed-exit halt and does not admit the queue', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r4')!;
+    const state: ConductState = { feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' };
+    const routed = { kind: 'repair-pending' as const, child: host, position: host, isLeaf: true, branch: 'feat/c1/demo', repairChildren: [host], routedRepair: { child: host, roundId } };
+    mocks.routedExit = async () => ({ kind: 'exit-halted', detail: 'routed exit host 1: base-refresh restack halted' });
+    const admission = vi.fn(async () => ({ kind: 'none' as const }));
+    mocks.queueAdmission = admission;
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as { activeRegionChild: typeof host; continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown> };
+    conductor.activeRegionChild = host;
+
+    await expect(conductor.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routed exit host 1: base-refresh restack halted');
+    expect(admission).not.toHaveBeenCalled();
+  });
+
   it('does not halt or fabricate receipt accounting when a routing-eligible resume has no route records', async () => {
     const subject = await fixture();
     await expect(subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']))

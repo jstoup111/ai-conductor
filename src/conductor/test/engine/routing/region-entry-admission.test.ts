@@ -38,6 +38,8 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
 });
 
 import { Conductor } from '../../../src/engine/conductor.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { recordRoundStall } from '../../../src/engine/routing/round-admission.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -169,6 +171,21 @@ describe('BUILD-region queue admission', () => {
     expect(runner.run).not.toHaveBeenCalled();
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routing round r6');
     await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
+  });
+
+  it('escalates the third identical busy fence at region entry from mechanical to needs-human', async () => {
+    const root = await fixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    const stall = { kind: 'stalled' as const, detail: 'routing round r6 has an active host; cannot admit r7', rounds: [] };
+    persister.start();
+    try {
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toMatchObject({ haltClass: 'mechanical' });
+      await expect(recordRoundStall(root, 'demo', stall, events)).resolves.toEqual({ detail: expect.any(String) });
+    } finally {
+      persister.stop();
+    }
   });
 
   it('re-resolves a marker-race busy result once and enters the marker host', async () => {
@@ -311,6 +328,7 @@ describe('BUILD-region queue admission', () => {
     expect(runner.run).not.toHaveBeenCalled();
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('queued child 1, queue generation 3;');
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('admitted round r7 for child 1 re-resolved as cursor');
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
   it('leaves an ordinary cursor region untouched by queue admission', async () => {
