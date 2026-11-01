@@ -98,7 +98,9 @@ describe('BUILD-region admission (real local Git)', () => {
     let park = false;
     const events = new ConductorEventEmitter();
     const loopHalts: unknown[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event));
+    events.on('loop_halt', (event) => {
+      loopHalts.push(event);
+    });
     const conductor = new Conductor({
       // Start after the invalidated gate.  Admission must rewind the loop to
       // acceptance_specs instead of silently continuing at build.
