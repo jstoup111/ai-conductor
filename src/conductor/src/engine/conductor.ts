@@ -845,7 +845,9 @@ export class Conductor {
     const queueRefusal = queue.kind === 'unreadable' ? `; unreadable ref: ${revalidationQueueRefFor(slug)}` : '';
     const owner = marker.kind === 'marker' ? `child ${marker.marker.host} in round ${marker.marker.roundId}` : marker.kind === 'absent' ? 'none' : `unreadable (${repairMarkerRefFor(slug)})`;
     const rounds = affected.kind === 'affected'
-      ? affected.rounds.map((round) => round.readable ? `${round.roundId} (${Object.entries(round.unsettledHosts).map(([host, status]) => `${host}: ${status}`).join(', ')})` : `${round.roundId} (unreadable)`).join('; ') || 'none'
+      ? affected.rounds.map((round) => round.readable
+        ? `${round.roundId} (${Object.entries(round.unsettledHosts).map(([host, status]) => `${host}: ${status}`).join(', ')})`
+        : `${round.roundId} (unreadable: ${routeRecordRefFor(slug, round.roundId)})`).join('; ') || 'none'
       : `unreadable (${affected.detail})`;
     return `queued child ${execution.target.child}, queue generation ${generation}; non-closed rounds: ${rounds}; marker owner: ${owner}${queueRefusal}; ${detail}`;
   }
