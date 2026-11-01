@@ -6206,8 +6206,9 @@ export class DefaultStepRunner implements StepRunner {
       if (revisionGuidance !== undefined) {
         prompt +=
           '\n\nFINISH PR PROSE REVISION — the retained pull request needs a focused reader-facing prose revision. ' +
-          `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
-          'Revise the retained PR title and body in place to address that objection. ' +
+          `The prior objection is:\n> ${revisionGuidance}\n\n` +
+          'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}` with a title and body that address that objection. ' +
+          'Do not edit the pull request or make a GitHub call. The engine validates and publishes that handoff. ' +
           FINISH_PROSE_DIFF_BUDGET +
           `Then follow this repository's PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} ` +
           `invokes it as \`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
@@ -6222,8 +6223,10 @@ export class DefaultStepRunner implements StepRunner {
       prompt +=
         '\n\nFINISH PR PROSE AUTHORING — the retained pull request still carries the engine-seeded ' +
         'placeholder body, so there is no prose to judge yet. Write it. ' +
+        'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}` with the authored title and body. ' +
+        'Do not edit the pull request or make a GitHub call. The engine validates and publishes that handoff. ' +
         FINISH_PROSE_DIFF_BUDGET +
-        'Then rewrite the retained PR title and body in place following this repository\'s ' +
+        'Then follow this repository\'s ' +
           `PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
         `\`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
