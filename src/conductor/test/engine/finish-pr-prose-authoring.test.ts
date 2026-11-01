@@ -655,3 +655,162 @@ describe('production FINISH invalid prose handoffs', () => {
     }
   });
 });
+
+describe('production FINISH engine-owned PR-prose edits', () => {
+  // Covers: task:6
+  it('halts with the failed guarded edit cause instead of an unmoved transition', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-edit-failure-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      const missingScope = 'missing read:org scope';
+      const operations = { run: vi.fn(async () => { throw new Error(missingScope); }) };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-edit-failure\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: draft', body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-edit-failure', worktree_branch: 'feat/prose-edit-failure', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nPublished by the engine.' }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({
+        kind: 'human_required', reason: 'publication_operation_failed',
+        detail: `pull-request.edit failed: guarded pull-request.edit failed: ${missingScope}`,
+      });
+      expect(operations.run).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('halts with the guarded-edit refusal when no operation boundary is available', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-edit-refusal-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main',
+        // This deliberately does not provide `operations`; the fixture's
+        // origin is not a GitHub repository, so production cannot derive one.
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'not-a-github-origin\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: draft', body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-edit-refusal', worktree_branch: 'feat/prose-edit-refusal', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nPublished by the engine.' }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({
+        kind: 'human_required', reason: 'publication_operation_failed',
+        detail: 'pull-request.edit failed: guarded pull-request.edit unavailable: missing feature operation boundary',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('accepts a moved PR after the engine edit reports failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-edit-moved-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const placeholder = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      let views = 0;
+      const operations = { run: vi.fn(async () => { throw new Error('connection reset after edit'); }) };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-edit-moved\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') {
+            views++;
+            const body = views === 3 ? '## Why\n\nThe guarded request completed remotely.' : placeholder;
+            return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: authored', body, isDraft: true, labels: [] }) };
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-edit-moved', worktree_branch: 'feat/prose-edit-moved', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nThe guarded request completed remotely.' }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      expect(operations.run).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('halts an executed edit that leaves the PR prose at the engine floor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-edit-unmoved-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const body = '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n';
+      const operations = { run: vi.fn(async () => ({})) };
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-edit-unmoved\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title: 'fix: draft', body, isDraft: true, labels: [] }) };
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'prose-edit-unmoved', worktree_branch: 'feat/prose-edit-unmoved', pr_url: PR_URL, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }),
+        dispatchAuthoring: async () => {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nThe engine sent an edit.' }));
+          return { success: true };
+        },
+        emit: async () => {},
+      })).resolves.toEqual({
+        kind: 'human_required', reason: 'publication_transition_unmoved',
+        detail: 'The author_pr_prose transition left pr.prose unchanged at placeholder.',
+      });
+      expect(operations.run).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
