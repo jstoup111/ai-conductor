@@ -1,4 +1,4 @@
-// Covers: task:6, task:9, task:10, task:67, task:rem-prd-audit-W7
+// Covers: task:3, task:6, task:9, task:10, task:67, task:rem-prd-audit-W7
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   routedExit: undefined as undefined | (() => Promise<unknown>),
   consumeQueued: undefined as undefined | (() => Promise<unknown>),
+  queueAdmission: undefined as undefined | (() => Promise<unknown>),
 }));
 
 vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
@@ -25,6 +26,14 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
     ...actual,
     consumeLowestQueued: (...args: Parameters<typeof actual.consumeLowestQueued>) =>
       mocks.consumeQueued === undefined ? actual.consumeLowestQueued(...args) : mocks.consumeQueued(),
+  };
+});
+vi.mock('../../../src/engine/routing/queue-admission.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/queue-admission.js')>();
+  return {
+    ...actual,
+    admitQueuedRevalidation: (...args: Parameters<typeof actual.admitQueuedRevalidation>) =>
+      mocks.queueAdmission === undefined ? actual.admitQueuedRevalidation(...args) : mocks.queueAdmission(),
   };
 });
 
@@ -51,6 +60,7 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 afterEach(async () => {
   mocks.routedExit = undefined;
   mocks.consumeQueued = undefined;
+  mocks.queueAdmission = undefined;
   await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -98,6 +108,38 @@ async function fixture() {
 }
 
 describe('routed round conductor resume', () => {
+  it('halts when routed-exit queue admission is unavailable', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'none' } });
+    mocks.queueAdmission = async () => ({ kind: 'unavailable', detail: 'cannot consume routed revalidation queue' });
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = host;
+
+    await expect(resumed.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8'))
+      .resolves.toContain('child BUILD region refused: cannot consume routed revalidation queue');
+  });
+
   it('consumes queued revalidation before selecting the next region after a resumed routed exit', async () => {
     const subject = await fixture();
     const host = parseChildId(1)!;
