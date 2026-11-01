@@ -4,11 +4,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readConflictRecord, recordAnswer } from '../../../src/engine/restack/restack-conflict-record.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import { readRevalidationQueue } from '../../../src/engine/routing/route-record-store.js';
 import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
@@ -178,6 +180,17 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git, events, resolver, resolverCap: 1 }))
       .resolves.toEqual({ kind: 'restacked' });
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ operatorDecision: expect.objectContaining({ answer: 'keep upstream' }) }));
+    const resolvedChild = (await subject.git(['rev-parse', 'refs/heads/feat/c2/demo'])).stdout.trim();
+    await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).resolves.toMatchObject({
+      exitCode: 0, stdout: resolvedChild,
+    });
+    const queue = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
+    expect(queue).toMatchObject({ kind: 'queue', queue: { entries: expect.any(Array) } });
+    if (queue.kind !== 'queue') throw new Error('expected routed revalidation queue');
+    expect(queue.queue.entries.map((entry) => entry.child)).toEqual([child, parseChildId(3)!]);
+    await expect(resolveActiveChild(subject.repo, 'demo', { git: subject.git })).resolves.not.toMatchObject({
+      kind: 'divergent', check: 'closed-child-rewritten',
+    });
     const eventLines = (await readFile(join(subject.repo, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(eventLines).toContainEqual(expect.objectContaining({ type: 'restack_decision', action: 'applied', child }));
     await expect(subject.git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/decision/c2'])).resolves.toMatchObject({ exitCode: 1 });

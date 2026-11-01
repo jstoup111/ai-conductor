@@ -247,7 +247,10 @@ export async function writeRestackDecision(
 }
 
 /** Delete a delivered decision with the blob value observed at delivery time. */
-export function decisionDeleteLines(slug: string, decision: Pick<StoredRestackDecision, 'blob' | 'decision'>): readonly string[] {
+export function decisionDeleteLines(
+  slug: string,
+  decision: Pick<StoredRestackDecision, 'blob'> & { readonly decision: Pick<RestackDecision, 'child'> },
+): readonly string[] {
   return [`delete ${decisionRefFor(slug, decision.decision.child)} ${decision.blob}`];
 }
 
@@ -271,17 +274,21 @@ export async function recordAnswer(
   if (oldDecision === undefined || oldResolution === undefined) return { kind: 'unavailable' };
 
   let update: string;
-  let deleteLine: string | undefined;
+  let oppositeLine: string | undefined;
   if (answer.kind === 'decision') {
     const blob = await writeRestackDecision(worktree, answer.decision, { git });
     if (!blob) return { kind: 'unavailable' };
     update = `update ${decisionRef} ${blob} ${oldDecision}`;
-    if (oldResolution !== ZERO_SHA) deleteLine = `delete ${resolutionRef} ${oldResolution}`;
+    oppositeLine = oldResolution === ZERO_SHA
+      ? `verify ${resolutionRef} ${ZERO_SHA}`
+      : `delete ${resolutionRef} ${oldResolution}`;
   } else {
     update = `update ${resolutionRef} ${answer.tip} ${oldResolution}`;
-    if (oldDecision !== ZERO_SHA) deleteLine = `delete ${decisionRef} ${oldDecision}`;
+    oppositeLine = oldDecision === ZERO_SHA
+      ? `verify ${decisionRef} ${ZERO_SHA}`
+      : `delete ${decisionRef} ${oldDecision}`;
   }
-  const transaction = ['start', update, ...(deleteLine ? [deleteLine] : []), 'prepare', 'commit', ''].join('\n');
+  const transaction = ['start', update, ...(oppositeLine ? [oppositeLine] : []), 'prepare', 'commit', ''].join('\n');
   const updated = await runGit(git, ['update-ref', '--stdin'], transaction);
   if (updated?.exitCode === 0) return { kind: 'updated' };
   return updated === undefined ? { kind: 'unavailable' } : { kind: 'stale' };

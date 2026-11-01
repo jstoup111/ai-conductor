@@ -36,7 +36,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionRefFor } from './restack-conflict-record.js';
+import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
@@ -355,8 +355,10 @@ export async function appliedTransactionLines(
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
   }
   if (journal.journal.deliveredDecision !== undefined) {
-    const { child, blob } = journal.journal.deliveredDecision;
-    lines.push(`delete ${decisionRefFor(journal.slug, child)} ${blob}`);
+    lines.push(...decisionDeleteLines(journal.slug, {
+      blob: journal.journal.deliveredDecision.blob,
+      decision: { child: journal.journal.deliveredDecision.child },
+    }));
     lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${journal.journal.deliveredDecision.record}`);
     lines.push(`delete ${conflictParentRefFor(journal.slug)} ${journal.journal.deliveredDecision.parent}`);
   }

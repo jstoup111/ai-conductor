@@ -1710,6 +1710,19 @@ child on the scratch branch the HALT names, then record the resolved tip:
 ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
 ```
 
+Alternatively, for either a base-refresh or feature-repair conflict (including a closed child),
+record the operator's decision and let the next restack resume the replay:
+
+```bash
+ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer>"
+```
+
+`--decision` and `--tip` are mutually exclusive. The decision command requires the recorded child,
+a matching live conflict HALT, durable stacked child state, and an available feature dispatch lease;
+it is refused for a wrong child, a cleared or unrelated HALT, an unstacked feature, or a held lease.
+It is also refused from a daemon session. On success it stores the answer, clears the HALT, and the
+next restack gives that answer to the resolver before it retries the conflicted child.
+
 The command acquires the feature dispatch lease, then validates the tip against the recorded
 conflict: the feature is stacked, the live HALT names the same child and operation, the tip descends
 from the recorded new parent, contains every candidate commit subject, has no merge commits, and

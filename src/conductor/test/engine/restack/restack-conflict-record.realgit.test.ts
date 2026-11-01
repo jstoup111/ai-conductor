@@ -260,6 +260,32 @@ describe('restack conflict record (real local Git)', () => {
     await expect(native(['rev-parse', resolution])).resolves.toMatchObject({ exitCode: 0, stdout: concurrent });
   });
 
+  // Covers: task:2
+  it('rejects an answer transaction when the absent opposite answer appears concurrently', async () => {
+    const subject = await createRepo();
+    const decision: RestackDecision = {
+      child: child(2), oldParent: subject.head, oldTip: subject.head, commit: subject.head,
+      paths: ['src/flag.ts'], answer: 'keep the upstream seam', operator: 'operator@example.test',
+    };
+    const resolution = resolutionRefFor('demo', child(2));
+    const decisionRef = decisionRefFor('demo', child(2));
+    const native = makeGitRunner(subject.repo);
+    const concurrent = sha((await native(['hash-object', '-w', '--stdin'], { input: JSON.stringify(decision) })).stdout.trim());
+    let raced = false;
+    const racingGit = async (args: string[], options?: { input?: string }) => {
+      if (!raced && args[0] === 'update-ref' && args[1] === '--stdin') {
+        raced = true;
+        await native(['update-ref', decisionRef, concurrent]);
+      }
+      return native(args, options);
+    };
+
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'tip', child: child(2), tip: subject.head }, { git: racingGit }))
+      .resolves.toEqual({ kind: 'stale' });
+    await expect(native(['rev-parse', decisionRef])).resolves.toMatchObject({ exitCode: 0, stdout: concurrent });
+    await expect(native(['rev-parse', '-q', '--verify', resolution])).resolves.toMatchObject({ exitCode: 1 });
+  });
+
   it('writes the complete parsed record and pins its replay parent', async () => {
     const subject = await createRepo();
     const expected = record(subject.head);
