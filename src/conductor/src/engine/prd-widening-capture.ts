@@ -36,6 +36,10 @@ export interface CapturePrdWideningDecisionsOptions {
   readonly operator: string | undefined;
   readonly offerStore: PrdWideningCaptureOfferStore;
   readonly decisionStore: PrdWideningCaptureDecisionStore;
+  /** Typed PRD-audit story criteria eligible for offerless authority. */
+  readonly offeredStoryCriteria:
+    | { readonly kind: 'available'; readonly criteria: ReadonlySet<string> }
+    | { readonly kind: 'unavailable' };
 }
 
 export type PrdWideningCaptureDefectKind =
@@ -266,6 +270,30 @@ async function persistedOffers(
   }));
 }
 
+async function captureOfferlessStoryDecision(
+  entry: ClearedDecisionEntry,
+  options: CapturePrdWideningDecisionsOptions,
+): Promise<{ readonly decision?: AcceptedWideningDecision; readonly defect?: PrdWideningCaptureDefect }> {
+  if (entry.authority !== 'accept' && entry.authority !== 'refuse') {
+    return { defect: { kind: 'invalid-decision', criterion: entry.criterion } };
+  }
+  if (options.offeredStoryCriteria.kind === 'unavailable') {
+    return { defect: { kind: 'offered-set-unavailable', criterion: entry.criterion } };
+  }
+  if (!options.offeredStoryCriteria.criteria.has(entry.criterion)) {
+    return { defect: { kind: 'unknown-criterion', criterion: entry.criterion } };
+  }
+  if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH) || !bounded(entry.summary)) {
+    return { defect: { kind: 'invalid-decision', criterion: entry.criterion } };
+  }
+  return captureLegacyClear({
+    criterion: entry.criterion,
+    summary: entry.summary,
+    authority: entry.authority,
+    rationale: entry.rationale ?? '',
+  }, options);
+}
+
 /**
  * Captures cleared authority only after proving its immutable offer references
  * still name a source/case persisted before the editable halt was rendered.
@@ -301,7 +329,19 @@ export async function capturePrdWideningDecisions(
     const captured: AcceptedWideningDecision[] = [];
     const defects: PrdWideningCaptureDefect[] = [];
     for (const entry of legacy.entries) {
-      const result = await captureLegacyClear(entry, options);
+      const result = isPrdAuditNoOwnerOrdinal(entry.criterion)
+        ? await captureLegacyClear(entry, options)
+        : await captureOfferlessStoryDecision({
+            criterion: entry.criterion,
+            summary: entry.summary,
+            relation: undefined,
+            authority: entry.authority,
+            rationale: entry.rationale,
+            offerEntryId: undefined,
+            originalCaseId: undefined,
+            originalSource: undefined,
+            priorDecision: undefined,
+          }, options);
       if (result.defect) defects.push(result.defect);
       else if (result.decision) captured.push(result.decision);
     }
@@ -328,16 +368,7 @@ export async function capturePrdWideningDecisions(
     }
     if (!isPrdAuditNoOwnerOrdinal(entry.criterion) && entry.offerEntryId === undefined &&
       entry.originalCaseId === undefined && entry.originalSource === undefined) {
-      if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH) || !bounded(entry.summary)) {
-        defects.push({ kind: 'invalid-decision' });
-        continue;
-      }
-      const result = await captureLegacyClear({
-        criterion: entry.criterion,
-        summary: entry.summary,
-        authority: entry.authority,
-        rationale: entry.rationale ?? '',
-      }, options);
+      const result = await captureOfferlessStoryDecision(entry, options);
       if (result.defect) defects.push(result.defect);
       else if (result.decision) captured.push(result.decision);
       continue;

@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:4
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,6 +73,10 @@ function decisionStore(recorded: AcceptedWideningDecisionInput[] = []): PrdWiden
   };
 }
 
+function offeredStories(...criteria: string[]) {
+  return { kind: 'available' as const, criteria: new Set(criteria) };
+}
+
 function decision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     criterion: 'NC.1',
@@ -101,6 +105,50 @@ function siblingDecision(): Record<string, unknown> {
 }
 
 describe('capturePrdWideningDecisions', () => {
+  it('rejects an unoffered story decision while retaining its offered sibling in mixed and story-only blocks', async () => {
+    const block = [
+      {
+        criterion: 'S3.17', summary: 'The offered story criterion.', decision: 'refuse',
+        rationale: 'The operator refuses the offered criterion.',
+      },
+      {
+        criterion: 'S9.9', summary: 'A sibling never offered by the audit.', decision: 'accept',
+        rationale: 'The operator attempts to accept the unoffered criterion.',
+      },
+    ];
+    for (const [entries, offers, captured] of [[...block, siblingDecision()], block].map((entries, index) =>
+      [entries, index === 0 ? siblingOfferState() : offerState(), index === 0
+        ? [{ criterion: 'S3.17', authority: 'refuse' }, { criterion: 'NC.2', authority: 'refuse' }]
+        : [{ criterion: 'S3.17', authority: 'refuse' }]] as const)) {
+      const recorded: AcceptedWideningDecisionInput[] = [];
+      const result = await capturePrdWideningDecisions(cleared(entries), {
+        operator: 'operator@example.test', offerStore: offerStore(offers), decisionStore: decisionStore(recorded),
+        offeredStoryCriteria: offeredStories('S3.17'),
+      });
+      expect({ result, recorded }).toMatchObject({
+        result: {
+          captured,
+          defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }],
+        },
+      });
+      expect(recorded).toContainEqual(expect.objectContaining({ criterion: 'S3.17', authority: 'refuse' }));
+      expect(recorded).not.toContainEqual(expect.objectContaining({ criterion: 'S9.9' }));
+    }
+  });
+
+  it('does not capture an offerless story decision when the offered set is unavailable', async () => {
+    const result = await capturePrdWideningDecisions(cleared([{
+      criterion: 'S3.17', summary: 'The offered story criterion.', decision: 'refuse',
+      rationale: 'The operator refuses the offered criterion.',
+    }]), {
+      operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(),
+      offeredStoryCriteria: { kind: 'unavailable' },
+    });
+
+    expect(result).toEqual({
+      kind: 'captured', captured: [], defects: [{ kind: 'offered-set-unavailable', criterion: 'S3.17' }],
+    });
+  });
   it('retains supported pre-offer evidence without rebinding it to current wording', () => {
     expect(parseLegacyPrdWideningClear(cleared([{
       criterion: 'NC.9', summary: 'Original reviewer wording.', decision: 'refuse', rationale: 'Out of scope.',
@@ -114,6 +162,7 @@ describe('capturePrdWideningDecisions', () => {
       operator: 'operator@example.test',
       offerStore: offerStore(),
       decisionStore: decisionStore(recorded),
+      offeredStoryCriteria: offeredStories(),
     });
 
     expect(result).toEqual({
@@ -150,6 +199,7 @@ describe('capturePrdWideningDecisions', () => {
         { ...siblingDecision(), decision: 'accept' },
       ]), {
         operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: store,
+        offeredStoryCriteria: offeredStories('S3.17'),
       });
       const persisted = await store.read();
 
@@ -188,6 +238,7 @@ describe('capturePrdWideningDecisions', () => {
       decision({ decision: 'pending' }),
     ]), {
       operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(recorded),
+      offeredStoryCriteria: offeredStories('S4.2'),
     });
 
     expect({ result, recorded }).toMatchObject({
@@ -212,7 +263,10 @@ describe('capturePrdWideningDecisions', () => {
         },
         { ...siblingDecision(), decision: 'accept' },
       ]);
-      const options = { operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: store };
+      const options = {
+        operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: store,
+        offeredStoryCriteria: offeredStories('S3.17'),
+      };
 
       await capturePrdWideningDecisions(block, options);
       const replay = await capturePrdWideningDecisions(block, options);
