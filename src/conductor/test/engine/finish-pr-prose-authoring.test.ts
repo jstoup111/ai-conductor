@@ -476,6 +476,7 @@ describe('production FINISH authoring dispatch failure', () => {
       labels = [{ name: 'needs-remediation' }];
       await expect(coordinator.advance(input)).resolves.toMatchObject({ kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_not_returned' });
       expect(dispatchAuthoring).toHaveBeenCalledOnce();
+      expect(dispatchJudgment).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -2177,6 +2177,7 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     let body = '## Why\n\nThe first retained revision.';
     let acceptedBody: string | undefined;
     const observedBodies: string[] = [];
+    const judgedBodies: string[] = [];
     const observe = vi.fn(async (): Promise<PublicationSnapshot> => {
       observedBodies.push(body);
       return readyPublicationSnapshot({
@@ -2190,6 +2191,7 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
       });
     });
     const dispatchJudgment = vi.fn(async () => {
+      judgedBodies.push(body);
       if (dispatchJudgment.mock.calls.length === 1) {
         // Model the retained PR changing while the first judgment dispatch is
         // in flight; the second body has no verdict yet.
@@ -2208,6 +2210,10 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     });
 
     expect(dispatchJudgment).toHaveBeenCalledTimes(2);
+    expect(judgedBodies).toEqual([
+      '## Why\n\nThe first retained revision.',
+      '## Why\n\nThe revised retained body.',
+    ]);
     expect(observedBodies).toContain('## Why\n\nThe first retained revision.');
     expect(observedBodies).toContain('## Why\n\nThe revised retained body.');
   });
