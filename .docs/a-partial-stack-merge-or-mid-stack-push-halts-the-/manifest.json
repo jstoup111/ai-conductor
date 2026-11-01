@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "slug": "a-partial-stack-merge-or-mid-stack-push-halts-the-",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/a-partial-stack-merge-or-mid-stack-push-halts-the-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-01-multi-proof-park-deletion-authority.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-17-stacked-feature-publication-as-native-stack.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/a-partial-stack-merge-or-mid-stack-push-halts-the-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/a-partial-stack-merge-or-mid-stack-push-halts-the-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/a-partial-stack-merge-or-mid-stack-push-halts-the-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/a-partial-stack-merge-or-mid-stack-push-halts-the-.md"
+    }
+  ]
+}

@@ -443,6 +443,8 @@ Option B, with engine-rendered child bodies and the leaf draft opened at SHIP en
 
          The delete is a compare-and-swap with that tip as the expected value. A member failing
          the proof is kept.
+
+         > **Amended 2026-10-31 by spec `a-partial-stack-merge-or-mid-stack-push-halts-the-` (operator decision, composer DECIDE):** The third condition is now an accounted-for proof. Every commit reachable from the local tip, and not from the recorded `pushed/<branch>` tip or the merged PR's `headRefOid`, must be a halt-record-only commit for this slug (`isHaltRecordOnlyCommit`). A head that GitHub moved after publication no longer keeps the member: a merge of `main`, a pushed CI fix, or the server-side rebase after a partial merge. When the head object is missing locally it is fetched by SHA. A failed fetch or probe is `failed` and retries; it never becomes `kept`. The delete is a compare-and-swap on the local tip that the proof read. A commit that the engine pushed and a reviewer later dropped no longer keeps the branch, because the merged PR is the authority. Branches already kept behind a `tornDown` record are not revisited. All 3 stacks published before this change kept every child this way.
       - **Step 5.** deletes the conductor refs. Once every child is deleted, this path alone deletes `positions` and `publication` by explicit name. They stay out of the shared cleanup list that park reconciliation uses, so park can never orphan a kept child branch.
          While any member is kept, the record is kept and marked `tornDown` instead.
     - A failure at any step stops the remaining steps and keeps the watch entry
