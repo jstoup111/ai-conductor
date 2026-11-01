@@ -15,6 +15,7 @@ import {
 } from '../kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
+import { routeRecordRefFor } from './routing-refs.js';
 import {
   assertNever,
   currentHostOf,
@@ -323,7 +324,7 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
     const result = await withKickbackLedgerLease(input.projectRoot, async () => {
       const stored = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
       if (stored.kind !== 'record') return {
-        kind: 'halted', reason: `route record ${input.roundId} is ${stored.kind}`,
+        kind: 'halted', reason: `route record ${routeRecordRefFor(input.slug, input.roundId)} is ${stored.kind}`,
       } as const;
       if (currentHostOf(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
       // Revalidation replays an already-accounted child contribution. An
