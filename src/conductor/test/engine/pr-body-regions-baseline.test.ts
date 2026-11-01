@@ -33,8 +33,13 @@ async function runNoRegionFinish(input: { config?: HarnessConfig; template?: str
     return {} as never;
   } };
   const runner: StepRunner = { run: vi.fn(async (_step, _state, options) => {
-    expect(options?.finishProsePass).toBe('author');
-    body = '## Why\n\nAuthored prose from the provider.\n\n## What Changed\n\n- Baseline change.\n\n## Testing\n\n- Focused fixture.';
+    if (options?.finishProsePass === 'author') {
+      await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+        version: 1,
+        title: 'feat: no-region baseline',
+        body: '## Why\n\nAuthored prose from the provider.\n\n## What Changed\n\n- Baseline change.\n\n## Testing\n\n- Focused fixture.',
+      }));
+    }
     return { success: true };
   }) };
   const coordinator = createProductionFinishPublicationCoordinator({

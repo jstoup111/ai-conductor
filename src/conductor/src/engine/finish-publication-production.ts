@@ -54,6 +54,7 @@ import {
   StackPublicationHaltError,
   StackPublicationRetryError,
   PublicationOperationFailedError,
+  PrProseAuthoringFailedError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -68,6 +69,7 @@ import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
+import { applyAuthoredPrProse, clearPrProseHandoff, readPrProseHandoff } from './finish-pr-prose-handoff.js';
 import { type BuildReviewAdvisoryFinding, upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
@@ -241,7 +243,7 @@ async function mutateRetainedPullRequest(input: {
   operations?: GithubOperationRunner;
   prUrl: string;
   operation: 'pull-request.edit' | 'pull-request.ready';
-  payload?: { readonly body: string };
+  payload?: { readonly title?: string; readonly body: string };
 }): Promise<RetainedPullRequestMutation> {
   if (!input.operations) {
     return { ok: false, message: `guarded ${input.operation} unavailable: missing feature operation boundary` };
@@ -1225,6 +1227,12 @@ function prHaltState(title: unknown, body: unknown, rawLabels: unknown): boolean
   return hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false });
 }
 
+/** The shared floor predicate for observation and returned author prose. */
+function isPlaceholderPrProse(title: string, body: string, templateBytes?: string): boolean {
+  const text = `${title}\n${body}`.trim();
+  return !text || isEngineFlooredBody(body, templateBytes) || /Draft opened automatically/i.test(maskProjectOwnedRegions(text));
+}
+
 function prProse(
   title: unknown,
   body: unknown,
@@ -1234,8 +1242,7 @@ function prProse(
 ): 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
-  const text = `${prTitle}\n${prBody}`.trim();
-  if (!text) return 'placeholder';
+  if (isPlaceholderPrProse(prTitle, prBody, templateBytes)) return 'placeholder';
   if (halted) return 'halt';
   // The floor marker is provenance, not a verdict: it is an invisible comment
   // an authoring pass can preserve while rewriting every word around it, and
@@ -1244,9 +1251,6 @@ function prProse(
   // (#1703). `isEngineFlooredBody` reads the body content instead, so an
   // intact floor still classifies as a placeholder and authored prose does
   // not.
-  if (isEngineFlooredBody(prBody, templateBytes) || /Draft opened automatically/i.test(maskProjectOwnedRegions(text))) {
-    return 'placeholder';
-  }
   // Existing prose is a judgment candidate until this coordinator either
   // authored that exact revision or received an accepted judgment for it.
   // The PR remains the observation authority; this cache only records the
@@ -1354,6 +1358,23 @@ export function createProductionFinishPublicationCoordinator(
   const acceptedProseRevisionByPr = new Map<string, string>();
   const authoredPlaceholderProsePendingByPr = new Set<string>();
   const authoringOriginByPr = new Map<string, 'placeholder' | 'revision_required'>();
+  // Retry guidance is intentionally process-local: the next attempt can use
+  // the concrete handoff failure, while a restarted coordinator begins with
+  // no unverifiable provider-side state.
+  const authoringFailureGuidanceByPr = new Map<string, string>();
+  const recordAuthoringFailure = (
+    pullRequestUrl: string,
+    cause: 'not_returned' | 'invalid',
+    detail: string,
+  ): never => {
+    authoringFailureGuidanceByPr.set(
+      pullRequestUrl,
+      cause === 'not_returned'
+        ? 'No PR-prose handoff was written to .pipeline/finish-pr-prose.json.'
+        : detail,
+    );
+    throw new PrProseAuthoringFailedError(cause, detail);
+  };
   // Once a retained PR exists, its finish pass observes one immutable sealed
   // topology. Reuse that cursor across its coordinator lifetime to avoid
   // repeating durable-child-state probes while retaining the loader's
@@ -1784,44 +1805,23 @@ export function createProductionFinishPublicationCoordinator(
         emit,
         effects: {
           // Authoring is dispatched only when the engine itself observed an
-          // unauthored body. The provider's reply is not inspected at all: the
-          // coordinator re-observes the PR and only a body that no longer
-          // carries the placeholder classification counts as progress.
+          // unauthored body. The provider returns a handoff; the engine alone
+          // re-splices, validates, and publishes it before re-observation
+          // decides whether the transition progressed.
           ...(dispatchAuthoring
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
-                  const pullRequest = repositoryAndNumber(request.pullRequestUrl);
-                  let lastFailure: { operation: string; error: string } | undefined;
-                  const observeFailure = (event: ConductorEvent) => {
-                    if (
-                      event.type === 'github_operation_failed'
-                      && event.operation === 'pull-request.edit'
-                      && event.target.kind === 'pull-request'
-                      && event.target.repository === pullRequest?.repository
-                      && event.target.number === pullRequest.number
-                    ) {
-                      lastFailure = { operation: event.operation, error: event.error };
-                    }
-                  };
-                  // Establish the pass boundary before observing failures. The
-                  // pre-subscribe drain advances any earlier sibling-ledger
-                  // records, while the post-dispatch fresh flush projects only
-                  // records produced by this authoring pass.
-                  const canObserveFailures = pullRequest !== undefined
-                    && deps.events !== undefined
-                    && deps.flushSessionEvents !== undefined;
-                  let observingFailures = false;
-                  if (canObserveFailures) {
-                    // A failed drain leaves the sibling-ledger cursor at an
-                    // unknown boundary. Do not subscribe in that case: a
-                    // later successful flush could replay a failure from an
-                    // earlier authoring pass and misattribute it here.
-                    observingFailures = await deps.flushSessionEvents!()
-                      .then(() => true, () => false);
-                    if (observingFailures) deps.events!.on('github_operation_failed', observeFailure);
-                  }
-                  try {
-                    const dispatched = await dispatchAuthoring(request);
+                  await clearPrProseHandoff(pipelineDir);
+                  const failureGuidance = authoringFailureGuidanceByPr.get(request.pullRequestUrl);
+                  const authoringRequest = failureGuidance === undefined
+                    ? request
+                    : {
+                        ...request,
+                        revisionGuidance: [request.revisionGuidance, failureGuidance]
+                          .filter((guidance): guidance is string => guidance !== undefined)
+                          .join('\n\n'),
+                      };
+                  const dispatched = await dispatchAuthoring(authoringRequest);
                   // A failed provider run returns, it does not throw. Passing
                   // it through as a completed pass made the coordinator's
                   // fixed-point guard read an aborted attempt as "authoring
@@ -1830,15 +1830,52 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
-                    if (observingFailures) {
-                      await deps.flushSessionEvents!().catch(() => undefined);
-                      if (lastFailure) throw new PublicationOperationFailedError(lastFailure.operation, lastFailure.error);
-                    }
+                  const handoff = await readPrProseHandoff(pipelineDir);
+                  const prose = handoff.kind === 'returned'
+                    ? handoff.prose
+                    : recordAuthoringFailure(
+                      request.pullRequestUrl,
+                      handoff.kind,
+                      handoff.kind === 'not_returned'
+                        ? 'PR-prose handoff was not returned.'
+                        : handoff.detail,
+                    );
+                  const stdout = await runTrackerUrlRead(
+                    deps.gh,
+                    deps.projectRoot,
+                    'pull-request',
+                    request.pullRequestUrl,
+                    ['pr', 'view', request.pullRequestUrl, '--json', 'title,body'],
+                  );
+                  const retained = JSON.parse(stdout) as { title?: unknown; body?: unknown };
+                  const retainedBody = typeof retained.title === 'string' && typeof retained.body === 'string'
+                    ? retained.body
+                    : recordAuthoringFailure(
+                        request.pullRequestUrl,
+                        'invalid',
+                        'retained PR title or body is malformed.',
+                      );
+                  const applied = applyAuthoredPrProse({
+                    currentBody: retainedBody,
+                    prose,
+                    isPlaceholder: (title, body) => isPlaceholderPrProse(title, body, deps.prTemplateBytes),
+                  });
+                  const appliedProse = applied.kind === 'apply'
+                    ? applied
+                    : recordAuthoringFailure(request.pullRequestUrl, 'invalid', applied.detail);
+                  const operations = await retainedOperations(request.pullRequestUrl);
+                  const mutation = await mutateRetainedPullRequest({
+                    operations,
+                    prUrl: request.pullRequestUrl,
+                    operation: 'pull-request.edit',
+                    payload: { title: appliedProse.title, body: appliedProse.body },
+                  });
+                  if (!mutation.ok) {
+                    throw new PublicationOperationFailedError('pull-request.edit', mutation.message);
+                  }
+                  authoringFailureGuidanceByPr.delete(request.pullRequestUrl);
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
-                  }
-                  } finally {
-                    if (observingFailures) deps.events!.off('github_operation_failed', observeFailure);
                   }
                 },
               }
@@ -2055,9 +2092,11 @@ export function createProductionFinishPublicationCoordinator(
       });
 
       // A transition is intentionally one effect per attempt. The core
-      // coordinator has verified the effect before reporting an advance, so
-      // re-enter FINISH without charging it to the retry budget.
+      // coordinator has verified the effect before reporting an advance. Keep
+      // a completed prose-authoring transition observable to callers; it is
+      // still routed as FINISH progress and therefore does not spend a retry.
       if (result.kind === 'advanced') {
+        if (result.transition === 'author_pr_prose') return result;
         return {
           kind: 'publication_progress',
           transition: result.transition,

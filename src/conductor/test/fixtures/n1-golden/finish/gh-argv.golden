@@ -16,6 +16,13 @@
     "view",
     "https://github.com/acme/widget/pull/42",
     "--json",
+    "title,body"
+  ],
+  [
+    "pr",
+    "view",
+    "https://github.com/acme/widget/pull/42",
+    "--json",
     "url,title,body,isDraft,labels"
   ],
   [

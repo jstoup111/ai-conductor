@@ -207,7 +207,7 @@ describe('conductor/finish publication defect', () => {
     });
 
     expect(dispatchAuthoring).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+    expect(result).toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
     expect(result).not.toEqual(expect.objectContaining({
       kind: 'human_required', reason: 'publication_transition_unmoved',
     }));

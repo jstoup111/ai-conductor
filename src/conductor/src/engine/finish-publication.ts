@@ -48,6 +48,24 @@ export function isPublicationOperationFailedError(
   return error instanceof PublicationOperationFailedError;
 }
 
+/** The authoring pass completed without returning usable PR prose. */
+export class PrProseAuthoringFailedError extends Error {
+  override readonly name = 'PrProseAuthoringFailedError';
+
+  constructor(
+    override readonly cause: 'not_returned' | 'invalid',
+    readonly detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+export function isPrProseAuthoringFailedError(
+  error: unknown,
+): error is PrProseAuthoringFailedError {
+  return error instanceof PrProseAuthoringFailedError;
+}
+
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
  * derives these values from authoritative repository and external evidence;
@@ -579,6 +597,8 @@ export type HumanRequiredReason =
 
 export type PublicationDisposition =
   | { kind: 'complete' }
+  /** A verified authoring transition; the conductor re-enters FINISH without charging a retry. */
+  | { kind: 'advanced'; transition: PublicationTransition }
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | {
       kind: 'publication_revision_progress';
@@ -753,6 +773,8 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'publication_transition_indeterminate',
     'authoring_effect_unavailable',
     'authoring_dispatch_failed',
+    'prose_not_returned',
+    'prose_invalid',
     'authoring_not_verified_after_pass',
   ],
   write_shipped_record: [
@@ -878,6 +900,7 @@ export function routeFinishPublicationDisposition(
   switch (disposition.kind) {
     case 'complete':
       return { kind: 'complete' };
+    case 'advanced':
     case 'publication_progress':
       return { kind: 'progress_finish', transition: disposition.transition };
     case 'publication_revision_progress':
@@ -936,6 +959,7 @@ function isExactDisposition(
   switch (value.kind) {
     case 'complete':
       return hasOnly('kind');
+    case 'advanced':
     case 'publication_progress':
       return hasOnly('kind', 'transition') && isPublicationTransition(value.transition);
     case 'publication_revision_progress':
@@ -1969,6 +1993,7 @@ async function advanceFinishPublicationUnreconciled(
     return coalescePublicationEffect(input.effects, 'author_pr_prose', async () => {
       let dispatchFailure = false;
       let publicationFailure: PublicationOperationFailedError | undefined;
+      let authoringFailure: PrProseAuthoringFailedError | undefined;
       try {
         await input.effects.authorProse!(prProseAuthoringRequest(pr));
       } catch (error) {
@@ -1981,6 +2006,8 @@ async function advanceFinishPublicationUnreconciled(
         }
         if (isPublicationOperationFailedError(error)) {
           publicationFailure = error;
+        } else if (isPrProseAuthoringFailedError(error)) {
+          authoringFailure = error;
         } else {
           // A dispatcher can lose its response after the provider already edited
           // the PR. The mandatory re-observation below is the only authority.
@@ -2010,6 +2037,27 @@ async function advanceFinishPublicationUnreconciled(
           kind: 'human_required',
           reason: 'publication_operation_failed',
           detail: `${publicationFailure.operation} failed: ${publicationFailure.error}`,
+        };
+      }
+
+      if (authoringFailure !== undefined) {
+        if (
+          observedAfterAuthoring.pr.identity === 'one' &&
+          observedAfterAuthoring.pr.prose !== 'placeholder' &&
+          observedAfterAuthoring.pr.prose !== 'indeterminate'
+        ) {
+          return advancedPublicationTransition(
+            input.emit,
+            'author_pr_prose',
+            snapshot,
+            observedAfterAuthoring,
+          );
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'author_pr_prose',
+          reason: authoringFailure.cause === 'not_returned' ? 'prose_not_returned' : 'prose_invalid',
+          detail: authoringFailure.detail,
         };
       }
 
