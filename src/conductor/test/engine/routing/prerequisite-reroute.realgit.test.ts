@@ -158,6 +158,29 @@ async function addHookStampedOperatorCommit(subject: Awaited<ReturnType<typeof f
 }
 
 describe('verified prerequisite reroute (real local Git)', () => {
+  // Covers: task:7
+  it('reroutes an explicitly resolved prerequisite path to its leaf host', async () => {
+    const subject = await fixture({ destination: c3 });
+    try {
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('missing routed work order');
+      await expect(writeRoutingTransaction(subject.repo, 'demo', [{
+        kind: 'update-record', previous: stored, record: {
+          ...stored.record,
+          items: stored.record.items.map((item) => ({ ...item, prerequisitePaths: ['src/engine/'] })),
+        },
+      }], { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, paths: ['src/engine/register-artifact-cli.ts'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toEqual({ kind: 'rerouted' });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker', marker: { roundId, host: c3 },
+      });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   it('resolves a bare claimed prerequisite and reroutes using resolved stored evidence', async () => {
     const subject = await fixture({ destination: c3 });
     try {

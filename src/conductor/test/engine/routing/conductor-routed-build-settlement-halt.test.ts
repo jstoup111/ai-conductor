@@ -137,10 +137,11 @@ async function subject(options: {
     return { success: true, ...(options.buildResult === undefined ? {} : { finalStructuredResult: options.buildResult }) };
   });
   const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
+  const events = new ConductorEventEmitter();
   const conductor = new Conductor({
     projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
     mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: options.maxRetries ?? 1,
-    events: new ConductorEventEmitter(), stepRunner: runner,
+    events, stepRunner: runner,
     operatorParkBoundary: async () => parkAfterBuild,
     config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: options.configGrowthCap ?? 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
@@ -149,7 +150,7 @@ async function subject(options: {
       enterChildRegion: async () => ({ kind: 'completed' }) as never,
     },
   });
-  return { root, build, conductor, git, roundId: routeRoundId };
+  return { root, build, conductor, events, git, roundId: routeRoundId };
 }
 
 async function enableRoutedGrowthSnapshot(root: string) {
@@ -387,6 +388,8 @@ describe('routed BUILD settlement cap halt', () => {
     // failed, charged attempt rather than synthesizing the generic exhausted
     // BUILD HALT that is outside this routed-claim boundary.
     const fixture = await subject({ cap: 15, activeChild, buildResult: claim, maxRetries: 2 });
+    const failures: unknown[] = [];
+    fixture.events.on('step_failed', (event) => failures.push(event));
 
     await fixture.conductor.run();
 
@@ -397,7 +400,15 @@ describe('routed BUILD settlement cap halt', () => {
       kind: 'record', record: { items: expect.arrayContaining([expect.objectContaining({ host: child })]) },
     });
     await expect(readBuildOutcome(fixture.root)).resolves.toMatchObject({
-      records: [expect.objectContaining({ terminalOutcome: 'failed', note: expect.arrayContaining([`routed prerequisite claim unverified: ${detail}`]) })],
+      records: [expect.objectContaining({
+        terminalOutcome: 'failed',
+        note: [`routed prerequisite claim unverified: ${detail}`],
+        reason: 'routed-prerequisite-claim',
+      })],
     });
+    expect(failures).toContainEqual(expect.objectContaining({
+      type: 'step_failed', step: 'build', child: child,
+      error: `routed prerequisite claim unverified: ${detail}`,
+    }));
   });
 });
