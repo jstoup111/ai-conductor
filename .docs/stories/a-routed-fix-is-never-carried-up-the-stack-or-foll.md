@@ -23,7 +23,7 @@ Scope outcomes (from jstoup111/ai-conductor#3212):
    exactly as today.
 
 The PR comment on an already-published child, and refreshing a published stack, are excluded: they
-belong to #3269 and #3268. A published stack is frozen.
+belong to #3269.
 
 Delivery is three stacked slices. Each story belongs to exactly one:
 - Slice 1, exit restack: Stories 1–3.
@@ -118,12 +118,12 @@ stop safely at every limit, so that it neither drops work nor rewrites what revi
 - Given child 2's post-closure commits carry a `Round:` stamp of a different round, when host 1's exit restack is planned, then it halts needs-human naming child 2 and creates no journal.
 - Given an origin set that does not include host 1, when the exit restack is planned, then it halts needs-human naming child 1 and creates no journal.
 - Given child 1 has reached `MAX_RESTACK_CASCADES_PER_CHILD`, when host 1's exit restack is planned, then it halts needs-human with a `cascade-cap` HALT naming child 1, the marker stays set, and the halt detail names the runbook section `Routed repair halted on the cascade cap`.
-- Given the feature's stack is already published, when host 1's exit is requested, then it halts needs-human with `published-stack` naming child 1, no restack journal is created, and no branch or closure ref moves.
+- Given the feature's stack is already published, when host 1's exit is requested, then the exit restack runs and records every moved tip for FINISH to publish, and no remote ref moves.
 
 ### Done When
 - [ ] Tests assert co-origin cascade charges and the halt on a foreign `Round:` stamp.
 - [ ] Tests assert the cascade-cap halt keeps the marker and that its detail names a runbook heading that exists.
-- [ ] A test asserts the published-stack refusal on the routed exit path.
+- [ ] A test asserts the routed exit on a published stack records its moved tips and moves no remote ref.
 
 ## Story 4: Appended rem blocks merge by id when a restack replays the plan
 

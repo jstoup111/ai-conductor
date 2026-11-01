@@ -286,10 +286,10 @@ As an operator, I want the engine never to overwrite a published stack that GitH
 #### Negative Paths
 - Given GitHub rebased #c3 and #500 server-side after #c1 merged, when FINISH publication attempts any push or retarget to `demo`, then the guard refuses, the feature halts with class `stack-tip-diverged` naming positions 3 and 5, and `stack_tip_diverged` is emitted.
 - Given a `stack-tip-diverged` halt exists, when the daemon re-kick sweep runs, then the feature is skipped and not re-dispatched.
-- Given every remote tip matches, when an engine push to a member would rewrite history so the recorded tip is not an ancestor of the source, then the push is refused and the remote branch is unchanged.
+- Given every remote tip matches and the push has no refresh authorization from FINISH for a recorded restack tip, when an engine push to a member would rewrite history so the recorded tip is not an ancestor of the source, then the push is refused and the remote branch is unchanged.
 - Given remote tips do not match, when a halt-record push targets the leaf, then the push is skipped, `halt_record_push_failed` is emitted with reason `stack-tip-mismatch`, the record keeps its may-be-ahead-of-the-remote note, and no further halt is written.
 - Given remote tips do not match, when the post-finish shipped-record refresh would push the leaf, then the push is skipped and logged, and the local commit is kept.
-- Given the record has members, when a leaf gate admits a fix that would open a routed round, then route admission refuses it naming `published-stack`, and no route record is created.
+- Given the record has members and any member's remote tip differs from its receipt or has a recorded `lastSeen`, when a leaf gate admits a fix that would open a routed round, then route admission refuses it naming that member and #3268, and no route record is created.
 - Given remote tips do not match, when an agent pushes to `feat/daemon-demo` through `conduct github-operation`, then the push is refused with a reason naming the stack tip mismatch.
 - Given the operator merged the remaining members after a partial merge, when the sweep reads the stack, then no halt is written, because reads never halt.
 
