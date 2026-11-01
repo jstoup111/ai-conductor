@@ -131,6 +131,110 @@ describe('capturePrdWideningDecisions', () => {
     })]);
   });
 
+  it('captures an offerless story refusal beside an offer-backed NC acceptance', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-capture-'));
+    try {
+      const store = new AcceptedWideningDecisionStore(projectRoot, {
+        version: 1, repository: feature.repository, feature: feature.feature,
+      }, { newDecisionId: (() => {
+        const ids = ['decision-story', 'decision-nc'];
+        return () => ids.shift()!;
+      })() });
+      const result = await capturePrdWideningDecisions(cleared([
+        {
+          criterion: 'S3.17',
+          summary: 'A newly raised story criterion is outside the visible scope.',
+          decision: 'refuse',
+          rationale: 'The operator refuses this newly raised criterion.',
+        },
+        { ...siblingDecision(), decision: 'accept' },
+      ]), {
+        operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: store,
+      });
+      const persisted = await store.read();
+
+      expect({ result, persisted }).toMatchObject({
+        result: {
+          kind: 'captured',
+          captured: [
+            { criterion: 'S3.17', authority: 'refuse' },
+            { criterion: 'NC.2', authority: 'accept', offerEntryId: 'case-2' },
+          ],
+          defects: [],
+        },
+        persisted: {
+          kind: 'valid',
+          state: {
+            decisions: [
+              { criterion: 'S3.17', authority: 'refuse' },
+              { criterion: 'NC.2', authority: 'accept', offerEntryId: 'case-2' },
+            ],
+          },
+        },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('captures an offerless story acceptance beside a pending offer-backed entry', async () => {
+    const recorded: AcceptedWideningDecisionInput[] = [];
+
+    const result = await capturePrdWideningDecisions(cleared([
+      {
+        criterion: 'S4.2', summary: 'A separately raised story criterion.', decision: 'accept',
+        rationale: 'The operator accepts this criterion.',
+      },
+      decision({ decision: 'pending' }),
+    ]), {
+      operator: 'operator@example.test', offerStore: offerStore(), decisionStore: decisionStore(recorded),
+    });
+
+    expect({ result, recorded }).toMatchObject({
+      result: { kind: 'captured', captured: [{ criterion: 'S4.2', authority: 'accept' }], defects: [] },
+      recorded: [{ criterion: 'S4.2', authority: 'accept' }],
+    });
+  });
+
+  it('replays an identical mixed decision block without duplicate story or NC decisions', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-capture-'));
+    try {
+      const store = new AcceptedWideningDecisionStore(projectRoot, {
+        version: 1, repository: feature.repository, feature: feature.feature,
+      }, { newDecisionId: (() => {
+        let next = 0;
+        return () => `decision-${++next}`;
+      })() });
+      const block = cleared([
+        {
+          criterion: 'S3.17', summary: 'A newly raised story criterion is outside the visible scope.',
+          decision: 'refuse', rationale: 'The operator refuses this newly raised criterion.',
+        },
+        { ...siblingDecision(), decision: 'accept' },
+      ]);
+      const options = { operator: 'operator@example.test', offerStore: offerStore(siblingOfferState()), decisionStore: store };
+
+      await capturePrdWideningDecisions(block, options);
+      const replay = await capturePrdWideningDecisions(block, options);
+      const persisted = await store.read();
+
+      expect({
+        replay,
+        persisted,
+        decisionCount: persisted.kind === 'valid' ? persisted.state.decisions.length : undefined,
+      }).toMatchObject({
+        replay: { kind: 'captured', defects: [] },
+        persisted: { kind: 'valid', state: { decisions: [
+          { criterion: 'S3.17', authority: 'refuse' },
+          { criterion: 'NC.2', authority: 'accept', offerEntryId: 'case-2' },
+        ] } },
+        decisionCount: 2,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('threads a rendered prior-decision reference into a valid supersession append', async () => {
     const recorded: AcceptedWideningDecisionInput[] = [];
     const result = await capturePrdWideningDecisions(cleared([decision({

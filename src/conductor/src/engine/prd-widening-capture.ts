@@ -14,6 +14,7 @@ import type {
   RemediationCaseStoreState,
 } from './remediation-case-store.js';
 import { prdWideningCasesForState, withPrdWideningCases } from './remediation-case-store.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
@@ -201,6 +202,44 @@ async function materializeLegacySource(
     source.sourceId === sourceId && source.snapshot === entry.summary));
 }
 
+async function captureLegacyClear(
+  entry: LegacyPrdWideningClear,
+  options: CapturePrdWideningDecisionsOptions,
+): Promise<{ readonly decision?: AcceptedWideningDecision; readonly defect?: PrdWideningCaptureDefect }> {
+  if (!bounded(entry.rationale)) return { defect: { kind: 'missing-rationale' } };
+  if (!bounded(options.operator, MAX_REFERENCE_LENGTH)) return { defect: { kind: 'missing-operator' } };
+  // D3: source/case state is durable before a legacy decision can refer to it.
+  // Replays verify the same deterministic materialization.
+  if (!await materializeLegacySource(options.offerStore, entry)) return { defect: { kind: 'write-failed' } };
+
+  const originalSource = { id: legacyClearReference('source', entry), snapshot: entry.summary };
+  const input: AcceptedWideningDecisionInput = {
+    criterion: entry.criterion,
+    authority: entry.authority,
+    rationale: entry.rationale,
+    operator: options.operator.trim(),
+    // This deterministic legacy-clear provenance is deliberately distinct
+    // from migrated v1-row provenance.
+    originalSource,
+    originalCaseId: legacyClearReference('case', entry),
+    offerEntryId: legacyClearReference('entry', entry),
+  };
+  const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
+  const prior = existing?.kind === 'valid'
+    ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
+      decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot).at(-1)
+    : undefined;
+  if (prior && sameLegacyAuthority(prior, entry, input.operator)) return { decision: prior };
+
+  const appended = await options.decisionStore.append({
+    ...input,
+    ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
+  });
+  return appended.ok
+    ? { decision: appended.decision }
+    : { defect: { kind: 'write-failed' } };
+}
+
 function hasUnsupportedLegacyClear(value: string): boolean {
   return /```(?:json\s+)?over-scope-decisions\s*\n[\s\S]*?\n```/i.test(value) || /^\s*OVER_SCOPE_ACCEPT:/m.test(value);
 }
@@ -262,46 +301,9 @@ export async function capturePrdWideningDecisions(
     const captured: AcceptedWideningDecision[] = [];
     const defects: PrdWideningCaptureDefect[] = [];
     for (const entry of legacy.entries) {
-      if (!bounded(options.operator, MAX_REFERENCE_LENGTH)) {
-        defects.push({ kind: 'missing-operator' });
-        continue;
-      }
-      // D3: source/case state is durable before a legacy decision can refer
-      // to it. Replays verify the same deterministic materialization.
-      if (!await materializeLegacySource(options.offerStore, entry)) {
-        defects.push({ kind: 'write-failed' });
-        continue;
-      }
-      const originalSource = { id: legacyClearReference('source', entry), snapshot: entry.summary };
-      const input: AcceptedWideningDecisionInput = {
-        criterion: entry.criterion,
-        authority: entry.authority,
-        rationale: entry.rationale,
-        operator: options.operator.trim(),
-        // This deterministic legacy-clear provenance is deliberately distinct
-        // from migrated v1-row provenance.
-        originalSource,
-        originalCaseId: legacyClearReference('case', entry),
-        offerEntryId: legacyClearReference('entry', entry),
-      };
-      const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
-      const prior = existing?.kind === 'valid'
-        ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
-          decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot).at(-1)
-        : undefined;
-      if (prior && sameLegacyAuthority(prior, entry, input.operator)) {
-        captured.push(prior);
-        continue;
-      }
-      const appended = await options.decisionStore.append({
-        ...input,
-        ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
-      });
-      if (!appended.ok) {
-        defects.push({ kind: 'write-failed' });
-        continue;
-      }
-      captured.push(appended.decision);
+      const result = await captureLegacyClear(entry, options);
+      if (result.defect) defects.push(result.defect);
+      else if (result.decision) captured.push(result.decision);
     }
     return { kind: 'captured', captured, defects };
   }
@@ -322,6 +324,22 @@ export async function capturePrdWideningDecisions(
     if (entry.authority === 'pending') continue;
     if (entry.authority === undefined) {
       defects.push({ kind: 'invalid-decision', ...(entry.offerEntryId ? { offerEntryId: entry.offerEntryId } : {}) });
+      continue;
+    }
+    if (!isPrdAuditNoOwnerOrdinal(entry.criterion) && entry.offerEntryId === undefined &&
+      entry.originalCaseId === undefined && entry.originalSource === undefined) {
+      if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH) || !bounded(entry.summary)) {
+        defects.push({ kind: 'invalid-decision' });
+        continue;
+      }
+      const result = await captureLegacyClear({
+        criterion: entry.criterion,
+        summary: entry.summary,
+        authority: entry.authority,
+        rationale: entry.rationale ?? '',
+      }, options);
+      if (result.defect) defects.push(result.defect);
+      else if (result.decision) captured.push(result.decision);
       continue;
     }
     if (!matchesPersistedOffer(entry, offers.value)) {
