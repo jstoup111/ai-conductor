@@ -1,4 +1,4 @@
-// Covers: task:1, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:1, task:2, task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,6 +37,26 @@ const cleanup: string[] = [];
 
 async function runGit(cwd: string, args: string[], input?: string) {
   return execa('git', args, { cwd, input, reject: false });
+}
+
+async function accountingFixture(name: string) {
+  const root = await mkdtemp(join(tmpdir(), `stack-teardown-unaccounted-${name}-`));
+  cleanup.push(root);
+  await runGit(root, ['init', '-q', '-b', 'main']);
+  await runGit(root, ['config', 'user.email', 'stack@example.test']);
+  await runGit(root, ['config', 'user.name', 'Stack teardown']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await runGit(root, ['add', 'base.txt']);
+  await runGit(root, ['commit', '-qm', 'base']);
+  const base = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['checkout', '-qb', 'child-work']);
+  await writeFile(join(root, 'child.txt'), 'child\n');
+  await runGit(root, ['add', 'child.txt']);
+  await runGit(root, ['commit', '-qm', 'child']);
+  const pushed = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+  await runGit(root, ['branch', 'feat/c1/demo', pushed]);
+  await runGit(root, ['update-ref', 'refs/conductor/demo/pushed/feat/c1/demo', pushed]);
+  return { root, base, pushed };
 }
 
 describe('stack teardown', () => {
@@ -123,6 +143,79 @@ describe('stack teardown', () => {
     await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip: pushed, mergedHead, git }))
       .resolves.toEqual({ kind: 'accounted' });
     expect(calls).toContainEqual(['rev-list', pushed, '--not', pushed, mergedHead]);
+  });
+
+  it('rejects one production-file commit beyond the pushed and merged tips', async () => {
+    const { root, pushed } = await accountingFixture('production-file');
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'feature.ts'), 'export const feature = true;\n');
+    await runGit(root, ['add', 'src/feature.ts']);
+    await runGit(root, ['commit', '-qm', 'production change']);
+    const localTip = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
+
+    await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip, mergedHead: pushed, git }))
+      .resolves.toEqual({ kind: 'unaccounted' });
+  });
+
+  it('rejects one other-slug halt record beyond the pushed and merged tips', async () => {
+    const { root, pushed } = await accountingFixture('other-halt-record');
+    await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(root, '.docs', 'halted', 'other.md'), 'other feature\n');
+    await runGit(root, ['add', '.docs/halted/other.md']);
+    await runGit(root, ['commit', '-qm', 'other halt record']);
+    const localTip = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
+
+    await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip, mergedHead: pushed, git }))
+      .resolves.toEqual({ kind: 'unaccounted' });
+  });
+
+  it('rejects one own halt-record commit that also changes a production path', async () => {
+    const { root, pushed } = await accountingFixture('halt-record-plus-source');
+    await mkdir(join(root, '.docs', 'halted'), { recursive: true });
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, '.docs', 'halted', 'demo.md'), 'this feature\n');
+    await writeFile(join(root, 'src', 'x.ts'), 'export const x = true;\n');
+    await runGit(root, ['add', '.docs/halted/demo.md', 'src/x.ts']);
+    await runGit(root, ['commit', '-qm', 'halt record plus source']);
+    const localTip = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
+
+    await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip, mergedHead: pushed, git }))
+      .resolves.toEqual({ kind: 'unaccounted' });
+  });
+
+  it('rejects a no-ff merge when it is the only commit beyond the pushed and merged tips', async () => {
+    const { root, pushed } = await accountingFixture('merge');
+    await runGit(root, ['checkout', '-q', 'main']);
+    await writeFile(join(root, 'main.txt'), 'main\n');
+    await runGit(root, ['add', 'main.txt']);
+    await runGit(root, ['commit', '-qm', 'main advance']);
+    const mergedHead = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    await runGit(root, ['checkout', '-q', 'child-work']);
+    await runGit(root, ['merge', '--no-ff', 'main', '-m', 'merge main']);
+    const localTip = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    const listed = (await runGit(root, ['rev-list', localTip, '--not', pushed, mergedHead])).stdout.trim().split('\n');
+    const git = vi.fn((args: string[], options?: { input?: string }) => runGit(root, args, options?.input));
+
+    expect(listed).toEqual([localTip]);
+    await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip, mergedHead, git }))
+      .resolves.toEqual({ kind: 'unaccounted' });
+  });
+
+  it('rejects an absent-child commit without a pushed ref and omits a pushed argument from rev-list', async () => {
+    const { root, base, pushed } = await accountingFixture('missing-pushed-ref');
+    await runGit(root, ['update-ref', '-d', 'refs/conductor/demo/pushed/feat/c1/demo']);
+    const calls: string[][] = [];
+    const git = vi.fn(async (args: string[], options?: { input?: string }) => {
+      calls.push(args);
+      return runGit(root, args, options?.input);
+    });
+
+    await expect(accountForChildCommits({ slug: 'demo', branch: 'feat/c1/demo', localTip: pushed, mergedHead: base, git }))
+      .resolves.toEqual({ kind: 'unaccounted' });
+    expect(calls).toContainEqual(['rev-list', pushed, '--not', base]);
   });
 
   it('accounts for halt-record-only commits beyond the pushed tip using the real Git classifiers', async () => {
