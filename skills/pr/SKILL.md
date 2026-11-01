@@ -158,13 +158,16 @@ than attempting a fallback write. The host supplies no approval hook; when a reg
 operation needs approval, the engine binds it to that exact canonical request.
 
 For feature-branch publication, return the authored title/body to the finish/publication engine.
-It owns the guarded remote write and PR operation; do not substitute a direct command, including a
-force or lease variant. Report the returned PR URL after an executed result.
+During FINISH, write `.pipeline/finish-pr-prose.json` with `version`, `title`, and `body`; the
+engine validates the handoff and performs the PR title and body write. It owns the guarded remote
+write and PR operation; do not substitute a direct command, including a force or lease variant.
+Report the returned PR URL after an executed result.
 
 **Engine Behavior — Halt-PR Rehabilitation (automated after PR is created/updated).**
 When the engine creates or updates a PR that replaces a reused halt PR (one with title
 prefixed `needs-remediation:` or the `needs-remediation` label), your job is to
-generate a fresh title and body as described in §3 and §4 above. You do NOT need
+generate fresh title and body content as described in §3 and §4 above for the
+FINISH handoff. You do NOT need
 to remove the halt signal or clear the label yourself — the conductor's finish
 step automatically rehabilitates the PR after you complete:
 
@@ -179,16 +182,16 @@ This means your fresh title/body (from §3 and §4) and the engine's rehabilitat
 happen in sequence. The finish completion gate verifies the final PR state does NOT
 start with `needs-remediation:` (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
 
-**The body is always the plain template — writing it is YOUR job, not the
-engine's.** A rehabilitated PR gets the same body shape as a clean first-pass
-finish: `## Why` / `## What Changed` / `## Testing` (+ optional
+**The body is always the plain template — authoring its handoff content is YOUR
+job, and the engine writes it to the PR.** A rehabilitated PR gets the same body
+shape as a clean first-pass finish: `## Why` / `## What Changed` / `## Testing` (+ optional
 `## Notes for Reviewers`) and the `Closes #N` reference. Never write remediation
 prose, halt narrative, "rehabilitated from…" footnotes, or recovery history into
 the body — that content belongs in the engine-posted PR comment. The engine's
 deterministic body floor exists only as a last resort when `/pr` did not run at
-all; if you see a floored body (`<!-- conductor:pr-body-floor -->`) on a PR you
-are updating, replace it wholesale with real prose while keeping every
-`ai-conductor:step` region and its markers unchanged.
+all; if the handoff concerns a floored body (`<!-- conductor:pr-body-floor -->`),
+return real prose while keeping every `ai-conductor:step` region and its markers
+unchanged.
 
 ### 7. Verify
 
