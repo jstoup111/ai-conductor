@@ -88,7 +88,7 @@ describe('builder prerequisite claim verification (real local Git)', () => {
       })).resolves.toMatchObject({ kind: 'refused-not-above' });
       await expect(verifyPrerequisiteClaim({
         claim: { outcome: 'blocked-by-prerequisite', child: c2, symbols: ['parseB'] },
-        host: c1, slug: 'demo', prerequisitePaths: ['src-required.ts'], git: subject.git,
+        host: c1, slug: 'demo', prerequisitePaths: ['src-c.ts'], git: subject.git,
       })).resolves.toMatchObject({ kind: 'unverified' });
       expect(await routingRefs(subject.git)).toBe(before);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }

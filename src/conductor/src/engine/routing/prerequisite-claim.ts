@@ -6,6 +6,7 @@ import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
 import { syncRestackedWorktree } from '../restack/restack-sync.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { closureRefFor, rejectedPinRefFor } from './routing-refs.js';
+import { resolveCitedPaths } from './cannot-host.js';
 import { resolveGitRef } from './git-ref-resolver.js';
 import { readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
 import { remediationReroutedEvent, withOutboxEvent } from './routing-events.js';
@@ -161,6 +162,23 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
     return { kind: 'refused-not-above', detail: `claimed child ${input.claim.child} is not above host ${input.host}` };
   }
   const git = input.git ?? makeGitRunner(input.worktree ?? process.cwd());
+  // Route records from before resolved-path routing can contain directories
+  // and partial citations. Normalize both durable evidence and the builder's
+  // claim against the same leaf listing before either can drive a reroute.
+  const leafTip = leafBranchFor(input.slug);
+  const [claimed, required] = await Promise.all([
+    (input.claim.paths?.length ?? 0) === 0
+      ? Promise.resolve({ inputs: [], outputs: [], dropped: [] } as const)
+      : resolveCitedPaths(input.claim.paths!, leafTip, git),
+    (input.prerequisitePaths?.length ?? 0) === 0
+      ? Promise.resolve({ inputs: [], outputs: [], dropped: [] } as const)
+      : resolveCitedPaths(input.prerequisitePaths!, leafTip, git),
+  ]);
+  if ('kind' in claimed) return { kind: 'unverified', detail: claimed.detail };
+  if ('kind' in required) return { kind: 'unverified', detail: required.detail };
+  if (claimed.inputs.length === 0 && (input.claim.symbols?.length ?? 0) === 0) {
+    return { kind: 'unverified', detail: 'claim names no prerequisite file' };
+  }
   const source = closureRefFor(input.slug, input.host);
   if (!await existingRef(git, source)) {
     return { kind: 'unverified', detail: `claiming host ${input.host} closure is unavailable` };
@@ -168,8 +186,8 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
   // A builder may only claim that the paths it explicitly names are missing
   // from its host.  The admitted work-order inputs are a destination
   // obligation: they need not be missing at the source (and commonly are).
-  const claimedPaths = input.claim.paths ?? [];
-  const destinationPaths = [...new Set([...claimedPaths, ...(input.prerequisitePaths ?? [])])];
+  const claimedPaths = claimed.inputs;
+  const destinationPaths = [...new Set([...claimedPaths, ...required.inputs])];
   if (await hasAnyClaimInput(git, source, claimedPaths, input.claim.symbols ?? [])) {
     return { kind: 'unverified', detail: `claimed prerequisite is already present at host ${input.host}` };
   }

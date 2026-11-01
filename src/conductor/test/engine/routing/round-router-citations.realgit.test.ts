@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4, task:5
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,13 +57,16 @@ async function threeChildStack() {
 
   await mustSucceed(git, ['checkout', '-qb', leafBranchFor('demo')]);
   await mkdir(join(repo, 'src', 'engine', 'restack'), { recursive: true });
+  await mkdir(join(repo, 'src', 'cli'), { recursive: true });
   await Promise.all([
     writeFile(join(repo, 'src', 'engine', 'register-artifact-cli.ts'), 'export const register = true;\n'),
     writeFile(join(repo, 'src', 'engine', 'restack', 'restack-sync.ts'), 'export const sync = true;\n'),
+    writeFile(join(repo, 'src', 'engine', 'index.ts'), 'export {};\n'),
+    writeFile(join(repo, 'src', 'cli', 'index.ts'), 'export {};\n'),
   ]);
   await mustSucceed(git, ['add', '.']);
   await mustSucceed(git, ['commit', '-qm', 'leaf citation paths']);
-  return { git };
+  return { repo, git };
 }
 
 const gap: CriterionBoundRemediationGap = {
@@ -82,16 +85,26 @@ function residueJudge() {
   });
 }
 
-async function route(citations: readonly string[]) {
+async function route(citations: readonly string[], options: { gap?: CriterionBoundRemediationGap; existingTask?: boolean } = {}) {
   const stack = await threeChildStack();
+  return routeStack(stack, citations, stack.git, options);
+}
+
+async function routeStack(
+  stack: Awaited<ReturnType<typeof threeChildStack>>,
+  citations: readonly string[],
+  git = stack.git,
+  options: { gap?: CriterionBoundRemediationGap; existingTask?: boolean } = {},
+) {
   return routeAdmittedRound({
     admitted: [{
-      id: 'citation-repair', gap, gateSource: 'prd-audit', citedPaths: citations,
+      id: 'citation-repair', gap: options.gap ?? gap, gateSource: 'prd-audit', citedPaths: citations,
       provenance: { kind: 'taskless-obligation' },
+      ...(options.existingTask ? { existingTask: true, ownerTaskIds: ['T1'] } : {}),
     }],
     sliceMembership: { taskSlices: {}, titles: [] }, planText: '', appendedChildren: {},
     declaredPositions: [child(1), child(2), child(3)], leafTip: leafBranchFor('demo'),
-    roundId: 'r1' as RoundId, judge: residueJudge(), git: stack.git,
+    roundId: 'r1' as RoundId, judge: residueJudge(), git,
   });
 }
 
@@ -129,5 +142,109 @@ describe('routeAdmittedRound citations (real local Git)', () => {
       findingId: 'citation-repair', owner: child(1), host: child(1), reason: 'residue-judged',
       prerequisitePaths: ['src/engine/a.ts'],
     })]);
+  });
+
+  it.each([
+    [['src/engine/', 'src/engine/a.ts'], child(1), ['src/engine/a.ts']],
+    [['src/engine/', 'register-artifact-cli.ts'], child(3), ['src/engine/register-artifact-cli.ts']],
+  ])('drops directory citations while routing remaining inputs', async (citations, host, prerequisitePaths) => {
+    const routed = await route(citations);
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual([expect.objectContaining({
+      owner: child(1), host, prerequisitePaths,
+    })]);
+  });
+
+  it('keeps a directory-only citation with its residue-judged owner and no prerequisite paths', async () => {
+    const routed = await route(['src/engine/']);
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items[0]).toEqual(expect.objectContaining({
+      owner: child(1), host: child(1), reason: 'residue-judged',
+    }));
+    expect(routed.items[0]).not.toHaveProperty('prerequisitePaths');
+  });
+
+  it('drops ambiguous citations while retaining unambiguous inputs', async () => {
+    const routed = await route(['index.ts', 'src/engine/a.ts']);
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items[0]).toEqual(expect.objectContaining({
+      owner: child(1), host: child(1), prerequisitePaths: ['src/engine/a.ts'],
+    }));
+    expect(routed.items[0]?.prerequisitePaths).not.toContain('src/engine/index.ts');
+    expect(routed.items[0]?.prerequisitePaths).not.toContain('src/cli/index.ts');
+  });
+
+  it('treats unmatched citations as outputs rather than prerequisite paths', async () => {
+    const routed = await route(['brand-new.ts']);
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items[0]).toEqual(expect.objectContaining({ owner: child(1), host: child(1) }));
+    expect(routed.items[0]).not.toHaveProperty('prerequisitePaths');
+  });
+
+  it('halts needs-human before route allocation when the leaf listing is unreadable', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const before = await mustSucceed(stack.git, ['for-each-ref', 'refs/conductor/demo/']);
+    const unreadable: GitRunner = async (args, options) => args.join(' ') === `ls-tree -r --name-only ${leafTip}`
+      ? { exitCode: 1, stdout: '', stderr: 'missing leaf' }
+      : stack.git(args, options);
+
+    const routed = await routeStack(stack, ['src/engine/a.ts'], unreadable);
+
+    expect(routed).toMatchObject({
+      kind: 'halt', haltClass: 'needs-human', detail: expect.stringContaining('feat/daemon-demo'),
+    });
+    expect(await mustSucceed(stack.git, ['for-each-ref', 'refs/conductor/demo/'])).toBe(before);
+  });
+
+  it('uses governing-clause citations from a new remediation block to select the leaf host', async () => {
+    const routed = await route(['src/engine/a.ts'], {
+      gap: { ...gap, governingClause: 'Repair register-artifact-cli.ts before continuing.' },
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items[0]).toMatchObject({
+      host: child(3), reason: 'prerequisite-paths',
+      prerequisitePaths: expect.arrayContaining(['src/engine/register-artifact-cli.ts']),
+    });
+  });
+
+  it('keeps block text that names only owner files and outputs on its owner and freezes its block', async () => {
+    const routed = await route([], {
+      gap: { ...gap, governingClause: 'Inspect src/engine/a.ts and create brand-new.ts.' },
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items[0]).toMatchObject({ host: child(1), reason: 'residue-judged' });
+    expect(routed.allocation[child(1)]?.blockBodies.join('\n')).toContain('Inspect src/engine/a.ts and create brand-new.ts.');
+  });
+
+  it('does not use block text for existing-task work', async () => {
+    const routed = await route(['src/engine/a.ts'], {
+      existingTask: true,
+      gap: { ...gap, governingClause: 'Repair register-artifact-cli.ts before continuing.' },
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items[0]).toMatchObject({ host: child(1), prerequisitePaths: ['src/engine/a.ts'] });
+  });
+
+  it('halts before allocation when a block-text citation cannot read its owner closure', async () => {
+    const stack = await threeChildStack();
+    const before = await mustSucceed(stack.git, ['for-each-ref', 'refs/conductor/demo/']);
+    const unreadable: GitRunner = async (args, options) => args.join(' ') === `ls-tree ${closureRefFor('demo', child(1))} -- src/engine/register-artifact-cli.ts`
+      ? { exitCode: 1, stdout: '', stderr: 'missing closure' }
+      : stack.git(args, options);
+
+    const routed = await routeStack(stack, [], unreadable, {
+      gap: { ...gap, governingClause: 'Repair register-artifact-cli.ts before continuing.' },
+    });
+
+    expect(routed).toMatchObject({ kind: 'halt', haltClass: 'needs-human', detail: expect.stringContaining('child 1') });
+    expect(await mustSucceed(stack.git, ['for-each-ref', 'refs/conductor/demo/'])).toBe(before);
   });
 });

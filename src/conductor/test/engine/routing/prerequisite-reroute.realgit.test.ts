@@ -62,8 +62,10 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
   await git(['config', 'user.name', 'Routing']);
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(repo, 'src', 'engine'), { recursive: true });
   await writeFile(join(repo, '.docs', 'plans', 'demo.md'), '### Task T1: Existing work\n');
   await writeFile(join(repo, 'src-a.ts'), 'export const parseA = 1;\n');
+  await writeFile(join(repo, 'src', 'engine', 'a.ts'), 'export const a = 1;\n');
   await git(['add', '.']);
   await git(['commit', '-qm', 'base']);
 
@@ -88,6 +90,10 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
     await git(['branch', 'feat/daemon-demo']);
   } else {
     await git(['update-ref', closureRefFor('demo', destination), closed2]);
+    // Claim resolution is defined against the sealed leaf listing. This
+    // two-child fixture uses the destination tip as that listing until a
+    // leaf-specific scenario replaces it below.
+    await git(['branch', 'feat/daemon-demo']);
   }
   await git(['checkout', '-q', `feat/c${source}/demo`]);
 
@@ -148,6 +154,35 @@ async function addHookStampedOperatorCommit(subject: Awaited<ReturnType<typeof f
 }
 
 describe('verified prerequisite reroute (real local Git)', () => {
+  it('resolves a bare claimed prerequisite and reroutes using resolved stored evidence', async () => {
+    const subject = await fixture();
+    try {
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('missing route record');
+      const next = { ...stored.record, items: stored.record.items.map((item) => ({ ...item, prerequisitePaths: ['src/engine/'] })) };
+      await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: next }], { git: subject.git }))
+        .resolves.toEqual({ kind: 'updated' });
+
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['parse-b.ts'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'rerouted' });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { host: c2 } });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('turns directory-only claims into ordinary failed attempts without moving routing refs', async () => {
+    const subject = await fixture();
+    try {
+      const before = await routingRefs(subject.git);
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('claim names no prerequisite file') });
+      expect(await routingRefs(subject.git)).toBe(before);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   it('verifies only an upward immutable destination before any ref move', async () => {
     const subject = await fixture();
     try {
@@ -255,6 +290,11 @@ describe('verified prerequisite reroute (real local Git)', () => {
   it('refuses a BUILD claim when its admitted destination prerequisite path is absent', async () => {
     const subject = await fixture();
     try {
+      await subject.git(['switch', '-q', leafBranchFor('demo')]);
+      await writeFile(join(subject.repo, 'src-required.ts'), 'export const required = 1;\n');
+      await subject.git(['add', 'src-required.ts']);
+      await subject.git(['commit', '-qm', 'leaf-only prerequisite']);
+      await subject.git(['switch', '-q', 'feat/c1/demo']);
       const stored = await readRouteRecord(subject.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('missing routed work order');
       const updated = await writeRouteRecord(subject.repo, stored, {
