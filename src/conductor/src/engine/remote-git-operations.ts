@@ -21,6 +21,7 @@ import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushe
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import type { PublicationMember } from './stack-publication-record.js';
+import type { PublishedStackRefreshAuthorization } from './stack-refresh-ledger.js';
 import { makeGitRunner } from './rebase.js';
 import { hasDurableChildState } from './child-cursor.js';
 import { gitRefManifestSource, resolveFeatureArtifact } from './feature-manifest-source.js';
@@ -51,6 +52,8 @@ export interface RemoteGitOperationDependencies {
   readonly events?: GithubOperationEventEmitter;
   /** Local-Git seam for the durable pushed-tip record. */
   readonly pushLeaseGit?: PushLeaseGitRunner;
+  /** FINISH-only capability for a recorded published-stack refresh. */
+  readonly publishedStackRefreshAuthorization?: PublishedStackRefreshAuthorization;
 }
 
 export type RemoteGitExecutionResult =
@@ -204,6 +207,7 @@ async function guardPublishedStackPushes(
       destination: destination.ref,
       source: candidate.source,
       durableChildState,
+      refreshAuthorization: dependencies.publishedStackRefreshAuthorization,
       git: localGit,
       lsRemote: (lsArgs) => dependencies.runRemoteGit([...lsArgs], {
         cwd: dependencies.cwd,

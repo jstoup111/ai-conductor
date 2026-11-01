@@ -74,6 +74,22 @@ export interface RefreshLedgerDependencies {
   readonly git?: GitRunner;
 }
 
+const publishedStackRefreshAuthorization: unique symbol = Symbol('publishedStackRefreshAuthorization');
+
+/**
+ * A capability minted only by the FINISH refresh effect.  Keeping the brand
+ * private prevents ordinary remote writers from opting into a history rewrite.
+ */
+export type PublishedStackRefreshAuthorization = {
+  readonly slug: string;
+  readonly [publishedStackRefreshAuthorization]: true;
+};
+
+/** Construct the narrow capability that permits FINISH to apply this ledger. */
+export function authorizePublishedStackRefresh(slug: string): PublishedStackRefreshAuthorization {
+  return { slug, [publishedStackRefreshAuthorization]: true };
+}
+
 export type RefreshLedgerUpdateLinesResult =
   | {
     readonly kind: 'lines';

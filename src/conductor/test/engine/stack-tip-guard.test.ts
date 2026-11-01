@@ -9,6 +9,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { preparePushedTip, pushedTipRef } from '../../src/engine/push-lease.js';
 import { readPublicationRecord, writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { authorizePublishedStackRefresh, refreshLedgerRefFor } from '../../src/engine/stack-refresh-ledger.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
@@ -103,6 +104,15 @@ function dependencies(repository: string, calls: string[][]) {
   };
 }
 
+async function writeRefreshLedger(repository: string, member: { branch: string; position: number; pr: number; publishedTip: string; recordedTip: string }): Promise<void> {
+  const payload = JSON.stringify({ version: 1, members: { [member.branch]: member }, rounds: [], aboveOwed: [], posted: [] });
+  // `git()` deliberately has no stdin seam; use the existing shell-free test
+  // runner only for this one Git object write.
+  const written = await execa('git', ['hash-object', '-w', '--stdin'], { cwd: repository, input: payload, reject: false });
+  if ((written.exitCode ?? 1) !== 0) throw new Error('could not write refresh ledger');
+  await git(repository, ['update-ref', refreshLedgerRefFor('demo'), written.stdout.trim()]);
+}
+
 describe('published stack tip guard', () => {
   it('leases a verified fast-forward from the recorded leaf tip after reading every member once', async () => {
     const { repository } = await fixture();
@@ -174,6 +184,45 @@ describe('published stack tip guard', () => {
 
     expect(await sha(origin, 'refs/heads/feat/daemon-demo')).toBe(leaf);
     expect(calls).toHaveLength(1);
+  });
+
+  it('permits only FINISH to force a source descending from the recorded refresh tip', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    const recordedTip = await commit(repository, 'restacked-child');
+    const source = await commit(repository, 'restacked-follow-up');
+    await writeRefreshLedger(repository, {
+      branch: 'feat/c1/demo', position: c1, pr: 101, publishedTip: child1, recordedTip,
+    });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'],
+      { ...dependencies(repository, calls), publishedStackRefreshAuthorization: authorizePublishedStackRefresh('demo') },
+    )).resolves.toMatchObject({ kind: 'executed' });
+
+    expect(await sha(origin, 'refs/heads/feat/c1/demo')).toBe(source);
+    expect(calls.at(-1)).toContain(`--force-with-lease=refs/heads/feat/c1/demo:${child1}`);
+  });
+
+  it('refuses the same recorded rewrite without FINISH authorization before transport', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    const recordedTip = await commit(repository, 'restacked-child');
+    await commit(repository, 'restacked-follow-up');
+    await writeRefreshLedger(repository, {
+      branch: 'feat/c1/demo', position: c1, pr: 101, publishedTip: child1, recordedTip,
+    });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'], dependencies(repository, calls),
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
+
+    expect(await sha(origin, 'refs/heads/feat/c1/demo')).toBe(child1);
+    expect(calls.map((call) => call[0])).toEqual(['ls-remote']);
   });
 
   it('does not guard a stack record that has been torn down', async () => {

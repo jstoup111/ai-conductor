@@ -1,6 +1,7 @@
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { pushedTipIntentRef, pushedTipRef, recordPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { activePublicationRecord, type PublicationMember } from './stack-publication-record.js';
+import { readRefreshLedger, type PublishedStackRefreshAuthorization } from './stack-refresh-ledger.js';
 import type { GitRunner } from './rebase.js';
 
 /** The result of checking one published stack write at the remote-Git choke point. */
@@ -68,6 +69,8 @@ export async function guardPublishedStackWrite(input: {
   readonly source: string;
   /** The remote-Git choke point established durable stacked-child state. */
   readonly durableChildState: true;
+  /** Present only for the FINISH refresh of a durable routed-restack ledger. */
+  readonly refreshAuthorization?: PublishedStackRefreshAuthorization;
   readonly git: PushLeaseGitRunner;
   readonly lsRemote: (args: readonly string[]) => Promise<{ readonly stdout: string }>;
 }): Promise<PublishedStackWriteGuard> {
@@ -123,7 +126,18 @@ export async function guardPublishedStackWrite(input: {
   const expected = recorded.get(branch);
   if (expected === undefined) return { kind: 'refuse', members: [member] };
   const fastForward = await input.git(['merge-base', '--is-ancestor', expected, input.source]);
-  return fastForward.exitCode === 0
+  if (fastForward.exitCode === 0) return { kind: 'allow', expected };
+
+  // Rewrites remain forbidden by default.  FINISH may refresh precisely the
+  // recorded result of a routed restack, but not an arbitrary descendant and
+  // not a ledger belonging to another feature.
+  if (input.refreshAuthorization?.slug !== input.slug) return { kind: 'refuse', members: [member] };
+  const refresh = await readRefreshLedger(input.cwd, input.slug, { git: asGitRunner(input.git) });
+  if (refresh.kind !== 'ledger') return { kind: 'refuse', members: [member] };
+  const ledgerMember = refresh.ledger.members[branch];
+  if (ledgerMember === undefined) return { kind: 'refuse', members: [member] };
+  const recordedAncestor = await input.git(['merge-base', '--is-ancestor', ledgerMember.recordedTip, input.source]);
+  return recordedAncestor.exitCode === 0
     ? { kind: 'allow', expected }
     : { kind: 'refuse', members: [member] };
 }
