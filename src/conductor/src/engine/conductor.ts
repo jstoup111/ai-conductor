@@ -864,6 +864,31 @@ export class Conductor {
             return false;
           }
           enteredExecution = reResolved;
+        } else if (admission.kind === 'busy') {
+          // A busy result may be the admission fence or a marker written by a
+          // concurrent admission. Resolve exactly once: the marker owner is
+          // safe to enter, while a still-revalidating cursor must wait for a
+          // subsequent preflight rather than trying to recover it in-loop.
+          const reResolved = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+          if (reResolved.source === 'routed-host') {
+            enteredExecution = reResolved;
+          } else {
+            const markerAfterBusy = admission.detail === undefined
+              ? await readRepairMarker(this.projectRoot, slug)
+              : undefined;
+            const detail = admission.detail
+              ?? (markerAfterBusy?.kind === 'marker'
+                ? `repair marker is owned by child ${markerAfterBusy.marker.host} in round ${markerAfterBusy.marker.roundId}`
+                : 'revalidation queue admission is busy');
+            await this.haltChildRegionRefusal(detail, 'mechanical');
+            return false;
+          }
+        } else if (admission.kind === 'continue') {
+          await this.haltChildRegionRefusal(
+            `region-entry queue admission returned ${admission.reconciled.kind}; resume preflight must recover it`,
+            'mechanical',
+          );
+          return false;
         } else {
           await this.haltChildRegionRefusal(`revalidating child ${enteredExecution.target.child} has no matching repair marker`);
           return false;
