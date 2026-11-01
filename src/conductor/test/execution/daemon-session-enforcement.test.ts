@@ -72,15 +72,13 @@ describe('guardDaemonSessionInvocation', () => {
     },
   );
 
-  it('refuses any conductor invocation when the daemon-session marker is set', () => {
+  it('refuses any conductor invocation with a subcommand when the daemon-session marker is set', () => {
     for (const argv of [
       argvFor('daemon', 'park', 'some-slug'),
       argvFor('daemon', 'restart'),
       argvFor('reseal', '--feature', 'x'),
       argvFor('shipped-record', '--slug', 'x', '--pr', 'url'),
       argvFor('engineer'),
-      argvFor('--interactive'),
-      argvFor(),
     ]) {
       const verdict = guardDaemonSessionInvocation(argv, markedEnv());
       expect(verdict.allowed).toBe(false);
@@ -93,6 +91,41 @@ describe('guardDaemonSessionInvocation', () => {
         );
       }
     }
+  });
+
+  // Covers: task:12
+  it.each([
+    [argvFor()],
+    [argvFor('--help')],
+    [argvFor('--help', '--zz-unknown-token')],
+  ])('explains a missing subcommand without reflecting argv: %j', (argv) => {
+    const verdict = guardDaemonSessionInvocation(argv, markedEnv());
+
+    expect(verdict).toMatchObject({ allowed: false, subcommand: 'none' });
+    if (verdict.allowed) throw new Error('expected no-subcommand refusal');
+    expect(verdict.message).toContain(
+      'ai-conductor was invoked without a subcommand from inside a daemon-managed session.',
+    );
+    expect(verdict.message).not.toContain('blocked subcommand: <none>');
+    expect(verdict.message).not.toContain('--zz-unknown-token');
+    for (const sanctioned of SESSION_SANCTIONED_SUBCOMMANDS) {
+      expect(verdict.message).toContain(sanctioned);
+    }
+  });
+
+  // Covers: task:12
+  it('leaves known blocked and sanctioned subcommands unchanged', () => {
+    expect(guardDaemonSessionInvocation(argvFor('daemon', 'status'), markedEnv())).toEqual({
+      allowed: false,
+      subcommand: 'daemon',
+      message: expect.stringContaining('blocked subcommand: daemon'),
+    });
+    expect(
+      guardDaemonSessionInvocation(
+        argvFor('github-operation', '--request-file', '/tmp/request.json'),
+        markedEnv(),
+      ),
+    ).toEqual({ allowed: true });
   });
 
   it('names the blocked subcommand in the refusal', () => {
