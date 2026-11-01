@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "refusing-a-newly-raised-over-scope-criterion-halts",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-07-durable-prd-widening-decision-reconciliation.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/refusing-a-newly-raised-over-scope-criterion-halts.md"
+    }
+  ]
+}
