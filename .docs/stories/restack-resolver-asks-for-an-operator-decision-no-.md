@@ -43,7 +43,7 @@ As an operator facing a base-refresh restack conflict, I want the same recorded 
 
 #### Negative Paths
 - Given the base-refresh conflict on child 2, when the halt is written, then no `feat/` branch, no `refs/conductor/demo/closed/*` ref and no default-branch ref has moved.
-- Given a base-refresh conflict on child 2 whose range contains a merge commit, when the restack conflicts, then it halts with the shipped `flatten_refused` reason and text, and no `restack/conflict/*` ref is created.
+- Given a base-refresh conflict on child 2 whose range contains a merge commit, when the restack conflicts, then it reaches the resolver and, when unsettled, takes this story's conflict halt with its `--tip` recipe starting from the pinned flattened tip.
 - Given a recorded base-refresh tip, when the default branch advanced before the next base-refresh restack so that the parent being built has a different tree, then the restack moves no branch or closure ref, halts `restack-resolution-stale` naming the parent tree, and keeps the resolution and the record.
 - Given a base-refresh conflict halt written by journal recovery resuming a planned journal, when the operator reads it, then it carries the same record and both recipes as an executor-written halt.
 

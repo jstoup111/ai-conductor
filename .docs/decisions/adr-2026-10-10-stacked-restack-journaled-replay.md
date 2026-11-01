@@ -412,6 +412,8 @@ Operator decisions (2026-10-10):
      the conflicting commit and the paths. Both sides stay recoverable: the refs never moved, and the
      staging refs are kept until the halt clears.
 
+> **Amended 2026-11-01 by #3438:** A merge-bearing child no longer refuses the hand-off. The resolver's todo is built from one linear flattened chain rooted at `oldParent`, using decision 3's classification: ancestry-only merges are dropped, a Q-carried merge contributes only its hand-resolved part, any other merge becomes one flattened commit, and a flattened commit whose change the new parent already contains is dropped. The FR-9 subjects are those of the remaining entries, and the rewritten list is translated back to the original commits. The same budget and guards apply. When the resolver cannot settle the conflict, the child takes the ordinary unresolved conflict halt. `flatten_refused` is no longer a restack refusal reason, so decision 12's closed list loses it. N=1 `flatten_refused` rebases are unchanged.
+
 > **Amended 2026-10-12 by #2944:** Before the resolver, a deterministic merge unions appended rem-*
 > blocks in the plan by id. The same id with a different body halts
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
@@ -735,6 +737,8 @@ Operator decisions (2026-10-10):
         `verification-failed`, `replay-mismatch`, `range-not-ancestor`,
         `closed-child-rewritten`, `flatten_refused`, `restack-outstanding`,
         `published-stack` or `deferred-base-refresh`.
+
+        > **Amended 2026-11-01 by #3438:** `flatten_refused` is no longer a restack refusal reason. A merge-bearing conflict reaches the resolver and, when unsettled, takes the ordinary conflict halt (decision 6). `rebase_merge_audit` and N=1's `flatten_refused` rebase outcome are unchanged.
 
         > **Amended 2026-10-27 by #3446:** The reason set also includes `journal-live-owner`. It
         > is emitted when the stack preflight stops because journal recovery returns `live-owner`

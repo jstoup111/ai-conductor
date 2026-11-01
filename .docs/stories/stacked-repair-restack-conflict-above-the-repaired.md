@@ -43,7 +43,7 @@ As an operator facing a restack conflict the engine could not resolve, I want th
 #### Negative Paths
 - Given the same halt, when the operator reads its text, then it contains neither an instruction to rebase or commit on `feat/c2/demo` or `feat/daemon-demo` nor an instruction to move any `refs/conductor/demo/closed/*` ref.
 - Given a base-refresh restack that halts on an unresolved conflict, when the halt is written, then it writes the same conflict record, parent pin and `Restack-Conflict` line as a feature-repair conflict halt, and moves no branch or closure ref.
-- Given the repaired stack whose child 2 range contains a merge commit, when the routed exit restack conflicts on child 2, then it halts with the shipped `flatten_refused` reason and text, and no `restack/conflict/*` ref is created.
+- Given the repaired stack whose child 2 range contains a merge commit, when the routed exit restack conflicts on child 2, then it reaches the resolver and, when unsettled, takes this story's conflict halt with its `--tip` recipe starting from the pinned flattened tip.
 - Given the repaired stack whose replay of child 2 halts on a `rem-*` block body mismatch, when the halt is written, then the conflict record is written as for any unresolved conflict, and no branch or closure ref has moved.
 - Given a conflict record from an earlier halt, when a later conflict halt is written on child 3, then the record names child 3 and the earlier record is replaced in one compare-and-swap.
 - Given the conflict record cannot be written because its ref changed concurrently, when the conflict halt is raised, then the needs-human HALT is still written, it names the record write failure, and no branch or closure ref has moved.

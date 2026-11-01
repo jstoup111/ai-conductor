@@ -197,6 +197,8 @@ Option B.
    - **Merge-bearing children are out of scope.** A merge-bearing child keeps the shipped
      `flatten_refused` halt, its text and its recovery, and writes no conflict ref.
 
+> **Amended 2026-11-01 by #3438:** A merge-bearing child now writes the conflict refs and takes this ADR's halt. Its `--tip` recipe starts from `refs/conductor/<slug>/restack/conflict/flattened-tip`, the pinned tip of the linear flattened chain, because a plain rebase of the merge-bearing `oldTip` drops the merge's hand edits and subject. That ref has the same lifecycle as the parent pin under decision 5, and it is written only for a merge-bearing child (adr-2026-10-10-stacked-restack-journaled-replay decision 6).
+
 > **Amended 2026-10-31 by #3478:** A sibling member, `restack_decision {child, action, commit, paths, operator?, opId?}`, records a decision being `recorded`, `applied` or `stale`. `restack_resolution` is unchanged (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 5).
 9. **Parity.** All of these are byte-for-byte unchanged:
    - a feature-repair restack with no resolution ref;

@@ -80,7 +80,7 @@ conflict needlessly nor silently resurrect reverted lines.
 #### Negative Paths
 - Given child 2 merged `origin/main` at `D1`, and main later changed the same lines at `D2` (the new parent contains `D2`), when a `base-refresh` restack replays child 2, then no conflict is raised and child 2's tree keeps `D2`'s lines.
 - Given child 2 merged `origin/main` at `D1`, and main later reverted `D1`'s line (the new parent contains the revert), when child 2 is replayed, then the reverted line is absent from child 2.
-- Given a merge-bearing child whose replay conflicts (Q carried or not), when the conflict is handled, then: the restack halts with `restack_refused` reason `flatten_refused`, naming the merge; no resolver is dispatched; no ref moves; the halt's recovery text tells the operator to resolve on the child branch and resume, and never prescribes a single-branch `git rebase` of a stacked branch.
+- Given a merge-bearing child whose replay conflicts (Q carried or not), when the conflict is handled, then: the resolver is dispatched with the merge flattened in its todo; when unsettled, the ordinary restack conflict halt is written; no ref moves before an accepted result; and the halt never prescribes a `git rebase` of a stacked branch.
 
 ### Done When
 - [ ] Ancestry-only merges are dropped, Q-carried merges replay only their hand resolution, and
