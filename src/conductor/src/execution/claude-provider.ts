@@ -738,20 +738,20 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
     const hasMachineEnvelope = !options.interactive;
-    const systemPromptFile = options.systemPrompt ? await writeSystemPromptFile(options.systemPrompt) : undefined;
-    const args = this.buildArgs(options, systemPromptFile?.path);
-
-    const promptOnStdin =
-      typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
-
-    if (options.prompt && options.interactive) {
-      // REPL mode keeps the prompt positional and stdin attached to the terminal.
-      args.push(options.prompt);
-    }
-
-    // Non-REPL print mode receives its prompt through stdin to avoid the argv
-    // size limit; the REPL retains inherited stdin and positional prompt behavior.
+    let systemPromptFile: Awaited<ReturnType<typeof writeSystemPromptFile>> | undefined;
     try {
+      systemPromptFile = options.systemPrompt ? await writeSystemPromptFile(options.systemPrompt) : undefined;
+      const args = this.buildArgs(options, systemPromptFile?.path);
+      const promptOnStdin =
+        typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
+
+      if (options.prompt && options.interactive) {
+        // REPL mode keeps the prompt positional and stdin attached to the terminal.
+        args.push(options.prompt);
+      }
+
+      // Non-REPL print mode receives its prompt through stdin to avoid the argv
+      // size limit; the REPL retains inherited stdin and positional prompt behavior.
       const observed = await observeInterval(this.intervalClock, () =>
         this.runClaude(args, {
           ...(promptOnStdin
@@ -1075,6 +1075,11 @@ async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly p
   const tempRoot = resolveSystemPromptTempRoot();
   const dir = await mkdtemp(join(tempRoot, 'ai-conductor-claude-system-prompt-'));
   const path = join(dir, 'system-prompt.md');
-  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  try {
+    await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
   return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }

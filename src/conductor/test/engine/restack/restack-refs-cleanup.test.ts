@@ -88,33 +88,38 @@ function routingFixtureRefs() {
 }
 
 describe('deleteFeatureConductorRefs (real local Git)', () => {
-  // Covers: task:12
-  it('lists conflict and every child resolution ref, then deletes them during single-slug reclaim', async () => {
+  // Covers: task:12, task:2
+  it('lists conflict and every child resolution and decision ref, then deletes them during single-slug reclaim', async () => {
     const subject = await fixture();
     const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
     const expected = [
       'refs/conductor/demo/restack/conflict/record',
       'refs/conductor/demo/restack/conflict/parent',
       ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/resolution/c${index + 1}`),
+      ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/decision/c${index + 1}`),
     ];
 
     expect(featureConductorRefNames('demo')).toEqual(expect.arrayContaining(expected));
     for (const ref of expected) await subject.git(['update-ref', ref, tip]);
+    const otherDecision = 'refs/conductor/other/restack/decision/c1';
+    await subject.git(['update-ref', otherDecision, tip]);
 
     await expect(deleteFeatureConductorRefs('demo', subject.git)).resolves.toBe(true);
     for (const ref of expected) {
       await expect(subject.git(['rev-parse', '-q', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
     }
+    await expect(subject.git(['rev-parse', '-q', '--verify', otherDecision])).resolves.toMatchObject({ exitCode: 0 });
   });
 
   // Covers: task:12
-  it('leaves another slug’s conflict and resolution refs intact', async () => {
+  it('leaves another slug’s conflict, resolution and decision refs intact', async () => {
     const subject = await fixture();
     const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
     const protectedRefs = [
       'refs/conductor/demo/restack/conflict/record',
       'refs/conductor/demo/restack/conflict/parent',
       ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/resolution/c${index + 1}`),
+      ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/decision/c${index + 1}`),
     ];
     for (const ref of protectedRefs) await subject.git(['update-ref', ref, tip]);
 

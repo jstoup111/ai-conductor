@@ -48,6 +48,47 @@ describe('restack resolution events', () => {
     }
   });
 
+  // Covers: task:1
+  it('persists a recorded decision without its answer through the event spine', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'restack-decision-events-'));
+    const eventsPath = join(root, '.pipeline', 'events.jsonl');
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(eventsPath, events);
+    const child = parseChildId(2)!;
+    const commit = parseCommitSha('c'.repeat(40))!;
+    const opId = 'restack-42' as RestackOpId;
+    const event = {
+      type: 'restack_decision',
+      opId,
+      child,
+      action: 'recorded',
+      commit,
+      paths: ['src/flag.ts'],
+      operator: 'james',
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+
+      expect(await persistedEvents(eventsPath)).toEqual([
+        {
+          type: 'restack_decision',
+          opId,
+          child: 2,
+          action: 'recorded',
+          commit,
+          paths: ['src/flag.ts'],
+          operator: 'james',
+        },
+      ]);
+    } finally {
+      persister.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('persists restack-resolution-stale refusals with their child and detail', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-resolution-refusal-'));
     const eventsPath = join(root, '.pipeline', 'events.jsonl');

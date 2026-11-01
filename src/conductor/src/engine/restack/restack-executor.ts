@@ -36,7 +36,8 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, consumeRecordedResolution } from './restack-conflict-record.js';
+import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines } from './restack-conflict-record.js';
+import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
@@ -352,6 +353,15 @@ export async function appliedTransactionLines(
   }
   if (journal.journal.consumedResolution !== undefined) {
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
+  }
+  if (journal.journal.deliveredDecision !== undefined) {
+    const decision = journal.journal.deliveredDecision;
+    lines.push(...decisionDeleteLines(journal.slug, {
+      blob: decision.blob,
+      decision: { child: decision.child },
+    }));
+    lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${decision.record}`);
+    lines.push(`delete ${conflictParentRefFor(journal.slug)} ${decision.parent}`);
   }
   lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
   return { journal: { slug: journal.slug, blob, journal: next }, lines };
@@ -727,7 +737,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         parent = adopted;
         continue;
       }
-      if (options.cause === 'feature-repair') {
+      {
         const recorded = await consumeRecordedResolution({
           slug: options.slug, range, parent, committer: journal.journal.committer, git,
           replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
@@ -798,6 +808,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return haltedResult(options.worktree);
         }
+        const decisionDelivery = await prepareRestackDecisionDelivery({
+          worktree: options.worktree, slug: options.slug, range, opId: journal.journal.opId, git, events: options.events,
+        });
+        if (decisionDelivery === undefined) {
+          throw new Error('cannot record delivered decision conflict state');
+        }
         const resolution = await resolveRestackConflict({
           worktree: options.worktree,
           range,
@@ -807,10 +823,14 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           haltRecordSlug: options.slug,
           resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
           cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
+          ...(decisionDelivery.operatorDecision === undefined ? {} : { operatorDecision: decisionDelivery.operatorDecision }),
           git,
         });
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
-          const detail = 'reason' in resolution.outcome ? resolution.outcome.reason : undefined;
+          const detail = [
+            ...restackDecisionDetailLines(decisionDelivery),
+            ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
+          ].join('\n') || undefined;
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, parent, 'conflict', detail, resolution.candidates);
           terminal = true;
           return haltedResult(options.worktree);
@@ -821,7 +841,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return haltedResult(options.worktree);
         }
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, { git });
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, {
+          git,
+          ...(decisionDelivery.deliveredDecision === undefined ? {} : { deliveredDecision: decisionDelivery.deliveredDecision }),
+        });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
         journal = updated.journal;
         exactRewrites.set(range.child, resolution.rewrites);

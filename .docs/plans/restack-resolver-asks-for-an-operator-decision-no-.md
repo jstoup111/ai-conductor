@@ -442,3 +442,37 @@ The plan has 15 tasks. They add `stack restack-resolve --decision`, a decision r
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-10a: Extend the task 10 routed-exit decision-delivery test: after the fake resolver settles child 2, assert feat/c2/demo and refs/conductor/demo/closed/c2 name the resolved commits, the revalidation queue lists child 2 before the leaf, and resolveActiveChild reports no closed-child-rewritten divergence
+**Gate:** prd-audit
+**Rationale:** Verified (95%): task 10's second doneWhen requires assertions on the routed decision path that the current decision-delivery test omits: feat/c2/demo and closed/c2 at the resolved commits, the revalidation queue order, and no closed-child-rewritten divergence. The production path reuses the shipped applyRestackMove and queueInvalidation, so this is a test-coverage gap inside task 10's existing RED/GREEN work. No architecture or plan change is needed.
+**Criterion:** S3.3
+**Parent task:** 10
+**Done when:**
+- [test] S3.3 is satisfied by this task.
+- The repair for task rem-prd-audit-10a is committed and its targeted tests pass.
+
+### Task rem-as-built-2a: Replace the inlined decision-ref delete line in restack-executor.ts appliedTransactionLines with decisionDeleteLines from restack-conflict-record.ts, keeping task 10's post-apply ref-deletion assertions green
+**Gate:** as-built
+**Rationale:** Verified: decisionDeleteLines (restack-conflict-record.ts:250) has no production caller, and appliedTransactionLines in restack-executor.ts:359 inlines the same `delete decisionRef blob` line. This is a conforming implementation fix within task 2's helper scope: wire the existing helper into the applied path. Task 10's deletion tests keep the behavior covered.
+**Parent task:** 2
+**Governing clause:** Task 2
+**Done when:**
+- Task 2 is satisfied by this task.
+- The repair for task rem-as-built-2a is committed and its targeted tests pass.
+
+### Task rem-as-built-2b: In recordAnswer (restack-conflict-record.ts), add `verify <oppositeRef> 0000…` to the transaction when the opposite answer ref was observed absent, and add a restack-conflict-record.realgit.test.ts case where that ref is created after observation, asserting the transaction fails with neither ref changed
+**Gate:** as-built
+**Rationale:** Verified (95%): recordAnswer in restack-conflict-record.ts:278-283 emits no line for the opposite answer ref when it is observed absent (ZERO_SHA). A ref created concurrently between observation and commit can therefore leave both answer kinds present. This breaks ADR D2's single-answer compare-and-swap and task 2's cross-kind transaction contract. The fix is clear: add a `verify <ref> ZERO_SHA` line. No architectural decision is needed.
+**Governing clause:** adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 2
+**Done when:**
+- adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 2 is satisfied by this task.
+- The repair for task rem-as-built-2b is committed and its targeted tests pass.
+
+### Task rem-as-built-6a: Add decide-then-resume guidance to docs/runbooks/stalled-or-stuck-feature.md (Restack-Conflict section) and docs/reference/cli.md (stack restack-resolve): the --decision command for both base-refresh and feature-repair causes, including closed children, and the flag's refusals (tip/decision conflict, wrong child, no live halt, unstacked feature, lease held, daemon session)
+**Gate:** as-built
+**Rationale:** Verified: docs/runbooks/stalled-or-stuck-feature.md:1317 and docs/reference/cli.md:1706 document only --tip and never mention --decision. Approved ADR D7 requires the runbook to document decide-then-resume. Because the approved architecture stays authoritative, this is documentation drift and belongs in BUILD. It is bound to the --decision command and refusal tasks (6 and 7), whose behavior it documents.
+**Governing clause:** adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 7
+**Done when:**
+- adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 7 is satisfied by this task.
+- The repair for task rem-as-built-6a is committed and its targeted tests pass.

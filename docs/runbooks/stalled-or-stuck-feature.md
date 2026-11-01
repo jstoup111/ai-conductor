@@ -1323,7 +1323,17 @@ git rebase --onto <new-parent> <old-parent>
 ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
 ```
 
-On success the command clears the HALT, and the next restack applies the recorded tip. For
+For a base-refresh or feature-repair conflict — including a closed child — an operator can instead
+record a decision and let the daemon resume the replay:
+
+```bash
+ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer>"
+```
+
+Use exactly one of `--tip` and `--decision`; a `--tip`/`--decision` flag conflict is refused.
+`--decision` also refuses a wrong child, no matching live
+HALT, an unstacked feature, a held feature-dispatch lease, and invocation from a daemon session.
+On success it clears the HALT and the next restack supplies the answer to the resolver. For
 validation rules and refusals, see
 [restack conflict resolution](../reference/cli.md#restack-conflict-resolution).
 

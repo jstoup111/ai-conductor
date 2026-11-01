@@ -1737,6 +1737,8 @@ export interface ResolutionContext {
   conflicts: string[];
   projectRoot: string;
   baseRef: string;
+  /** An operator answer recorded for the conflicting replay, when available. */
+  operatorDecision?: { answer: string; commit: string; paths: readonly string[] };
   /** Explicit sweep-only exception; all normal callers remain strict. */
   supersessionJudgement?: boolean;
 }

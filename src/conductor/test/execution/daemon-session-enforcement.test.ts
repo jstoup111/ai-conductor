@@ -152,7 +152,8 @@ describe('guardDaemonSessionInvocation', () => {
     expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
   });
 
-  it('refuses operator-recorded restack resolution before command dispatch', async () => {
+  // Covers: task:8
+  it('refuses operator-recorded restack decisions before any feature read or command dispatch', async () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).not.toContain('stack');
     const readFeaturePath = vi.fn();
     const dispatch = vi.fn(async () => {
@@ -160,7 +161,7 @@ describe('guardDaemonSessionInvocation', () => {
       return 0;
     });
     await expect(dispatchCliEntry({
-      argv: argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--tip', 'a'.repeat(40)),
+      argv: argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--decision', 'operator answer'),
       environment: markedEnv(),
       dispatch,
       diagnostic: vi.fn(),

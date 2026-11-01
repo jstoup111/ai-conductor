@@ -38,6 +38,8 @@ export interface ResolveRestackConflictOptions {
   readonly haltRecordSlug?: string;
   /** Whether the range owns this feature's halt record after carried-merge normalization. */
   readonly haltRecordOwned?: boolean;
+  /** An operator answer recorded for this child range, when it still matches. */
+  readonly operatorDecision?: { answer: string; commit: string; paths: readonly string[] };
   readonly resolver: RestackResolver;
   readonly cap: number;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
@@ -223,7 +225,11 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         reason: started.stderr || 'restack resolver rebase failed',
         expectedSubjects: await replayCandidateSubjects(tempGit, candidates),
       },
-      async (context) => options.resolver({ ...context, environment }),
+      async (context) => options.resolver({
+        ...context,
+        environment,
+        ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
+      }),
       options.cap,
     );
     if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome);

@@ -468,18 +468,28 @@ export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDi
   return { kind: 'stack-owners', slug, paths, ...(diff === undefined ? {} : { diff }) };
 }
 
-export interface StackRestackResolveDispatch { kind: 'stack-restack-resolve'; slug: string; child: string; tip: string }
+export interface StackRestackResolveDispatch {
+  kind: 'stack-restack-resolve';
+  slug: string;
+  child: string;
+  tip?: string;
+  decision?: string;
+}
 export function detectStackRestackResolveCommand(argv: readonly string[]): StackRestackResolveDispatch | null {
   if (argv[2] !== 'stack' || argv[3] !== 'restack-resolve') return null;
   const values = new Map<string, string>();
   for (let index = 4; index < argv.length; index += 2) {
     const flag = argv[index]; const value = argv[index + 1];
-    if (!flag || value === undefined || !['--slug', '--child', '--tip'].includes(flag) || values.has(flag)) return null;
+    if (!flag || value === undefined || !['--slug', '--child', '--tip', '--decision'].includes(flag) || values.has(flag)) return null;
     values.set(flag, value);
   }
-  const slug = values.get('--slug'); const child = values.get('--child'); const tip = values.get('--tip');
-  if (!slug || !child || !tip || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
-  return { kind: 'stack-restack-resolve', slug, child, tip };
+  const slug = values.get('--slug'); const child = values.get('--child');
+  const tip = values.get('--tip'); const decision = values.get('--decision');
+  // Preserve a well-formed command with an invalid answer shape so the
+  // dispatcher can issue its durable, side-effect-free refusal rather than
+  // falling through to the foreground pipeline.
+  if (!slug || !child || values.size < 2 || slug.includes('/') || slug === '.' || slug === '..') return null;
+  return { kind: 'stack-restack-resolve', slug, child, ...(tip === undefined ? {} : { tip }), ...(decision === undefined ? {} : { decision }) };
 }
 
 /** Parse the open, declaration, and abandon grammars. */
@@ -963,7 +973,8 @@ export function createProgram(): Command {
     .description('Record an operator-resolved restack conflict and resume the stack')
     .requiredOption('--slug <slug>', 'Feature worktree slug')
     .requiredOption('--child <n>', 'Conflicted stack child')
-    .requiredOption('--tip <sha>', 'Resolved linear commit tip');
+    .option('--tip <sha>', 'Resolved linear commit tip')
+    .option('--decision <answer>', 'Operator decision for the resolver');
 
   const buildReview = program
     .command('build-review')

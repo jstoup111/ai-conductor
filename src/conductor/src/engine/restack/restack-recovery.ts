@@ -28,6 +28,7 @@ import {
 } from './restack-move.js';
 import { replayChildRange, RemBlockBodyMismatchError } from './restack-replay.js';
 import { consumeRecordedResolution } from './restack-conflict-record.js';
+import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
@@ -507,7 +508,7 @@ async function resumePlanned(
       parent = adopted;
       continue;
     }
-    if (current.journal.cause === 'feature-repair') {
+    {
       const recorded = await consumeRecordedResolution({
         slug: current.slug, range, parent, committer: current.journal.committer, git,
         replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
@@ -555,6 +556,10 @@ async function resumePlanned(
       if (!conflict) throw error;
       const merge = await mergeInRange(git, range);
       if (merge) return { kind: 'flatten-refused', journal: current, range, merge };
+      const decisionDelivery = await prepareRestackDecisionDelivery({
+        worktree, slug: current.slug, range, opId: current.journal.opId, git, events: options.events,
+      });
+      if (decisionDelivery === undefined) return { kind: 'unavailable' };
       const resolution = await resolveRestackConflict({
         worktree,
         range,
@@ -564,6 +569,7 @@ async function resumePlanned(
         haltRecordSlug: current.slug,
         resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
         cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
+        ...(decisionDelivery.operatorDecision === undefined ? {} : { operatorDecision: decisionDelivery.operatorDecision }),
         git,
       });
       if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
@@ -575,7 +581,10 @@ async function resumePlanned(
           candidateSubjects: await replayCandidateSubjects(git, resolution.candidates),
           commit: conflict.commit,
           paths: conflict.paths,
-          ...('reason' in resolution.outcome ? { detail: resolution.outcome.reason } : {}),
+          detail: [
+            ...restackDecisionDetailLines(decisionDelivery),
+            ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
+          ].join('\n') || undefined,
         };
       }
       const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
@@ -590,7 +599,10 @@ async function resumePlanned(
         'resolved',
         resolution.tip,
         resolution.rewrites,
-        { git },
+        {
+          git,
+          ...(decisionDelivery.deliveredDecision === undefined ? {} : { deliveredDecision: decisionDelivery.deliveredDecision }),
+        },
       );
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
       current = updated.journal;

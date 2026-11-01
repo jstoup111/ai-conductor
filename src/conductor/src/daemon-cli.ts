@@ -57,6 +57,8 @@ import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import type { StepRunner } from './engine/step-runner-types.js';
+import type { RestackResolver } from './engine/restack/restack-resolver.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
@@ -1358,6 +1360,15 @@ export async function runDaemonRekickStackPreflight(
   return result;
 }
 
+/** The daemon's provider seam for resolver dispatches, including restack hand-offs. */
+export function restackResolverForStepRunner(
+  stepRunner: Pick<StepRunner, 'resolveRebaseConflict'>,
+): RestackResolver | undefined {
+  return stepRunner.resolveRebaseConflict === undefined
+    ? undefined
+    : (context) => stepRunner.resolveRebaseConflict!(context);
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
@@ -2147,9 +2158,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         await writeFile(rekickPath, '');
       },
       events: featureEvents,
-      resolver: stepRunner.resolveRebaseConflict
-        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
-        : undefined,
+      resolver: restackResolverForStepRunner(stepRunner),
       resolverCap: resolveRebaseResolutionAttempts(config),
       // Authorizations are consumed by the daemon's pre-dispatch maintenance
       // boundary. A record left by an already-cleared halt can be resolved

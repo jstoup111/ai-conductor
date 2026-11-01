@@ -219,6 +219,17 @@ function consumedResolutionVerifyLines(journal: StoredRestackJournal): readonly 
   ];
 }
 
+function deliveredDecisionVerifyLines(journal: StoredRestackJournal): readonly string[] {
+  const delivered = journal.journal.deliveredDecision;
+  return delivered === undefined
+    ? []
+    : [
+      `verify refs/conductor/${journal.slug}/restack/decision/c${delivered.child} ${delivered.blob}`,
+      `verify refs/conductor/${journal.slug}/restack/conflict/record ${delivered.record}`,
+      `verify refs/conductor/${journal.slug}/restack/conflict/parent ${delivered.parent}`,
+    ];
+}
+
 function leafMovedLine(journal: StoredRestackJournal, moves: readonly RestackMoveRef[]): string | undefined {
   const leaf = journal.journal.ranges.find((range) => range.kind === 'leaf-active');
   if (!leaf) return undefined;
@@ -285,6 +296,7 @@ export async function haltRestackConflict(
     `git switch -c restack-resolve/${recipe.slug}/c${child} ${recipe.oldTip}`,
     `git rebase --onto ${recipe.newParent} ${recipe.oldParent}`,
     `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --tip <sha>`,
+    `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --decision "<answer>"`,
     // /ai-conductor:session-command-context
   ].join('\n');
   return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}${instructions === '' ? '' : `\n${instructions}`}\n`, 'needs-human', events);
@@ -324,6 +336,7 @@ export async function applyRestackMove(
       ...moveLines(moves),
       ...(marker === undefined ? [] : [marker]),
       ...consumedResolutionVerifyLines(journal),
+      ...deliveredDecisionVerifyLines(journal),
       ...journalStateUpdateLines(journal, nextBlob, 'moved'),
     ]));
     if (moved?.exitCode === 0) return { kind: 'moved', journal: { slug: journal.slug, blob: nextBlob, journal: next } };
