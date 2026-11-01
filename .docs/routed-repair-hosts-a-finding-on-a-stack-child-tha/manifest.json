@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "routed-repair-hosts-a-finding-on-a-stack-child-tha",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-31-routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/routed-repair-hosts-a-finding-on-a-stack-child-tha.md"
+    }
+  ]
+}
