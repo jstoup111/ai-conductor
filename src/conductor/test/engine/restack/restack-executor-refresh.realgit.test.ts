@@ -192,9 +192,14 @@ describe('runRestack refresh ledger (real local Git)', () => {
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
     const changed = await writeBlob(native, { changed: true });
     let raced = false;
+    let refsBeforeRejectedTransaction = '';
     const git: GitRunner = async (args, options) => {
       if (!raced && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(refreshLedgerRefFor('demo'))) {
         raced = true;
+        refsBeforeRejectedTransaction = (await native([
+          'for-each-ref', '--format=%(refname) %(objectname)',
+          'refs/heads/feat/', 'refs/conductor/demo/closed/',
+        ])).stdout;
         await native(['update-ref', refreshLedgerRefFor('demo'), changed]);
       }
       return native(args, options);
@@ -203,7 +208,14 @@ describe('runRestack refresh ledger (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [host],
       routed: { roundId, host, routeOld, markerOld }, git,
-    })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining(refreshLedgerRefFor('demo')) });
+    })).resolves.toEqual({
+      kind: 'halted',
+      detail: `restack refused (stack-ref-changed)\n${refreshLedgerRefFor('demo')}\n`,
+    });
+    expect((await native([
+      'for-each-ref', '--format=%(refname) %(objectname)',
+      'refs/heads/feat/', 'refs/conductor/demo/closed/',
+    ])).stdout).toBe(refsBeforeRejectedTransaction);
   });
 
   it('recovers the exact journalled refresh ledger after a crash before apply', async () => {
@@ -246,6 +258,13 @@ describe('runRestack refresh ledger (real local Git)', () => {
     const dead = await writeRestackJournalBlob(subject.repo, { ...synced.journal, owner: { host: 'dead', pid: 999999, processStartTime: '0' } }, { git: native });
     await native(['update-ref', 'refs/conductor/demo/restack/journal', dead, synced.blob]);
     await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: native })).resolves.toEqual({ kind: 'recovered', fromState: 'synced' });
+    // Normal execution and recovery both consume this immutable journaled
+    // blob through appliedTransactionLines; recovery must install it verbatim.
     expect((await native(['rev-parse', refreshLedgerRefFor('demo')])).stdout.trim()).toBe(expected);
+    const recovered = await readRefreshLedger(subject.repo, 'demo', { git: native });
+    expect(recovered.kind === 'ledger' && {
+      memberCount: Object.keys(recovered.ledger.members).length,
+      roundIds: recovered.ledger.rounds.map((round) => round.roundId),
+    }).toEqual({ memberCount: 3, roundIds: [roundId] });
   });
 });
