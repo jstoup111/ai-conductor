@@ -159,7 +159,7 @@ async function addHookStampedOperatorCommit(subject: Awaited<ReturnType<typeof f
 
 describe('verified prerequisite reroute (real local Git)', () => {
   it('resolves a bare claimed prerequisite and reroutes using resolved stored evidence', async () => {
-    const subject = await fixture();
+    const subject = await fixture({ destination: c3 });
     try {
       const stored = await readRouteRecord(subject.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('missing route record');
@@ -168,10 +168,10 @@ describe('verified prerequisite reroute (real local Git)', () => {
         .resolves.toEqual({ kind: 'updated' });
 
       await expect(settleRoutedBuildClaim({
-        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['register-artifact-cli.ts'] },
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, paths: ['register-artifact-cli.ts'] },
         worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toMatchObject({ kind: 'rerouted' });
-      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { host: c2 } });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { host: c3 } });
       await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
         kind: 'record',
         record: { fallback: [expect.objectContaining({ evidence: ['src/engine/register-artifact-cli.ts'] })] },
@@ -180,26 +180,42 @@ describe('verified prerequisite reroute (real local Git)', () => {
   });
 
   it('turns directory-only claims into ordinary failed attempts without moving routing refs', async () => {
-    const subject = await fixture();
+    const subject = await fixture({ destination: c3 });
     try {
-      const before = await routingRefs(subject.git);
+      const before = {
+        branch: await refAt(subject.git, 'refs/heads/feat/c1/demo'),
+        closure: await refAt(subject.git, closureRefFor('demo', c1)),
+        marker: await refAt(subject.git, repairMarkerRefFor('demo')),
+        routing: await routingRefs(subject.git),
+      };
       await expect(settleRoutedBuildClaim({
-        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] },
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, paths: ['src/engine/'] },
         worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('claim names no prerequisite file') });
-      expect(await routingRefs(subject.git)).toBe(before);
+      await expect(refAt(subject.git, 'refs/heads/feat/c1/demo')).resolves.toBe(before.branch);
+      await expect(refAt(subject.git, closureRefFor('demo', c1))).resolves.toBe(before.closure);
+      await expect(refAt(subject.git, repairMarkerRefFor('demo'))).resolves.toBe(before.marker);
+      await expect(routingRefs(subject.git)).resolves.toBe(before.routing);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
   it('rejects an already-present claim without moving the routed host or refs', async () => {
-    const subject = await fixture();
+    const subject = await fixture({ destination: c3 });
     try {
-      const before = await routingRefs(subject.git);
+      const before = {
+        branch: await refAt(subject.git, 'refs/heads/feat/c1/demo'),
+        closure: await refAt(subject.git, closureRefFor('demo', c1)),
+        marker: await refAt(subject.git, repairMarkerRefFor('demo')),
+        routing: await routingRefs(subject.git),
+      };
       await expect(settleRoutedBuildClaim({
-        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] },
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, paths: ['src/engine/a.ts'] },
         worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('claimed prerequisite is already present at host 1') });
-      expect(await routingRefs(subject.git)).toBe(before);
+      await expect(refAt(subject.git, 'refs/heads/feat/c1/demo')).resolves.toBe(before.branch);
+      await expect(refAt(subject.git, closureRefFor('demo', c1))).resolves.toBe(before.closure);
+      await expect(refAt(subject.git, repairMarkerRefFor('demo'))).resolves.toBe(before.marker);
+      await expect(routingRefs(subject.git)).resolves.toBe(before.routing);
       await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId, host: c1 } });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
@@ -322,24 +338,40 @@ describe('verified prerequisite reroute (real local Git)', () => {
   });
 
   it('refuses a BUILD claim when its admitted destination prerequisite path is absent', async () => {
-    const subject = await fixture();
+    const subject = await fixture({ destination: c3 });
     try {
-      await subject.git(['switch', '-q', leafBranchFor('demo')]);
-      await writeFile(join(subject.repo, 'src-required.ts'), 'export const required = 1;\n');
-      await subject.git(['add', 'src-required.ts']);
-      await subject.git(['commit', '-qm', 'leaf-only prerequisite']);
-      await subject.git(['switch', '-q', 'feat/c1/demo']);
       const stored = await readRouteRecord(subject.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('missing routed work order');
       const updated = await writeRouteRecord(subject.repo, stored, {
         ...stored.record,
-        items: stored.record.items.map((item) => ({ ...item, prerequisitePaths: ['src-required.ts'] })),
+        items: stored.record.items.map((item) => ({ ...item, prerequisitePaths: ['src/engine/a.ts'] })),
       }, { git: subject.git });
       if (updated.kind !== 'updated') throw new Error(`work order update ${updated.kind}`);
-      const before = await routingRefs(subject.git);
+      const verified = await verifyPrerequisiteClaim({
+        claim: { outcome: 'blocked-by-prerequisite', child: c3, paths: ['src/engine/register-artifact-cli.ts'] },
+        host: c1, slug: 'demo', prerequisitePaths: ['src/engine/a.ts'], leaf: c3, git: subject.git,
+      });
+      expect(verified).toMatchObject({ kind: 'verified', destination: c3, ref: 'refs/heads/feat/daemon-demo' });
 
+      const absentRequired: GitRunner = async (args, options) => {
+        if (args[0] === 'ls-tree' && args.includes('refs/heads/feat/daemon-demo') && args.includes('src/engine/a.ts')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return subject.git(args, options);
+      };
+      await expect(verifyPrerequisiteClaim({
+        claim: { outcome: 'blocked-by-prerequisite', child: c3, paths: ['src/engine/register-artifact-cli.ts'] },
+        host: c1, slug: 'demo', prerequisitePaths: ['src/engine/a.ts'], leaf: c3, git: absentRequired,
+      })).resolves.toMatchObject({ kind: 'unverified', detail: expect.stringContaining('lacks prerequisite paths') });
+
+      // The leaf knows the resolved file, while child 2's immutable closure
+      // deliberately does not. This is the settlement boundary's no-ref-move
+      // case, distinct from the direct child-3 leaf verification above.
+      await subject.git(['branch', 'feat/c2/demo', subject.closed1]);
+      await subject.git(['update-ref', closureRefFor('demo', c2), subject.closed1]);
+      const before = await routingRefs(subject.git);
       await expect(settleRoutedBuildClaim({
-        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] },
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] },
         worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('lacks prerequisite paths') });
       expect(await routingRefs(subject.git)).toBe(before);

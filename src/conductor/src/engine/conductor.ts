@@ -11920,7 +11920,42 @@ export class Conductor {
               process.off('SIGTERM', sigterm);
               return;
             }
-            if (settled.kind === 'failed') result = { ...result, success: false, output: settled.detail };
+            if (settled.kind === 'failed') {
+              // A rejected prerequisite claim is a completed, region-local
+              // BUILD attempt.  It must retain its precise settlement detail
+              // without falling through to the generic retry-exhaustion HALT:
+              // the open round remains on this host for the next builder.
+              const [headAfter, treeAfter, resolvedAfter, outcomes] = await Promise.all([
+                currentCommitSha(this.projectRoot),
+                currentTreeHash(this.projectRoot),
+                countResolvedTasks(this.projectRoot, this.activeRegionChild),
+                readBuildOutcome(this.projectRoot),
+              ]);
+              const note = [settled.detail];
+              await writeBuildOutcomeBestEffort(this.projectRoot, {
+                ...outcomes,
+                records: [...outcomes.records, {
+                  outcome: classifyBuildSettle({
+                    treeBefore: treeHashBeforeBuild, treeAfter,
+                    resolvedBefore: resolvedTasksBefore, resolvedAfter,
+                  }),
+                  terminalOutcome: 'failed', gate: null, verdict: null,
+                  rung: buildOutcomeRung(result, esc),
+                  treeBefore: treeHashBeforeBuild, treeAfter,
+                  headBefore: headShaBeforeBuild, headAfter, note,
+                  category: await resolveBuildOutcomeCategory(this.projectRoot, note),
+                  reason: 'routed-prerequisite-claim',
+                }],
+              });
+              await emitTracked({
+                type: 'step_failed', step: 'build', error: settled.detail,
+                retryCount: attempt, executionContext: serialExecutionContext,
+              });
+              // Re-enter the normal dispatch boundary. An operator park can
+              // stop there; otherwise the host receives another BUILD turn.
+              i = indexOf('build') - 1;
+              continue stepLoop;
+            }
           }
 
           // An end_attempt policy is an ordinary failed provider attempt: it

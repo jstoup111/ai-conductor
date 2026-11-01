@@ -8,6 +8,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
 import { renderKickbackBudgetView } from '../../../src/engine/kickback-budget-view.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
+import { readBuildOutcome } from '../../../src/engine/build-outcome.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
@@ -77,6 +78,7 @@ async function subject(options: {
   settledEarlierGrowth?: number;
   buildResult?: unknown;
   activeChild?: number;
+  maxRetries?: number;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
@@ -137,7 +139,7 @@ async function subject(options: {
   const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
   const conductor = new Conductor({
     projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
-    mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
+    mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: options.maxRetries ?? 1,
     events: new ConductorEventEmitter(), stepRunner: runner,
     operatorParkBoundary: async () => parkAfterBuild,
     config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: options.configGrowthCap ?? 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
@@ -378,16 +380,23 @@ describe('routed BUILD settlement cap halt', () => {
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file', 1],
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['index.ts'] }, 'claim names no prerequisite file', 1],
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/register-artifact-cli.ts'] }, 'claimed destination 2 lacks prerequisite paths', 1],
-  ])('passes a rejected claim through as an unsuccessful attempt without a routing halt', async (claim, detail, activeChild) => {
+  ])('passes every rejected claim through as a child-one unsuccessful attempt without a routing halt', async (claim, detail, activeChild) => {
     claimSeam.detail = `routed prerequisite claim unverified: ${detail}`;
-    const fixture = await subject({ cap: 15, activeChild, buildResult: claim });
+    // Keep one retry available so the injected operator park ends after the
+    // failed, charged attempt rather than synthesizing the generic exhausted
+    // BUILD HALT that is outside this routed-claim boundary.
+    const fixture = await subject({ cap: 15, activeChild, buildResult: claim, maxRetries: 2 });
 
     await fixture.conductor.run();
 
     expect(claimSeam.calls).toContainEqual(claim);
     expect(fixture.build).toHaveBeenCalled();
-    // Generic retry exhaustion remains owned by BUILD. A rejected claim must
-    // not become a routed-prerequisite needs-human halt.
-    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('routed prerequisite claim unverified');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readRouteRecord(fixture.root, 'demo', fixture.roundId, { git: fixture.git })).resolves.toMatchObject({
+      kind: 'record', record: { items: expect.arrayContaining([expect.objectContaining({ host: child })]) },
+    });
+    await expect(readBuildOutcome(fixture.root)).resolves.toMatchObject({
+      records: [expect.objectContaining({ terminalOutcome: 'failed', note: expect.arrayContaining([`routed prerequisite claim unverified: ${detail}`]) })],
+    });
   });
 });
