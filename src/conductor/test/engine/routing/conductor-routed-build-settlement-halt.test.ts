@@ -390,7 +390,9 @@ describe('routed BUILD settlement cap halt', () => {
     // BUILD HALT that is outside this routed-claim boundary.
     const fixture = await subject({ cap: 15, activeChild, buildResult: claim, maxRetries: 2 });
     const failures: unknown[] = [];
+    const retries: unknown[] = [];
     fixture.events.on('step_failed', (event) => failures.push(event));
+    fixture.events.on('step_retry', (event) => retries.push(event));
 
     await fixture.conductor.run();
 
@@ -407,9 +409,10 @@ describe('routed BUILD settlement cap halt', () => {
         reason: 'routed-prerequisite-claim',
       })],
     });
-    expect(failures).toContainEqual(expect.objectContaining({
-      type: 'step_failed', step: 'build', child: child,
-      error: `routed prerequisite claim unverified: ${detail}`,
+    expect(failures).toEqual([]);
+    expect(retries).toContainEqual(expect.objectContaining({
+      type: 'step_retry', step: 'build', attempt: 2,
+      reason: `routed prerequisite claim unverified: ${detail}`,
     }));
   });
 
@@ -428,6 +431,9 @@ describe('routed BUILD settlement cap halt', () => {
       maxRetries,
       operatorParkAfterBuild: false,
     });
+    const terminalEvents: unknown[] = [];
+    fixture.events.on('step_retry', (event) => terminalEvents.push(event));
+    fixture.events.on('step_failed', (event) => terminalEvents.push(event));
     await fixture.conductor.run();
 
     expect(fixture.build).toHaveBeenCalledTimes(maxRetries);
@@ -445,5 +451,19 @@ describe('routed BUILD settlement cap halt', () => {
     await expect(readRouteRecord(fixture.root, 'demo', fixture.roundId, { git: fixture.git })).resolves.toMatchObject({
       kind: 'record', record: { items: expect.arrayContaining([expect.objectContaining({ host: child })]) },
     });
+    expect(terminalEvents).toEqual([
+      expect.objectContaining({
+        type: 'step_retry', step: 'build', attempt: 2,
+        reason: `routed prerequisite claim unverified: ${detail}`,
+      }),
+      expect.objectContaining({
+        type: 'step_retry', step: 'build', attempt: 3,
+        reason: `routed prerequisite claim unverified: ${detail}`,
+      }),
+      expect.objectContaining({
+        type: 'step_failed', step: 'build', retryCount: maxRetries, child,
+        error: `routed prerequisite claim unverified: ${detail}`,
+      }),
+    ]);
   });
 });

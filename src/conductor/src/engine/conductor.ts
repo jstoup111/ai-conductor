@@ -11988,10 +11988,6 @@ export class Conductor {
                 headAfter,
                 outcomeStore,
               });
-              await emitTracked({
-                type: 'step_failed', step: 'build', error: settled.detail,
-                retryCount: attempt, executionContext: serialExecutionContext,
-              });
               // Keep this rejected claim in this step's ordinary failure
               // flow: it consumes the host region's retry allowance, emits
               // the normal retry event, and revisits the operator-park
