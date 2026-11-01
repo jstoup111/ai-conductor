@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "flatten-refused-restack-halt-prescribes-a-recovery",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-01-flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-25-operator-recorded-restack-conflict-resolution.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-31-operator-decision-for-stacked-restack-conflicts.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/flatten-refused-restack-halt-prescribes-a-recovery.md"
+    }
+  ]
+}
