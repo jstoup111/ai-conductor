@@ -423,7 +423,7 @@ describe('capturePrdWideningDecisions', () => {
   it('keeps a later refusal effective when an earlier legacy acceptance is replayed', async () => {
     const captured: Array<AcceptedWideningDecisionInput & { id: string; revision: number }> = [];
     const store: PrdWideningCaptureDecisionStore = {
-      read: async () => ({ kind: 'valid', state: { version: 2, feature, decisions: captured } }),
+      read: async () => ({ kind: 'valid', state: { version: 2, feature: { ...feature, version: 1 }, decisions: captured } }),
       append: async (input) => {
         const decision = { id: `decision-${captured.length + 1}`, revision: captured.length + 1, ...input };
         captured.push(decision);
