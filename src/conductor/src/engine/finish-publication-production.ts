@@ -1358,6 +1358,23 @@ export function createProductionFinishPublicationCoordinator(
   const acceptedProseRevisionByPr = new Map<string, string>();
   const authoredPlaceholderProsePendingByPr = new Set<string>();
   const authoringOriginByPr = new Map<string, 'placeholder' | 'revision_required'>();
+  // Retry guidance is intentionally process-local: the next attempt can use
+  // the concrete handoff failure, while a restarted coordinator begins with
+  // no unverifiable provider-side state.
+  const authoringFailureGuidanceByPr = new Map<string, string>();
+  const recordAuthoringFailure = (
+    pullRequestUrl: string,
+    cause: 'not_returned' | 'invalid',
+    detail: string,
+  ): never => {
+    authoringFailureGuidanceByPr.set(
+      pullRequestUrl,
+      cause === 'not_returned'
+        ? 'No PR-prose handoff was written to .pipeline/finish-pr-prose.json.'
+        : detail,
+    );
+    throw new PrProseAuthoringFailedError(cause, detail);
+  };
   // Once a retained PR exists, its finish pass observes one immutable sealed
   // topology. Reuse that cursor across its coordinator lifetime to avoid
   // repeating durable-child-state probes while retaining the loader's
@@ -1795,7 +1812,16 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await clearPrProseHandoff(pipelineDir);
-                  const dispatched = await dispatchAuthoring(request);
+                  const failureGuidance = authoringFailureGuidanceByPr.get(request.pullRequestUrl);
+                  const authoringRequest = failureGuidance === undefined
+                    ? request
+                    : {
+                        ...request,
+                        revisionGuidance: [request.revisionGuidance, failureGuidance]
+                          .filter((guidance): guidance is string => guidance !== undefined)
+                          .join('\n\n'),
+                      };
+                  const dispatched = await dispatchAuthoring(authoringRequest);
                   // A failed provider run returns, it does not throw. Passing
                   // it through as a completed pass made the coordinator's
                   // fixed-point guard read an aborted attempt as "authoring
@@ -1806,10 +1832,14 @@ export function createProductionFinishPublicationCoordinator(
                   }
                   const handoff = await readPrProseHandoff(pipelineDir);
                   if (handoff.kind === 'not_returned') {
-                    throw new PrProseAuthoringFailedError('not_returned', 'PR-prose handoff was not returned.');
+                    recordAuthoringFailure(
+                      request.pullRequestUrl,
+                      'not_returned',
+                      'PR-prose handoff was not returned.',
+                    );
                   }
                   if (handoff.kind === 'invalid') {
-                    throw new PrProseAuthoringFailedError('invalid', handoff.detail);
+                    recordAuthoringFailure(request.pullRequestUrl, 'invalid', handoff.detail);
                   }
                   const stdout = await runTrackerUrlRead(
                     deps.gh,
@@ -1820,7 +1850,11 @@ export function createProductionFinishPublicationCoordinator(
                   );
                   const retained = JSON.parse(stdout) as { title?: unknown; body?: unknown };
                   if (typeof retained.title !== 'string' || typeof retained.body !== 'string') {
-                    throw new PrProseAuthoringFailedError('invalid', 'retained PR title or body is malformed.');
+                    recordAuthoringFailure(
+                      request.pullRequestUrl,
+                      'invalid',
+                      'retained PR title or body is malformed.',
+                    );
                   }
                   const applied = applyAuthoredPrProse({
                     currentBody: retained.body,
@@ -1828,7 +1862,7 @@ export function createProductionFinishPublicationCoordinator(
                     isPlaceholder: (title, body) => isPlaceholderPrProse(title, body, deps.prTemplateBytes),
                   });
                   if (applied.kind === 'invalid') {
-                    throw new PrProseAuthoringFailedError('invalid', applied.detail);
+                    recordAuthoringFailure(request.pullRequestUrl, 'invalid', applied.detail);
                   }
                   const operations = await retainedOperations(request.pullRequestUrl);
                   const mutation = await mutateRetainedPullRequest({
@@ -1840,6 +1874,7 @@ export function createProductionFinishPublicationCoordinator(
                   if (!mutation.ok) {
                     throw new PublicationOperationFailedError('pull-request.edit', mutation.message);
                   }
+                  authoringFailureGuidanceByPr.delete(request.pullRequestUrl);
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
                   }

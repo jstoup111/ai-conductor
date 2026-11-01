@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:5, task:7
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -653,6 +653,87 @@ describe('production FINISH invalid prose handoffs', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('production FINISH authoring retry guidance', () => {
+  async function retryAfterHandoffFailure(firstHandoff: string | undefined, initialBody: string) {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-retry-guidance-'));
+    const pipeline = join(root, '.pipeline');
+    await mkdir(pipeline);
+    await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+    let title = 'fix: draft';
+    let body = initialBody;
+    const operations = {
+      run: vi.fn(async (request: { payload?: { title?: string; body?: string } }) => {
+        title = request.payload?.title ?? title;
+        body = request.payload?.body ?? body;
+        return {};
+      }),
+    };
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', operations,
+      git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/prose-retry-guidance\n' },
+      gh: async (args) => {
+        if (args[0] === 'auth') return { stdout: '' };
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, title, body, isDraft: true, labels: [] }) };
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      },
+      observeReleaseReadiness: async () => 'present',
+    });
+    let calls = 0;
+    const dispatchAuthoring = vi.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        if (firstHandoff !== undefined) await writeFile(join(pipeline, 'finish-pr-prose.json'), firstHandoff);
+      } else {
+        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+          version: 1, title: 'fix: authored', body: '## Why\n\nThe retry returned valid prose.\n',
+        }));
+      }
+      return { success: true };
+    });
+    const input = {
+      state: {
+        feature_desc: 'prose-retry-guidance', worktree_branch: 'feat/prose-retry-guidance', pr_url: PR_URL,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState,
+      mode: 'auto' as const, daemon: true,
+      dispatchJudgment: async () => ({ success: true }), dispatchAuthoring, emit: async () => {},
+    };
+    try {
+      const first = await coordinator.advance(input);
+      const second = await coordinator.advance(input);
+      return { first, second, requests: dispatchAuthoring.mock.calls.map(([request]) => request), operations };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  // Covers: task:7
+  it('carries an invalid handoff detail into the next authoring request', async () => {
+    const result = await retryAfterHandoffFailure(
+      JSON.stringify({ version: 1, title: 'fix: authored', body: '## Why\n\nThe closing reference is absent.\n' }),
+      '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n\nCloses acme/widget#1364\n',
+    );
+
+    expect(result.requests[1]).toEqual(expect.objectContaining({
+      revisionGuidance: 'PR-prose handoff body must retain Closes acme/widget#1364.',
+    }));
+  });
+
+  // Covers: task:7
+  it('tells the next authoring pass about a missing handoff and publishes its valid retry', async () => {
+    const result = await retryAfterHandoffFailure(
+      undefined,
+      '<!-- conductor:pr-body-floor -->\n\n## Why\n\n_Not yet authored_\n',
+    );
+
+    expect(result.requests[1]).toEqual(expect.objectContaining({
+      revisionGuidance: 'No PR-prose handoff was written to .pipeline/finish-pr-prose.json.',
+    }));
+    expect(result.second).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+    expect(result.operations.run).toHaveBeenCalledOnce();
   });
 });
 
