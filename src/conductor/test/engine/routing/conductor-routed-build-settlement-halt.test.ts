@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
+import { Conductor, type StepRunner, type StepRunOptions } from '../../../src/engine/conductor.js';
 import { renderKickbackBudgetView } from '../../../src/engine/kickback-budget-view.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { readBuildOutcome } from '../../../src/engine/build-outcome.js';
@@ -133,7 +133,7 @@ async function subject(options: {
     throw new Error('route fixture admission failed');
   }
   let parkAfterBuild = false;
-  const build = vi.fn(async () => {
+  const build = vi.fn(async (_options?: StepRunOptions) => {
     parkAfterBuild = options.operatorParkAfterBuild ?? true;
     return { success: true, ...(options.buildResult === undefined ? {} : { finalStructuredResult: options.buildResult }) };
   });
@@ -391,8 +391,8 @@ describe('routed BUILD settlement cap halt', () => {
     const fixture = await subject({ cap: 15, activeChild, buildResult: claim, maxRetries: 2 });
     const failures: unknown[] = [];
     const retries: unknown[] = [];
-    fixture.events.on('step_failed', (event) => failures.push(event));
-    fixture.events.on('step_retry', (event) => retries.push(event));
+    fixture.events.on('step_failed', (event) => { failures.push(event); });
+    fixture.events.on('step_retry', (event) => { retries.push(event); });
 
     await fixture.conductor.run();
 
@@ -432,8 +432,8 @@ describe('routed BUILD settlement cap halt', () => {
       operatorParkAfterBuild: false,
     });
     const terminalEvents: unknown[] = [];
-    fixture.events.on('step_retry', (event) => terminalEvents.push(event));
-    fixture.events.on('step_failed', (event) => terminalEvents.push(event));
+    fixture.events.on('step_retry', (event) => { terminalEvents.push(event); });
+    fixture.events.on('step_failed', (event) => { terminalEvents.push(event); });
     await fixture.conductor.run();
 
     expect(fixture.build).toHaveBeenCalledTimes(maxRetries);
