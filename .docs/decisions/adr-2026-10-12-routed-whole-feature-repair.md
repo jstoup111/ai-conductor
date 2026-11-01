@@ -279,6 +279,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
 
    > **Amended 2026-10-29 by #3459:** The decision 6 supersession is an operator CLI writer, as #3203's operator round is. It runs under the feature dispatch lease with an approved operator identity, and its refusal predicate runs before the lease and before any write. A read-only `ai-conductor stack rounds --slug <slug>` lists every round, the marker and receipt settlement state, writing nothing. Neither command reconciles, admits, or clears a HALT. The next dispatch's reconciliation continues from the surviving round.
 
+   > **Amended 2026-10-31 by #3477:** Reconciliation followed by queue consumption is one shared admission helper, the same one decision 14 names. Resume stack preflight and the routed-exit continuation pass it the result they already reconciled. BUILD-region entry calls it when the execution child resolves `revalidating` with no repair marker, and the helper then drains the routing outbox and reconciles before it consumes. A failed drain stops through the read-only diagnostic, as in the preflight. At region entry, a `navigate-host` result re-resolves and enters the navigated host, and queue admission re-resolves and enters the admitted child. Any result that only the preflight may act on, such as `resume-exit`, ends the run with a `mechanical` HALT naming it, so the daemon's re-kick reaches the preflight. The append still happens solely at region entry, on the checked-out host.
+
 8. **The cursor gains fields, not kinds, and one execution-child resolver serves every consumer.**
    - **Cursor.** After the `no-child` return, `resolveActiveChild` reads the marker and the queue.
      It reports the existing kinds with added fields:
@@ -309,6 +311,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      gates are restaged stale and are not re-pended until the queue drains (decision 15).
 
    > **Amended 2026-10-24 by #3203:** A closed non-host child with unstamped post-closure commits is a co-origin only when the open operator round carried it. Any other co-origin halts `unlanded-closed-child-commits`, in every round kind. An explicit closed `rewind --child` opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
+
+   > **Amended 2026-10-31 by #3477:** Region entry admits before it refuses. When the execution child resolves `revalidating` and no repair marker exists, region entry runs the shared admission helper (decisions 7 and 14) and re-resolves the execution child before any entry side effect or dispatch. A child admitted this way is entered as the routed host of its new `revalidate` round. A refused admission ends the run with a HALT whose reason names the queued child and queue generation, every non-closed round with its unsettled hosts, and the marker owner or `none`, not only "no matching repair marker". A fence refusal and a routing stall take #3445's bounded stop: `mechanical`, then `needs-human` after three identical stops. Unreadable queue, marker or route refs halt `needs-human`. With routing ineligible, region entry admits nothing and halts `needs-human` naming the same state. When no queue entry exists, the cursor never resolves `revalidating` and region entry is unchanged.
 
 9. **Routed tasks are appended on the host's checked-out branch, carry their child in committed
    text, and merge deterministically on replay.**
@@ -539,6 +543,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     >   `returnToLeaf` records the switch in that round, then closes it (decisions 4 and 6).
 
     > **Amended 2026-10-24 by #3203:** With routing eligible, operator commits on closed children reach the queue only as children an operator round carried; uncarried ones halt `unlanded-closed-child-commits` instead (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
+
+    > **Amended 2026-10-31 by #3477:** Consumption runs through the one shared admission helper of decision 7, at three points: resume stack preflight, the routed-exit continuation, and BUILD-region entry (decision 8). A restack applied inside the gate loop, such as the `rebase` step's base refresh, therefore has its queue head admitted in the same run, at the next region entry, without an operator halt clear. A queue head is admitted at most once. The helper consumes only through `consumeLowestQueued`, which returns `busy` while a marker exists, so a later resume continues the admitted round instead of opening a second `revalidate` round. Production, merge, acknowledgement and the round-admission fence are unchanged.
 
 15. **The leaf gates re-run when the queue drains, under their existing caps.**
     - When no marker and no queue entry remain, the leaf's whole-feature gates are re-pended under
