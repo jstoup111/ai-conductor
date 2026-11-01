@@ -19,6 +19,7 @@ import { createSweepRepository, removeAll, sealStack } from './restack-sweepG2-f
 const cleanup: string[] = [];
 const host = parseChildId(1)!;
 const child = parseChildId(2)!;
+const leaf = parseChildId(3)!;
 const roundId = parseRoundId('r1')!;
 
 afterEach(async () => removeAll(cleanup));
@@ -55,7 +56,7 @@ async function fixture() {
   return { ...subject, git, closedOne, closedTwo };
 }
 
-async function childThreeConflictFixture() {
+async function childThreeConflictFixture(conflictPath: 'two.txt' | 'three.txt' = 'three.txt') {
   const subject = await createSweepRepository('restack-decision-child-three-', cleanup);
   await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
   await subject.git(['add', '.ai-conductor/config.yml']);
@@ -74,7 +75,7 @@ async function childThreeConflictFixture() {
   await subject.commit('leaf', 'leaf.txt', 'leaf\n');
   await sealStack(subject.repo);
   await subject.git(['checkout', '-q', 'feat/c1/demo']);
-  await subject.commit('routed fix touching child 3', 'three.txt', 'routed\n');
+  await subject.commit(`routed fix touching ${conflictPath === 'two.txt' ? 'child 2' : 'child 3'}`, conflictPath, 'routed\n');
   const git = makeGitRunner(subject.repo);
   const route: RouteRecord = {
     roundId, kind: 'audit', phase: 'open',
@@ -155,8 +156,8 @@ describe('restack decision delivery (real local Git)', () => {
     expect(eventLines).not.toContainEqual(expect.objectContaining({ type: 'restack_decision' }));
   });
 
-  it('delivers a matching decision, moves the resolved closed child, then deletes it only with the applied move', async () => {
-    const subject = await fixture();
+  it('delivers a matching decision, moves resolved closed children, queues child 2 before the leaf, then deletes it only with the applied move', async () => {
+    const subject = await childThreeConflictFixture('two.txt');
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(subject.repo, '.pipeline/events.jsonl'), events);
     persister.start();
@@ -190,12 +191,14 @@ describe('restack decision delivery (real local Git)', () => {
     await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).resolves.toMatchObject({
       exitCode: 0, stdout: resolvedChildCommit,
     });
+    const resolvedLeaf = (await subject.git(['rev-parse', 'refs/heads/feat/c3/demo'])).stdout.trim();
+    await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c3'])).resolves.toMatchObject({
+      exitCode: 0, stdout: resolvedLeaf,
+    });
     const queue = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
-    expect(queue).toMatchObject({ kind: 'queue', queue: { entries: expect.any(Array) } });
     if (queue.kind !== 'queue') throw new Error('expected routed revalidation queue');
-    // Revalidation queues contain moved *closed* children only. The leaf has
-    // no closure ref and resumes after this queued child has been handled.
-    expect(queue.queue.entries.map((entry) => entry.child)).toEqual([child]);
+    // The moved closed child is revalidated before the moved closed leaf.
+    expect(queue.queue.entries.map((entry) => entry.child)).toEqual([child, leaf]);
     await expect(resolveActiveChild(subject.repo, 'demo', { git: subject.git })).resolves.not.toMatchObject({
       kind: 'divergent', check: 'closed-child-rewritten',
     });
