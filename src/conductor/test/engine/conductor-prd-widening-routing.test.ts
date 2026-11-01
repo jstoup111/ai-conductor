@@ -322,6 +322,23 @@ describe('typed PRD widening routing', () => {
     }, { attemptId: `typed-${criterion}`, codeStamp: null });
   }
 
+  async function writeTypedStoryOverScope(criterionId: string, evidence: string): Promise<void> {
+    const match = /^S(\d+)\.(\d+)$/.exec(criterionId);
+    if (!match) throw new Error(`expected a story criterion, got ${criterionId}`);
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: match[1]!, ordinal: Number(match[2]) }, criterionId, grade: 'OVER_SCOPE', evidence,
+          rationale: 'Fixture scope evidence.', requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'outside-visible',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [], recordedDispositions: [],
+    }, { attemptId: `typed-${criterionId}`, codeStamp: null });
+  }
+
   async function writeTypedMixedOverScope(): Promise<void> {
     await persistPrdAuditVerdict(projectRoot, {
       complete: true,
@@ -401,6 +418,85 @@ describe('typed PRD widening routing', () => {
       expect.objectContaining({ criterion: 'S3.17', decision: 'refuse' }),
       expect.objectContaining({ criterion: 'NC.1', decision: 'accept', accepted: true }),
     ]));
+  });
+
+  it('records an accepted offerless S4.2 beside a pending offer-backed NC.1', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    const nc = JSON.parse((await readFile(clearPath, 'utf8')).match(/\[.*\]/s)?.[0] ?? '[]')[0];
+    await writeFile(clearPath, ['```json over-scope-decisions', JSON.stringify([
+      {
+        criterion: 'S4.2', summary: 'The story widening is outside visible scope.', decision: 'accept',
+        rationale: 'The operator accepts this newly raised story criterion.',
+      },
+      { ...nc, decision: 'pending' },
+    ]), '```'].join('\n'));
+    await writeTypedStoryOverScope('S4.2', 'The story widening is outside visible scope.');
+
+    await expect(prdAuditEntry().preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    const decisions = await new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: '/fixture/repository', feature: 'prd-widening-routing',
+    }).read();
+    if (decisions.kind !== 'valid') throw new Error('expected captured S4.2 decision');
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [{ criterion: 'S4.2', grade: 'OVER_SCOPE', prdIds: [], evidence: 'The story widening is outside visible scope.' }], rejectedRows: [] },
+      new Map([['S4.2', 'outside-visible' as const]]), decisions.state.decisions, [],
+    );
+
+    expect(route).toMatchObject({
+      kind: 'record', findings: [expect.objectContaining({ criterion: 'S4.2', decision: 'accept', accepted: true })],
+    });
+  });
+
+  it('keeps a pending story criterion in the next halt after recording its decided sibling', async () => {
+    await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), ['```json over-scope-decisions', JSON.stringify([
+      {
+        criterion: 'S1.2', summary: 'The first story widening is outside visible scope.', decision: 'refuse',
+        rationale: 'The operator refuses this newly raised story criterion.',
+      },
+      { criterion: 'S1.3', summary: 'The second story widening is outside visible scope.', decision: 'pending' },
+    ]), '```'].join('\n'));
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          {
+            criterion: { storyId: '1', ordinal: 2 }, criterionId: 'S1.2', grade: 'OVER_SCOPE',
+            evidence: 'The first story widening is outside visible scope.', rationale: 'Fixture scope evidence.',
+            requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'outside-visible',
+          },
+          {
+            criterion: { storyId: '1', ordinal: 3 }, criterionId: 'S1.3', grade: 'OVER_SCOPE',
+            evidence: 'The second story widening is outside visible scope.', rationale: 'Fixture scope evidence.',
+            requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'outside-visible',
+          },
+        ],
+        noOwnerObservations: [],
+      },
+      diagnostics: [], recordedDispositions: [],
+    }, { attemptId: 'typed-story-only', codeStamp: null });
+
+    await expect(prdAuditEntry().preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    const decisions = await new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: '/fixture/repository', feature: 'prd-widening-routing',
+    }).read();
+    if (decisions.kind !== 'valid') throw new Error('expected captured S1.2 decision');
+    expect(decisions.state.decisions).toHaveLength(1);
+    expect(decisions.state.decisions[0]).toMatchObject({ criterion: 'S1.2', authority: 'refuse' });
+    const route = routeTypedPrdAuditOverScope(
+      {
+        prd: 'present', findings: [
+          { criterion: 'S1.2', grade: 'OVER_SCOPE', prdIds: [], evidence: 'The first story widening is outside visible scope.' },
+          { criterion: 'S1.3', grade: 'OVER_SCOPE', prdIds: [], evidence: 'The second story widening is outside visible scope.' },
+        ], rejectedRows: [],
+      },
+      new Map([['S1.2', 'outside-visible' as const], ['S1.3', 'outside-visible' as const]]), decisions.state.decisions, [],
+    );
+
+    if (route.kind !== 'halt') throw new Error(`expected halt, got ${route.kind}`);
+    expect(JSON.parse(renderOverScopeDecisionBlock(route.undecided, route.refused).match(/\[.*\]/s)?.[0] ?? '[]')).toEqual([
+      expect.objectContaining({ criterion: 'S1.3', decision: 'pending' }),
+    ]);
   });
 
   it('renders one criterion-named recovery per capture-defect reason at PRD-audit entry', async () => {
