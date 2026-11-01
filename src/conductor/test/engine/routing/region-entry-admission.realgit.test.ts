@@ -4,7 +4,7 @@
 // while keeping the child-region and provider boundaries injected.  The
 // observable seam is BUILD-region entry: it must turn a queued child into an
 // open revalidate round before the first region gate is dispatched.
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,8 @@ import { Conductor } from '../../../src/engine/conductor.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { readRepairMarker } from '../../../src/engine/routing/route-record-store.js';
-import { revalidationQueueRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -43,6 +44,10 @@ async function fixture(entries: readonly number[] = [1]) {
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child one', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   });
+  await git(['add', '.']);
+  await git(['commit', '-qm', 'stack topology']);
+  await git(['checkout', '-qb', 'feat/c1/demo']);
+  await git(['checkout', '-q', 'feat/daemon-demo']);
   await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
     ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])), feature_desc: 'demo', complexity_tier: 'M',
@@ -92,7 +97,9 @@ describe('BUILD-region admission (real local Git)', () => {
     };
     let park = false;
     const conductor = new Conductor({
-      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      // Start after the invalidated gate.  Admission must rewind the loop to
+      // acceptance_specs instead of silently continuing at build.
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: runner, acceptanceRedExec: vi.fn(), operatorParkBoundary: async () => park,
       childRegionLifecycle: lifecycle,
     });
@@ -123,5 +130,45 @@ describe('BUILD-region admission (real local Git)', () => {
     await conductor.run();
     expect((await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout).toBe(before);
     expect(runner.run).toHaveBeenCalledWith('acceptance_specs', expect.anything(), expect.anything());
+  });
+
+  // Covers: task:6
+  it.each([
+    ['queue', revalidationQueueRefFor('demo')],
+    ['marker', repairMarkerRefFor('demo')],
+  ] as const)('halts needs-human and names an unreadable $kind ref without routing writes', async (_kind, brokenRef) => {
+    const { root, git } = await fixture();
+    const badBlob = (await git(['hash-object', '-w', '--stdin'], { input: '{not json' })).stdout.trim();
+    await git(['update-ref', brokenRef, badBlob]);
+    const before = (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout;
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild: async () => revalidating(), enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+    });
+    await conductor.run();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(brokenRef);
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect((await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout).toBe(before);
+  });
+
+  // Covers: task:6
+  it('names an unreadable routed record without consuming its queued child', async () => {
+    const { root, git } = await fixture();
+    const round = parseRoundId('r7')!;
+    const marker = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: 1, roundId: round }) })).stdout.trim();
+    const badBlob = (await git(['hash-object', '-w', '--stdin'], { input: '{not json' })).stdout.trim();
+    await git(['update-ref', repairMarkerRefFor('demo'), marker]);
+    await git(['update-ref', routeRecordRefFor('demo', round), badBlob]);
+    const before = (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout;
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', fromStep: 'acceptance_specs', mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: { resolveActiveChild: async () => revalidating(), enterHostRegion: vi.fn(), enterChildRegion: vi.fn() },
+    });
+    await conductor.run();
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(routeRecordRefFor('demo', round));
+    await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect((await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout).toBe(before);
   });
 });
