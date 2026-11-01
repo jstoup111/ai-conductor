@@ -1831,16 +1831,15 @@ export function createProductionFinishPublicationCoordinator(
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
                   const handoff = await readPrProseHandoff(pipelineDir);
-                  if (handoff.kind === 'not_returned') {
-                    recordAuthoringFailure(
+                  const prose = handoff.kind === 'returned'
+                    ? handoff.prose
+                    : recordAuthoringFailure(
                       request.pullRequestUrl,
-                      'not_returned',
-                      'PR-prose handoff was not returned.',
+                      handoff.kind,
+                      handoff.kind === 'not_returned'
+                        ? 'PR-prose handoff was not returned.'
+                        : handoff.detail,
                     );
-                  }
-                  if (handoff.kind === 'invalid') {
-                    recordAuthoringFailure(request.pullRequestUrl, 'invalid', handoff.detail);
-                  }
                   const stdout = await runTrackerUrlRead(
                     deps.gh,
                     deps.projectRoot,
@@ -1849,27 +1848,27 @@ export function createProductionFinishPublicationCoordinator(
                     ['pr', 'view', request.pullRequestUrl, '--json', 'title,body'],
                   );
                   const retained = JSON.parse(stdout) as { title?: unknown; body?: unknown };
-                  if (typeof retained.title !== 'string' || typeof retained.body !== 'string') {
-                    recordAuthoringFailure(
-                      request.pullRequestUrl,
-                      'invalid',
-                      'retained PR title or body is malformed.',
-                    );
-                  }
+                  const retainedBody = typeof retained.title === 'string' && typeof retained.body === 'string'
+                    ? retained.body
+                    : recordAuthoringFailure(
+                        request.pullRequestUrl,
+                        'invalid',
+                        'retained PR title or body is malformed.',
+                      );
                   const applied = applyAuthoredPrProse({
-                    currentBody: retained.body,
-                    prose: handoff.prose,
+                    currentBody: retainedBody,
+                    prose,
                     isPlaceholder: (title, body) => isPlaceholderPrProse(title, body, deps.prTemplateBytes),
                   });
-                  if (applied.kind === 'invalid') {
-                    recordAuthoringFailure(request.pullRequestUrl, 'invalid', applied.detail);
-                  }
+                  const appliedProse = applied.kind === 'apply'
+                    ? applied
+                    : recordAuthoringFailure(request.pullRequestUrl, 'invalid', applied.detail);
                   const operations = await retainedOperations(request.pullRequestUrl);
                   const mutation = await mutateRetainedPullRequest({
                     operations,
                     prUrl: request.pullRequestUrl,
                     operation: 'pull-request.edit',
-                    payload: { title: applied.title, body: applied.body },
+                    payload: { title: appliedProse.title, body: appliedProse.body },
                   });
                   if (!mutation.ok) {
                     throw new PublicationOperationFailedError('pull-request.edit', mutation.message);
