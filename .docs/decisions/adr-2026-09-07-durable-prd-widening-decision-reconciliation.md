@@ -46,11 +46,33 @@ The engine validates the cleared entry against its original offer, never against
 
 On a refused current finding, expose an explicit revise-decision entry referring to the existing decision, with no default acceptance. This makes a later operator reversal possible without silently treating an unchanged old clear as a new decision.
 
+> **Amended 2026-10-31 by #3548:** Offer validation applies to NC entries, not to a whole cleared
+> block. Capture decides scope per entry. An NC entry, or any entry carrying an offer reference,
+> must match its persisted offer as above. A story-criterion entry with no offer reference keeps
+> D1's criterion-only scope. It is captured from its rendered criterion, summary, explicit
+> decision and rationale through the same deterministic criterion-and-summary provenance as a D4
+> legacy clear, and becomes effective by criterion name. It is captured only when its criterion is
+> an outside-visible OVER_SCOPE finding in the persisted PRD-audit verdict that rendered the halt;
+> a criterion the halt never offered, or an unreadable verdict, is a named defect that grants
+> nothing. One entry's defect never rejects a
+> sibling, and an entry left `pending` grants nothing in any block. Each capture defect names its
+> own recovery reason and, when the entry is readable, its criterion. A defect in a cleared block
+> is never reported as malformed widening history; that reason belongs to stored history that is
+> corrupt. Stored-history failures map exhaustively too: an unknown version or unsupported row is
+> unsupported history, another feature's store is a foreign feature, and a failed read or write is
+> a persistence failure.
+
 ### D4 — Legacy authority is preserved, not guessed away
 
 Read current version-1 decisions and existing fenced HALT.cleared entries before migration. Valid stored rows become legacy source snapshots with their full original evidence and attribution; preserve append order for decision precedence. Identical row replays are inert. Malformed stores remain intact and produce named recovery rather than partial overwrite.
 
 A pre-offer legacy clear can be imported from its original authored summary and explicit decision/rationale using the existing machine-owner resolution; mark its provenance as legacy-clear rather than inventing an offer. It need not match the latest report to enter durable history. It cannot become effective on a current NC finding until reconciliation establishes the relationship. Ambiguous legacy identity remains durable but unresolved; multiple candidate matches do not inherit acceptance. A retired, unsupported format is named with a recovery path; no silent absence.
+
+> **Amended 2026-10-31 by #3548:** A current-format block (a JSON array of rendered entries) is
+> never a retired format. The legacy whole-block import above still applies to a block whose
+> entries all lack offer references and all carry an explicit decision. Any other array is
+> captured per entry under D3 as amended, so a pending row or a mix with offer-bearing NC entries
+> never makes it `unsupported`.
 
 ### D5 — One source-complete judgment for unmatched current NC findings
 
