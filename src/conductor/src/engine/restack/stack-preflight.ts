@@ -324,6 +324,7 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
         case 'unavailable':
           return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
         case 'stalled': {
+          if ('haltClass' in admission) return { kind: 'halted', haltClass: admission.haltClass, detail: admission.detail };
           const recorded = await recordRoundStall(options.worktree, options.slug, admission, stallEvents);
           return { kind: 'halted', ...recorded };
         }

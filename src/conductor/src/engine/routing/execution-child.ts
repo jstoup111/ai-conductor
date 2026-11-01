@@ -6,7 +6,15 @@ import { assertNever, type RoundId } from './route-types.js';
 export type ExecutionChildResolution =
   | { readonly source: 'none' }
   | { readonly source: 'refused'; readonly cursor: ActiveChildResolution }
-  | { readonly source: 'cursor' | 'routed-host' | 'revalidating'; readonly target: ActiveChildLifecycleTarget; readonly roundId?: RoundId; readonly generation?: number };
+  | { readonly source: 'cursor'; readonly target: ActiveChildLifecycleTarget }
+  | { readonly source: 'routed-host'; readonly target: ActiveChildLifecycleTarget; readonly roundId: RoundId }
+  | { readonly source: 'revalidating'; readonly target: ActiveChildLifecycleTarget; readonly generation: number };
+
+/** The executable cursor variants which own a concrete child region. */
+export type ExecutionChildTargetResolution = Exclude<
+  ExecutionChildResolution,
+  { readonly source: 'none' | 'refused' }
+>;
 
 /**
  * A repair requires stack preflight until routing or revalidation selects its
@@ -51,10 +59,7 @@ function resolveActiveExecutionChild(
     branch: typeof branch === 'string' ? branch : branch.branch,
     ...(child === cursor.child && cursor.leafMovePending ? { leafMovePending: true } : {}),
   };
-  return {
-    source: routed ? 'routed-host' : revalidating ? 'revalidating' : 'cursor',
-    target,
-    ...(routed ? { roundId: routed.roundId } : {}),
-    ...(revalidating ? { generation: revalidating.generation } : {}),
-  };
+  if (routed) return { source: 'routed-host', target, roundId: routed.roundId };
+  if (revalidating) return { source: 'revalidating', target, generation: revalidating.generation };
+  return { source: 'cursor', target };
 }

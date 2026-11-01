@@ -2,7 +2,8 @@ import type { GitRunner } from '../rebase.js';
 import { consumeLowestQueued } from './revalidation-queue.js';
 import { reconcileRounds, type ReconcileRoundsResult } from './round-admission.js';
 import { drainRoutingOutboxes, type PersistOutboxEvent } from './route-record-store.js';
-import type { ChildId, RoundId } from './route-types.js';
+import type { ChildId } from '../child-context.js';
+import type { RoundId } from './route-types.js';
 
 type ContinuingReconciliation = Extract<ReconcileRoundsResult, {
   readonly kind: 'navigate-host' | 'navigate-leaf-to-build' | 'resume-exit';
@@ -54,9 +55,9 @@ export async function admitQueuedRevalidation(input: AdmitQueuedRevalidationInpu
     case 'resume-exit':
       return { kind: 'continue', reconciled };
     case 'unavailable':
-      return reconciled;
+      return { kind: 'unavailable', detail: reconciled.detail };
     case 'stalled':
-      return reconciled;
+      return { kind: 'stalled', detail: reconciled.detail, rounds: reconciled.rounds };
     case 'none':
     case 'aborted':
     case 'deferred':
@@ -68,11 +69,11 @@ export async function admitQueuedRevalidation(input: AdmitQueuedRevalidationInpu
   const consumed = await consumeLowestQueued(input.worktree, input.slug, dependencies);
   switch (consumed.kind) {
     case 'admitted':
-      return consumed;
+      return { kind: 'admitted', roundId: consumed.roundId, host: consumed.host };
     case 'none':
-      return consumed;
+      return { kind: 'none' };
     case 'busy':
-      return consumed;
+      return consumed.detail === undefined ? { kind: 'busy' } : { kind: 'busy', detail: consumed.detail };
     case 'unavailable':
       return { kind: 'unavailable', detail: consumed.detail ?? 'cannot consume routed revalidation queue' };
     case 'stalled': {

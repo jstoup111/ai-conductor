@@ -213,7 +213,7 @@ import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
-import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
+import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution, type ExecutionChildTargetResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
@@ -864,8 +864,9 @@ export class Conductor {
     slug: string,
     state: ConductState,
     cursor?: ActiveChildResolution,
-  ): Promise<ExecutionChildResolution | false> {
-    if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return execution;
+  ): Promise<ExecutionChildTargetResolution | false> {
+    if (execution.source === 'cursor') return execution;
+    if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return false;
 
     let enteredExecution: Extract<ExecutionChildResolution, { readonly source: 'routed-host' | 'revalidating' }> = execution;
 
@@ -933,16 +934,15 @@ export class Conductor {
         } else if (admission.kind === 'stalled') {
           await this.haltAdmissionStall(slug, enteredExecution, admission.detail);
           return false;
-        } else {
+        } else if (admission.kind === 'unavailable') {
           await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, admission.detail));
           return false;
         }
-      } else if (marker.marker.host !== enteredExecution.target.child || marker.marker.roundId !== enteredExecution.roundId) {
+      } else if (marker.marker.host !== enteredExecution.target.child) {
         await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'repair marker does not match the revalidating child'));
         return false;
-      }
-      if (enteredExecution.source === 'revalidating') {
-        const route = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
+      } else {
+        const route = await readRouteRecord(this.projectRoot, slug, marker.marker.roundId);
         if (route.kind !== 'record') {
           await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidate route record is unreadable'));
           return false;
@@ -961,7 +961,17 @@ export class Conductor {
           await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidate route record is not open'));
           return false;
         }
+        enteredExecution = {
+          source: 'routed-host',
+          target: enteredExecution.target,
+          roundId: marker.marker.roundId,
+        };
       }
+    }
+
+    if (enteredExecution.source !== 'routed-host') {
+      await this.haltChildRegionRefusal('revalidation entry did not resolve to a routed host', 'mechanical');
+      return false;
     }
 
     const hostEntry = await this.enterHostRegion({
