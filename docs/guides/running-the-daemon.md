@@ -787,8 +787,10 @@ proof-gated cleanup paths.
   retain the worktree for recovery.
 - **Published stack.** For a [stacked publication](../reference/configuration.md#stacked-publication),
   the sweep then deletes each child's local branch by name, only when that child's PR is merged, its
-  merge commit is on `origin/main`, and the local tip equals the merged head. A child PR that is
-  open or closed unmerged, or whose merge is not on `origin/main`, is kept and the watch entry is
+  merge commit is on `origin/main`, and every local commit is accounted for by the merged head, the
+  recorded pushed tip, or an engine halt-record commit (see
+  [teardown](../reference/configuration.md#stacked-publication)). A child PR that is open or closed
+  unmerged, whose merge is not on `origin/main`, or whose branch carries an unaccounted commit, is kept and the watch entry is
   retained; an unreachable member emits `stack_members_unreachable` once and logs `retained <slug> —
   reason: stack-members-unreachable`.
 
