@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2, task:rem-prd-audit-9-R3, task:rem-as-built-6-r7
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:9, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2, task:rem-prd-audit-9-R3, task:rem-as-built-6-r7
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir, symlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -3078,7 +3078,7 @@ describe('DefaultStepRunner', () => {
   // The authoring pass is the fix for a PR that reached FINISH with an
   // unauthored body: the provider is told to WRITE the prose from the diff,
   // and is given the authoring contract instead of a grading rubric.
-  it('finish authoring pass mandates writing the body from the diff and names both hosts', async () => {
+  it('finish authoring pass returns the prose through the engine handoff and names both hosts', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       mode: 'auto',
@@ -3095,15 +3095,21 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).not.toContain('Read the full diff');
     expect(opts.systemPrompt).toContain('`/pr`');
     expect(opts.systemPrompt).toContain('`$pr`');
+    expect(opts.systemPrompt).toContain('Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}`');
+    expect(opts.systemPrompt).toContain('The engine validates and publishes that handoff');
     expect(opts.systemPrompt).toContain('leave every `ai-conductor:step` region and its markers unchanged');
     // It authors; it does not grade, and it makes no publication mechanics.
     expect(opts.systemPrompt).not.toContain('revision_required');
     expect(opts.systemPrompt).not.toContain('gh pr create');
     expect(opts.systemPrompt).not.toContain('git push');
     expect(opts.systemPrompt).not.toContain('finish-record');
+    expect(opts.systemPrompt).not.toContain('in place');
+    expect(opts.systemPrompt).not.toContain('ai-conductor github-operation');
+    expect(opts.systemPrompt).not.toContain('--request-file');
+    expect(opts.systemPrompt).not.toContain('pull-request.edit');
   });
 
-  it('finish revision-lap authoring pass quotes the judge objection without calling the body a placeholder', async () => {
+  it('finish revision-lap authoring pass returns the revised prose through the engine handoff', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       mode: 'auto',
@@ -3119,12 +3125,18 @@ describe('DefaultStepRunner', () => {
     const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('FINISH PR PROSE REVISION');
     expect(opts.systemPrompt).toContain(guidance);
+    expect(opts.systemPrompt).toContain('Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}`');
+    expect(opts.systemPrompt).toContain('The engine validates and publishes that handoff');
     expect(opts.systemPrompt).toContain('Do not print the whole branch diff');
     expect(opts.systemPrompt).not.toContain('still carries the engine-seeded placeholder body');
     expect(opts.systemPrompt).not.toContain('no prose to judge yet');
     expect(opts.systemPrompt).toContain('do not create, push, merge, or ready a pull request');
     expect(opts.systemPrompt).toContain('do not alter labels, shipment evidence, or completion files');
     expect(opts.systemPrompt).toContain('The publication coordinator re-reads the pull request afterwards');
+    expect(opts.systemPrompt).not.toContain('in place');
+    expect(opts.systemPrompt).not.toContain('ai-conductor github-operation');
+    expect(opts.systemPrompt).not.toContain('--request-file');
+    expect(opts.systemPrompt).not.toContain('pull-request.edit');
   });
 
   it('finish authoring pass without revision guidance keeps the placeholder-authoring prompt', async () => {
