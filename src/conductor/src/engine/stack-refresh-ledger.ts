@@ -1,8 +1,11 @@
 import { parseChildId, type ChildId } from './child-context.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
-import { parseCommitSha, parseRefName, type CommitSha, type RefName } from './restack/restack-types.js';
+import { parseCommitSha, type CommitSha, type RefName } from './restack/restack-types.js';
+import { refreshLedgerRefFor } from './routing/routing-refs.js';
 import { parseRoundId, type RoundId } from './routing/route-types.js';
 import type { RouteKind } from '../types/routing.js';
+
+export { refreshLedgerRefFor } from './routing/routing-refs.js';
 
 const routeKinds = new Set<RouteKind>(['audit', 'revalidate', 'operator']);
 
@@ -178,12 +181,6 @@ export function parseRefreshLedger(serialized: string): { readonly ledger: Refre
       posted: [...value.posted],
     },
   };
-}
-
-export function refreshLedgerRefFor(slug: string): RefName {
-  const ref = parseRefName(`refs/conductor/${slug}/refresh`);
-  if (!ref) throw new Error(`invalid refresh ledger ref for ${slug}`);
-  return ref;
 }
 
 /** Read the durable ledger without caching its ref or content. */

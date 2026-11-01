@@ -792,7 +792,7 @@ describe('Conductor FINISH publication routing', () => {
     await writeFile(join(repo, 'leaf.txt'), 'published leaf\n');
     await execa('git', ['add', '.'], { cwd: repo });
     await execa('git', ['commit', '-m', 'published leaf'], { cwd: repo });
-    await execa('git', ['init', '--bare', remote], { cwd: dir });
+    await execa('git', ['init', '--bare', '--initial-branch=main', remote], { cwd: dir });
     await execa('git', ['remote', 'add', 'origin', remote], { cwd: repo });
     await execa('git', ['push', 'origin', 'HEAD:refs/heads/feat/daemon-finish-publication'], { cwd: repo });
     const before = (await execa('git', ['ls-remote', '--heads', remote], { cwd: dir })).stdout;

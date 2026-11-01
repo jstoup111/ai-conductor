@@ -1,7 +1,7 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { journalRefFor, readRestackJournal, type ReadRestackJournalResult, type RestackJournal } from '../restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
+import { refreshLedgerRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
   MAX_ROUTE_ROUNDS,
   isLegalHostTransition,
@@ -65,6 +65,8 @@ export type RoutingTransactionOp =
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'delete-marker'; readonly old: CommitSha }
+  /** The published-stack refresh receipt travels with leaf settlement. */
+  | { readonly kind: 'update-refresh-ledger'; readonly previous?: CommitSha; readonly next: CommitSha }
   /** A value-only fence for authority refs not otherwise written by this transaction. */
   | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
@@ -229,6 +231,9 @@ export async function writeRoutingTransaction(
         case 'delete-marker':
           lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
           break;
+        case 'update-refresh-ledger':
+          lines.push(`update ${refreshLedgerRefFor(slug)} ${op.next} ${op.previous ?? ZERO_SHA}`);
+          break;
         case 'verify-ref':
           lines.push(`verify ${op.ref} ${op.value}`);
           break;
@@ -264,6 +269,7 @@ export async function writeRoutingTransaction(
         case 'create-pin': expectRef(op.ref, undefined); break;
         case 'update-marker':
         case 'delete-marker': expectRef(repairMarkerRefFor(slug), op.old); break;
+        case 'update-refresh-ledger': expectRef(refreshLedgerRefFor(slug), op.previous); break;
         case 'verify-ref': expectRef(op.ref, op.value); break;
       }
     }
