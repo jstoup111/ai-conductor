@@ -162,7 +162,7 @@ describe('FINISH PR-prose handoff', () => {
   ])('rejects prose that drops %s', async (_caseName, currentReference, body) => {
     const { applyAuthoredPrProse } = await loadHandoff();
 
-    await expect(applyAuthoredPrProse({
+    expect(applyAuthoredPrProse({
       currentBody: `Current body.\n\n${currentReference}`,
       prose: { title: 'Returned title', body } as never,
       isPlaceholder: () => false,
@@ -175,7 +175,7 @@ describe('FINISH PR-prose handoff', () => {
   it('retains exact qualified and short Closes references', async () => {
     const { applyAuthoredPrProse } = await loadHandoff();
 
-    await expect(applyAuthoredPrProse({
+    expect(applyAuthoredPrProse({
       currentBody: 'Current body.\n\nCloses #42\nCloses owner/repo#43',
       prose: { title: 'Returned title', body: 'Returned body.\n\nCloses #42\nCloses owner/repo#43' } as never,
       isPlaceholder: () => false,
@@ -186,7 +186,7 @@ describe('FINISH PR-prose handoff', () => {
   it('applies prose without a Closes reference when none is currently present', async () => {
     const { applyAuthoredPrProse } = await loadHandoff();
 
-    await expect(applyAuthoredPrProse({
+    expect(applyAuthoredPrProse({
       currentBody: 'Current body.',
       prose: { title: 'Returned title', body: 'Returned body.' } as never,
       isPlaceholder: () => false,
