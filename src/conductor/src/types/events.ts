@@ -195,6 +195,7 @@ export type FinishPublicationTransition =
   | 'establish_pr'
   | 'establish_child_prs'
   | 'refresh_published_members'
+  | 'post_routed_comments'
   | 'verify_release_readiness'
   | 'author_pr_prose'
   | 'judge_pr_prose'

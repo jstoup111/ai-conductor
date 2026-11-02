@@ -71,8 +71,16 @@ import {
   type PushLeaseGitRunner,
 } from './push-lease.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
-import { authorizePublishedStackRefresh, readRefreshLedger, refreshPendingState } from './stack-refresh-ledger.js';
+import {
+  authorizePublishedStackRefresh,
+  readRefreshLedger,
+  refreshPendingState,
+  routedCommentTargets,
+  type RefreshLedger,
+  type RoutedCommentTarget,
+} from './stack-refresh-ledger.js';
 import { parseCommitSha } from './restack/restack-types.js';
+import { renderHostComment, renderMemberAboveComment } from './routed-fix-comment.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
@@ -550,6 +558,108 @@ export async function refreshPublishedStackMembers(input: {
       eventId: `stack-refresh:${member.pr}:${oldTip}:${member.recordedTip}`,
     });
   }
+}
+
+type RoutedCommentBody = { readonly kind: 'body'; readonly body: string } | { readonly kind: 'retryable' };
+
+/**
+ * Post the comment associated with each durable refresh receipt. The read and
+ * create remain a narrow direct boundary for this task; the guarded-operation
+ * migration is owned by Task 17.
+ */
+export async function postRoutedComments(input: {
+  root: string;
+  slug: string;
+  baseBranch: string;
+  repository: string;
+  git: PublicationRecordGitRunner;
+  gh: GhRunner;
+  routedCommentTargets?: typeof routedCommentTargets;
+  renderHostComment?: typeof renderHostComment;
+  renderMemberAboveComment?: typeof renderMemberAboveComment;
+}): Promise<void> {
+  const targetsResult = await (input.routedCommentTargets ?? routedCommentTargets)({
+    worktree: input.root,
+    slug: input.slug,
+    baseBranch: input.baseBranch,
+    git: input.git,
+  });
+  if (targetsResult.kind !== 'targets') throw new StackPublicationRetryError('routed comment targets are unreadable');
+
+  for (const target of targetsResult.targets) {
+    const receipt = await readRefreshLedger(input.root, input.slug, { git: input.git });
+    if (receipt.kind !== 'ledger') throw new StackPublicationRetryError('routed comment receipt is unreadable');
+    const marker = markerForRoutedComment(receipt.ledger, target);
+    if (marker === undefined) throw new StackPublicationRetryError('routed comment receipt is missing');
+    if (receipt.ledger.posted.includes(marker)) continue;
+
+    const rendered: RoutedCommentBody = target.kind === 'host'
+      ? await (input.renderHostComment ?? renderHostComment)({ worktree: input.root, slug: input.slug, target, git: input.git })
+      : await (input.renderMemberAboveComment ?? renderMemberAboveComment)({ worktree: input.root, slug: input.slug, target, git: input.git });
+    if (rendered.kind !== 'body') throw new StackPublicationRetryError('routed comment body is unreadable');
+
+    const comments = await readPullRequestComments(input.gh, input.root, input.repository, target.pr);
+    // Crash-deduping an already-created comment is deliberately Task 15. This
+    // task still refuses to create a duplicate before that receipt path lands.
+    if (comments.some((body) => body.includes(marker))) {
+      throw new StackPublicationRetryError(`routed comment marker already exists on PR #${target.pr}`);
+    }
+    await input.gh(
+      ['pr', 'comment', String(target.pr), '-R', input.repository, '--body', rendered.body],
+      { cwd: input.root, credential: 'write' },
+    );
+    if (!await recordRoutedCommentReceipt(input.git, receipt, marker)) {
+      throw new StackPublicationRetryError(`routed comment receipt CAS failed for PR #${target.pr}`);
+    }
+  }
+}
+
+function markerForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarget): string | undefined {
+  if (target.kind === 'host') {
+    const round = ledger.rounds.find((entry) => entry.roundId === target.roundId);
+    if (!round) return undefined;
+    return Object.values(ledger.members).some((member) => member.position === round.host && member.pr === target.pr)
+      ? round.marker : undefined;
+  }
+  return ledger.aboveOwed.find((entry) =>
+    entry.pr === target.pr && entry.hostPr === target.hostPr && entry.newTip === target.newTip,
+  )?.marker;
+}
+
+async function readPullRequestComments(
+  gh: GhRunner,
+  cwd: string,
+  repository: string,
+  pr: number,
+): Promise<readonly string[]> {
+  const stdout = await runTrackerRepositoryRead(
+    gh,
+    cwd,
+    'pull-request.read',
+    repository,
+    { kind: 'pull-request', number: pr },
+    ['pr', 'view', String(pr), '-R', repository, '--json', 'comments'],
+  );
+  const parsed = JSON.parse(stdout) as { comments?: unknown };
+  if (!Array.isArray(parsed.comments)) throw new Error(`comments are unreadable for PR #${pr}`);
+  return parsed.comments.flatMap((comment) =>
+    typeof (comment as { body?: unknown } | null)?.body === 'string'
+      ? [(comment as { body: string }).body]
+      : [],
+  );
+}
+
+async function recordRoutedCommentReceipt(
+  git: PublicationRecordGitRunner,
+  receipt: Extract<Awaited<ReturnType<typeof readRefreshLedger>>, { kind: 'ledger' }>,
+  marker: string,
+): Promise<boolean> {
+  const updated: RefreshLedger = { ...receipt.ledger, posted: [...receipt.ledger.posted, marker] };
+  const hashed = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(updated) });
+  const blob = hashed.exitCode === 0 ? parseCommitSha(hashed.stdout.trim()) : undefined;
+  if (!blob) return false;
+  const applied = await git(['update-ref', receipt.ref, blob, receipt.blob]);
+  return applied.exitCode === 0;
 }
 
 /** Stack API calls are bound to the latest durable record immediately before transport. */
@@ -2092,6 +2202,19 @@ export function createProductionFinishPublicationCoordinator(
               mutation: publicationMutation,
               remoteGit: deps.remoteGit,
               events: deps.events,
+            });
+          },
+          postRoutedComments: async () => {
+            if (!state.feature_desc || !state.pr_url) throw new Error('missing routed comment identity');
+            const retained = repositoryAndNumber(state.pr_url);
+            if (!retained) throw new Error('invalid retained PR identity for routed comments');
+            await postRoutedComments({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              baseBranch: deps.baseBranch,
+              repository: retained.repository,
+              git: publicationRecordGit(deps.git, deps.projectRoot),
+              gh: deps.gh,
             });
           },
           persistEstablishedPrUrl: async (prUrl) => {

@@ -487,6 +487,7 @@ export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions 
   establish_pr: 'pr.identity + branchPushed',
   establish_child_prs: 'stack',
   refresh_published_members: 'stackRefresh',
+  post_routed_comments: 'stackRefresh',
   verify_release_readiness: 'releaseReadiness',
   author_pr_prose: 'pr.prose',
   judge_pr_prose: 'pr.prose',
@@ -504,7 +505,7 @@ export const FINISH_PUBLICATION_PROGRESS_ALLOWANCE = 2 * 7;
 
 /** The bounded progress budget is derived from the selected feature shape. */
 export function publicationProgressAllowance(snapshot: PublicationSnapshot): number {
-  return 2 * (stackDimension(snapshot) === 'not-applicable' ? 7 : 9);
+  return 2 * (stackDimension(snapshot) === 'not-applicable' ? 7 : 10);
 }
 
 type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
@@ -572,6 +573,12 @@ export function nextFinishPublicationTransition(
 
   if (!snapshot.pr.ready) {
     return 'ready_pr';
+  }
+
+  // The durable refresh receipt is not settled until reviewers have its
+  // explanation. Keep the finish outcome behind that acknowledgement.
+  if (snapshot.stackRefresh === 'comments-owed') {
+    return 'post_routed_comments';
   }
 
   return 'record_outcome';
@@ -769,6 +776,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'publication_transition_not_verified_after_effect',
   ],
   refresh_published_members: ['publication_transition_indeterminate'],
+  post_routed_comments: ['publication_transition_indeterminate'],
   verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
     'publication_transition_indeterminate',
@@ -1449,6 +1457,8 @@ export interface AdvanceFinishPublicationInput {
     establishChildPrs?: () => Promise<void>;
     /** Refresh the already-published members recorded by a routed restack. */
     refreshPublishedMembers?: () => Promise<void>;
+    /** Post the durable routed-refresh receipts before recording FINISH's outcome. */
+    postRoutedComments?: () => Promise<void>;
     /** Create or extend and verify the native stack after retargeting the leaf. */
     assembleStack?: () => Promise<void>;
     /**
@@ -2004,6 +2014,31 @@ async function advanceFinishPublicationUnreconciled(
         ?? (observed.stackRefresh !== 'push-pending'
           ? { kind: 'advanced', transition: 'refresh_published_members' }
           : { kind: 'publication_retry', transition: 'refresh_published_members', reason: 'publication_transition_indeterminate' });
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'post_routed_comments') {
+    return coalescePublicationEffect(input.effects, 'post_routed_comments', async () => {
+      if (!input.effects.postRoutedComments) {
+        return { kind: 'publication_retry', transition: 'post_routed_comments', reason: 'publication_transition_indeterminate' };
+      }
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'post_routed_comments',
+      });
+      try {
+        await input.effects.postRoutedComments();
+      } catch (error) {
+        return {
+          kind: 'publication_retry', transition: 'post_routed_comments',
+          reason: 'publication_transition_indeterminate',
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const observed = await input.observe();
+      return (await advancedPublicationTransition(input.emit, 'post_routed_comments', snapshot, observed))
+        ?? (observed.stackRefresh !== 'comments-owed'
+          ? { kind: 'advanced', transition: 'post_routed_comments' }
+          : { kind: 'publication_retry', transition: 'post_routed_comments', reason: 'publication_transition_indeterminate' });
     });
   }
 
