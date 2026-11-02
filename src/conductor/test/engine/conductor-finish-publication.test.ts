@@ -889,7 +889,6 @@ describe('Conductor FINISH publication routing', () => {
       architecture_review: 'skipped',
       manual_test: 'done',
       session_started_at: Date.now() - 60_000,
-      coverage_binding: 'done',
       validation__prd_audit: 'done',
       validation__architecture_review_as_built: 'done',
     });

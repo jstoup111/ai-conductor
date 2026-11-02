@@ -382,7 +382,7 @@ describe('FINISH routed fix comments', () => {
 
   it('leaves a failed guarded comment owed for the bounded FINISH retry path', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused', reason: 'other-owner' })) };
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
     const fixture = commentFixture({
       ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
       targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
