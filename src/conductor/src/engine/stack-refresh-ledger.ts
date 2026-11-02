@@ -324,6 +324,9 @@ export async function routedCommentTargets(input: RoutedCommentTargetsInput): Pr
       const hostIndex = members.findIndex((member) => member.position === round.host);
       if (hostIndex < 0) return { kind: 'retryable' };
       const host = members[hostIndex]!;
+      // A retained round alone does not make a comment owed: its host must
+      // have a new published-stack receipt to describe.
+      if (host.publishedTip === host.recordedTip) continue;
       const rebaseOnly: number[] = [];
       const memberTargets: RoutedMemberAboveCommentTarget[] = [];
 
