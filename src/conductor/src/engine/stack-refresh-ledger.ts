@@ -328,7 +328,8 @@ export async function routedCommentTargets(input: RoutedCommentTargetsInput): Pr
     const members = Object.entries(stored.ledger.members)
       .map(([branch, member]) => ({ branch, ...member }))
       .sort((left, right) => left.position - right.position);
-    const targets: RoutedCommentTarget[] = [];
+    const hostTargets: RoutedHostCommentTarget[] = [];
+    const discoveredAboveTargets: RoutedMemberAboveCommentTarget[] = [];
     for (const round of stored.ledger.rounds) {
       const hostIndex = members.findIndex((member) => member.position === round.host);
       if (hostIndex < 0) return { kind: 'retryable' };
@@ -363,11 +364,11 @@ export async function routedCommentTargets(input: RoutedCommentTargetsInput): Pr
         }
       }
 
-      targets.push({ kind: 'host', pr: host.pr, roundId: round.roundId, rebaseOnly }, ...memberTargets);
+      hostTargets.push({ kind: 'host', pr: host.pr, roundId: round.roundId, rebaseOnly });
+      discoveredAboveTargets.push(...memberTargets);
     }
     const owedMarkers = new Set(stored.ledger.aboveOwed.map((entry) => entry.marker));
-    const newAboveOwed = targets
-      .filter((target): target is RoutedMemberAboveCommentTarget => target.kind === 'member-above')
+    const newAboveOwed = discoveredAboveTargets
       .map((target) => ({
         pr: target.pr,
         hostPr: target.hostPr,
@@ -380,7 +381,14 @@ export async function routedCommentTargets(input: RoutedCommentTargetsInput): Pr
         return true;
       });
     if (newAboveOwed.length > 0 && !await appendAboveOwed(git, stored, newAboveOwed)) return { kind: 'retryable' };
-    return { kind: 'targets', targets };
+    // Above-host receipts are immutable comment obligations.  A later restack
+    // may change a member's recorded tip, but it must not orphan an earlier
+    // receipt that was durably journaled before posting was interrupted.
+    const posted = new Set(stored.ledger.posted);
+    const aboveTargets = [...stored.ledger.aboveOwed, ...newAboveOwed]
+      .filter((entry) => !posted.has(entry.marker))
+      .map(({ pr, hostPr, newTip }) => ({ kind: 'member-above', pr, hostPr, newTip }) satisfies RoutedMemberAboveCommentTarget);
+    return { kind: 'targets', targets: [...hostTargets, ...aboveTargets] };
   } catch {
     return { kind: 'retryable' };
   }

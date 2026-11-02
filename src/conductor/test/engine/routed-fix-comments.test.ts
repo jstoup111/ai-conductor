@@ -11,6 +11,7 @@ import {
 } from '../../src/engine/finish-publication.js';
 import { observePublishedStackRefresh, postRoutedComments } from '../../src/engine/finish-publication-production.js';
 import {
+  mergeRefreshLedger,
   refreshLedgerRefFor,
   routedCommentTargets,
   type RefreshLedger,
@@ -244,6 +245,96 @@ function commentFixture(input: {
 }
 
 describe('FINISH routed fix comments', () => {
+  it('replays an interrupted above-host receipt after a later restack changes its recorded tip', async () => {
+    const publishedTip = 'e'.repeat(40) as never;
+    const firstRecordedTip = 'f'.repeat(40) as never;
+    const laterRecordedTip = 'g'.repeat(40) as never;
+    const laterHostTip = 'h'.repeat(40) as never;
+    const firstMarker = `<!-- conductor:routed-refresh:${firstRecordedTip}:101:102 -->`;
+    const secondMarker = `<!-- conductor:routed-refresh:${laterRecordedTip}:101:102 -->`;
+    let ledger: RefreshLedger = {
+      version: 1,
+      members: {
+        'feat/c1/demo': { position: host, pr: 101, publishedTip: tip, recordedTip: blob as never },
+        'feat/c2/demo': { position: parseChildId(2)!, pr: 102, publishedTip, recordedTip: firstRecordedTip },
+      },
+      rounds: [{ roundId, kind: 'audit', host, marker: '<!-- conductor:routed-fix:r1:101 -->' }],
+      aboveOwed: [],
+      posted: [],
+    };
+    let blobAtRef = ledgerBlob;
+    const git = vi.fn(async (args: readonly string[], options?: { input?: string }) => {
+      if (args[0] === 'rev-parse') {
+        if (args.at(-1)?.includes('stack-refresh')) return { exitCode: 0, stdout: `${blobAtRef}\n`, stderr: '' };
+        const branch = Object.keys(ledger.members).find((candidate) => args.at(-1)?.includes(candidate));
+        return branch === undefined
+          ? { exitCode: 1, stdout: '', stderr: '' }
+          : { exitCode: 0, stdout: `${ledger.members[branch]!.recordedTip}\n`, stderr: '' };
+      }
+      if (args[0] === 'cat-file') return { exitCode: 0, stdout: JSON.stringify(ledger), stderr: '' };
+      if (args[0] === 'diff') return { exitCode: 0, stdout: args[2]!, stderr: '' };
+      if (args[0] === 'patch-id') return {
+        exitCode: 0,
+        stdout: options?.input === publishedTip ? 'published\n' : `${options?.input}\n`,
+        stderr: '',
+      };
+      if (args[0] === 'hash-object') {
+        ledger = JSON.parse(options?.input ?? '{}') as RefreshLedger;
+        return { exitCode: 0, stdout: `${nextBlob}\n`, stderr: '' };
+      }
+      if (args[0] === 'update-ref') {
+        blobAtRef = nextBlob;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected git operation: ${args.join(' ')}`);
+    });
+
+    // The first FINISH discovers and durably records the receipt, then crashes
+    // before it can post the resulting target.
+    await routedCommentTargets({ worktree: '/worktree', slug: 'demo', baseBranch: 'main', git });
+    expect(ledger.aboveOwed).toEqual([
+      { pr: 102, hostPr: 101, newTip: firstRecordedTip, marker: firstMarker },
+    ]);
+
+    // A later routed restack moves the member again and starts a fresh round.
+    ledger = mergeRefreshLedger(ledger, {
+      moves: [
+        { position: host, branch: 'feat/c1/demo', pr: 101, pushedTip: blob as never, recordedTip: laterHostTip },
+        { position: parseChildId(2)!, branch: 'feat/c2/demo', pr: 102, pushedTip: firstRecordedTip, recordedTip: laterRecordedTip },
+      ],
+      round: {
+        roundId: parseRoundId('r2')!, kind: 'revalidate', host, marker: '<!-- conductor:routed-fix:r2:101 -->',
+      },
+    });
+    const laterTargets = await routedCommentTargets({ worktree: '/worktree', slug: 'demo', baseBranch: 'main', git });
+    if (laterTargets.kind !== 'targets') throw new Error('expected routed comment targets');
+    expect(laterTargets.targets).toEqual(expect.arrayContaining([
+      { kind: 'member-above', pr: 102, hostPr: 101, newTip: firstRecordedTip },
+      { kind: 'member-above', pr: 102, hostPr: 101, newTip: laterRecordedTip },
+    ]));
+    expect(await observePublishedStackRefresh({ root: '/worktree', slug: 'demo', git })).toBe('comments-owed');
+
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+    await postRoutedComments({
+      root: '/worktree', slug: 'demo', baseBranch: 'main', repository, git,
+      gh: async () => ({ stdout: JSON.stringify({ comments: [] }) }),
+      operations,
+      routedCommentTargets: async () => ({ kind: 'targets', targets: laterTargets.targets }),
+      renderHostComment: async ({ target }) => ({ kind: 'body', body: `host\n<!-- conductor:routed-fix:${target.roundId}:${target.pr} -->` }),
+      renderMemberAboveComment: async ({ target }) => ({ kind: 'body', body: `member\n<!-- conductor:routed-refresh:${target.newTip}:${target.hostPr}:${target.pr} -->` }),
+    });
+
+    const createdBodies = operations.run.mock.calls
+      .map(([request]) => request.payload)
+      .filter((payload): payload is { body: string } => typeof payload === 'object' && payload !== null && 'body' in payload && typeof payload.body === 'string')
+      .map((payload) => payload.body);
+    expect({
+      firstMarkerCreates: createdBodies.filter((body) => body.includes(firstMarker)),
+      posted: ledger.posted,
+      refresh: await observePublishedStackRefresh({ root: '/worktree', slug: 'demo', git }),
+    }).toEqual({ firstMarkerCreates: [expect.stringContaining(firstMarker)], posted: expect.arrayContaining([firstMarker, secondMarker]), refresh: 'settled' });
+  });
+
   it('keeps a changed descendant receipt and comment for each routed host', async () => {
     const hostTwo = parseChildId(2)!;
     const descendant = parseChildId(3)!;
