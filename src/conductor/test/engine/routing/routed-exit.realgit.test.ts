@@ -696,21 +696,25 @@ describe('routed exit (real local Git)', () => {
     expect(updateTransactions(recorded.calls).join('\n')).not.toMatch(/"(?:done|built)"/);
   });
 
-  it('halts before a journal when the exit is published or has a foreign co-origin', async () => {
+  it('restacks a published exit but halts before a journal for a foreign co-origin', async () => {
     const published = await fixture(true);
     await expect(writePublicationRecord(published.repo, 'demo', undefined, {
-      version: 1, members: [{ position: host, branch: 'feat/c1/demo', pr: 1 }],
+      version: 1,
+      members: [
+        { position: host, branch: 'feat/c1/demo', pr: 101 },
+        { position: childTwo, branch: 'feat/c2/demo', pr: 102 },
+        { position: leaf, branch: 'feat/daemon-demo', pr: 103 },
+      ],
     }, { git: published.gitRunner })).resolves.toEqual({ kind: 'updated' });
-    const publishedRefs = await Promise.all(['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo', closureRefFor('demo', host), closureRefFor('demo', childTwo)]
-      .map(async (ref) => (await published.gitRunner(['rev-parse', ref])).stdout.trim()));
-    await expect(requestRoutedExit({ worktree: published.repo, slug: 'demo', roundId, host })).resolves.toMatchObject({ kind: 'halted' });
+    for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) {
+      const tip = (await published.gitRunner(['rev-parse', branch])).stdout.trim();
+      await published.gitRunner(['update-ref', pushedTipRef('demo', branch), tip]);
+    }
+    await expect(requestRoutedExit({ worktree: published.repo, slug: 'demo', roundId, host })).resolves.toEqual({ kind: 'restacked' });
     expect(await refExists(published.gitRunner, journalRefFor('demo'))).toBe(false);
-    await expect(readFile(join(published.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^restack refused \(published-stack\) child 1/);
-    await expect(readFile(join(published.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(Promise.all(['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo', closureRefFor('demo', host), closureRefFor('demo', childTwo)]
-      .map(async (ref) => (await published.gitRunner(['rev-parse', ref])).stdout.trim()))).resolves.toEqual(publishedRefs);
     const publishedRoute = await readRouteRecord(published.repo, 'demo', roundId, { git: published.gitRunner });
-    expect(publishedRoute).toMatchObject({ kind: 'record', record: { hosts: { 1: 'repairing' } } });
+    expect(publishedRoute).toMatchObject({ kind: 'record', record: { hosts: { 1: 'restacked' } } });
+    await expect(readRefreshLedger(published.repo, 'demo', { git: published.gitRunner })).resolves.toMatchObject({ kind: 'ledger' });
 
     const foreign = await fixture(true);
     await foreign.git(['checkout', '-q', 'feat/c2/demo']);
