@@ -24,8 +24,8 @@ and publication evidence, creating or reusing a PR identity, pushing commits,
 creating durable shipment evidence, marking a PR ready, and recording the
 final outcome.
 
-An author pass may inspect only the retained PR's title and body, and changes
-prose only by writing the returned prose handoff. A judgment pass may inspect
+An author pass may inspect and repair only the retained PR's title and body,
+and changes prose only by writing the returned prose handoff. A judgment pass may inspect
 that same retained title and body, but returns only its bounded verdict.
 It must not create, push, merge, ready, or otherwise change a PR; write shipment
 evidence, completion markers, or outcome records; or infer deterministic
