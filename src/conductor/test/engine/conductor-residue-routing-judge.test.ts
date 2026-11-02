@@ -398,6 +398,25 @@ class AsBuiltTaskBoundRunner implements StepRunner {
   }
 }
 
+class AsBuiltExistingTaskRunner implements StepRunner {
+  constructor(private readonly projectRoot: string) {}
+
+  async run(_step: string, _state: ConductState, options: Parameters<StepRunner['run']>[2]) {
+    const request = options?.remediationRequest;
+    if (request?.mode !== 'gap-plan' || options?.runId === undefined) {
+      throw new Error('fixture requires a remediation gap-plan request');
+    }
+    const finding = request.projection.requiredReferences[0];
+    if (finding?.kind !== 'as-built-finding') throw new Error('fixture requires an as-built finding');
+    await persistFixtureProjectedRemediationPlan(this.projectRoot, options, [{
+      id: finding.id, referenceKind: 'as-built-finding', disposition: 'existing-task', category: null,
+      rationale: 'The authored task already owns this repair.',
+      tasks: [], boundTaskIds: ['first'],
+    }]);
+    return { success: true };
+  }
+}
+
 const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'fixture' },
   planGap: { enabled: true, reason: 'fixture' },
@@ -1035,6 +1054,60 @@ describe('Conductor residue routing judge binding', () => {
     expect(routingMutationSpy.consolidatedManualTestFail).toEqual(failRows);
     expect(outcome.hint).toContain(failRows[0]!);
     expect(outcome.hint).toContain(failRows[1]!);
+  });
+
+  it('routes an existing-task finding to its bound owner in a mixed round with manual-test FAIL rows', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      slicedRoutingPlan(),
+      'utf8',
+    );
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'first' },
+        summary: 'The authored boundary needs repair.',
+      }],
+      violations: 'The task-bound implementation is incomplete.',
+      resolution: 'Repair the task boundary.',
+    }, { attemptId: 'fixture-existing-task', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltExistingTaskRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+    const failRows = ['manual_test: FAIL row one'];
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string; hint?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'validation-group existing-task finding with manual-test FAIL rows',
+      {
+        source: 'validation-group',
+        consolidatedManualTestFail: true,
+        consolidatedManualTestFailRows: failRows,
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }],
+      },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
+    expect(routingMutationSpy.allocatedRemTaskIds).toEqual([]);
+    expect(outcome.hint).toContain(failRows[0]!);
   });
 
   // Covers: task:rem-as-built-W12, task:rem-as-built-W13

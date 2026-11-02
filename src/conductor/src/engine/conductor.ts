@@ -5289,6 +5289,15 @@ export class Conductor {
               }
               return paths;
             };
+            const planTaskIds = new Set(parsePlanTaskBodies(planText).keys());
+            const existingTaskOwnerIds = (gap: RemediationGap): string[] | undefined => {
+              const recorded = resolvedExistingTaskIdsByGapId.get(gap.id);
+              if (recorded !== undefined || !hintSource.consolidatedManualTestFail) return recorded;
+              // Decision 8 skips the gate-local binding in a consolidated round,
+              // but the router still needs the owner to place the repair.
+              const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, planTaskIds);
+              return bindings.kind === 'resolved' ? bindings.ids : undefined;
+            };
             const routed = await routeAdmittedRound({
               admitted: routedFixes.map((gap) => {
                 const routedGap = gap as CriterionBoundRemediationGap;
@@ -5309,7 +5318,7 @@ export class Conductor {
                       summary: asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale,
                 };
                 const ownerTaskIds = gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-                  ? resolvedExistingTaskIdsByGapId.get(gap.id)
+                  ? existingTaskOwnerIds(gap)
                   : routedGap.parentTask === undefined
                     ? undefined
                     : String(routedGap.parentTask).split(',');
