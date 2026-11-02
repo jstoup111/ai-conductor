@@ -417,7 +417,9 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
     if (!await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
       const preflight = await publishedStackTipPreflight(options.worktree, options.slug, { git: options.git });
       if (preflight.kind === 'intact') {
+        // ai-conductor:session-command-context=operator-only
         return { kind: 'halted', detail: `published stack requires ai-conductor stack land --slug ${options.slug} --child ${publishedChild} --reason "<why>"` };
+        // /ai-conductor:session-command-context
       }
       const suffix = preflight.kind === 'refused' ? `member ${preflight.member.position} changed or closed (#3268)` : 'tips are unreadable (#3268)';
       return { kind: 'halted', detail: `published stack cannot open a landing: ${suffix}` };
