@@ -2202,8 +2202,12 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
       return { kind: 'accepted' as const };
     });
 
-    await expect(advanceFinishPublication({ observe, effects: { dispatchJudgment } })).resolves.toEqual({
+    const staleRevisionDisposition = await advanceFinishPublication({ observe, effects: { dispatchJudgment } });
+    expect(staleRevisionDisposition).toEqual({
       kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_revision_changed',
+    });
+    await expect(routeFinishPublicationDisposition(staleRevisionDisposition)).resolves.toEqual({
+      kind: 'retry_finish', reason: 'judgment_revision_changed',
     });
     await expect(advanceFinishPublication({ observe, effects: { dispatchJudgment } })).resolves.toEqual({
       kind: 'advanced', transition: 'judge_pr_prose',

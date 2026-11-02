@@ -800,6 +800,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     // feature whose prose may be perfectly fine.
     'judgment_malformed_response',
     'judgment_completed_reobserve',
+    'judgment_revision_changed',
   ],
   ready_pr: [
     'publication_transition_indeterminate',
