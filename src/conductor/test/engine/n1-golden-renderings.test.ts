@@ -523,8 +523,8 @@ describe('N=1 golden renderings', () => {
     await expectFinishGolden('git-argv', JSON.stringify(normalGit.parity, null, 2));
     await expectFinishGolden('git-probe-argv', `${JSON.stringify(normalGit.probes, null, 2)}\n`);
     expect(normalGit.probes).toEqual([
-      ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
-      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
+      ...DURABLE_CHILD_STATE_PROBE_PAIR,
+      ...Array.from({ length: 9 }, () => N1_PUBLICATION_REF_PROBE),
     ]);
     await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
     await expectFinishGolden('shipped-record', normalizeRecord(normal.record));
