@@ -700,6 +700,99 @@ describe('FINISH routed fix comments', () => {
     expect(operations.run).toHaveBeenCalledOnce();
   });
 
+  it('retries a refused comment without refreshing or recording the FINISH outcome', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+      operations,
+    });
+    const refreshPublishedMembers = vi.fn(async () => undefined);
+    const recordOutcome = vi.fn(async () => undefined);
+    const observe = async () => ({
+      ...commentsOwedSnapshot(),
+      stackRefresh: fixture.ledger().posted.includes(marker) ? 'settled' as const : 'comments-owed' as const,
+    });
+
+    const attempts = await Promise.all(Array.from({ length: 3 }, () => advanceFinishPublication({
+      observe,
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        refreshPublishedMembers,
+        postRoutedComments: fixture.run,
+        recordOutcome,
+      },
+    })));
+
+    expect({ attempts, refreshes: refreshPublishedMembers.mock.calls, outcomes: recordOutcome.mock.calls, posted: fixture.ledger().posted })
+      .toEqual({
+        attempts: Array.from({ length: 3 }, () => expect.objectContaining({
+          kind: 'publication_retry', transition: 'post_routed_comments', detail: 'routed comment create failed for PR #101: refused',
+        })),
+        refreshes: [], outcomes: [], posted: [],
+      });
+  });
+
+  it('does not post an owed comment when the refresh push fails first', async () => {
+    const postRoutedComments = vi.fn(async () => undefined);
+    const result = await advanceFinishPublication({
+      observe: async () => ({ ...commentsOwedSnapshot(), stackRefresh: 'push-pending' as const }),
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        refreshPublishedMembers: async () => { throw new Error('push rejected'); },
+        postRoutedComments,
+      },
+    });
+
+    expect({ result, comments: postRoutedComments.mock.calls }).toEqual({
+      result: expect.objectContaining({ kind: 'publication_retry', transition: 'refresh_published_members' }),
+      comments: [],
+    });
+  });
+
+  it('emits an ownership refusal for a guarded comment and leaves it owed', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const events = new ConductorEventEmitter();
+    const refusals: unknown[] = [];
+    events.on('github_operation_refused', (event) => { refusals.push(event); });
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` }, operations, events,
+    });
+
+    await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
+
+    expect({ refusals, creates: operations.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({
+      refusals: [expect.objectContaining({
+        type: 'github_operation_refused', operation: 'pull-request.comment.create',
+        target: { repository, kind: 'pull-request', number: 101 }, reason: 'other-owner',
+      })],
+      creates: 1, posted: [],
+    });
+  });
+
+  it('refuses a comment when its supplied operation runner is bound to another PR', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const wrongPrRunner: GithubOperationRunner = {
+      run: vi.fn(async (request) => request.target.kind === 'pull-request' && request.target.number === 102
+        ? {}
+        : { kind: 'refused' as const, reason: 'invalid-target' as const }),
+    };
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` }, operations: wrongPrRunner,
+    });
+
+    await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
+
+    expect({ requests: wrongPrRunner.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ requests: 1, posted: [] });
+  });
+
   it('keeps the receipt when the posted-comment emitter fails', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
     const events = new ConductorEventEmitter();

@@ -348,6 +348,23 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 
+  it('deduplicates replayed refreshed-member occurrences by eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'stack_member_refreshed',
+      child: ROUTING_CHILD,
+      pr: 101,
+      oldTip: 'a'.repeat(40),
+      newTip: 'b'.repeat(40),
+      eventId: 'stack-refresh:101:old:new',
+    } as ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
   it.each([
     {
       type: 'build_review_acceptance_carried',
