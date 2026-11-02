@@ -9956,6 +9956,12 @@ export class Conductor {
                 asBuiltRemediationEnabled &&
                 asBuiltOutcome.kind === 'blocked-remediable' &&
                 !consolidatedKickbackOwnsThisRound;
+              // Planning has side effects: under routed repairs it admits a
+              // round. When the merge below owns this round, it is the only
+              // planning call, or its plan is refused against the round that
+              // an earlier call in this same join just opened.
+              const mergeOwnsRemediationPlanning =
+                consolidatedKickbackOwnsThisRound && asBuiltOutcome.kind === 'blocked-remediable';
               if (remediableAsBuiltRoute) {
                 // The join bypasses the serial as-built halt site, so it
                 // must consume the same single-use gate-scoped no-op
@@ -10095,6 +10101,7 @@ export class Conductor {
                   remediationNoPlanReason = remediationOutcome.reason;
                 }
               } else if (
+                !mergeOwnsRemediationPlanning &&
                 this.daemon &&
                 prdAuditUnsatisfied &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
@@ -10155,7 +10162,8 @@ export class Conductor {
               } else if (
                 this.daemon &&
                 prdAuditUnsatisfied &&
-                prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
+                !(mergeOwnsRemediationPlanning && await refusalReworkAllowanceAvailable())
               ) {
                 await haltGroupedRefusalRework();
                 return;
