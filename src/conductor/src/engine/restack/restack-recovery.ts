@@ -46,7 +46,7 @@ import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './res
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { routedRoundOpen } from '../routing/round-admission.js';
+import { routedRoundOpen } from '../routing/routed-round-open.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,

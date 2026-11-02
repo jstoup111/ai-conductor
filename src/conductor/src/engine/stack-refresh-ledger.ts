@@ -6,7 +6,7 @@ import { refreshLedgerRefFor } from './routing/routing-refs.js';
 import { parseRoundId, type RoundId } from './routing/route-types.js';
 import type { RouteKind } from '../types/routing.js';
 import { activePublicationRecord } from './stack-publication-record.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { routedRoundOpen } from './routing/routed-round-open.js';
 import { pushedTipRef } from './push-lease.js';
 
 export { refreshLedgerRefFor } from './routing/routing-refs.js';

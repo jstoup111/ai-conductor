@@ -39,7 +39,7 @@ import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
 import { runRestack } from './restack/restack-executor.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { routedRoundOpen } from './routing/routed-round-open.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';

@@ -16,7 +16,7 @@ import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
 import { syncRestackedWorktree } from '../restack/restack-sync.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { writeGitHooksAndWire } from '../worktree-prepare.js';
-import { routedRoundOpen } from './round-admission.js';
+import { routedRoundOpen } from './routed-round-open.js';
 import { admitRound } from './round-admission.js';
 import { pinHostEntry, restageHostRegion } from './host-region-entry.js';
 import { grantRoutedRepairCredit, routedSealedAuthored } from './round-receipt.js';

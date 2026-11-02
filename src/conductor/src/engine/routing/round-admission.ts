@@ -22,6 +22,8 @@ import { advanceRound, requestRoutedExit, selectNextHost, type RequestRoutedExit
 import { readRevalidationQueue } from './route-record-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
 
+export { routedRoundOpen } from './routed-round-open.js';
+
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string; readonly fence?: true };
 
 /** Admission may deliver its durable route occurrences only after its marker transaction commits. */
@@ -407,21 +409,4 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     }
   }
   return marker.kind === 'absent' && !deferred ? { kind: 'quiescent' } : { kind: 'deferred' };
-}
-
-/** True when routing durability says that automatic base movement would race a round. */
-export async function routedRoundOpen(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<boolean> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
-  const queue = await readRevalidationQueue(worktree, slug, { git });
-  if (queue.kind === 'unreadable') return true;
-  if (queue.kind === 'queue' && queue.queue.entries.length > 0) return true;
-  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-  if (listed.exitCode !== 0) return true;
-  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
-    const id = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (!id) return true;
-    const record = await readRouteRecord(worktree, slug, id, { git });
-    if (record.kind !== 'record' || record.record.phase !== 'closed') return true;
-  }
-  return false;
 }
