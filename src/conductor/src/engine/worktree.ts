@@ -35,8 +35,12 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 
 /**
  * Slugify a feature description into a URL-safe directory/branch name.
+ *
+ * Idempotent: truncation can leave a trailing hyphen, so a full-length slug
+ * that already has that shape is returned unchanged rather than re-trimmed.
  */
 export function slugify(name: string): string {
+  if (name.length === 50 && /^[a-z0-9]+(?:-[a-z0-9]+)*-$/.test(name)) return name;
   return name
     .toLowerCase()
     .replace(/\s+/g, '-')
