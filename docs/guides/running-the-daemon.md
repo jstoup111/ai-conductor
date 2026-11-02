@@ -357,8 +357,9 @@ What the draft window does and does not mean:
 - **FINISH authors the prose, then flips it ready.** The engine-owned publication coordinator
   re-observes the PR and dispatches one bounded title/body pass — `author_pr_prose` while the body is
   still the engine-seeded placeholder, `judge_pr_prose` for a quality verdict on prose that exists.
-  The authoring pass is given the branch diff and the feature's spec artifacts, so the judgment pass
-  is never asked to grade a body nobody wrote. Only after prose is accepted does the coordinator write
+  The authoring pass is given the branch diff and the feature's spec artifacts and returns its title
+  and body in the `.pipeline/finish-pr-prose.json` handoff; the engine validates it and edits the PR
+  itself. The judgment pass only returns a verdict, and is never asked to grade a body nobody wrote. Only after prose is accepted does the coordinator write
   and push the shipped record and mark the PR ready for review. That order is deliberate: the shipped
   record is the daemon backlog's dedup key, so committing it before the prose survived used to make a
   prose halt permanently un-redispatchable. When the judgment finds an authored body structurally

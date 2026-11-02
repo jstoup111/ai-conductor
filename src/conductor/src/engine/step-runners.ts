@@ -6206,8 +6206,9 @@ export class DefaultStepRunner implements StepRunner {
       if (revisionGuidance !== undefined) {
         prompt +=
           '\n\nFINISH PR PROSE REVISION — the retained pull request needs a focused reader-facing prose revision. ' +
-          `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
-          'Revise the retained PR title and body in place to address that objection. ' +
+          `The prior objection is:\n> ${revisionGuidance}\n\n` +
+          'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}` with a title and body that address that objection. ' +
+          'Do not edit the pull request or make a GitHub call. The engine validates and publishes that handoff. ' +
           FINISH_PROSE_DIFF_BUDGET +
           `Then follow this repository's PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} ` +
           `invokes it as \`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
@@ -6222,8 +6223,10 @@ export class DefaultStepRunner implements StepRunner {
       prompt +=
         '\n\nFINISH PR PROSE AUTHORING — the retained pull request still carries the engine-seeded ' +
         'placeholder body, so there is no prose to judge yet. Write it. ' +
+        'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}` with the authored title and body. ' +
+        'Do not edit the pull request or make a GitHub call. The engine validates and publishes that handoff. ' +
         FINISH_PROSE_DIFF_BUDGET +
-        'Then rewrite the retained PR title and body in place following this repository\'s ' +
+        'Then follow this repository\'s ' +
           `PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
         `\`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
@@ -6237,13 +6240,12 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // FINISH publication mechanics are engine-owned. The provider crosses this
-    // boundary only for one reader-facing PR-prose judgment and may repair
-    // only that retained PR's title/body; it must never create/push/merge/ready
-    // a PR or write completion state itself.
+    // boundary only for one reader-facing PR-prose judgment; it must never
+    // create/push/merge/ready a PR or write completion state itself.
     if (step === 'finish' && this.mode === 'auto') {
       prompt +=
         '\n\nUNATTENDED FINISH JUDGMENT — inspect only the retained PR title and body for reader-facing quality. ' +
-        'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
+        'Return exactly one JSON object: ' +
         '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
         '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
         'For every revision_required verdict, include a concrete `detail` describing what is deficient. ' +
@@ -6258,9 +6260,10 @@ export class DefaultStepRunner implements StepRunner {
     if (step === 'finish' && this.mode !== 'auto') {
       prompt +=
         '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
-        'inspect only its title/body quality. For the bounded prose judgment you may repair only that retained PR title/body once, ' +
-        'then return exactly one JSON object using accepted, revision_required (placeholder|halt|structurally_incomplete), timed_out, ' +
-        'provider_unavailable, or refused. If the body is unauthored placeholder text, return revision_required with ' +
+        'inspect only its title/body quality. For the bounded prose judgment, return exactly one JSON object: ' +
+        '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
+        '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'If the body is unauthored placeholder text, return revision_required with ' +
         'reason placeholder and stop — the coordinator owns a separate authoring pass for that. Do not create, push, ' +
         'merge, or ready a PR; do not alter labels, shipment evidence, ' +
         'or completion files; the publication coordinator performs every other authorized transition.';

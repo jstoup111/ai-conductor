@@ -393,7 +393,10 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
 
 - `FINISH publication retry exhausted: <reason>` — the reason was transient (transport, GitHub,
   filesystem, provider judgment, or a re-observation), so every attempt in the budget was spent
-  before giving up.
+  before giving up. An authoring pass that wrote no `.pipeline/finish-pr-prose.json` handoff
+  (`prose_not_returned`) or an invalid one (`prose_invalid` — unparsable, wrong `version`, empty
+  title or body, still placeholder, or missing a retained `Closes` reference) retries this way, and
+  the next authoring prompt carries the failure.
 - `FINISH publication cannot proceed: <reason> is not retryable — …` — the reason can never be
   satisfied by re-running the identical transition, so the run halted on the **first** observation
   and the retry budget was deliberately left unspent. Only `author_pr_prose` and `judge_pr_prose`
@@ -417,10 +420,9 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
   dispatched, so no provider pass is spent), a publication transition that ran but left its owned
   state unchanged (`publication_transition_unmoved` — the detail names the transition and the
   state that did not move, whether the transition reported success or asked for a retry it could
-  not perform), a PR edit that failed during the authoring pass so the prose never reached the
-  PR (`publication_operation_failed` — the detail is `pull-request.edit failed: <GitHub error>`,
-  e.g. a token missing a required scope; the daemon log also shows
-  `✗ GitHub operation failed: pull-request.edit on <target> — <error>`), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
+  not perform), the engine's own PR edit of the authored handoff failing so the prose never
+  reached the PR (`publication_operation_failed` — the detail is
+  `pull-request.edit failed: <GitHub error>`, e.g. a token missing a required scope), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
   `invalid_shipped_record`), and destructive or unrecognized publication intent
   (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
 

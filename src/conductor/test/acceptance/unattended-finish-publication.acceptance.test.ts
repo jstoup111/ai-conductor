@@ -693,8 +693,11 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
             maximumPasses: 1,
           });
           authoringDispatches++;
-          pullRequest.title = 'feat: publish coherent finish';
-          pullRequest.body = 'A reader-facing summary of the completed change.';
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: publish coherent finish',
+            body: 'A reader-facing summary of the completed change.',
+          }));
           return { success: true };
         },
         emit: async (event) => {
@@ -881,9 +884,12 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
           if (options.finishProsePass === 'author') prosePasses.author++;
           if (options.finishProsePass === 'judge') prosePasses.judge++;
           if (!pullRequest) throw new Error('judgment requires a PR');
-          if (options.finishProsePass !== 'judge') {
-            pullRequest.title = 'feat: publish coherent finish';
-            pullRequest.body = 'Reader-facing summary of the completed change.';
+          if (options.finishProsePass === 'author') {
+            await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+              version: 1,
+              title: 'feat: publish coherent finish',
+              body: 'Reader-facing summary of the completed change.',
+            }));
           }
           return { success: true, publicationDisposition: { kind: 'accepted' } };
         }),
