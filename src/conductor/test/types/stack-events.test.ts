@@ -12,9 +12,10 @@ const stackEvents = [
   { type: 'stack_member_lifecycle', child, pr: 101, state: 'merged', eventId: 'lifecycle-101' },
   { type: 'stack_members_unreachable', child, pr: 101 },
   { type: 'stack_member_refreshed', child, pr: 101, oldTip: 'old', newTip: 'new', eventId: 'refresh-101' },
+  { type: 'stack_member_comment_posted', pr: 101, roundId: 'r1', marker: '<!-- marker -->', eventId: 'comment-101' },
   { type: 'stack_tip_diverged', prs: [101, 303] },
 ] satisfies ConductorEvent[];
 
 it('declares stack events with PR numbers and child identity only for one member', () => {
-  expect(stackEvents).toHaveLength(7);
+  expect(stackEvents).toHaveLength(8);
 });

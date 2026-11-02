@@ -325,7 +325,8 @@ function observationEventId(event: ConductorEvent): string | undefined {
     || ROUTING_OCCURRENCE_TYPES.has(event.type)
     || REMEDIATION_CASE_OCCURRENCE_TYPES.has(event.type)
     || event.type === 'stack_member_lifecycle'
-    || event.type === 'stack_member_refreshed')
+    || event.type === 'stack_member_refreshed'
+    || event.type === 'stack_member_comment_posted')
     && 'eventId' in event
     && typeof event.eventId === 'string'
     ? event.eventId

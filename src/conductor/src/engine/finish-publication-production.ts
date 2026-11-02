@@ -574,6 +574,12 @@ export async function postRoutedComments(input: {
   repository: string;
   git: PublicationRecordGitRunner;
   gh: GhRunner;
+  /** Guarded mutation authority; a missing authority must never fall back to raw gh. */
+  operations?: GithubOperationRunner;
+  /** Production binds every comment to the PR it will mutate. */
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
+  /** Posted-comment telemetry is best-effort after its durable receipt. */
+  events?: ConductorEventEmitter;
   routedCommentTargets?: typeof routedCommentTargets;
   renderHostComment?: typeof renderHostComment;
   renderMemberAboveComment?: typeof renderMemberAboveComment;
@@ -598,18 +604,50 @@ export async function postRoutedComments(input: {
       : await (input.renderMemberAboveComment ?? renderMemberAboveComment)({ worktree: input.root, slug: input.slug, target, git: input.git });
     if (rendered.kind !== 'body') throw new StackPublicationRetryError('routed comment body is unreadable');
 
-    const comments = await readPullRequestComments(input.gh, input.root, input.repository, target.pr);
-    // Crash-deduping an already-created comment is deliberately Task 15. This
-    // task still refuses to create a duplicate before that receipt path lands.
-    if (comments.some((body) => body.includes(marker))) {
-      throw new StackPublicationRetryError(`routed comment marker already exists on PR #${target.pr}`);
+    let comments: readonly string[];
+    try {
+      comments = await readPullRequestComments(input.gh, input.root, input.repository, target.pr);
+    } catch (error) {
+      throw new StackPublicationRetryError(
+        `routed comment lookup failed for PR #${target.pr}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    await input.gh(
-      ['pr', 'comment', String(target.pr), '-R', input.repository, '--body', rendered.body],
-      { cwd: input.root, credential: 'write' },
-    );
+    if (!comments.some((body) => body.includes(marker))) {
+      const operationTarget: GithubOperationTarget = {
+        repository: input.repository,
+        kind: 'pull-request',
+        number: target.pr,
+      };
+      const operations = input.operationsForTarget?.(operationTarget) ?? input.operations;
+      if (!operations) throw new StackPublicationRetryError(`guarded routed comment operation is unavailable for PR #${target.pr}`);
+      const created = await executeGithubOperation({
+        operation: 'pull-request.comment.create',
+        repository: input.repository,
+        resource: { kind: 'pull-request', number: target.pr },
+        context: { actor: 'finish-publication' },
+        payload: { body: rendered.body },
+      }, operations, { events: input.events });
+      if (created.kind !== 'executed') {
+        throw new StackPublicationRetryError(`routed comment create failed for PR #${target.pr}: ${created.kind}`);
+      }
+    }
     if (!await recordRoutedCommentReceipt(input.git, receipt, marker)) {
       throw new StackPublicationRetryError(`routed comment receipt CAS failed for PR #${target.pr}`);
+    }
+    // The receipt is the idempotency boundary. A crash after remote creation
+    // but before it can emit is recovered by the marker scan above, which then
+    // re-delivers this deterministic occurrence without creating another comment.
+    const roundId = roundForRoutedComment(receipt.ledger, target);
+    try {
+      await input.events?.emit({
+        type: 'stack_member_comment_posted',
+        pr: target.pr,
+        roundId,
+        marker,
+        eventId: `stack-member-comment:${createHash('sha256').update(marker).digest('hex')}`,
+      });
+    } catch {
+      // Comment publication remains durable even if its observational sink is unavailable.
     }
   }
 }
@@ -624,6 +662,17 @@ function markerForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarg
   return ledger.aboveOwed.find((entry) =>
     entry.pr === target.pr && entry.hostPr === target.hostPr && entry.newTip === target.newTip,
   )?.marker;
+}
+
+function roundForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarget): string {
+  if (target.kind === 'host') return target.roundId;
+  const round = ledger.rounds.find((entry) => Object.values(ledger.members).some(
+    (member) => member.position === entry.host && member.pr === target.hostPr,
+  ));
+  // A member-above receipt always descends from a routed host. Retain a
+  // stable non-empty value if a damaged ledger loses that relation, while the
+  // marker remains the event's authoritative identity.
+  return round?.roundId ?? 'unknown';
 }
 
 async function readPullRequestComments(
@@ -2215,6 +2264,9 @@ export function createProductionFinishPublicationCoordinator(
               repository: retained.repository,
               git: publicationRecordGit(deps.git, deps.projectRoot),
               gh: deps.gh,
+              operations,
+              operationsForTarget,
+              events: deps.events,
             });
           },
           persistEstablishedPrUrl: async (prUrl) => {

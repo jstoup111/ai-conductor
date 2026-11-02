@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:14, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:14, task:15, task:17, task:18, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -46,6 +46,7 @@ it('declares one persistent sink row for each stack event', () => {
     'stack_member_lifecycle',
     'stack_members_unreachable',
     'stack_member_refreshed',
+    'stack_member_comment_posted',
     'stack_tip_diverged',
   ] as const;
 
@@ -422,6 +423,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'stack_member_lifecycle',
   'stack_members_unreachable',
   'stack_member_refreshed',
+  'stack_member_comment_posted',
   'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',

@@ -1,4 +1,4 @@
-// Covers: task:11, task:14
+// Covers: task:11, task:14, task:15, task:16, task:17, task:18
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -17,6 +17,8 @@ import {
   type RoutedCommentTarget,
 } from '../../src/engine/stack-refresh-ledger.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const tip = 'a'.repeat(40) as never;
 const blob = 'b'.repeat(40);
@@ -120,7 +122,11 @@ function commentsOwedSnapshot(): PublicationSnapshot {
   };
 }
 
-function owedLedger(rounds: RefreshLedger['rounds'], aboveOwed: RefreshLedger['aboveOwed'] = []): RefreshLedger {
+function owedLedger(
+  rounds: RefreshLedger['rounds'],
+  aboveOwed: RefreshLedger['aboveOwed'] = [],
+  posted: RefreshLedger['posted'] = [],
+): RefreshLedger {
   return {
     version: 1,
     members: {
@@ -130,7 +136,7 @@ function owedLedger(rounds: RefreshLedger['rounds'], aboveOwed: RefreshLedger['a
     },
     rounds,
     aboveOwed,
-    posted: [],
+    posted,
   };
 }
 
@@ -138,10 +144,15 @@ function commentFixture(input: {
   ledger: RefreshLedger;
   targets: readonly RoutedCommentTarget[];
   bodies: Readonly<Record<number, string>>;
+  existingComments?: Readonly<Record<number, readonly string[]>>;
+  lookupFailures?: number;
+  operations?: GithubOperationRunner;
+  events?: ConductorEventEmitter;
 }) {
   let ledger = input.ledger;
   let blobAtRef = ledgerBlob;
   const calls: string[][] = [];
+  let lookupFailures = input.lookupFailures ?? 0;
   const git = vi.fn(async (args: readonly string[], options?: { input?: string }) => {
     if (args[0] === 'rev-parse') return { exitCode: 0, stdout: `${blobAtRef}\n`, stderr: '' };
     if (args[0] === 'cat-file') return { exitCode: 0, stdout: JSON.stringify(ledger), stderr: '' };
@@ -157,16 +168,32 @@ function commentFixture(input: {
   });
   const gh = vi.fn(async (args: string[]) => {
     calls.push(args);
-    if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ comments: [] }) };
-    if (args[0] === 'pr' && args[1] === 'comment') return { stdout: '' };
+    if (args[0] === 'pr' && args[1] === 'view') {
+      if (lookupFailures > 0) {
+        lookupFailures -= 1;
+        throw new Error('lookup unavailable');
+      }
+      return { stdout: JSON.stringify({ comments: (input.existingComments?.[Number(args[2])] ?? []).map((body) => ({ body })) }) };
+    }
     throw new Error(`unexpected gh operation: ${args.join(' ')}`);
   });
+  const operations = input.operations ?? {
+    run: vi.fn(async (request) => {
+      const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+      calls.push(['pr', 'comment', String(request.target.kind === 'pull-request' ? request.target.number : ''), '-R', request.target.repository, '--body', body ?? '']);
+      return {};
+    }),
+  } satisfies GithubOperationRunner;
   return {
     calls,
     git,
+    gh,
     ledger: () => ledger,
     run: () => postRoutedComments({
       root: '/worktree', slug: 'demo', baseBranch: 'main', repository, git, gh,
+      operations,
+      operationsForTarget: () => operations,
+      events: input.events,
       routedCommentTargets: async () => ({ kind: 'targets', targets: input.targets }),
       renderHostComment: async ({ target }) => ({ kind: 'body', body: input.bodies[target.pr]! }),
       renderMemberAboveComment: async ({ target }) => ({ kind: 'body', body: input.bodies[target.pr]! }),
@@ -280,5 +307,112 @@ describe('FINISH routed fix comments', () => {
       { pr: '101', body: expect.stringContaining('PR #103 was rebased with no diff change.') },
       { pr: '102', body: expect.stringContaining('routed fix from #101') },
     ]);
+  });
+
+  it('records a pre-existing marker after a crash without creating a second comment', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+      existingComments: { 101: [`already posted\n${marker}`] },
+    });
+
+    await fixture.run();
+
+    expect({ creates: fixture.calls.filter((args) => args[1] === 'comment'), posted: fixture.ledger().posted })
+      .toEqual({ creates: [], posted: [marker] });
+  });
+
+  it('retries a failed comment lookup without creating before scanning again', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+      lookupFailures: 1,
+    });
+
+    await expect(fixture.run()).rejects.toThrow('lookup failed for PR #101');
+    expect(fixture.calls.filter((args) => args[1] === 'comment')).toEqual([]);
+    await fixture.run();
+
+    expect(fixture.calls.filter((args) => args[1] === 'view')).toHaveLength(2);
+    expect(fixture.calls.filter((args) => args[1] === 'comment')).toHaveLength(1);
+  });
+
+  it('does not recreate a receipt from an earlier routed round', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }], [], [marker]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+    });
+
+    await fixture.run();
+
+    expect(fixture.calls).toEqual([]);
+  });
+
+  it('uses an operation runner bound to the member PR', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const boundTargets: unknown[] = [];
+    const requests: unknown[] = [];
+    const operations: GithubOperationRunner = { run: vi.fn(async (request) => { requests.push(request); return {}; }) };
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+      operations,
+    });
+    fixture.run = () => postRoutedComments({
+      root: '/worktree', slug: 'demo', baseBranch: 'main', repository, git: fixture.git, gh: fixture.gh,
+      operations, operationsForTarget: (target) => { boundTargets.push(target); return operations; },
+      routedCommentTargets: async () => ({ kind: 'targets', targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }] }),
+      renderHostComment: async () => ({ kind: 'body', body: `body\n${marker}` }),
+    });
+
+    await fixture.run();
+
+    expect({ boundTargets, requests }).toEqual({
+      boundTargets: [{ repository, kind: 'pull-request', number: 101 }],
+      requests: [expect.objectContaining({ operation: 'pull-request.comment.create', target: { repository, kind: 'pull-request', number: 101 } })],
+    });
+  });
+
+  it('leaves a failed guarded comment owed for the bounded FINISH retry path', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused', reason: 'other-owner' })) };
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+      operations,
+    });
+
+    await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
+
+    expect({ creates: operations.run, posted: fixture.ledger().posted }).toEqual({
+      creates: expect.any(Function), posted: [],
+    });
+    expect(operations.run).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the receipt when the posted-comment emitter fails', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const events = new ConductorEventEmitter();
+    events.on('stack_member_comment_posted', () => { throw new Error('spine unavailable'); });
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` },
+      events,
+    });
+
+    await fixture.run();
+    await fixture.run();
+
+    expect({ posted: fixture.ledger().posted, creates: fixture.calls.filter((args) => args[1] === 'comment') })
+      .toEqual({ posted: [marker], creates: [expect.any(Array)] });
   });
 });
