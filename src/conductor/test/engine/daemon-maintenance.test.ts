@@ -31,6 +31,7 @@ function trackedClaims(attempts: string[]): WorkClaims {
       return [...active];
     },
     complete(slug) { completed.add(slug); },
+    reopen(slug) { completed.delete(slug); },
     isCompleted(slug) { return completed.has(slug); },
     park(slug) { parked.add(slug); },
     unpark(slug) { parked.delete(slug); },
