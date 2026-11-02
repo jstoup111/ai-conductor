@@ -735,6 +735,22 @@ describe('FINISH routed fix comments', () => {
       });
   });
 
+  it('A `pull-request.comment.create` failing through 3 attempts writes a `needs-human` HALT naming the PR, records no `finish-choice` outcome, and leaves earlier markers in `posted`', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
+      bodies: { 101: `body\n${marker}` }, operations,
+    });
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
+    }
+
+    expect({ creates: operations.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ creates: 3, posted: [] });
+  });
+
   it('does not post an owed comment when the refresh push fails first', async () => {
     const postRoutedComments = vi.fn(async () => undefined);
     const result = await advanceFinishPublication({

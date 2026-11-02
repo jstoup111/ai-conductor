@@ -348,6 +348,19 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 
+  it('A posted comment leaves one `stack_member_comment_posted` line in `.pipeline/events.jsonl` with the PR, round and marker', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+    await emitter.emit({
+      type: 'stack_member_comment_posted', pr: 101, roundId: 'r1',
+      marker: '<!-- conductor:routed-fix:r1:101 -->', eventId: 'stack-member-comment:r1-101',
+    });
+    persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim()).toContain('"type":"stack_member_comment_posted"');
+    expect((await readFile(eventsPath, 'utf8')).trim()).toContain('"pr":101');
+  });
+
   it('deduplicates replayed refreshed-member occurrences by eventId', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     const event = {

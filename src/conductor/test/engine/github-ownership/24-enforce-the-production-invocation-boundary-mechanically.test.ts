@@ -389,4 +389,8 @@ describe('GitHub invocation audit', () => {
   it('accepts only the classified shipped invocation inventory', () => {
     expect(auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'))).toEqual([]);
   });
+
+  it('`github-invocation-audit` passes with the new caller', () => {
+    expect(auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'))).toEqual([]);
+  });
 });
