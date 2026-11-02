@@ -1,7 +1,6 @@
 import { parseChildId, type ChildId } from './child-context.js';
 import { makeLocalGitRunner, type LocalGitRunner } from './local-git-runner.js';
 import { parseCommitSha, type CommitSha, type RefName } from './restack/restack-types.js';
-import { makeGitRunner, type GitRunner } from './rebase.js';
 import { rangePatchId } from './rewrite-map.js';
 import { refreshLedgerRefFor } from './routing/routing-refs.js';
 import { parseRoundId, type RoundId } from './routing/route-types.js';
@@ -131,7 +130,8 @@ export interface RoutedCommentTargetsInput {
   readonly worktree: string;
   readonly slug: string;
   readonly baseBranch: string;
-  readonly git?: GitRunner;
+  /** Local plumbing only; comment calculation has no rebase-workflow dependency. */
+  readonly git?: LocalGitRunner;
 }
 
 export type RoutedCommentTargetsResult =
@@ -311,7 +311,7 @@ export function refreshPendingState(
  * exposes no partial target list that a caller could post.
  */
 export async function routedCommentTargets(input: RoutedCommentTargetsInput): Promise<RoutedCommentTargetsResult> {
-  const git = input.git ?? makeGitRunner(input.worktree);
+  const git = input.git ?? makeLocalGitRunner(input.worktree);
 
   try {
     const stored = await readRefreshLedger(input.worktree, input.slug, { git });
@@ -377,7 +377,7 @@ export async function routedCommentTargets(input: RoutedCommentTargetsInput): Pr
   }
 }
 
-async function mergeBase(git: GitRunner, baseBranch: string, tip: CommitSha): Promise<string> {
+async function mergeBase(git: LocalGitRunner, baseBranch: string, tip: CommitSha): Promise<string> {
   const result = await git(['merge-base', baseBranch, tip]);
   const mergeBase = result.exitCode === 0 ? result.stdout.trim() : '';
   if (!mergeBase) throw new Error(`could not find merge base for ${baseBranch} and ${tip}`);
@@ -386,7 +386,7 @@ async function mergeBase(git: GitRunner, baseBranch: string, tip: CommitSha): Pr
 
 /** CAS newly discovered above-host receipts so a later comment retry reuses them. */
 async function appendAboveOwed(
-  git: GitRunner,
+  git: LocalGitRunner,
   stored: StoredRefreshLedger,
   entries: readonly RefreshLedgerAboveOwed[],
 ): Promise<boolean> {

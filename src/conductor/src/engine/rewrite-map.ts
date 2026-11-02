@@ -15,6 +15,12 @@ type GitRunnerWithInput = (
   opts?: { input?: string },
 ) => Promise<{ stdout: string }>;
 
+/** Minimal local-Git contract for stable patch identity calculations. */
+export type PatchIdGitRunner = (
+  args: string[],
+  opts?: { input?: string },
+) => Promise<{ exitCode: number; stdout: string }>;
+
 /**
  * Compute the stable patch identity for the change introduced by a range.
  *
@@ -23,7 +29,7 @@ type GitRunnerWithInput = (
  * comparison for an unchanged patch.
  */
 export async function rangePatchId(
-  git: GitRunner,
+  git: PatchIdGitRunner,
   parent: string,
   tip: string,
 ): Promise<string | undefined> {
