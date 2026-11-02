@@ -1,6 +1,8 @@
 import { parseChildId, type ChildId } from './child-context.js';
 import { makeLocalGitRunner, type LocalGitRunner } from './local-git-runner.js';
 import { parseCommitSha, type CommitSha, type RefName } from './restack/restack-types.js';
+import { makeGitRunner, type GitRunner } from './rebase.js';
+import { rangePatchId } from './rewrite-map.js';
 import { refreshLedgerRefFor } from './routing/routing-refs.js';
 import { parseRoundId, type RoundId } from './routing/route-types.js';
 import type { RouteKind } from '../types/routing.js';
@@ -106,6 +108,36 @@ export type RefreshLedgerUpdateLinesResult =
   | { readonly kind: 'unreadable'; readonly ref: RefName; readonly diagnostic: RefreshLedgerDiagnostic };
 
 export type RefreshPendingState = 'push-pending' | 'comments-owed' | 'settled';
+
+/** A routed round's host comment, including children rebased without own changes. */
+export interface RoutedHostCommentTarget {
+  readonly kind: 'host';
+  readonly pr: number;
+  readonly roundId: RoundId;
+  readonly rebaseOnly: readonly number[];
+}
+
+/** A child above the routed host whose own patch changed during the replay. */
+export interface RoutedMemberAboveCommentTarget {
+  readonly kind: 'member-above';
+  readonly pr: number;
+  readonly hostPr: number;
+  readonly newTip: CommitSha;
+}
+
+export type RoutedCommentTarget = RoutedHostCommentTarget | RoutedMemberAboveCommentTarget;
+
+export interface RoutedCommentTargetsInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly baseBranch: string;
+  readonly git?: GitRunner;
+}
+
+export type RoutedCommentTargetsResult =
+  | { readonly kind: 'targets'; readonly targets: readonly RoutedCommentTarget[] }
+  /** A required local Git comparison could not establish comment targets safely. */
+  | { readonly kind: 'retryable' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -270,4 +302,95 @@ export function refreshPendingState(
   return ledger.rounds.some((round) => !posted.has(round.marker)) || ledger.aboveOwed.some((entry) => !posted.has(entry.marker))
     ? 'comments-owed'
     : 'settled';
+}
+
+/**
+ * Select the comments owed by routed rounds without confusing a clean replay
+ * (new commit ids, same own diff) with a child's changed resolution.  Every
+ * comparison is all-or-nothing: a failed Git operation returns retryable and
+ * exposes no partial target list that a caller could post.
+ */
+export async function routedCommentTargets(input: RoutedCommentTargetsInput): Promise<RoutedCommentTargetsResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+
+  try {
+    const stored = await readRefreshLedger(input.worktree, input.slug, { git });
+    if (stored.kind !== 'ledger') return { kind: 'retryable' };
+    const members = Object.entries(stored.ledger.members)
+      .map(([branch, member]) => ({ branch, ...member }))
+      .sort((left, right) => left.position - right.position);
+    const targets: RoutedCommentTarget[] = [];
+    for (const round of stored.ledger.rounds) {
+      const hostIndex = members.findIndex((member) => member.position === round.host);
+      if (hostIndex < 0) return { kind: 'retryable' };
+      const host = members[hostIndex]!;
+      const rebaseOnly: number[] = [];
+      const memberTargets: RoutedMemberAboveCommentTarget[] = [];
+
+      for (const [memberIndex, member] of members.slice(hostIndex + 1).entries()) {
+        // A child whose receipt has not moved was not replayed by this refresh.
+        if (member.publishedTip === member.recordedTip) continue;
+        const parent = member.position === 1
+          ? undefined
+          : members[hostIndex + memberIndex];
+        if (member.position !== 1 && parent === undefined) throw new Error(`missing parent for stack position ${member.position}`);
+        const [oldParent, newParent] = member.position === 1
+          ? await Promise.all([
+            mergeBase(git, input.baseBranch, member.publishedTip),
+            mergeBase(git, input.baseBranch, member.recordedTip),
+          ])
+          : [parent!.publishedTip, parent!.recordedTip];
+        const [publishedPatch, recordedPatch] = await Promise.all([
+          rangePatchId(git, oldParent, member.publishedTip),
+          rangePatchId(git, newParent, member.recordedTip),
+        ]);
+        if (publishedPatch === recordedPatch) {
+          rebaseOnly.push(member.pr);
+        } else {
+          memberTargets.push({ kind: 'member-above', pr: member.pr, hostPr: host.pr, newTip: member.recordedTip });
+        }
+      }
+
+      targets.push({ kind: 'host', pr: host.pr, roundId: round.roundId, rebaseOnly }, ...memberTargets);
+    }
+    const owedMarkers = new Set(stored.ledger.aboveOwed.map((entry) => entry.marker));
+    const newAboveOwed = targets
+      .filter((target): target is RoutedMemberAboveCommentTarget => target.kind === 'member-above')
+      .map((target) => ({
+        pr: target.pr,
+        hostPr: target.hostPr,
+        newTip: target.newTip,
+        marker: `<!-- conductor:routed-refresh:${target.newTip}:${target.pr} -->`,
+      } satisfies RefreshLedgerAboveOwed))
+      .filter((entry) => {
+        if (owedMarkers.has(entry.marker)) return false;
+        owedMarkers.add(entry.marker);
+        return true;
+      });
+    if (newAboveOwed.length > 0 && !await appendAboveOwed(git, stored, newAboveOwed)) return { kind: 'retryable' };
+    return { kind: 'targets', targets };
+  } catch {
+    return { kind: 'retryable' };
+  }
+}
+
+async function mergeBase(git: GitRunner, baseBranch: string, tip: CommitSha): Promise<string> {
+  const result = await git(['merge-base', baseBranch, tip]);
+  const mergeBase = result.exitCode === 0 ? result.stdout.trim() : '';
+  if (!mergeBase) throw new Error(`could not find merge base for ${baseBranch} and ${tip}`);
+  return mergeBase;
+}
+
+/** CAS newly discovered above-host receipts so a later comment retry reuses them. */
+async function appendAboveOwed(
+  git: GitRunner,
+  stored: StoredRefreshLedger,
+  entries: readonly RefreshLedgerAboveOwed[],
+): Promise<boolean> {
+  const updated: RefreshLedger = { ...stored.ledger, aboveOwed: [...stored.ledger.aboveOwed, ...entries] };
+  const hashed = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(updated) });
+  const blob = hashed.exitCode === 0 ? parseCommitSha(hashed.stdout.trim()) : undefined;
+  if (!blob) return false;
+  const applied = await git(['update-ref', stored.ref, blob, stored.blob]);
+  return applied.exitCode === 0;
 }

@@ -15,6 +15,27 @@ type GitRunnerWithInput = (
   opts?: { input?: string },
 ) => Promise<{ stdout: string }>;
 
+/**
+ * Compute the stable patch identity for the change introduced by a range.
+ *
+ * The empty range deliberately has no patch id.  Operational failures throw
+ * so callers that make a durable routing decision cannot mistake a failed
+ * comparison for an unchanged patch.
+ */
+export async function rangePatchId(
+  git: GitRunner,
+  parent: string,
+  tip: string,
+): Promise<string | undefined> {
+  const diff = await git(['diff', parent, tip]);
+  if (diff.exitCode !== 0) throw new Error(`could not diff ${parent}..${tip}`);
+
+  const identified = await git(['patch-id', '--stable'], { input: diff.stdout });
+  if (identified.exitCode !== 0) throw new Error(`could not compute patch-id for ${parent}..${tip}`);
+  const [id] = identified.stdout.trim().split(/\s+/);
+  return id || undefined;
+}
+
 function parseShaList(stdout: string): string[] {
   return stdout
     .split('\n')
