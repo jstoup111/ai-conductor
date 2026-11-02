@@ -891,7 +891,7 @@ describe('Conductor FINISH publication routing', () => {
       session_started_at: Date.now() - 60_000,
       validation__prd_audit: 'done',
       validation__architecture_review_as_built: 'done',
-    });
+    } as ConductState);
 
     const subject = await createPublishedRefreshFixture(dir);
     const before = (await execa('git', ['ls-remote', '--heads', subject.remote], { cwd: dir })).stdout;
