@@ -625,6 +625,7 @@ Existence is the signal. Alphabetized.
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
 | `current-task` | `ai-conductor task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
 | `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
+| `finish-pr-prose.json` | FINISH `author_pr_prose` pass | `{ "version": 1, "title": string, "body": string }` — the authored PR title and body. The engine deletes it before each authoring dispatch, then reads it, restores every `ai-conductor:step` region from the retained PR, rejects placeholder prose or a dropped `Closes` reference, and performs the `pull-request.edit` itself. Missing ⇒ `prose_not_returned`; malformed or rejected ⇒ `prose_invalid`; both are retried with the failure carried into the next authoring prompt |
 | `finish-choice` | FINISH publication coordinator through `ai-conductor finish-record` | Final publication outcome; subject to the session freshness check. Interactive intent is acquired before this marker exists |
 | `halt-user-input-required` | `pipeline` skill on a user-requested exit | The build predicate returns not-done while it exists |
 | `phase-active` | `phase-marker.ts::writePhaseMarker` | Line-oriented on purpose so bash hooks can read it without a parser: `step: <name>`, `phase: <BUILD\|SHIP>`, `written: <ISO-8601>`, then zero or more `allow: <prefix>` lines. Removed idempotently on step exit |
@@ -1169,13 +1170,6 @@ re-emitted. A malformed or unadmitted complete line is consumed once so later va
 observable; the tail emits one `pipeline_tail_diagnostic` instead of replaying or exposing the line.
 `readMergedFeatureEvents` (used by [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail))
 merges this ledger with `events.jsonl` by `ts`.
-
-FINISH PR-prose authoring also reads this ledger. It flushes the tail before dispatching an
-authoring pass to fix a boundary, then flushes again after the pass. A `github_operation_failed`
-for `pull-request.edit` on the same pull request inside that window halts FINISH with
-`publication_operation_failed`, unless re-observation shows the prose changed anyway. If the first
-flush fails, the pass attributes no failures, so an earlier pass's failure is never reported as
-this one's.
 
 ### `.pipeline/audit-trail/events.jsonl`
 
