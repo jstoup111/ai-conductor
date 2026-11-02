@@ -12,6 +12,12 @@
   ],
   [
     "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-push/publication"
+  ],
+  [
+    "rev-parse",
     "--verify",
     "--quiet",
     "refs/conductor/n1-push/pushed/feat/daemon-n1-push"
@@ -47,5 +53,11 @@
     "for-each-ref",
     "--format=%(refname)",
     "refs/conductor/n1-push/"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-push/publication"
   ]
 ]

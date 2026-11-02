@@ -9,5 +9,59 @@
     "for-each-ref",
     "--format=%(refname)",
     "refs/conductor/n1-golden/"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
+  ],
+  [
+    "rev-parse",
+    "-q",
+    "--verify",
+    "refs/conductor/n1-golden/publication"
   ]
 ]
