@@ -18,13 +18,19 @@ import {
   type RoutedCommentTarget,
 } from '../../src/engine/stack-refresh-ledger.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
-import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const tip = 'a'.repeat(40) as never;
 const blob = 'b'.repeat(40);
 const host = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
+type GithubOperationRun = (request: GithubOperationRequest) => Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
 
 function publicationPorts(stack: PublicationObservationPorts['stack']): PublicationObservationPorts {
   return {
@@ -105,7 +111,8 @@ describe('routed fix comment exclusions', () => {
     });
     if (targetsResult.kind !== 'targets') throw new Error('expected routed comment targets');
 
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+    const operationRun = vi.fn<GithubOperationRun>(async () => ({}));
+    const operations: GithubOperationRunner = { run: operationRun };
     const fixture = commentFixture({
       ledger,
       targets: targetsResult.targets,
@@ -314,7 +321,8 @@ describe('FINISH routed fix comments', () => {
     ]));
     expect(await observePublishedStackRefresh({ root: '/worktree', slug: 'demo', git })).toBe('comments-owed');
 
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+    const operationRun = vi.fn<GithubOperationRun>(async () => ({}));
+    const operations: GithubOperationRunner = { run: operationRun };
     await postRoutedComments({
       root: '/worktree', slug: 'demo', baseBranch: 'main', repository, git,
       gh: async () => ({ stdout: JSON.stringify({ comments: [] }) }),
@@ -324,7 +332,7 @@ describe('FINISH routed fix comments', () => {
       renderMemberAboveComment: async ({ target }) => ({ kind: 'body', body: `member\n<!-- conductor:routed-refresh:${target.newTip}:${target.hostPr}:${target.pr} -->` }),
     });
 
-    const createdBodies = operations.run.mock.calls
+    const createdBodies = operationRun.mock.calls
       .map(([request]) => request.payload)
       .filter((payload): payload is { body: string } => typeof payload === 'object' && payload !== null && 'body' in payload && typeof payload.body === 'string')
       .map((payload) => payload.body);
@@ -623,7 +631,8 @@ describe('FINISH routed fix comments', () => {
       targets: [target],
       bodies: { 101: `body\n${marker}` },
     });
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+    const operationRun = vi.fn<GithubOperationRun>(async () => ({}));
+    const operations: GithubOperationRunner = { run: operationRun };
     const run = () => postRoutedComments({
       root: '/worktree', slug: 'demo', baseBranch: 'main', repository,
       git: fixture.git, gh: fixture.gh, operations,
@@ -641,11 +650,11 @@ describe('FINISH routed fix comments', () => {
 
     const targetRetry = await advance();
     const bodyRetry = await advance();
-    expect(operations.run).not.toHaveBeenCalled();
+    expect(operationRun).not.toHaveBeenCalled();
 
     const completed = await advance();
 
-    expect({ targetRetry, bodyRetry, completed, targets: targets.mock.calls.length, bodies: render.mock.calls.length, creates: operations.run.mock.calls.length })
+    expect({ targetRetry, bodyRetry, completed, targets: targets.mock.calls.length, bodies: render.mock.calls.length, creates: operationRun.mock.calls.length })
       .toEqual({
         targetRetry: expect.objectContaining({ kind: 'publication_retry', transition: 'post_routed_comments' }),
         bodyRetry: expect.objectContaining({ kind: 'publication_retry', transition: 'post_routed_comments' }),
@@ -684,7 +693,8 @@ describe('FINISH routed fix comments', () => {
 
   it('leaves a failed guarded comment owed for the bounded FINISH retry path', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
+    const operationRun = vi.fn<GithubOperationRun>(async () => ({ kind: 'refused', reason: 'other-owner' }));
+    const operations: GithubOperationRunner = { run: operationRun };
     const fixture = commentFixture({
       ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
       targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
@@ -694,10 +704,10 @@ describe('FINISH routed fix comments', () => {
 
     await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
 
-    expect({ creates: operations.run, posted: fixture.ledger().posted }).toEqual({
+    expect({ creates: operationRun, posted: fixture.ledger().posted }).toEqual({
       creates: expect.any(Function), posted: [],
     });
-    expect(operations.run).toHaveBeenCalledOnce();
+    expect(operationRun).toHaveBeenCalledOnce();
   });
 
   it('retries a refused comment without refreshing or recording the FINISH outcome', async () => {
@@ -737,7 +747,8 @@ describe('FINISH routed fix comments', () => {
 
   it('A `pull-request.comment.create` failing through 3 attempts writes a `needs-human` HALT naming the PR, records no `finish-choice` outcome, and leaves earlier markers in `posted`', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
+    const operationRun = vi.fn<GithubOperationRun>(async () => ({ kind: 'refused', reason: 'other-owner' }));
+    const operations: GithubOperationRunner = { run: operationRun };
     const fixture = commentFixture({
       ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
       targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
@@ -748,7 +759,7 @@ describe('FINISH routed fix comments', () => {
       await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
     }
 
-    expect({ creates: operations.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ creates: 3, posted: [] });
+    expect({ creates: operationRun.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ creates: 3, posted: [] });
   });
 
   it('does not post an owed comment when the refresh push fails first', async () => {
@@ -773,7 +784,8 @@ describe('FINISH routed fix comments', () => {
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
     events.on('github_operation_refused', (event) => { refusals.push(event); });
-    const operations: GithubOperationRunner = { run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const })) };
+    const operationRun = vi.fn<GithubOperationRun>(async () => ({ kind: 'refused', reason: 'other-owner' }));
+    const operations: GithubOperationRunner = { run: operationRun };
     const fixture = commentFixture({
       ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
       targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
@@ -782,7 +794,7 @@ describe('FINISH routed fix comments', () => {
 
     await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
 
-    expect({ refusals, creates: operations.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({
+    expect({ refusals, creates: operationRun.mock.calls.length, posted: fixture.ledger().posted }).toEqual({
       refusals: [expect.objectContaining({
         type: 'github_operation_refused', operation: 'pull-request.comment.create',
         target: { repository, kind: 'pull-request', number: 101 }, reason: 'other-owner',
@@ -793,11 +805,14 @@ describe('FINISH routed fix comments', () => {
 
   it('refuses a comment when its supplied operation runner is bound to another PR', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
-    const wrongPrRunner: GithubOperationRunner = {
-      run: vi.fn(async (request) => request.target.kind === 'pull-request' && request.target.number === 102
+    const wrongPrRun = vi.fn<GithubOperationRun>(async (
+      request: GithubOperationRequest,
+    ): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => (
+      request.target.kind === 'pull-request' && request.target.number === 102
         ? {}
-        : { kind: 'refused' as const, reason: 'invalid-target' as const }),
-    };
+        : { kind: 'refused', reason: 'invalid-target' }
+    ));
+    const wrongPrRunner: GithubOperationRunner = { run: wrongPrRun };
     const fixture = commentFixture({
       ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
       targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
@@ -806,7 +821,7 @@ describe('FINISH routed fix comments', () => {
 
     await expect(fixture.run()).rejects.toThrow('routed comment create failed for PR #101: refused');
 
-    expect({ requests: wrongPrRunner.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ requests: 1, posted: [] });
+    expect({ requests: wrongPrRun.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ requests: 1, posted: [] });
   });
 
   it('An emitter that throws after a comment leaves the marker in `posted`, and a replay makes no second `pull-request.comment.create` call', async () => {
