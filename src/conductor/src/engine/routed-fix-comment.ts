@@ -1,5 +1,6 @@
 import {
   readRefreshLedger,
+  routedMemberAboveCommentMarker,
   type RoutedHostCommentTarget,
   type RoutedMemberAboveCommentTarget,
 } from './stack-refresh-ledger.js';
@@ -102,7 +103,7 @@ export async function renderMemberAboveComment(input: RenderMemberAboveCommentIn
     body: [
       `This PR's diff changed while carrying the routed fix from #${hostPr}.`,
       '',
-      `<!-- conductor:routed-refresh:${newTip}:${pr} -->`,
+      routedMemberAboveCommentMarker({ pr, hostPr, newTip }),
     ].join('\n'),
   };
 }

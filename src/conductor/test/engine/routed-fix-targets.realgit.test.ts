@@ -112,7 +112,7 @@ describe('routedCommentTargets (real local Git)', () => {
           pr: 102,
           hostPr: 101,
           newTip: subject.recordedConflictChild,
-          marker: `<!-- conductor:routed-refresh:${subject.recordedConflictChild}:102 -->`,
+          marker: `<!-- conductor:routed-refresh:${subject.recordedConflictChild}:101:102 -->`,
         }],
       },
     });

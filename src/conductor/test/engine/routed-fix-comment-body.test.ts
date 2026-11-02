@@ -22,7 +22,7 @@ const routeBlob = sha('a');
 const ledgerBlob = sha('b');
 const revalidationQueueBlob = sha('c');
 const marker = '<!-- conductor:routed-fix:r7:101 -->';
-const aboveMarker = `<!-- conductor:routed-refresh:${recordedTip}:102 -->`;
+const aboveMarker = `<!-- conductor:routed-refresh:${recordedTip}:101:102 -->`;
 
 const target: RoutedHostCommentTarget = {
   kind: 'host',

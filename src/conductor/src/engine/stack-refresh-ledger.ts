@@ -126,6 +126,15 @@ export interface RoutedMemberAboveCommentTarget {
 
 export type RoutedCommentTarget = RoutedHostCommentTarget | RoutedMemberAboveCommentTarget;
 
+/**
+ * A changed member can carry more than one routed host.  Its durable receipt
+ * must retain that host rather than collapsing distinct routed explanations
+ * for the same refreshed tip.
+ */
+export function routedMemberAboveCommentMarker(input: Pick<RoutedMemberAboveCommentTarget, 'pr' | 'hostPr' | 'newTip'>): string {
+  return `<!-- conductor:routed-refresh:${input.newTip}:${input.hostPr}:${input.pr} -->`;
+}
+
 export interface RoutedCommentTargetsInput {
   readonly worktree: string;
   readonly slug: string;
@@ -363,7 +372,7 @@ export async function routedCommentTargets(input: RoutedCommentTargetsInput): Pr
         pr: target.pr,
         hostPr: target.hostPr,
         newTip: target.newTip,
-        marker: `<!-- conductor:routed-refresh:${target.newTip}:${target.pr} -->`,
+        marker: routedMemberAboveCommentMarker(target),
       } satisfies RefreshLedgerAboveOwed))
       .filter((entry) => {
         if (owedMarkers.has(entry.marker)) return false;

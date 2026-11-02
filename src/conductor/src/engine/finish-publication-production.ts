@@ -75,6 +75,7 @@ import {
   authorizePublishedStackRefresh,
   readRefreshLedger,
   refreshPendingState,
+  routedMemberAboveCommentMarker,
   routedCommentTargets,
   type RefreshLedger,
   type RoutedCommentTarget,
@@ -659,9 +660,8 @@ function markerForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarg
     return Object.values(ledger.members).some((member) => member.position === round.host && member.pr === target.pr)
       ? round.marker : undefined;
   }
-  return ledger.aboveOwed.find((entry) =>
-    entry.pr === target.pr && entry.hostPr === target.hostPr && entry.newTip === target.newTip,
-  )?.marker;
+  const marker = routedMemberAboveCommentMarker(target);
+  return ledger.aboveOwed.some((entry) => entry.marker === marker) ? marker : undefined;
 }
 
 function roundForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarget): string {
