@@ -248,8 +248,8 @@ describe('FINISH routed fix comments', () => {
   it('replays an interrupted above-host receipt after a later restack changes its recorded tip', async () => {
     const publishedTip = 'e'.repeat(40) as never;
     const firstRecordedTip = 'f'.repeat(40) as never;
-    const laterRecordedTip = 'g'.repeat(40) as never;
-    const laterHostTip = 'h'.repeat(40) as never;
+    const laterRecordedTip = '8'.repeat(40) as never;
+    const laterHostTip = '9'.repeat(40) as never;
     const firstMarker = `<!-- conductor:routed-refresh:${firstRecordedTip}:101:102 -->`;
     const secondMarker = `<!-- conductor:routed-refresh:${laterRecordedTip}:101:102 -->`;
     let ledger: RefreshLedger = {
@@ -265,7 +265,7 @@ describe('FINISH routed fix comments', () => {
     let blobAtRef = ledgerBlob;
     const git = vi.fn(async (args: readonly string[], options?: { input?: string }) => {
       if (args[0] === 'rev-parse') {
-        if (args.at(-1)?.includes('stack-refresh')) return { exitCode: 0, stdout: `${blobAtRef}\n`, stderr: '' };
+        if (args.at(-1) === refreshLedgerRefFor('demo')) return { exitCode: 0, stdout: `${blobAtRef}\n`, stderr: '' };
         const branch = Object.keys(ledger.members).find((candidate) => args.at(-1)?.includes(candidate));
         return branch === undefined
           ? { exitCode: 1, stdout: '', stderr: '' }
