@@ -426,6 +426,30 @@ export async function observePublishedStackRefresh(input: {
 }
 
 /**
+ * A FINISH observation reads GitHub member heads against local pushed-tip
+ * receipts.  A completed transport can leave exactly one receipt behind, so
+ * reconcile that durable intent before the observation treats the moved head
+ * as an external stack divergence.
+ */
+async function reconcileOutstandingPublishedPushIntents(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+}): Promise<void> {
+  const publication = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (publication === undefined) return;
+
+  for (const member of publication.record.members) {
+    await adoptCompletedPushIntent({
+      root: input.root,
+      slug: input.slug,
+      branch: member.branch,
+      git: input.git,
+    });
+  }
+}
+
+/**
  * A transport may reach the remote immediately before executeRemoteGit records
  * its pushed-tip receipt.  Reconcile only an exact durable intent before a
  * retry asks the guard to evaluate that now-moved remote tip.
@@ -1873,6 +1897,15 @@ export function createProductionFinishPublicationCoordinator(
           stack: {
             observeStackDimension: async () => {
               if (!state.feature_desc) return 'not-applicable';
+              // Recover a transport that completed just before its receipt was
+              // recorded before comparing GitHub's current heads to those
+              // receipts. A non-matching remote is intentionally left for
+              // observeStackDimension to classify as stack-tip-diverged.
+              await reconcileOutstandingPublishedPushIntents({
+                root: deps.projectRoot,
+                slug: state.feature_desc,
+                git: publicationRecordGit(deps.git, deps.projectRoot),
+              });
               const cursor = await resolveObservationChild();
               // The leaf URL is the authoritative repository binding. Before
               // the ordinary establish-PR transition finishes, the stack is

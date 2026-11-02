@@ -6,15 +6,19 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 
 import { parseChildId } from '../../src/engine/child-context.js';
-import { refreshPublishedStackMembers } from '../../src/engine/finish-publication-production.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  refreshPublishedStackMembers,
+} from '../../src/engine/finish-publication-production.js';
 import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
-import { pushedTipIntentRef, pushedTipRef } from '../../src/engine/push-lease.js';
+import { preparePushedTip, pushedTipIntentRef, pushedTipRef } from '../../src/engine/push-lease.js';
 import { writePublicationRecord } from '../../src/engine/stack-publication-record.js';
 import { refreshLedgerRefFor } from '../../src/engine/stack-refresh-ledger.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 const roots: string[] = [];
 const positions = [parseChildId(1)!, parseChildId(3)!, parseChildId(5)!, parseChildId(7)!] as const;
@@ -200,43 +204,97 @@ describe('FINISH published member refresh (real Git)', () => {
 
   it('adopts a remote-completed push intent before retrying instead of pushing that member twice', async () => {
     const subject = await fixture();
-    let remoteSucceeded = false;
-    await expect(refreshPublishedStackMembers({
-      root: subject.repo, slug: 'demo', mutation: mutation(),
-      remoteGit: async (args, dependencies) => executeRemoteGit(args, {
-        ...dependencies,
-        config: async () => ({ stdout: 'git@github.com:acme/rocket.git\n' }),
-        runRemoteGit: async (remoteArgs, options) => {
-          const result = await dependencies.runRemoteGit(remoteArgs, options);
-          remoteSucceeded = true;
-          return result;
-        },
-        pushLeaseGit: async (gitArgs, input) => {
-          if (remoteSucceeded && gitArgs[0] === 'update-ref' && gitArgs[1] === pushedTipRef('demo', subject.branches[0]!)) {
-            return { stdout: '', exitCode: 1 };
-          }
-          return dependencies.pushLeaseGit!(gitArgs, input);
-        },
-      }),
-      git: async (args, options) => git(subject.repo, args, options?.input),
-    })).rejects.toThrow('published stack refresh refused at position 3');
+    await writeSliceTopologyFixture(subject.repo, {
+      version: 1,
+      slug: 'demo',
+      sliceMembership: {
+        taskSlices: { one: 1, three: 3, five: 5 },
+        titles: ['One', 'Two', 'Three', 'Four', 'Five'],
+      },
+      storyOwnership: { S1: 1, S3: 3, S5: 5 },
+    });
+
+    const leaseGit = async (args: readonly string[], input?: string) => {
+      const result = await git(subject.repo, args, input);
+      return { stdout: result.stdout, exitCode: result.exitCode };
+    };
+    const branch = subject.branches[0]!;
+    const prepared = await preparePushedTip({
+      cwd: subject.repo,
+      slug: 'demo',
+      branch,
+      new: subject.recordedTips[0]!,
+      git: leaseGit,
+    });
+    expect(prepared).toBeDefined();
+    await git(subject.repo, [
+      'push', 'origin', `${subject.recordedTips[0]}:refs/heads/${branch}`,
+      `--force-with-lease=refs/heads/${branch}:${subject.oldTips[0]}`,
+    ]);
 
     expect(await tip(subject.origin, `refs/heads/${subject.branches[0]}`)).toBe(subject.recordedTips[0]);
     expect(await tip(subject.repo, pushedTipIntentRef('demo', subject.branches[0]!))).toBeTruthy();
+    for (const branch of subject.branches.slice(1)) {
+      expect(await tip(subject.origin, `refs/heads/${branch}`)).toBe(await tip(subject.repo, pushedTipRef('demo', branch)));
+    }
 
     const resumedPushes: string[][] = [];
-    await refreshPublishedStackMembers({
-      root: subject.repo, slug: 'demo', mutation: mutation(),
+    const state = {
+      feature_desc: 'demo',
+      worktree_branch: subject.branches.at(-1),
+      pr_url: 'https://github.com/acme/rocket/pull/103',
+      build_review: 'done', test_suite: 'done',
+      manual_test: 'done', architecture_review_as_built: 'done',
+    } as const;
+    const gh = async (args: string[]) => {
+      if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        const selector = args[2]!;
+        const index = selector === state.pr_url
+          ? subject.branches.length - 1
+          : subject.branches.findIndex((_, candidate) => String(101 + candidate) === selector);
+        if (index < 0) throw new Error(`unknown PR selector: ${selector}`);
+        const head = await tip(subject.origin, `refs/heads/${subject.branches[index]}`);
+        return {
+          stdout: JSON.stringify({
+            url: `https://github.com/acme/rocket/pull/${101 + index}`,
+            title: 'feat: demo', body: 'Reader-facing summary.', labels: [],
+            state: 'OPEN', isDraft: true,
+            baseRefName: index === 0 || index === subject.branches.length - 1
+              ? 'main'
+              : subject.branches[index - 1],
+            headRefOid: head,
+          }),
+        };
+      }
+      throw new Error(`unexpected gh argv: ${args.join(' ')}`);
+    };
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      baseBranch: 'main',
+      git: async (args, options) => git(subject.repo, args, options.input),
+      gh,
+      remoteMutation: mutation(),
       remoteGit: async (args, dependencies) => {
         resumedPushes.push([...args]);
         return localRemoteGit(args, dependencies);
       },
-      git: async (args, options) => git(subject.repo, args, options?.input),
+      observeReleaseReadiness: async () => 'present',
+    });
+    const outcome = await coordinator.advance({
+      state,
+      mode: 'auto',
+      daemon: true,
+      dispatchJudgment: async () => ({ success: true }),
+      emit: async () => undefined,
     });
 
+    expect(outcome).toMatchObject({ kind: 'publication_progress', transition: 'refresh_published_members' });
     expect(resumedPushes.map((args) => args[2])).toEqual(subject.branches.slice(1).map((branch, index) => `${subject.recordedTips[index + 1]}:refs/heads/${branch}`));
     expect(await tip(subject.repo, pushedTipRef('demo', subject.branches[0]!))).toBe(subject.recordedTips[0]);
     await expect(git(subject.repo, ['rev-parse', '--verify', '--quiet', pushedTipIntentRef('demo', subject.branches[0]!)]).then((result) => result.exitCode)).resolves.toBe(1);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('halts stack-tip-diverged on a guard refusal while retaining prior pushed receipts', async () => {
