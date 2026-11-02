@@ -62,6 +62,9 @@ function deps(options: {
     git: defaultGit,
     loadSliceTopology: vi.fn().mockResolvedValue(options.topology ?? sliced()),
     publishedStackRefusal: vi.fn().mockResolvedValue(options.published ?? false),
+    publishedStackTipPreflight: vi.fn().mockResolvedValue(options.published
+      ? { kind: 'refused', member: { position: c1, branch: 'feat/c1/demo', pr: 1 } }
+      : { kind: 'not-published' }),
     routedRoundOpen: vi.fn().mockResolvedValue(options.open ?? false),
     routingFenceOpen: vi.fn().mockReturnValue(options.fence ?? true),
     readRepairMarker: readMarker,

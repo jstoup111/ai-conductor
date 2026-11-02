@@ -123,7 +123,7 @@ describe('runStackPreflight unlanded closed-child commits (real local Git)', () 
     await expect(preflight(subject)).resolves.toMatchObject({ result: { kind: 'halted' } });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('restack refused (published-stack) child 1');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('published stack cannot open a landing: tips are unreadable (#3268)');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('unlanded-closed-child-commits');
   });
 

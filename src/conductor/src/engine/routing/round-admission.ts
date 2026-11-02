@@ -17,7 +17,7 @@ import {
 } from './route-record-store.js';
 import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type HostState, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
-import { publishedStackRefusal } from '../stack-publication.js';
+import { publishedStackTipPreflight } from '../stack-publication.js';
 import { advanceRound, requestRoutedExit, selectNextHost, type RequestRoutedExitInput } from './routed-exit.js';
 import { readRevalidationQueue } from './route-record-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
@@ -91,12 +91,12 @@ export async function admitRound(
 ): Promise<AdmitRoundResult> {
   const fence = await checkRoundAdmissionFence(worktree, slug, record, dependencies);
   if (fence !== undefined) return fence;
-  // The conductor performs this check before allocating a route record. Keep
-  // the same fence at the durable admission boundary so a publication that
-  // lands between route planning and this transaction cannot open the round.
-  if (await publishedStackRefusal(worktree, slug, { git: dependencies.git })) {
-    return { kind: 'refused', detail: 'routing admission refused: published-stack' };
-  }
+  // A routed round is the sole route through the publication freeze.  Repeat
+  // the remote receipt check at the durable boundary so planning cannot race a
+  // reviewer moving a member before the marker transaction.
+  const publication = await publishedStackTipPreflight(worktree, slug, { git: dependencies.git });
+  if (publication.kind === 'unreadable') return { kind: 'refused', detail: 'routing admission refused: published stack tips are unreadable; retry' };
+  if (publication.kind === 'refused') return { kind: 'refused', detail: `routing admission refused: published stack member ${publication.member.position} changed or closed (#3268)` };
   const marker = await readRepairMarker(worktree, slug, dependencies);
   if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
   const stored = await readRouteRecord(worktree, slug, record.roundId, dependencies);

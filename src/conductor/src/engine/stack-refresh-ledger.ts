@@ -5,6 +5,9 @@ import { rangePatchId } from './rewrite-map.js';
 import { refreshLedgerRefFor } from './routing/routing-refs.js';
 import { parseRoundId, type RoundId } from './routing/route-types.js';
 import type { RouteKind } from '../types/routing.js';
+import { activePublicationRecord } from './stack-publication-record.js';
+import { routedRoundOpen } from './routing/round-admission.js';
+import { pushedTipRef } from './push-lease.js';
 
 export { refreshLedgerRefFor } from './routing/routing-refs.js';
 
@@ -76,6 +79,25 @@ export interface RefreshLedgerMergeInput {
 
 export interface RefreshLedgerDependencies {
   readonly git?: LocalGitRunner;
+}
+
+/** True only for the durable state which makes a completed publication live again. */
+export async function publishedFeatureReopened(
+  worktree: string,
+  slug: string,
+  dependencies: RefreshLedgerDependencies = {},
+): Promise<boolean> {
+  const git = dependencies.git ?? makeLocalGitRunner(worktree);
+  if (await activePublicationRecord(worktree, slug, { git }) === undefined) return false;
+  if (await routedRoundOpen(worktree, slug, { git })) return true;
+  const ledger = await readRefreshLedger(worktree, slug, { git });
+  if (ledger.kind !== 'ledger') return false;
+  const receipts: Record<string, CommitSha | undefined> = {};
+  for (const branch of Object.keys(ledger.ledger.members)) {
+    const read = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, branch)]);
+    receipts[branch] = read.exitCode === 0 ? parseCommitSha(read.stdout.trim()) : undefined;
+  }
+  return refreshPendingState(ledger.ledger, receipts) !== 'settled';
 }
 
 const publishedStackRefreshAuthorization: unique symbol = Symbol('publishedStackRefreshAuthorization');

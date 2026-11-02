@@ -6,9 +6,7 @@ import { EventPersister } from '../event-persister.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import type { RestackResolver } from '../restack/restack-resolver.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
-import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
-import { publishedStackRefusal } from '../stack-publication.js';
 import { activePublicationRecord } from '../stack-publication-record.js';
 import { refreshLedgerUpdateLines } from '../stack-refresh-ledger.js';
 import { pushedTipRef } from '../push-lease.js';
@@ -165,7 +163,7 @@ async function hasOtherOpenRound(worktree: string, slug: string, roundId: RoundI
   return false;
 }
 
-async function restageLeafGates(worktree: string): Promise<string | undefined> {
+async function restageLeafGates(worktree: string, slug: string): Promise<string | undefined> {
   const statePath = `${worktree}/.pipeline/conduct-state.json`;
   const state = await readState(statePath);
   if (!state.ok) return state.error.message;
@@ -179,7 +177,12 @@ async function restageLeafGates(worktree: string): Promise<string | undefined> {
   const postRegion = registry.slice(buildReview + 1, finish)
     .map((step) => step.name)
     .filter((name) => !builtins.has(name) && !CHILD_REGION_STEPS.includes(name as never));
-  const gates = ['prd_audit', 'architecture_review_as_built', 'manual_test', ...postRegion] as StepName[];
+  const publication = await activePublicationRecord(worktree, slug, { git: makeGitRunner(worktree) });
+  const gates = [
+    'prd_audit', 'architecture_review_as_built', 'manual_test',
+    ...postRegion.filter((gate) => publication === undefined || gate !== 'rebase'),
+    ...(publication === undefined ? [] : ['finish']),
+  ] as StepName[];
   const result = await applyStateChanges(statePath, state.value, Object.fromEntries(gates.map((gate) => [gate, 'pending'])), 're-pend leaf gates after routed return');
   if ('message' in result) return result.message;
   try {
@@ -233,7 +236,7 @@ export async function returnToLeaf(
   // discards its landing. Returning from that path is bookkeeping only: the
   // leaf's prior whole-feature validation remains authoritative.
   if (!options.abandon) {
-    const restageFailure = await restageLeafGates(worktree);
+    const restageFailure = await restageLeafGates(worktree, slug);
     if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
   }
   const closed = { ...currentStored.record, phase: 'closed' as const };
@@ -413,11 +416,6 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     return wrote.kind === 'updated'
       ? { kind: 'no-commit-done' }
       : halted(`routed exit host ${input.host}: no-commit compare-and-swap ${wrote.kind}`);
-  }
-
-  if (await publishedStackRefusal(input.worktree, input.slug, { git })) {
-    await haltRestack(input.worktree, 'published-stack', input.events, { child: input.host });
-    return halted(`routed exit host ${input.host}: published stack`);
   }
 
   let built = stored;

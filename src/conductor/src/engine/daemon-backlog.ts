@@ -26,6 +26,7 @@ import type { BacklogTreeSource } from './backlog-tree-source.js';
 import { readGitBlobs, type GitBlobBatchRunner } from './git-blob-batch.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
+import { publishedFeatureReopened } from './stack-refresh-ledger.js';
 import { parseCoherenceArtifact } from './coherence-parse.js';
 import {
   backlogTreeManifestSource,
@@ -536,6 +537,8 @@ export interface DiscoverBacklogOpts {
    */
   hasWarned?: (slug: string) => Promise<boolean>;
   markWarned?: (slug: string) => Promise<void>;
+  /** Read durable publication state for a processed slug before skipping it. */
+  isPublishedFeatureReopened?: (slug: string) => Promise<boolean>;
   /**
    * Owner-gate injectables (all optional → backward compatible). When the four
    * are absent the discovery behaves EXACTLY as before: no gate, no gate logs.
@@ -1018,7 +1021,12 @@ export async function discoverBacklog(
     let planContent = candidate.manifestBacked ? null : await tree.readFile(planRel);
     if (!candidate.manifestBacked && planContent === null) continue;
 
-    if (await isProcessed(slug)) continue;
+    if (await isProcessed(slug)) {
+      const reopened = opts.isPublishedFeatureReopened
+        ? await opts.isPublishedFeatureReopened(slug)
+        : await publishedFeatureReopened(pathJoin(projectRoot, '.worktrees', slug), slug);
+      if (!reopened || await (opts.isOperatorParked ?? ((candidate) => readOperatorParkMarker(projectRoot, candidate)))(slug)) continue;
+    }
 
     // The processed marker and shipped-record stem are identity-only dedup:
     // run them before content classification so completed work with a malformed

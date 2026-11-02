@@ -32,6 +32,56 @@ export async function publishedStackRefusal(
 }
 
 /**
+ * Read the one remote view which authorizes a routed change to a published
+ * stack.  A publication receipt is deliberately not enough: a reviewer may
+ * have moved a member after FINISH recorded it.  This check is read-only and
+ * is shared by every routed admission choke point.
+ */
+export type PublishedStackTipPreflight =
+  | { readonly kind: 'not-published' }
+  | { readonly kind: 'intact' }
+  | { readonly kind: 'refused'; readonly member: PublicationMember }
+  | { readonly kind: 'unreadable' };
+
+export async function publishedStackTipPreflight(
+  root: string,
+  slug: string,
+  dependencies: PublicationRecordDependencies & { readonly git?: GitRunner } = {},
+): Promise<PublishedStackTipPreflight> {
+  const git = dependencies.git ?? makeGitRunner(root);
+  const publication = await activePublicationRecord(root, slug, { git });
+  if (publication === undefined || publication.record.members.length === 0) return { kind: 'not-published' };
+  const members = publication.record.members;
+  const unavailable = members.find((member) => member.lastSeen !== undefined);
+  if (unavailable !== undefined) return { kind: 'refused', member: unavailable };
+
+  const receipts = new Map<string, string>();
+  for (const member of members) {
+    try {
+      const receipt = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, member.branch)]);
+      const tip = receipt.exitCode === 0 ? receipt.stdout.trim() : '';
+      if (tip === '') return { kind: 'unreadable' };
+      receipts.set(member.branch, tip);
+    } catch {
+      return { kind: 'unreadable' };
+    }
+  }
+  const refs = members.map((member) => `refs/heads/${member.branch}`);
+  let remote: Awaited<ReturnType<GitRunner>>;
+  try {
+    remote = await git(['ls-remote', '--heads', 'origin', ...refs]);
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  if (remote.exitCode !== 0) return { kind: 'unreadable' };
+  for (const member of members) {
+    const remoteTip = lsRemoteTip(remote.stdout, `refs/heads/${member.branch}`);
+    if (remoteTip === undefined || remoteTip !== receipts.get(member.branch)) return { kind: 'refused', member };
+  }
+  return { kind: 'intact' };
+}
+
+/**
  * The post-ship proof for a published stack.  A shipped record remains the
  * ship/reap gate; this proof is deliberately narrower and protects only later
  * child-branch cleanup.  GitHub's merge commit is the squash commit in this

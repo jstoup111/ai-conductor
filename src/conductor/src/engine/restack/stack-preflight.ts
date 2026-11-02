@@ -22,7 +22,7 @@ import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
 import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
-import { publishedStackRefusal } from '../stack-publication.js';
+import { publishedStackRefusal, publishedStackTipPreflight } from '../stack-publication.js';
 import { formatStackCursorRefusal, type StackCursorFailureCause } from '../stack-cursor-recovery.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
@@ -411,8 +411,16 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   // member branches, only an operator may choose a refresh/recovery path.
   const publishedChild = cursor.repairChildren[0];
   if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
-    await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
-    return { kind: 'halted', detail: 'published stack refused restack repair' };
+    // Only a routed round has passed the admission preflight. Raw post-closure
+    // changes still require an explicit landing and every other restack stays frozen.
+    if (!await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+      const preflight = await publishedStackTipPreflight(options.worktree, options.slug, { git: options.git });
+      if (preflight.kind === 'intact') {
+        return { kind: 'halted', detail: `published stack requires ai-conductor stack land --slug ${options.slug} --child ${publishedChild} --reason "<why>"` };
+      }
+      const suffix = preflight.kind === 'refused' ? `member ${preflight.member.position} changed or closed (#3268)` : 'tips are unreadable (#3268)';
+      return { kind: 'halted', detail: `published stack cannot open a landing: ${suffix}` };
+    }
   }
 
   // A raw closed-child commit needs an operator landing to declare it done;

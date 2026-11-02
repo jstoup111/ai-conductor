@@ -720,6 +720,11 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
             : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
         }
         if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
+          if (await routedRoundOpen(options.worktree, options.slug, { git })) {
+            return await cleanJournal(options.worktree, journal, git)
+              ? { kind: 'cleaned' }
+              : { kind: 'unavailable', detail: 'cannot remove routed published restack journal' };
+          }
           await haltRestack(options.worktree, 'published-stack', options.events, {
             child: journal.journal.ranges[0]?.child,
           });

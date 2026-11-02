@@ -54,7 +54,7 @@ describe('published-stack route admission', () => {
       return subject.git(args, options);
     };
     await expect(admitRound(subject.root, 'demo', created.record, child, { git })).resolves.toEqual({
-      kind: 'refused', detail: 'routing admission refused: published-stack',
+      kind: 'refused', detail: 'routing admission refused: published stack tips are unreadable; retry',
     });
     expect(calls.some((args) => args[0] === 'update-ref')).toBe(false);
   });

@@ -9,7 +9,8 @@ import { loadConfig } from '../config.js';
 import { verdictPathFor } from '../gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { loadSliceTopology, type SliceTopology } from '../slice-topology.js';
-import { publishedStackRefusal } from '../stack-publication.js';
+import { publishedStackRefusal, publishedStackTipPreflight } from '../stack-publication.js';
+import { activePublicationRecord } from '../stack-publication-record.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
 import { syncRestackedWorktree } from '../restack/restack-sync.js';
@@ -277,6 +278,8 @@ export interface CheckOpenOperatorRoundInput {
   readonly child: ChildId;
   readonly carry: readonly ChildId[];
   readonly reason: string;
+  /** Rewind remains frozen; a landing is the one operator route through it. */
+  readonly origin?: OperatorRoundOrigin;
 }
 
 export type OpenOperatorRoundRefusalKind =
@@ -316,6 +319,7 @@ export interface CheckOpenOperatorRoundDependencies {
   readonly git?: GitRunner;
   readonly loadSliceTopology?: typeof loadSliceTopology;
   readonly publishedStackRefusal?: typeof publishedStackRefusal;
+  readonly publishedStackTipPreflight?: typeof publishedStackTipPreflight;
   readonly routedRoundOpen?: typeof routedRoundOpen;
   readonly routingFenceOpen?: typeof routingFenceOpen;
   readonly readRepairMarker?: typeof readRepairMarker;
@@ -417,6 +421,7 @@ export async function checkOpenOperatorRound(
   const git = dependencies.git ?? makeGitRunner(input.worktree);
   const readTopology = dependencies.loadSliceTopology ?? loadSliceTopology;
   const readPublished = dependencies.publishedStackRefusal ?? publishedStackRefusal;
+  const preflightPublished = dependencies.publishedStackTipPreflight ?? publishedStackTipPreflight;
   const roundOpen = dependencies.routedRoundOpen ?? routedRoundOpen;
   const fenceOpen = dependencies.routingFenceOpen ?? routingFenceOpen;
   const readMarker = dependencies.readRepairMarker ?? readRepairMarker;
@@ -442,7 +447,16 @@ export async function checkOpenOperatorRound(
     return refuse('routing-off', `Routing is disabled by stacked_prs.route_whole_feature_fixes; enable it, then retry ${command(input.slug, input.child, input.carry)}.`);
   }
   if (await readPublished(input.worktree, input.slug, { git })) {
-    return refuse('published-stack', `This stack is published and frozen by #3268; resolve publication first, then retry ${command(input.slug, input.child, input.carry)}.`);
+    if (input.origin === 'rewind') {
+      return refuse('published-stack', `This stack is published and frozen by #3268; rewind cannot change it.`);
+    }
+    const publication = await preflightPublished(input.worktree, input.slug, { git });
+    if (publication.kind === 'unreadable') {
+      return refuse('published-stack', `Published stack tips are unreadable; retry ${command(input.slug, input.child, input.carry)}.`);
+    }
+    if (publication.kind === 'refused') {
+      return refuse('published-stack', `Published stack member ${publication.member.position} changed or closed (#3268); resolve it, then retry ${command(input.slug, input.child, input.carry)}.`);
+    }
   }
 
   const positions = topology.positions as readonly ChildId[];
@@ -649,6 +663,20 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
   let stored = loaded;
   if (stored.record.kind !== 'operator' || stored.record.operator?.origin !== origin || stored.record.operator.entryStep !== entryStep || stored.record.hosts[input.host] === undefined) {
     return { kind: 'refused', detail: `operator round ${input.roundId} does not match landing host ${input.host}` };
+  }
+
+  // A successful landing makes a previously finished feature runnable again.
+  // This is deliberately after the durable round exists, so a refusal cannot
+  // erase the terminal proof it was asked to preserve.
+  if (origin === 'land' && await activePublicationRecord(input.worktree, input.slug, { git })) {
+    try {
+      await Promise.all([
+        rm(join(input.worktree, '.pipeline', 'finish-choice'), { force: true }),
+        rm(join(input.worktree, '.pipeline', 'DONE'), { force: true }),
+      ]);
+    } catch {
+      return { kind: 'refused', detail: 'cannot clear finished markers for published landing' };
+    }
   }
 
   if (stored.record.phase === 'prepared') {
