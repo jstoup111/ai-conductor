@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-01
+## [1.7.0] - 2026-11-02
 
 ### Added
 
@@ -231,6 +231,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked feature restacks preserve the newest durable halt record. ([implementation PR #3553](https://github.com/jstoup111/ai-conductor/pull/3553)).
 - Stacked feature cleanup safely deletes accounted-for merged child branches even when their heads moved after publication. ([implementation PR #3563](https://github.com/jstoup111/ai-conductor/pull/3563)).
 - Stack preflight now halts with a working recovery when a routed host's closure ref was moved by hand, instead of continuing and silently dropping the repair from the children above it. ([implementation PR #3569](https://github.com/jstoup111/ai-conductor/pull/3569)).
+- PRD-audit recovery now rejects decisions for criteria outside the current offered scope. ([implementation PR #3570](https://github.com/jstoup111/ai-conductor/pull/3570)).
 
 ## Migration
 
