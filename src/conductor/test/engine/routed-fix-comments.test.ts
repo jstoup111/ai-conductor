@@ -544,7 +544,7 @@ describe('FINISH routed fix comments', () => {
       .toEqual({ creates: [], posted: [marker] });
   });
 
-  it('retries a failed comment lookup without creating before scanning again', async () => {
+  it('returns a FINISH retry for a failed lookup without creating, then scans again', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
     const fixture = commentFixture({
       ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
@@ -553,25 +553,107 @@ describe('FINISH routed fix comments', () => {
       lookupFailures: 1,
     });
 
-    await expect(fixture.run()).rejects.toThrow('lookup failed for PR #101');
-    expect(fixture.calls.filter((args) => args[1] === 'comment')).toEqual([]);
-    await fixture.run();
+    const observe = async () => ({
+      ...commentsOwedSnapshot(),
+      stackRefresh: fixture.ledger().posted.includes(marker) ? 'settled' as const : 'comments-owed' as const,
+    });
+    const first = await advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), postRoutedComments: fixture.run },
+    });
 
-    expect(fixture.calls.filter((args) => args[1] === 'view')).toHaveLength(2);
-    expect(fixture.calls.filter((args) => args[1] === 'comment')).toHaveLength(1);
+    expect(first).toEqual(expect.objectContaining({
+      kind: 'publication_retry', transition: 'post_routed_comments',
+    }));
+    expect(fixture.calls.filter((args) => args[1] === 'comment')).toEqual([]);
+
+    const second = await advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), postRoutedComments: fixture.run },
+    });
+
+    expect({ second, scans: fixture.calls.filter((args) => args[1] === 'view'), creates: fixture.calls.filter((args) => args[1] === 'comment') })
+      .toEqual({
+        second: { kind: 'advanced', transition: 'post_routed_comments' },
+        scans: [
+          ['pr', 'view', '101', '-R', repository, '--json', 'comments'],
+          ['pr', 'view', '101', '-R', repository, '--json', 'comments'],
+        ],
+        creates: [expect.any(Array)],
+      });
   });
 
-  it('does not recreate a receipt from an earlier routed round', async () => {
-    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+  it('does not recreate a posted earlier-round comment when a later round is owed', async () => {
+    const earlier = '<!-- conductor:routed-fix:r1:101 -->';
+    const later = '<!-- conductor:routed-fix:r2:102 -->';
     const fixture = commentFixture({
-      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }], [], [marker]),
-      targets: [{ kind: 'host', pr: 101, roundId, rebaseOnly: [] }],
-      bodies: { 101: `body\n${marker}` },
+      ledger: owedLedger([
+        { roundId, kind: 'audit', host, marker: earlier },
+        { roundId: parseRoundId('r2')!, kind: 'audit', host: parseChildId(2)!, marker: later },
+      ], [], [earlier]),
+      targets: [
+        { kind: 'host', pr: 101, roundId, rebaseOnly: [] },
+        { kind: 'host', pr: 102, roundId: parseRoundId('r2')!, rebaseOnly: [] },
+      ],
+      bodies: { 101: `earlier\n${earlier}`, 102: `later\n${later}` },
     });
 
     await fixture.run();
 
-    expect(fixture.calls).toEqual([]);
+    expect({
+      creates: fixture.calls.filter((args) => args[1] === 'comment'),
+      posted: fixture.ledger().posted,
+    }).toEqual({
+      creates: [['pr', 'comment', '102', '-R', repository, '--body', `later\n${later}`]],
+      posted: [earlier, later],
+    });
+  });
+
+  it('retries unreadable targets and bodies without creating, then recomputes them', async () => {
+    const marker = '<!-- conductor:routed-fix:r1:101 -->';
+    const target = { kind: 'host' as const, pr: 101, roundId, rebaseOnly: [] };
+    const targets = vi.fn()
+      .mockResolvedValueOnce({ kind: 'retryable' as const })
+      .mockResolvedValue({ kind: 'targets' as const, targets: [target] });
+    const render = vi.fn()
+      .mockResolvedValueOnce({ kind: 'retryable' as const })
+      .mockResolvedValue({ kind: 'body' as const, body: `body\n${marker}` });
+    const fixture = commentFixture({
+      ledger: owedLedger([{ roundId, kind: 'audit', host, marker }]),
+      targets: [target],
+      bodies: { 101: `body\n${marker}` },
+    });
+    const operations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
+    const run = () => postRoutedComments({
+      root: '/worktree', slug: 'demo', baseBranch: 'main', repository,
+      git: fixture.git, gh: fixture.gh, operations,
+      routedCommentTargets: targets,
+      renderHostComment: render,
+    });
+    const observe = async () => ({
+      ...commentsOwedSnapshot(),
+      stackRefresh: fixture.ledger().posted.includes(marker) ? 'settled' as const : 'comments-owed' as const,
+    });
+    const advance = () => advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), postRoutedComments: run },
+    });
+
+    const targetRetry = await advance();
+    const bodyRetry = await advance();
+    expect(operations.run).not.toHaveBeenCalled();
+
+    const completed = await advance();
+
+    expect({ targetRetry, bodyRetry, completed, targets: targets.mock.calls.length, bodies: render.mock.calls.length, creates: operations.run.mock.calls.length })
+      .toEqual({
+        targetRetry: expect.objectContaining({ kind: 'publication_retry', transition: 'post_routed_comments' }),
+        bodyRetry: expect.objectContaining({ kind: 'publication_retry', transition: 'post_routed_comments' }),
+        completed: { kind: 'advanced', transition: 'post_routed_comments' },
+        targets: 3,
+        bodies: 2,
+        creates: 1,
+      });
   });
 
   it('uses an operation runner bound to the member PR', async () => {
