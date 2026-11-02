@@ -1546,8 +1546,15 @@ a routed round instead of appended to the leaf plan:
   task's slice, its committed `**Child:**` line, or the child recorded for an engine-appended
   remediation task. Work with no owner task goes to a residue judgement dispatched with the
   `remediate` step's provider, at most two attempts.
-- **Host.** Cited paths already on the leaf tip are prerequisite inputs. The host is the owner when
-  its closure holds every input, else the first closed child above it that does, else the leaf.
+- **Host.** Each item's citations are its cited paths plus repository paths named in the text its
+  `rem-*` blocks carry: task titles (or the rationale when there are no tasks), rationale,
+  criterion, and governing clause. Wrapping quotes, backticks, `(`, `[`, and `<` are stripped.
+  Each citation is resolved against one recursive listing of the leaf tip: an exact listed file, or
+  the unique listed file it is a `/`-bounded suffix of, is a prerequisite input; a citation naming a
+  directory, or a suffix of two or more files, is dropped; anything else is a repair output. The
+  host is the owner when its closure holds every input, else the first closed child above it that
+  does, else the leaf. An unreadable leaf listing halts `needs-human` with
+  `cannot read leaf branch <ref>`.
 - **Admission.** The engine allocates the next round id `r<n>` and writes a `prepared` route record.
   One transaction, fenced on the restack journal, then opens the round and writes the `repairing`
   marker. The engine persists `remediation_routed` and `routed_repair_phase`, records one kickback,
@@ -1584,8 +1591,10 @@ a routed round instead of appended to the leaf plan:
   round grants the host one routed-repair credit, consumed before the cumulative kickback bound
   halts.
 - **Reroute.** A routed `build` may return a prerequisite claim naming paths or exported symbols the
-  host lacks. The engine verifies it against a higher child's tree (a closed child's closure, or the
-  leaf); a verified claim preserves the rejected host tip at `rejected/r<n>/<m>`, restores the host's
+  host lacks. The engine first resolves the claimed paths and the round's recorded inputs against
+  the leaf listing the same way, so only resolved files count; a claim left with no file and no
+  symbol is unverified (`claim names no prerequisite file`). It then verifies the claim against a
+  higher child's tree (a closed child's closure, or the leaf); a verified claim preserves the rejected host tip at `rejected/r<n>/<m>`, restores the host's
   closure, moves the round to that child in one fenced transaction, and emits
   `remediation_rerouted`. A malformed or unverified claim counts as an ordinary failed build
   attempt; a failed move or worktree sync halts `needs-human`.

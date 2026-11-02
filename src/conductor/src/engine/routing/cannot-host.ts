@@ -3,9 +3,13 @@ import { parseFeatureBranch } from '../feature-branch-identity.js';
 import type { GitRunner } from '../rebase.js';
 import { closureRefFor } from './routing-refs.js';
 
-export type CitedPathClassification = {
+export type ResolvedCitedPaths = {
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
+  readonly dropped: readonly {
+    readonly path: string;
+    readonly kind: 'dropped-directory' | 'dropped-ambiguous';
+  }[];
 } | { readonly kind: 'halt'; readonly detail: string };
 
 export type HostSelection = {
@@ -41,20 +45,52 @@ function slugForLeafTip(leafTip: string): string | undefined {
   return identity.kind === 'leaf' ? identity.slug : undefined;
 }
 
-/** Separates prerequisite inputs already present on the leaf from repair outputs. */
-export async function classifyCitedPaths(
+/** Resolves citations against one recursive listing of the leaf's files. */
+export async function resolveCitedPaths(
   paths: readonly string[],
   leafTip: string,
   git: GitRunner,
-): Promise<CitedPathClassification> {
+): Promise<ResolvedCitedPaths> {
+  const listing = await git(['ls-tree', '-r', '--name-only', leafTip]);
+  if (listing.exitCode !== 0) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
+
+  const files = listing.stdout.split('\n').filter((path) => path.length > 0);
+  const listed = new Set(files);
   const inputs: string[] = [];
+  const inputSet = new Set<string>();
   const outputs: string[] = [];
+  const dropped: { path: string; kind: 'dropped-directory' | 'dropped-ambiguous' }[] = [];
+
   for (const path of paths) {
-    const exists = await hasPath(git, leafTip, path);
-    if (exists === undefined) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
-    (exists ? inputs : outputs).push(path);
+    if (listed.has(path)) {
+      if (!inputSet.has(path)) {
+        inputSet.add(path);
+        inputs.push(path);
+      }
+      continue;
+    }
+
+    const directory = path.endsWith('/') ? path.slice(0, -1) : path;
+    if (files.some((file) => file.startsWith(`${directory}/`))) {
+      dropped.push({ path, kind: 'dropped-directory' });
+      continue;
+    }
+
+    const suffixMatches = files.filter((file) => file.endsWith(`/${path}`));
+    if (suffixMatches.length === 1) {
+      const [match] = suffixMatches;
+      if (!inputSet.has(match)) {
+        inputSet.add(match);
+        inputs.push(match);
+      }
+    } else if (suffixMatches.length > 1) {
+      dropped.push({ path, kind: 'dropped-ambiguous' });
+    } else {
+      outputs.push(path);
+    }
   }
-  return { inputs, outputs };
+
+  return { inputs, outputs, dropped };
 }
 
 /**
