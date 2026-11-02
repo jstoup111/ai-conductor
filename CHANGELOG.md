@@ -93,6 +93,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build reviews apply one consistent severity scale across built-in and custom reviewer prompts. ([implementation PR #3525](https://github.com/jstoup111/ai-conductor/pull/3525)).
 - Operators can record reduced coverage for an active stack child and receive specific refusal causes. ([implementation PR #3541](https://github.com/jstoup111/ai-conductor/pull/3541)).
 - As-built reviews prevent duplicate remediation work by reconciling reworded findings with prior cases. ([implementation PR #3533](https://github.com/jstoup111/ai-conductor/pull/3533)).
+- FINISH now publishes author-approved PR prose through the engine and retries safely when retained prose remains unchanged. ([implementation PR #3573](https://github.com/jstoup111/ai-conductor/pull/3573)).
 
 ### Removed
 
