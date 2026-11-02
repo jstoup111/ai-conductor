@@ -1,0 +1,199 @@
+// Covers: task:1
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+async function loadHandoff() {
+  return import('../../src/engine/finish-pr-prose-handoff.js');
+}
+
+describe('FINISH PR-prose handoff', () => {
+  let projectRoot: string;
+  let pipelineDir: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'finish-pr-prose-handoff-'));
+    pipelineDir = join(projectRoot, '.pipeline');
+    await mkdir(pipelineDir);
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  async function writeHandoff(value: unknown): Promise<void> {
+    const { PR_PROSE_HANDOFF_PATH } = await loadHandoff();
+    await writeFile(join(projectRoot, PR_PROSE_HANDOFF_PATH), JSON.stringify(value));
+  }
+
+  it('returns not_returned when no handoff was written', async () => {
+    const { readPrProseHandoff } = await loadHandoff();
+
+    await expect(readPrProseHandoff(pipelineDir)).resolves.toEqual({ kind: 'not_returned' });
+  });
+
+  it('rejects unparsable JSON', async () => {
+    await writeFile(join(projectRoot, '.pipeline/finish-pr-prose.json'), '{not json');
+    const { readPrProseHandoff } = await loadHandoff();
+
+    await expect(readPrProseHandoff(pipelineDir)).resolves.toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining('handoff could not be parsed'),
+    });
+  });
+
+  it.each([
+    ['version', { version: 2, title: 'Title', body: 'Body' }],
+    ['title', { version: 1, body: 'Body' }],
+    ['body', { version: 1, title: 'Title' }],
+    ['title', { version: 1, title: 42, body: 'Body' }],
+    ['body', { version: 1, title: 'Title', body: 42 }],
+    ['title', { version: 1, title: ' \t ', body: 'Body' }],
+    ['body', { version: 1, title: 'Title', body: ' \n ' }],
+  ])('rejects an invalid %s field', async (field, handoff) => {
+    await writeHandoff(handoff);
+    const { readPrProseHandoff } = await loadHandoff();
+
+    await expect(readPrProseHandoff(pipelineDir)).resolves.toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining(field),
+    });
+  });
+
+  it('returns a trimmed title and preserves the body bytes', async () => {
+    const body = 'First line.  \n\nSecond line.\n';
+    await writeHandoff({ version: 1, title: '  A reader-facing title  ', body });
+    const { PR_PROSE_HANDOFF_PATH, readPrProseHandoff } = await loadHandoff();
+
+    expect(PR_PROSE_HANDOFF_PATH).toBe('.pipeline/finish-pr-prose.json');
+    await expect(readPrProseHandoff(pipelineDir)).resolves.toEqual({
+      kind: 'returned',
+      prose: { title: 'A reader-facing title', body },
+    });
+  });
+
+  // Covers: task:rem-as-built-handoff-path-constant
+  it('reads and clears the handoff file named by PR_PROSE_HANDOFF_PATH', async () => {
+    await writeHandoff({ version: 1, title: 'Title', body: 'Body' });
+    const { PR_PROSE_HANDOFF_PATH, clearPrProseHandoff, readPrProseHandoff } = await loadHandoff();
+
+    await expect(readPrProseHandoff(pipelineDir)).resolves.toMatchObject({ kind: 'returned' });
+
+    await clearPrProseHandoff(pipelineDir);
+    await expect(access(join(projectRoot, PR_PROSE_HANDOFF_PATH))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(clearPrProseHandoff(pipelineDir)).resolves.toBeUndefined();
+  });
+
+  // Covers: task:2
+  it('re-splices every current step region exactly once', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+    const currentBody = [
+      'Current introduction.',
+      '<!-- ai-conductor:step first -->\ncurrent first\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step second -->\ncurrent second\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step third -->\ncurrent third\n<!-- /ai-conductor:step -->',
+    ].join('\n\n');
+    const authoredBody = [
+      'Authored introduction.',
+      '<!-- ai-conductor:step second -->\nchanged second\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step third -->\nchanged third\n<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step third -->\nduplicate third\n<!-- /ai-conductor:step -->',
+    ].join('\n\n');
+
+    const result = applyAuthoredPrProse({
+      currentBody,
+      prose: { title: 'Returned title', body: authoredBody } as never,
+      isPlaceholder: () => false,
+    });
+
+    expect(result).toMatchObject({ kind: 'apply', title: 'Returned title' });
+    if (result.kind !== 'apply') throw new Error(`Expected prose application, got ${result.kind}`);
+    for (const [key, bytes] of [
+      ['first', 'current first'],
+      ['second', 'current second'],
+      ['third', 'current third'],
+    ]) {
+      expect(result.body.match(new RegExp(`<!-- ai-conductor:step ${key} -->`, 'g'))).toHaveLength(1);
+      expect(result.body).toContain(`<!-- ai-conductor:step ${key} -->\n${bytes}\n<!-- /ai-conductor:step -->`);
+    }
+    expect(result.body).not.toContain('changed second');
+    expect(result.body).not.toContain('changed third');
+    expect(result.body).not.toContain('duplicate third');
+  });
+
+  // Covers: task:2
+  it('rejects spliced prose that remains placeholder', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    const result = applyAuthoredPrProse({
+      currentBody: 'Current body.',
+      prose: { title: 'Returned title', body: 'Returned body.' } as never,
+      isPlaceholder: (title, body) => title === 'Returned title' && body === 'Returned body.',
+    });
+
+    expect(result).toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining('body is still placeholder'),
+    });
+  });
+
+  // Covers: task:2
+  it('rejects prose that drops the current Closes reference', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    const result = applyAuthoredPrProse({
+      currentBody: 'Current body.\n\nCloses owner/repo#42',
+      prose: { title: 'Returned title', body: 'Returned body.' } as never,
+      isPlaceholder: () => false,
+    });
+
+    expect(result).toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining('Closes owner/repo#42'),
+    });
+  });
+
+  // Covers: task:rem-prd-audit-closes-ref
+  it.each([
+    ['a short reference', 'Closes #42', 'Returned body.'],
+    ['a qualified reference replaced by a longer one', 'Closes owner/repo#42', 'Returned body.\n\nCloses owner/repo#421'],
+    ['a qualified reference replaced by a shorter-prefix issue', 'Closes owner/repo#42', 'Returned body.\n\nCloses owner/repo#420'],
+  ])('rejects prose that drops %s', async (_caseName, currentReference, body) => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    expect(applyAuthoredPrProse({
+      currentBody: `Current body.\n\n${currentReference}`,
+      prose: { title: 'Returned title', body } as never,
+      isPlaceholder: () => false,
+    })).toEqual({
+      kind: 'invalid',
+      detail: expect.stringContaining(currentReference),
+    });
+  });
+
+  it('retains exact qualified and short Closes references', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    expect(applyAuthoredPrProse({
+      currentBody: 'Current body.\n\nCloses #42\nCloses owner/repo#43',
+      prose: { title: 'Returned title', body: 'Returned body.\n\nCloses #42\nCloses owner/repo#43' } as never,
+      isPlaceholder: () => false,
+    })).toMatchObject({ kind: 'apply' });
+  });
+
+  // Covers: task:2
+  it('applies prose without a Closes reference when none is currently present', async () => {
+    const { applyAuthoredPrProse } = await loadHandoff();
+
+    expect(applyAuthoredPrProse({
+      currentBody: 'Current body.',
+      prose: { title: 'Returned title', body: 'Returned body.' } as never,
+      isPlaceholder: () => false,
+    })).toEqual({
+      kind: 'apply',
+      title: 'Returned title',
+      body: 'Returned body.',
+    });
+  });
+});

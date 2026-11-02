@@ -87,6 +87,34 @@ async function isPublicationOperationFailedError(error: unknown): Promise<boolea
   return (isPublicationOperationFailedError as (value: unknown) => boolean)(error);
 }
 
+async function prProseAuthoringFailedError(
+  cause: 'not_returned' | 'invalid',
+  detail: string,
+): Promise<Error> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const PrProseAuthoringFailedError = mod.PrProseAuthoringFailedError;
+  if (typeof PrProseAuthoringFailedError !== 'function') {
+    throw new Error(
+      'expected export "PrProseAuthoringFailedError" to classify missing or invalid authored PR prose (not yet implemented)',
+    );
+  }
+  return new (PrProseAuthoringFailedError as new (
+    failureCause: 'not_returned' | 'invalid',
+    failureDetail: string,
+  ) => Error)(cause, detail);
+}
+
+async function isPrProseAuthoringFailedError(error: unknown): Promise<boolean> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const isPrProseAuthoringFailedError = mod.isPrProseAuthoringFailedError;
+  if (typeof isPrProseAuthoringFailedError !== 'function') {
+    throw new Error(
+      'expected export "isPrProseAuthoringFailedError" to discriminate missing or invalid authored PR prose (not yet implemented)',
+    );
+  }
+  return (isPrProseAuthoringFailedError as (value: unknown) => boolean)(error);
+}
+
 async function routeFinishPublicationDisposition(disposition: unknown) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const route = mod.routeFinishPublicationDisposition;
@@ -461,6 +489,18 @@ describe('author_pr_prose publish failure', () => {
     })).resolves.toEqual({ kind: 'human_required', reason: 'ambiguous_pr_identity' });
   });
 
+  it('keeps the publish failure when a judged revision remains unchanged', async () => {
+    const failure = await publicationOperationFailedError(operation, error);
+    const revisionRequired = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: false },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => revisionRequired,
+      effects: { authorProse: async () => { throw failure; }, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_operation_failed' });
+  });
+
   it('exports a discriminator for guarded publication failures', async () => {
     const failure = await publicationOperationFailedError(operation, error);
 
@@ -519,6 +559,114 @@ describe('author_pr_prose publish failure', () => {
       transition: 'author_pr_prose',
       reason: 'authoring_dispatch_failed',
     });
+  });
+});
+
+describe('author_pr_prose handoff failure', () => {
+  function placeholderSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'placeholder',
+        ready: false,
+      },
+    });
+  }
+
+  function authoredSnapshot(): PublicationSnapshot {
+    return readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+    });
+  }
+
+  // Covers: task:3
+  // Covers: task:rem-as-built-revision-failure-cause
+  it.each([
+    ['not_returned', 'The authoring handoff was not returned.', 'prose_not_returned'],
+    ['invalid', 'The returned handoff body is still placeholder.', 'prose_invalid'],
+  ] as const)(
+    'retries %s authored prose after placeholder prose is re-observed without treating it as unmoved',
+    async (cause, detail, reason) => {
+      const failure = await prProseAuthoringFailedError(cause, detail);
+
+      await expect(advanceFinishPublication({
+        observe: async () => placeholderSnapshot(),
+        effects: {
+          authorProse: async () => { throw failure; },
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+        },
+      })).resolves.toEqual({
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason,
+        detail,
+      });
+    },
+  );
+
+  it.each([
+    ['not_returned', 'The authoring handoff was not returned.', 'prose_not_returned'],
+    ['invalid', 'The returned handoff body is still placeholder.', 'prose_invalid'],
+  ] as const)('keeps %s handoff failure when revision_required prose is unchanged', async (cause, detail, reason) => {
+    const failure = await prProseAuthoringFailedError(cause, detail);
+    const revisionRequired = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: false },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => revisionRequired,
+      effects: { authorProse: async () => { throw failure; }, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({ kind: 'publication_retry', transition: 'author_pr_prose', reason, detail });
+  });
+
+  it('keeps a dispatch failure when revision_required prose is unchanged', async () => {
+    const revisionRequired = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'revision_required', ready: false },
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => revisionRequired,
+      effects: { authorProse: async () => { throw new Error('provider transport failed'); }, dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    })).resolves.toEqual({ kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_dispatch_failed' });
+  });
+
+  // Covers: task:3
+  it.each([
+    ['not_returned', 'The authoring handoff was not returned.'],
+    ['invalid', 'The returned handoff body is still placeholder.'],
+  ] as const)(
+    'accepts authoritative authored prose after a %s handoff failure',
+    async (cause, detail) => {
+      const failure = await prProseAuthoringFailedError(cause, detail);
+
+      await expect(advanceFinishPublication({
+        observe: vi.fn<() => Promise<PublicationSnapshot>>()
+          .mockResolvedValueOnce(placeholderSnapshot())
+          .mockResolvedValueOnce(authoredSnapshot()),
+        effects: {
+          authorProse: async () => { throw failure; },
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+        },
+      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+    },
+  );
+
+  it('exports a discriminator for typed authored-prose failures', async () => {
+    const failure = await prProseAuthoringFailedError('invalid', 'body is still placeholder');
+
+    await expect(isPrProseAuthoringFailedError(failure)).resolves.toBe(true);
+    await expect(isPrProseAuthoringFailedError(new Error('body is still placeholder'))).resolves.toBe(false);
+  });
+
+  it('keeps authored-prose handoff retries out of non-retryable reasons', async () => {
+    await expect(nonRetryablePublicationReason('prose_not_returned')).resolves.toBeUndefined();
+    await expect(nonRetryablePublicationReason('prose_invalid')).resolves.toBeUndefined();
   });
 });
 
@@ -996,15 +1144,18 @@ describe('finish-publication domain types', () => {
     } as PublicationSnapshot)).resolves.toBe(2 * 10);
   });
 
-  it('routes revision-required prose to authoring without constructing a judgment request', async () => {
+  // Covers: task:10
+  it('routes a persisted revision-required verdict to authoring with its guidance', async () => {
     const authorProse = vi.fn(async () => undefined);
     const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' as const }));
+    const revisionGuidance = 'Name the validation evidence readers can reproduce.';
     const snapshot = readyPublicationSnapshot({
       pr: {
         identity: 'one',
         url: 'https://github.com/acme/widget/pull/1172',
         prose: 'revision_required',
         ready: false,
+        revisionGuidance,
       },
     });
 
@@ -1018,8 +1169,49 @@ describe('finish-publication domain types', () => {
       pullRequestUrl: snapshot.pr.identity === 'one' ? snapshot.pr.url : '',
       authoringScope: ['title', 'body'],
       maximumPasses: 1,
+      revisionGuidance,
     });
     expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:10
+  it('accepts a verdict without dispatching the authoring boundary', async () => {
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const authorProse = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' as const };
+    });
+
+    await expect(advanceFinishPublication({
+      observe: async () => readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+      }),
+      effects: { authorProse, dispatchJudgment },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
+    expect(authorProse).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:10
+  it('judges a newly stale prose revision instead of treating the prior acceptance as current', async () => {
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' as const };
+    });
+
+    const observe = async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+    });
+    await advanceFinishPublication({ observe, effects: { dispatchJudgment } });
+
+    // A changed title/body digest is represented by a fresh stale classification.
+    prose = 'stale';
+    await expect(advanceFinishPublication({ observe, effects: { dispatchJudgment } }))
+      .resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a PR outcome record without an external PR identity', async () => {
@@ -1977,31 +2169,57 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     });
   });
 
-  it('keeps an unselectable revision-progress retry byte-identical without guidance', async () => {
-    const stale = readyPublicationSnapshot({
-      pr: {
-        identity: 'one',
-        url: 'https://github.com/acme/widget/pull/1172',
-        prose: 'stale',
-        ready: false,
-      },
+  // Covers: task:rem-prd-audit-judge-stale-rejudge
+  it.each([
+    ['revision-required', { kind: 'revision_required' as const, reason: 'structurally_incomplete' as const }],
+    ['accepted', { kind: 'accepted' as const }],
+  ])('re-judges a body changed during a %s judgment before accepting it', async (_verdict, firstVerdict) => {
+    let body = '## Why\n\nThe first retained revision.';
+    let acceptedBody: string | undefined;
+    const observedBodies: string[] = [];
+    const judgedBodies: string[] = [];
+    const observe = vi.fn(async (): Promise<PublicationSnapshot> => {
+      observedBodies.push(body);
+      return readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: acceptedBody === body ? 'accepted' : 'stale',
+          proseRevision: body,
+          ready: false,
+        },
+      });
+    });
+    const dispatchJudgment = vi.fn(async () => {
+      judgedBodies.push(body);
+      if (dispatchJudgment.mock.calls.length === 1) {
+        // Model the retained PR changing while the first judgment dispatch is
+        // in flight; the second body has no verdict yet.
+        body = '## Why\n\nThe revised retained body.';
+        return firstVerdict;
+      }
+      acceptedBody = body;
+      return { kind: 'accepted' as const };
     });
 
-    await expect(advanceFinishPublication({
-      observe: vi.fn<() => Promise<PublicationSnapshot>>()
-        .mockResolvedValueOnce(stale)
-        .mockResolvedValueOnce(stale),
-      effects: {
-        dispatchJudgment: async () => ({
-          kind: 'revision_required',
-          reason: 'structurally_incomplete',
-        }),
-      },
-    })).resolves.toEqual({
-      kind: 'human_required',
-      reason: 'publication_transition_unmoved',
-      detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.',
+    const staleRevisionDisposition = await advanceFinishPublication({ observe, effects: { dispatchJudgment } });
+    expect(staleRevisionDisposition).toEqual({
+      kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_revision_changed',
     });
+    await expect(routeFinishPublicationDisposition(staleRevisionDisposition)).resolves.toEqual({
+      kind: 'retry_finish', reason: 'judgment_revision_changed',
+    });
+    await expect(advanceFinishPublication({ observe, effects: { dispatchJudgment } })).resolves.toEqual({
+      kind: 'advanced', transition: 'judge_pr_prose',
+    });
+
+    expect(dispatchJudgment).toHaveBeenCalledTimes(2);
+    expect(judgedBodies).toEqual([
+      '## Why\n\nThe first retained revision.',
+      '## Why\n\nThe revised retained body.',
+    ]);
+    expect(observedBodies).toContain('## Why\n\nThe first retained revision.');
+    expect(observedBodies).toContain('## Why\n\nThe revised retained body.');
   });
 
   it('advances when authoring rewrites a judged revision to a newly stale body', async () => {

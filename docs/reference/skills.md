@@ -846,9 +846,11 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   additionally reads the feature branch's full diff against its base and the feature's spec, plan, and
   story artifacts. Deterministic BUILD, SHIP, release-readiness, push, shipped-record, and outcome
   evidence stays engine-owned.
-- **Outputs** — a rewritten reader-facing PR title/body (authoring), or an accepted verdict or bounded
-  repair (judgment). Neither is trusted on self-report: the coordinator re-reads the PR and a body that
-  still classifies as a placeholder is a failed pass. The coordinator separately persists
+- **Outputs** — authoring writes the `.pipeline/finish-pr-prose.json`
+  [handoff](artifacts.md#pipeline--run-state) (`version`, `title`, `body`); the engine validates it and
+  performs the PR title/body edit itself. Judgment returns only a bounded verdict and never edits the
+  PR. Neither is trusted on self-report: the coordinator re-reads the PR and a body that still
+  classifies as a placeholder is a failed pass. The coordinator separately persists
   `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes `.pipeline/finish-choice` through
   `ai-conductor finish-record` after verification.
 - **Gate role** — blocking. Missing or invalid deterministic evidence stops before this skill is
