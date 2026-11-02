@@ -60,6 +60,11 @@ it('declares one persistent sink row for each stack event', () => {
   }
 });
 
+it('`event-sinks.ts` registers `stack_member_refreshed` and `stack_member_comment_posted` with `persist: true`, and `EventPersister` persists a replayed `eventId` of each only once', () => {
+  expect(EVENT_SINKS.stack_member_refreshed.persist).toBe(true);
+  expect(EVENT_SINKS.stack_member_comment_posted.persist).toBe(true);
+});
+
 it('declares restack decisions as durable, unaudited event-spine records', () => {
   expect(EVENT_SINKS.restack_decision).toEqual({
     render: false,

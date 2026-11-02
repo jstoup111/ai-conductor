@@ -809,7 +809,7 @@ describe('FINISH routed fix comments', () => {
     expect({ requests: wrongPrRunner.run.mock.calls.length, posted: fixture.ledger().posted }).toEqual({ requests: 1, posted: [] });
   });
 
-  it('keeps the receipt when the posted-comment emitter fails', async () => {
+  it('An emitter that throws after a comment leaves the marker in `posted`, and a replay makes no second `pull-request.comment.create` call', async () => {
     const marker = '<!-- conductor:routed-fix:r1:101 -->';
     const events = new ConductorEventEmitter();
     events.on('stack_member_comment_posted', () => { throw new Error('spine unavailable'); });
