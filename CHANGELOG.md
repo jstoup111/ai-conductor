@@ -235,6 +235,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - PRD-audit recovery now rejects decisions for criteria outside the current offered scope. ([implementation PR #3570](https://github.com/jstoup111/ai-conductor/pull/3570)).
 - Routed repairs now keep eligible prerequisite-file work on the correct stack child. ([implementation PR #3567](https://github.com/jstoup111/ai-conductor/pull/3567)).
 - Stacked features whose 50-character slug ends in a hyphen no longer halt with a missing parent child branch. ([implementation PR #3577](https://github.com/jstoup111/ai-conductor/pull/3577)).
+- Stacked features no longer halt with a missing owner-task binding when a repair round combines manual-test failures with existing-task findings. ([implementation PR #3578](https://github.com/jstoup111/ai-conductor/pull/3578)).
 
 ## Migration
 
