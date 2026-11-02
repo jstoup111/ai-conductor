@@ -217,6 +217,7 @@ describe('typed PRD-audit scope routing', () => {
       operator: 'fixture-operator',
       offerStore: caseStore,
       decisionStore: new AcceptedWideningDecisionStore(projectRoot, { ...feature, version: 1 }),
+      offeredStoryCriteria: { kind: 'available', criteria: new Set() },
     });
     if (captured.kind !== 'captured' || captured.defects.length > 0 || captured.captured.length !== 1) {
       throw new Error('fixture refusal did not persist through the offer-capture seam');

@@ -14,6 +14,7 @@ import type {
   RemediationCaseStoreState,
 } from './remediation-case-store.js';
 import { prdWideningCasesForState, withPrdWideningCases } from './remediation-case-store.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
@@ -35,7 +36,13 @@ export interface CapturePrdWideningDecisionsOptions {
   readonly operator: string | undefined;
   readonly offerStore: PrdWideningCaptureOfferStore;
   readonly decisionStore: PrdWideningCaptureDecisionStore;
+  /** Typed PRD-audit story criteria eligible for offerless authority. */
+  readonly offeredStoryCriteria: PrdWideningOfferedStoryCriteria;
 }
+
+export type PrdWideningOfferedStoryCriteria =
+  | { readonly kind: 'available'; readonly criteria: ReadonlySet<string> }
+  | { readonly kind: 'unavailable' };
 
 export type PrdWideningCaptureDefectKind =
   | 'malformed-block'
@@ -47,10 +54,13 @@ export type PrdWideningCaptureDefectKind =
   | 'missing-operator'
   | 'offer-read-failed'
   | 'write-failed'
-  | 'unsupported-legacy-clear';
+  | 'unsupported-legacy-clear'
+  | 'unknown-criterion'
+  | 'offered-set-unavailable';
 
 export interface PrdWideningCaptureDefect {
   readonly kind: PrdWideningCaptureDefectKind;
+  readonly criterion?: string;
   readonly offerEntryId?: string;
 }
 
@@ -128,6 +138,13 @@ function parseEntry(value: unknown): ClearedDecisionEntry | undefined {
   };
 }
 
+/** Preserve a usable record identity even when another field makes the row invalid. */
+function readableCriterion(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const criterion = (value as Record<string, unknown>).criterion;
+  return bounded(criterion, MAX_REFERENCE_LENGTH) ? criterion.trim() : undefined;
+}
+
 /**
  * Read only the retired fenced JSON decision shape. It deliberately does not
  * compare current ordinals or summaries and returns unsupported rather than
@@ -198,6 +215,47 @@ async function materializeLegacySource(
     source.sourceId === sourceId && source.snapshot === entry.summary));
 }
 
+async function captureLegacyClear(
+  entry: LegacyPrdWideningClear,
+  options: CapturePrdWideningDecisionsOptions,
+): Promise<{ readonly decision?: AcceptedWideningDecision; readonly defect?: PrdWideningCaptureDefect }> {
+  if (!bounded(entry.rationale)) return { defect: { kind: 'missing-rationale', criterion: entry.criterion } };
+  if (!bounded(options.operator, MAX_REFERENCE_LENGTH)) return { defect: { kind: 'missing-operator', criterion: entry.criterion } };
+  // D3: source/case state is durable before a legacy decision can refer to it.
+  // Replays verify the same deterministic materialization.
+  if (!await materializeLegacySource(options.offerStore, entry)) return { defect: { kind: 'write-failed', criterion: entry.criterion } };
+
+  const originalSource = { id: legacyClearReference('source', entry), snapshot: entry.summary };
+  const input: AcceptedWideningDecisionInput = {
+    criterion: entry.criterion,
+    authority: entry.authority,
+    rationale: entry.rationale,
+    operator: options.operator.trim(),
+    // This deterministic legacy-clear provenance is deliberately distinct
+    // from migrated v1-row provenance.
+    originalSource,
+    originalCaseId: legacyClearReference('case', entry),
+    offerEntryId: legacyClearReference('entry', entry),
+  };
+  const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
+  const sameSource = existing?.kind === 'valid'
+    ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
+      decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot)
+    : [];
+  const prior = sameSource.at(-1);
+  // A historical replay is inert even when a later explicit reversal is now
+  // effective. Returning the latest decision preserves that reversal.
+  if (prior && sameSource.some((decision) => sameLegacyAuthority(decision, entry, input.operator))) return { decision: prior };
+
+  const appended = await options.decisionStore.append({
+    ...input,
+    ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
+  });
+  return appended.ok
+    ? { decision: appended.decision }
+    : { defect: { kind: 'write-failed', criterion: entry.criterion } };
+}
+
 function hasUnsupportedLegacyClear(value: string): boolean {
   return /```(?:json\s+)?over-scope-decisions\s*\n[\s\S]*?\n```/i.test(value) || /^\s*OVER_SCOPE_ACCEPT:/m.test(value);
 }
@@ -224,6 +282,82 @@ async function persistedOffers(
   }));
 }
 
+export type PrdWideningClearEligibility =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'malformed-block' }
+  | { readonly kind: 'unsupported-legacy-clear' }
+  | {
+      readonly kind: 'parsed';
+      readonly rawEntries: readonly unknown[];
+      readonly legacy: LegacyPrdWideningClearParse;
+      readonly carriesOfferReference: boolean;
+      readonly offers: RemediationCaseStoreMutationResult<readonly RemediationCasePrdWideningRecord[]> | undefined;
+      /** Legacy rows which both migration and capture may treat as authority. */
+      readonly eligibleLegacyEntries: readonly LegacyPrdWideningClear[];
+      readonly legacyHasPersistedNcOffer: boolean;
+    };
+
+/**
+ * Parses a cleared fence once and centralizes the legacy authority boundary.
+ * A persisted NC offer makes the whole reference-free clear ineligible: capture
+ * then reports each stripped row instead of letting migration retain a sibling.
+ */
+export async function parsePrdWideningClearEligibility(
+  clearedBlock: string,
+  options: Pick<CapturePrdWideningDecisionsOptions, 'offerStore' | 'offeredStoryCriteria'>,
+): Promise<PrdWideningClearEligibility> {
+  const match = clearedBlock.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
+  if (!match) return { kind: hasUnsupportedLegacyClear(clearedBlock) ? 'unsupported-legacy-clear' : 'absent' };
+  let parsed: unknown;
+  try { parsed = JSON.parse(match[1]!); } catch { return { kind: 'malformed-block' }; }
+  if (!Array.isArray(parsed)) return { kind: 'unsupported-legacy-clear' };
+
+  const rawEntries = parsed;
+  const legacy = parseLegacyPrdWideningClear(clearedBlock);
+  const carriesOfferReference = rawEntries.some((entry) =>
+    typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+    (Object.hasOwn(entry, 'offerEntryId') || Object.hasOwn(entry, 'originalCaseId') || Object.hasOwn(entry, 'originalSource')));
+  const needsPersistedOffers = carriesOfferReference || rawEntries.some((entry) => {
+    const criterion = readableCriterion(entry);
+    return criterion !== undefined && isPrdAuditNoOwnerOrdinal(criterion);
+  });
+  const offers = needsPersistedOffers ? await persistedOffers(options.offerStore) : undefined;
+  const legacyHasPersistedNcOffer = legacy.kind === 'supported' && offers?.ok === true && legacy.entries.some((entry) =>
+    isPrdAuditNoOwnerOrdinal(entry.criterion) && offers.value.some((offer) => offer.offeredCriterion === entry.criterion));
+  const eligibleLegacyEntries = legacy.kind === 'supported' && options.offeredStoryCriteria.kind === 'available' &&
+    !carriesOfferReference && offers?.ok !== false && !legacyHasPersistedNcOffer
+    ? (() => {
+        const criteria = options.offeredStoryCriteria.criteria;
+        return legacy.entries.filter((entry) => isPrdAuditNoOwnerOrdinal(entry.criterion) || criteria.has(entry.criterion));
+      })()
+    : [];
+  return { kind: 'parsed', rawEntries, legacy, carriesOfferReference, offers, eligibleLegacyEntries, legacyHasPersistedNcOffer };
+}
+
+async function captureOfferlessStoryDecision(
+  entry: ClearedDecisionEntry,
+  options: CapturePrdWideningDecisionsOptions,
+): Promise<{ readonly decision?: AcceptedWideningDecision; readonly defect?: PrdWideningCaptureDefect }> {
+  if (entry.authority !== 'accept' && entry.authority !== 'refuse') {
+    return { defect: { kind: 'invalid-decision', criterion: entry.criterion } };
+  }
+  if (options.offeredStoryCriteria.kind === 'unavailable') {
+    return { defect: { kind: 'offered-set-unavailable', criterion: entry.criterion } };
+  }
+  if (!options.offeredStoryCriteria.criteria.has(entry.criterion)) {
+    return { defect: { kind: 'unknown-criterion', criterion: entry.criterion } };
+  }
+  if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH) || !bounded(entry.summary)) {
+    return { defect: { kind: 'invalid-decision', criterion: entry.criterion } };
+  }
+  return captureLegacyClear({
+    criterion: entry.criterion,
+    summary: entry.summary,
+    authority: entry.authority,
+    rationale: entry.rationale ?? '',
+  }, options);
+}
+
 /**
  * Captures cleared authority only after proving its immutable offer references
  * still name a source/case persisted before the editable halt was rendered.
@@ -234,77 +368,36 @@ export async function capturePrdWideningDecisions(
   clearedBlock: string,
   options: CapturePrdWideningDecisionsOptions,
 ): Promise<CapturePrdWideningDecisionsResult> {
-  const match = clearedBlock.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
-  if (!match) {
-    return hasUnsupportedLegacyClear(clearedBlock)
-      ? { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] }
-      : { kind: 'absent', captured: [], defects: [] };
-  }
-  let rawEntries: unknown;
-  try {
-    rawEntries = JSON.parse(match[1]!);
-  } catch {
-    return { kind: 'captured', captured: [], defects: [{ kind: 'malformed-block' }] };
-  }
-  if (!Array.isArray(rawEntries)) return { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] };
-
-  const legacy = parseLegacyPrdWideningClear(clearedBlock);
-  const containsModernOffer = rawEntries.some((entry) =>
-    typeof entry === 'object' && entry !== null && !Array.isArray(entry) && Object.hasOwn(entry, 'offerEntryId'));
-  if (legacy.kind === 'unsupported' && !containsModernOffer) {
+  const parsed = await parsePrdWideningClearEligibility(clearedBlock, options);
+  if (parsed.kind === 'absent') return { kind: 'absent', captured: [], defects: [] };
+  if (parsed.kind === 'malformed-block') return { kind: 'captured', captured: [], defects: [{ kind: 'malformed-block' }] };
+  if (parsed.kind === 'unsupported-legacy-clear') {
     return { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] };
   }
-  if (legacy.kind === 'supported' && rawEntries.every((entry) =>
-    typeof entry === 'object' && entry !== null && !Array.isArray(entry) && !Object.hasOwn(entry, 'offerEntryId'))) {
+  const { rawEntries, legacy, carriesOfferReference, offers, legacyHasPersistedNcOffer } = parsed;
+  if (offers !== undefined && !offers.ok) return { kind: 'captured', captured: [], defects: [{ kind: 'offer-read-failed' }] };
+  if (legacy.kind === 'supported' && !carriesOfferReference && !legacyHasPersistedNcOffer) {
     const captured: AcceptedWideningDecision[] = [];
     const defects: PrdWideningCaptureDefect[] = [];
     for (const entry of legacy.entries) {
-      if (!bounded(options.operator, MAX_REFERENCE_LENGTH)) {
-        defects.push({ kind: 'missing-operator' });
-        continue;
-      }
-      // D3: source/case state is durable before a legacy decision can refer
-      // to it. Replays verify the same deterministic materialization.
-      if (!await materializeLegacySource(options.offerStore, entry)) {
-        defects.push({ kind: 'write-failed' });
-        continue;
-      }
-      const originalSource = { id: legacyClearReference('source', entry), snapshot: entry.summary };
-      const input: AcceptedWideningDecisionInput = {
-        criterion: entry.criterion,
-        authority: entry.authority,
-        rationale: entry.rationale,
-        operator: options.operator.trim(),
-        // This deterministic legacy-clear provenance is deliberately distinct
-        // from migrated v1-row provenance.
-        originalSource,
-        originalCaseId: legacyClearReference('case', entry),
-        offerEntryId: legacyClearReference('entry', entry),
-      };
-      const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
-      const prior = existing?.kind === 'valid'
-        ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
-          decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot).at(-1)
-        : undefined;
-      if (prior && sameLegacyAuthority(prior, entry, input.operator)) {
-        captured.push(prior);
-        continue;
-      }
-      const appended = await options.decisionStore.append({
-        ...input,
-        ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
-      });
-      if (!appended.ok) {
-        defects.push({ kind: 'write-failed' });
-        continue;
-      }
-      captured.push(appended.decision);
+      const result = isPrdAuditNoOwnerOrdinal(entry.criterion)
+        ? await captureLegacyClear(entry, options)
+        : await captureOfferlessStoryDecision({
+            criterion: entry.criterion,
+            summary: entry.summary,
+            relation: undefined,
+            authority: entry.authority,
+            rationale: entry.rationale,
+            offerEntryId: undefined,
+            originalCaseId: undefined,
+            originalSource: undefined,
+            priorDecision: undefined,
+          }, options);
+      if (result.defect) defects.push(result.defect);
+      else if (result.decision) captured.push(result.decision);
     }
     return { kind: 'captured', captured, defects };
   }
-
-  const offers = await persistedOffers(options.offerStore);
-  if (!offers.ok) return { kind: 'captured', captured: [], defects: [{ kind: 'offer-read-failed' }] };
 
   const captured: AcceptedWideningDecision[] = [];
   const defects: PrdWideningCaptureDefect[] = [];
@@ -312,33 +405,40 @@ export async function capturePrdWideningDecisions(
   for (const raw of rawEntries) {
     const entry = parseEntry(raw);
     if (!entry) {
-      defects.push({ kind: 'malformed-entry' });
+      defects.push({ kind: 'malformed-entry', ...(readableCriterion(raw) === undefined ? {} : { criterion: readableCriterion(raw) }) });
       continue;
     }
     // An untouched rendered entry is an offer, never implicit machine authority.
     if (entry.authority === 'pending') continue;
     if (entry.authority === undefined) {
-      defects.push({ kind: 'invalid-decision', ...(entry.offerEntryId ? { offerEntryId: entry.offerEntryId } : {}) });
+      defects.push({ kind: 'invalid-decision', criterion: entry.criterion, ...(entry.offerEntryId ? { offerEntryId: entry.offerEntryId } : {}) });
       continue;
     }
-    if (!matchesPersistedOffer(entry, offers.value)) {
-      defects.push({ kind: 'changed-offer-reference', ...(entry.offerEntryId ? { offerEntryId: entry.offerEntryId } : {}) });
+    if (!isPrdAuditNoOwnerOrdinal(entry.criterion) && entry.offerEntryId === undefined &&
+      entry.originalCaseId === undefined && entry.originalSource === undefined) {
+      const result = await captureOfferlessStoryDecision(entry, options);
+      if (result.defect) defects.push(result.defect);
+      else if (result.decision) captured.push(result.decision);
+      continue;
+    }
+    if (offers === undefined || !matchesPersistedOffer(entry, offers.value)) {
+      defects.push({ kind: 'changed-offer-reference', criterion: entry.criterion, ...(entry.offerEntryId ? { offerEntryId: entry.offerEntryId } : {}) });
       continue;
     }
     if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH)) {
-      defects.push({ kind: 'invalid-decision', offerEntryId: entry.offerEntryId });
+      defects.push({ kind: 'invalid-decision', criterion: entry.criterion, offerEntryId: entry.offerEntryId });
       continue;
     }
     if (!bounded(entry.rationale)) {
-      defects.push({ kind: 'missing-rationale', offerEntryId: entry.offerEntryId });
+      defects.push({ kind: 'missing-rationale', criterion: entry.criterion, offerEntryId: entry.offerEntryId });
       continue;
     }
     if (!bounded(options.operator, MAX_REFERENCE_LENGTH)) {
-      defects.push({ kind: 'missing-operator', offerEntryId: entry.offerEntryId });
+      defects.push({ kind: 'missing-operator', criterion: entry.criterion, offerEntryId: entry.offerEntryId });
       continue;
     }
     if (handledOffers.has(entry.offerEntryId!)) {
-      defects.push({ kind: 'duplicate-offer-entry', offerEntryId: entry.offerEntryId });
+      defects.push({ kind: 'duplicate-offer-entry', criterion: entry.criterion, offerEntryId: entry.offerEntryId });
       continue;
     }
     handledOffers.add(entry.offerEntryId!);
@@ -356,6 +456,7 @@ export async function capturePrdWideningDecisions(
     if (!appended.ok) {
       defects.push({
         kind: appended.reason === 'invalid-decision' ? 'invalid-decision' : 'write-failed',
+        criterion: entry.criterion,
         offerEntryId: entry.offerEntryId,
       });
       continue;

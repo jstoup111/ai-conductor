@@ -1,7 +1,10 @@
 import type { AcceptedWideningFeatureIdentity } from './accepted-widenings.js';
+import { prdAuditTypedRouteReport } from './artifacts.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
+import { readPrdAuditVerdict } from './prd-audit-verdict-store.js';
 import {
   capturePrdWideningDecisions,
-  parseLegacyPrdWideningClear,
+  parsePrdWideningClearEligibility,
   type CapturePrdWideningDecisionsOptions,
   type CapturePrdWideningDecisionsResult,
 } from './prd-widening-capture.js';
@@ -24,16 +27,34 @@ export async function preparePrdWideningEntry(input: {
   readonly projectRoot: string;
   readonly feature: AcceptedWideningFeatureIdentity;
   readonly priorHalt: string;
-  readonly capture: CapturePrdWideningDecisionsOptions;
+  readonly capture: Omit<CapturePrdWideningDecisionsOptions, 'offeredStoryCriteria'>;
 }): Promise<PreparePrdWideningEntryResult> {
-  // Read the fenced legacy clear before the v1 replacement so migration can
-  // atomically retain both histories in their authored order.
-  const legacyClear = parseLegacyPrdWideningClear(input.priorHalt);
+  const verdict = await readPrdAuditVerdict(input.projectRoot);
+  const offeredStoryCriteria = verdict.kind === 'present'
+    ? (() => {
+        const typed = prdAuditTypedRouteReport(verdict.value);
+        return {
+          kind: 'available' as const,
+          criteria: new Set(typed.report.findings
+            .filter((finding) => finding.grade === 'OVER_SCOPE' && !isPrdAuditNoOwnerOrdinal(finding.criterion) &&
+              typed.relations.get(finding.criterion) === 'outside-visible')
+            .map((finding) => finding.criterion)),
+        };
+      })()
+    : { kind: 'unavailable' as const };
+  // Read the fence before v1 replacement. This is the same eligibility
+  // decision capture uses, so migration cannot retain a stripped row that D3
+  // would reject after migration.
+  const legacyEligibility = await parsePrdWideningClearEligibility(input.priorHalt, {
+    offerStore: input.capture.offerStore,
+    offeredStoryCriteria,
+  });
   const migration = await migrateLegacyPrdWideningDecisions(input.projectRoot, input.feature, {
-    legacyClear: legacyClear.kind === 'supported' && typeof input.capture.operator === 'string' && input.capture.operator.trim()
-      ? { entries: legacyClear.entries, operator: input.capture.operator.trim() }
+    legacyClear: legacyEligibility.kind === 'parsed' && legacyEligibility.eligibleLegacyEntries.length > 0 &&
+      typeof input.capture.operator === 'string' && input.capture.operator.trim()
+      ? { entries: legacyEligibility.eligibleLegacyEntries, operator: input.capture.operator.trim() }
       : undefined,
   });
-  const capture = await capturePrdWideningDecisions(input.priorHalt, input.capture);
+  const capture = await capturePrdWideningDecisions(input.priorHalt, { ...input.capture, offeredStoryCriteria });
   return { migration, capture };
 }

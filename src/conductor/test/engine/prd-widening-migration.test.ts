@@ -40,7 +40,7 @@ describe('legacy PRD widening decision migration', () => {
     expect(parseLegacyPrdWideningClear(raw)).toEqual({ kind: 'unsupported' });
     const decisions = new AcceptedWideningDecisionStore(projectRoot, FEATURE);
     await expect(capturePrdWideningDecisions(raw, {
-      operator: 'operator', offerStore: new RemediationCaseStore(projectRoot, CASE_FEATURE), decisionStore: decisions,
+      operator: 'operator', offerStore: new RemediationCaseStore(projectRoot, CASE_FEATURE), decisionStore: decisions, offeredStoryCriteria: { kind: 'available', criteria: new Set() },
     })).resolves.toMatchObject({ captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] });
     expect(await readFile(path, 'utf8')).toBe(raw);
     expect(await decisions.read()).toMatchObject({ kind: 'absent' });
@@ -63,11 +63,13 @@ describe('legacy PRD widening decision migration', () => {
       operator: 'operator@example.test',
       offerStore: new RemediationCaseStore(projectRoot, CASE_FEATURE),
       decisionStore: new AcceptedWideningDecisionStore(projectRoot, FEATURE),
+      offeredStoryCriteria: { kind: 'available', criteria: new Set() },
     });
     const replay = await capturePrdWideningDecisions(legacyClear, {
       operator: 'operator@example.test',
       offerStore: new RemediationCaseStore(projectRoot, CASE_FEATURE),
       decisionStore: new AcceptedWideningDecisionStore(projectRoot, FEATURE),
+      offeredStoryCriteria: { kind: 'available', criteria: new Set() },
     });
 
     expect(first).toMatchObject({ kind: 'captured', defects: [] });
@@ -110,6 +112,7 @@ describe('legacy PRD widening decision migration', () => {
       operator: row.operator,
       offerStore: new RemediationCaseStore(projectRoot, CASE_FEATURE),
       decisionStore: new AcceptedWideningDecisionStore(projectRoot, FEATURE),
+      offeredStoryCriteria: { kind: 'available', criteria: new Set() },
     })).resolves.toMatchObject({ kind: 'captured', defects: [] });
     expect(await new AcceptedWideningDecisionStore(projectRoot, FEATURE).read()).toMatchObject({
       kind: 'valid', state: { decisions: [expect.objectContaining({ criterion: row.criterion })] },
@@ -167,10 +170,10 @@ describe('legacy PRD widening decision migration', () => {
 
     const results = await Promise.all([
       capturePrdWideningDecisions('```json over-scope-decisions\n{"entries":[]}\n```', {
-        operator: 'operator@example.test', offerStore, decisionStore,
+        operator: 'operator@example.test', offerStore, decisionStore, offeredStoryCriteria: { kind: 'available', criteria: new Set() },
       }),
       capturePrdWideningDecisions('```over-scope-decisions\nNC.9: accept\n```', {
-        operator: 'operator@example.test', offerStore, decisionStore,
+        operator: 'operator@example.test', offerStore, decisionStore, offeredStoryCriteria: { kind: 'available', criteria: new Set() },
       }),
     ]);
 

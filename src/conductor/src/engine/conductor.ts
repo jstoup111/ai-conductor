@@ -67,7 +67,10 @@ import { PRD_WIDENING_RECONCILIATION_SCHEMA } from './prd-widening-contract.js';
 import {
   renderPrdAuditProjectionHalt,
   renderPrdAuditScopeHalt,
+  PRD_WIDENING_CAPTURE_DEFECT_RECOVERY,
+  PRD_WIDENING_MIGRATION_FAILURE_RECOVERY,
   renderPrdWideningRecovery,
+  type PrdWideningRecoveryReason,
 } from './prd-widening-recovery.js';
 import {
   admitRefusalReworkPlan,
@@ -3699,12 +3702,9 @@ export class Conductor {
       capture: { operator, offerStore: caseStore, decisionStore },
     });
     if (prepared.migration.kind === 'failed') {
-      const recoveryReason = prepared.migration.reason.includes('unsupported')
-        ? 'unsupported-history'
-        : 'malformed-history';
       await this.emitPrdWideningRejections(prepared.migration.reason);
       return renderPrdWideningRecovery(
-        recoveryReason,
+        PRD_WIDENING_MIGRATION_FAILURE_RECOVERY[prepared.migration.reason],
         ['.pipeline/accepted-widenings.json', '.pipeline/remediation-cases.json'],
       );
     }
@@ -3732,18 +3732,16 @@ export class Conductor {
     }
     if (prepared.capture.defects.length > 0) {
       for (const defect of prepared.capture.defects) {
-        await this.emitPrdWideningRejections(defect.kind, [defect.offerEntryId ?? 'prd-audit:entry']);
+        await this.emitPrdWideningRejections(defect.kind, [defect.criterion ?? defect.offerEntryId ?? 'prd-audit:entry']);
       }
-      const reason = prepared.capture.defects.some((defect) => defect.kind === 'missing-operator')
-        ? 'missing-operator'
-        : prepared.capture.defects.some((defect) => defect.kind === 'write-failed' || defect.kind === 'offer-read-failed')
-          ? 'persistence-failed'
-          : prepared.capture.defects.some((defect) => defect.kind === 'invalid-decision')
-            ? 'invalid-decision'
-            : prepared.capture.defects.some((defect) => defect.kind === 'unsupported-legacy-clear')
-              ? 'unsupported-history'
-              : 'malformed-history';
-      return renderPrdWideningRecovery(reason, prepared.capture.defects.flatMap((defect) => defect.offerEntryId ? [defect.offerEntryId] : []));
+      const grouped = new Map<PrdWideningRecoveryReason, string[]>();
+      for (const defect of prepared.capture.defects) {
+        const reason = PRD_WIDENING_CAPTURE_DEFECT_RECOVERY[defect.kind];
+        const records = grouped.get(reason) ?? [];
+        records.push(defect.criterion ?? defect.offerEntryId ?? 'prd-audit:entry');
+        grouped.set(reason, records);
+      }
+      return [...grouped].map(([reason, records]) => renderPrdWideningRecovery(reason, records)).join('\n');
     }
     const decisions = await decisionStore.read();
     if (decisions.kind !== 'absent' && decisions.kind !== 'valid') {

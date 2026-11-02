@@ -1067,7 +1067,8 @@ describe('prd_audit kickback', () => {
     const recovery = await (conductor as unknown as {
       preparePrdWideningBeforeAudit: () => Promise<string | undefined>;
     }).preparePrdWideningBeforeAudit();
-    expect(recovery).toBeUndefined();
+    expect(recovery).toContain('unknown-criterion');
+    expect(recovery).toContain('S9.9');
 
     const route = await (conductor as unknown as {
       routeCurrentPrdAuditOverScope: () => Promise<{
