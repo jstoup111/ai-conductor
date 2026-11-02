@@ -390,7 +390,13 @@ describe('GitHub invocation audit', () => {
     expect(auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'))).toEqual([]);
   });
 
-  it('`github-invocation-audit` passes with the new caller', () => {
-    expect(auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'))).toEqual([]);
+  it('identifies the Task 17 routed-comment caller and its guarded GitHub invocation', async () => {
+    const production = await readFile(resolve(__dirname, '../../../src/engine/finish-publication-production.ts'), 'utf8');
+    const callerStart = production.indexOf('export async function postRoutedComments');
+    const callerEnd = production.indexOf('\nfunction markerForRoutedComment', callerStart);
+    const caller = callerStart === -1 || callerEnd === -1 ? '' : production.slice(callerStart, callerEnd);
+
+    expect(caller).toContain('export async function postRoutedComments');
+    expect(caller).toMatch(/executeGithubOperation\(\{[\s\S]*?operation:\s*'pull-request\.comment\.create'/);
   });
 });
