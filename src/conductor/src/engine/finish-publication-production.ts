@@ -64,7 +64,12 @@ import {
 import { createShipDraftPublicationDependencies, createTargetBoundGithubOperationRunner } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
-import { pushedTipIntentRef, pushedTipRef, recordPushedTip, type PushLeaseGitRunner } from './push-lease.js';
+import {
+  adoptPushedTipIntentAtRemoteTip,
+  decodePushedTipIntent,
+  pushedTipRef,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { authorizePublishedStackRefresh, readRefreshLedger, refreshPendingState } from './stack-refresh-ledger.js';
 import { parseCommitSha } from './restack/restack-types.js';
@@ -438,26 +443,16 @@ async function adoptCompletedPushIntent(input: {
     remoteTip = remote.stdout.split('\n').find((line) => line.endsWith(`\trefs/heads/${input.branch}`))?.split('\t', 1)[0]?.trim();
     if (!remoteTip) return true;
 
-    const intentRef = await input.git(['rev-parse', '--verify', '--quiet', pushedTipIntentRef(input.slug, input.branch)]);
-    const intentObject = intentRef.exitCode === 0 ? intentRef.stdout.trim() : '';
-    if (!intentObject) return true;
-    const content = await input.git(['cat-file', '-p', intentObject]);
-    if (content.exitCode !== 0) return false;
-    const parsed: unknown = JSON.parse(content.stdout);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || typeof (parsed as { new?: unknown }).new !== 'string'
-      || ((parsed as { expected?: unknown }).expected !== undefined
-        && typeof (parsed as { expected?: unknown }).expected !== 'string')) return false;
-    const intent = parsed as { readonly new: string; readonly expected?: string };
-    if (intent.new !== remoteTip) return true;
     const pushLeaseGit: PushLeaseGitRunner = async (args, text) => {
       const result = await input.git([...args], text === undefined ? undefined : { input: text });
       return { stdout: result.stdout, exitCode: result.exitCode };
     };
-    return recordPushedTip({
-      cwd: input.root,
-      prepared: { slug: input.slug, branch: input.branch, expected: intent.expected, new: intent.new, intentObject },
-      git: pushLeaseGit,
+    const intent = await decodePushedTipIntent({ git: pushLeaseGit, slug: input.slug, branch: input.branch });
+    if (intent.kind === 'absent') return true;
+    if (intent.kind === 'malformed') return false;
+    if (intent.prepared.new !== remoteTip) return true;
+    return adoptPushedTipIntentAtRemoteTip({
+      cwd: input.root, remoteTip, prepared: intent.prepared, git: pushLeaseGit,
     });
   } catch {
     return false;
