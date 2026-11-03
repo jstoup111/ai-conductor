@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:24
 import { describe, expect, it, vi } from 'vitest';
 import {
   nextFinishPublicationTransition,
