@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { isProcessed } from '../../src/engine/daemon-deps.js';
 import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
 import { makeRunFeature } from '../../src/engine/daemon-runner.js';
@@ -35,11 +36,24 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execFile('git', args, { cwd })).stdout.trim();
 }
 
-async function commit(repo: string, message: string, path: string, contents: string): Promise<string> {
+async function commit(
+  repo: string,
+  message: string,
+  path: string,
+  contents: string,
+  options: { daemonSession?: boolean } = {},
+): Promise<string> {
   await mkdir(dirname(join(repo, path)), { recursive: true });
   await writeFile(join(repo, path), contents);
   await git(repo, 'add', path);
-  await git(repo, 'commit', '-qm', message);
+  if (options.daemonSession) {
+    await execFile('git', ['commit', '-qm', message], {
+      cwd: repo,
+      env: { ...process.env, [DAEMON_SESSION_MARKER]: '1' },
+    });
+  } else {
+    await git(repo, 'commit', '-qm', message);
+  }
   return git(repo, 'rev-parse', 'HEAD');
 }
 
@@ -135,7 +149,7 @@ describe('published stack landing completion (real local Git)', () => {
 
     const publishedHostTip = await git(subject.repo, 'rev-parse', 'HEAD');
     const publishedLeafTip = await git(subject.repo, 'rev-parse', `feat/daemon-${slug}`);
-    await commit(subject.repo, 'routed repair', 'review.txt', 'fixed\n');
+    await commit(subject.repo, 'routed repair', 'review.txt', 'fixed\n', { daemonSession: true });
     const recordedHostTip = await git(subject.repo, 'rev-parse', 'HEAD');
     const ledger = {
       version: 1,
