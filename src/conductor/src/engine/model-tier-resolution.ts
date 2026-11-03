@@ -58,6 +58,26 @@ export function resolveModelTierFloors(
   }));
 }
 
+/**
+ * Every listed id a tier probe could upgrade one of the floors to: same tier,
+ * strictly newer version.  Pricing all of them, not just the newest, keeps the
+ * card correct when the provider's own catalog lags the price list.
+ */
+export function newerSameTierModelIds(
+  floors: readonly string[],
+  listedIds: readonly string[],
+): string[] {
+  const parsedFloors = floors.flatMap((floor) => {
+    const parsed = parseTieredModelId(floor);
+    return parsed === undefined ? [] : [parsed];
+  });
+  return listedIds.filter((id) => {
+    const candidate = parseTieredModelId(id);
+    return candidate !== undefined && parsedFloors.some((floor) =>
+      floor.tier === candidate.tier && compareVersions(candidate.version, floor.version) > 0);
+  });
+}
+
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
