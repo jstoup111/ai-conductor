@@ -4,6 +4,47 @@ spec_hash: 300768263ffc948ee687ca9208bc499a058cf1f5a2df12c0892b7e335ce96dab
 pr: https://github.com/jstoup111/ai-conductor/pull/3568
 shipped: 2026-11-03
 engine_version: 20261103T113615Z-112100c2807e
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "The change supplies the ref S3.4 needs at region entry, but it also changes the resume path: an unreadable marker route record stops before reconcile and bounded stall recording, and that halt does not name the ref."
+    accepted: true
+    decision: accept
+    rationale: "Operator accepts: surfacing an unreadable route record as git-error instead of silently ignoring it is the safer behavior and in the spirit of the feature."
+    authority: jstoup111
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This is a compile-time reshaping that lets enterRoutedHostRegion return the entered execution. Resolved values do not change, and it directly supports planned region-entry admission."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-3
+    summary: "The timeout affects tests only. The changed expectation follows the region-entry refusal wording from the planned Story 3 work and adds no behavior of its own."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-4
+    summary: "Operators see different halt text. The settlement path lies outside the stories' region-entry scope, and the unreadable-ref refusal gains the ref but carries no recovery instruction."
+    accepted: true
+    decision: accept
+    rationale: "Operator accepts: naming the unreadable route record in the halt is the same fail-closed surfacing accepted for NC-1; the generic git recovery hint would mislead for an unreadable ref."
+    authority: jstoup111
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-5
+    summary: "This is test-runner isolation unrelated to queue admission and changes no shipped engine behavior."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-6
+    summary: "This removes a false positive for 'symbolic-ref -q HEAD' beside routing ref helpers, but it also weakens a structural guard against unauthorized routing ref writes. It is not user-visible, though it reduces future protection and merits operator attention."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
