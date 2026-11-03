@@ -108,4 +108,10 @@ describe('FINISH published-member refresh selection', () => {
     })).resolves.toMatchObject({ kind: 'implementation_invalid' });
     expect(refreshPublishedMembers).not.toHaveBeenCalled();
   });
+
+  it('selects the routed-comment transition after member refresh', () => {
+    expect(nextFinishPublicationTransition(snapshot({
+      stackRefresh: 'comments-owed',
+    }))).toBe('post_routed_comments');
+  });
 });

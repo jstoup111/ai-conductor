@@ -665,20 +665,6 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
     return { kind: 'refused', detail: `operator round ${input.roundId} does not match landing host ${input.host}` };
   }
 
-  // A successful landing makes a previously finished feature runnable again.
-  // This is deliberately after the durable round exists, so a refusal cannot
-  // erase the terminal proof it was asked to preserve.
-  if (origin === 'land' && await activePublicationRecord(input.worktree, input.slug, { git })) {
-    try {
-      await Promise.all([
-        rm(join(input.worktree, '.pipeline', 'finish-choice'), { force: true }),
-        rm(join(input.worktree, '.pipeline', 'DONE'), { force: true }),
-      ]);
-    } catch {
-      return { kind: 'refused', detail: 'cannot clear finished markers for published landing' };
-    }
-  }
-
   if (stored.record.phase === 'prepared') {
     try {
       await writeGitHooksAndWire(input.worktree);
@@ -714,6 +700,20 @@ export async function openOperatorRound(input: OpenOperatorRoundInput): Promise<
   }
   const credit = await grantRoutedRepairCredit({ projectRoot: input.worktree, child: input.host, roundId: input.roundId });
   if (credit.kind === 'refused') return { kind: 'refused', detail: `cannot grant operator repair credit: ${credit.detail}` };
+
+  // A successful landing makes a previously finished feature runnable again.
+  // Keep this after every fallible admission and host-entry mutation: a refused
+  // `stack land` must preserve the terminal markers byte-for-byte.
+  if (origin === 'land' && await activePublicationRecord(input.worktree, input.slug, { git })) {
+    try {
+      await Promise.all([
+        rm(join(input.worktree, '.pipeline', 'finish-choice'), { force: true }),
+        rm(join(input.worktree, '.pipeline', 'DONE'), { force: true }),
+      ]);
+    } catch {
+      return { kind: 'refused', detail: 'cannot clear finished markers for published landing' };
+    }
+  }
   return { kind: 'opened', pinnedBase: pinned.pinnedBase };
 }
 

@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
+// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18, task:22, task:25
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { execFile as execFileCallback } from 'node:child_process';
@@ -10,6 +10,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import { readVerdict, verdictPathFor, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { pushedTipRef } from '../../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor } from '../../../src/engine/restack/cascade-cap.js';
@@ -184,6 +185,29 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  it('re-pends FINISH but preserves rebase and its verdict after a published leaf return', async () => {
+    const subject = await leafFixture(false);
+    await publishLeafFixture(subject);
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({
+      feature_desc: 'demo', rebase: 'done', finish: 'done',
+      prd_audit: 'done', architecture_review_as_built: 'done', manual_test: 'done',
+    }));
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: true, reason: 'existing rebase', checkedAt: 1,
+    });
+    const beforeRebaseVerdict = await readFile(verdictPathFor(subject.repo, 'rebase'), 'utf8');
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [leaf]: 'done' } }));
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+    if (stored.kind !== 'record') throw new Error('fixture route is missing');
+
+    await expect(returnToLeaf(subject.repo, 'demo', stored, { git: subject.gitRunner })).resolves.toEqual({ kind: 'leaf-returned' });
+
+    const state = JSON.parse(await readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, string>;
+    expect(state).toMatchObject({ finish: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending', manual_test: 'pending', rebase: 'done' });
+    await expect(readFile(verdictPathFor(subject.repo, 'rebase'), 'utf8')).resolves.toBe(beforeRebaseVerdict);
+    await expect(readVerdict(subject.repo, 'finish')).resolves.toMatchObject({ satisfied: false });
+  });
+
   // Covers: task:4
   it('records a published leaf host tip and its owed round comment in the settling transaction', async () => {
     const subject = await leafFixture(true);

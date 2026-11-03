@@ -1029,6 +1029,7 @@ function isPublicationTransition(value: unknown): value is PublicationTransition
     value === 'assemble_stack' ||
     value === 'author_pr_prose' ||
     value === 'judge_pr_prose' ||
+    value === 'post_routed_comments' ||
     value === 'ready_pr' ||
     value === 'record_outcome'
   );

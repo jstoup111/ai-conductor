@@ -40,8 +40,12 @@ export async function publishedStackRefusal(
 export type PublishedStackTipPreflight =
   | { readonly kind: 'not-published' }
   | { readonly kind: 'intact' }
-  | { readonly kind: 'refused'; readonly member: PublicationMember }
+  | { readonly kind: 'refused'; readonly member: PublicationMember; readonly detail?: string }
   | { readonly kind: 'unreadable' };
+
+function publishedStackTipRefusalDetail(member: PublicationMember): string {
+  return `published stack member ${member.position} changed or closed (#3268)`;
+}
 
 export async function publishedStackTipPreflight(
   root: string,
@@ -53,7 +57,9 @@ export async function publishedStackTipPreflight(
   if (publication === undefined || publication.record.members.length === 0) return { kind: 'not-published' };
   const members = publication.record.members;
   const unavailable = members.find((member) => member.lastSeen !== undefined);
-  if (unavailable !== undefined) return { kind: 'refused', member: unavailable };
+  if (unavailable !== undefined) {
+    return { kind: 'refused', member: unavailable, detail: publishedStackTipRefusalDetail(unavailable) };
+  }
 
   const receipts = new Map<string, string>();
   for (const member of members) {
@@ -76,7 +82,9 @@ export async function publishedStackTipPreflight(
   if (remote.exitCode !== 0) return { kind: 'unreadable' };
   for (const member of members) {
     const remoteTip = lsRemoteTip(remote.stdout, `refs/heads/${member.branch}`);
-    if (remoteTip === undefined || remoteTip !== receipts.get(member.branch)) return { kind: 'refused', member };
+    if (remoteTip === undefined || remoteTip !== receipts.get(member.branch)) {
+      return { kind: 'refused', member, detail: publishedStackTipRefusalDetail(member) };
+    }
   }
   return { kind: 'intact' };
 }

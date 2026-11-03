@@ -98,7 +98,7 @@ export async function admitRound(
   // reviewer moving a member before the marker transaction.
   const publication = await publishedStackTipPreflight(worktree, slug, { git: dependencies.git });
   if (publication.kind === 'unreadable') return { kind: 'refused', detail: 'routing admission refused: published stack tips are unreadable; retry' };
-  if (publication.kind === 'refused') return { kind: 'refused', detail: `routing admission refused: published stack member ${publication.member.position} changed or closed (#3268)` };
+  if (publication.kind === 'refused') return { kind: 'refused', detail: `routing admission refused: ${publication.detail ?? `published stack member ${publication.member.position} changed or closed (#3268)`}` };
   const marker = await readRepairMarker(worktree, slug, dependencies);
   if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
   const stored = await readRouteRecord(worktree, slug, record.roundId, dependencies);

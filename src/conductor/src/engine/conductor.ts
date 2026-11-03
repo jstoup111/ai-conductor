@@ -5222,7 +5222,7 @@ export class Conductor {
             if (publication.kind === 'unreadable' || publication.kind === 'refused') {
               await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
               return { kind: 'halt', haltClass: 'needs-human', detail: publication.kind === 'refused'
-                ? `routing admission refused: published stack member ${publication.member.position} changed or closed (#3268)`
+                ? `routing admission refused: ${publication.detail ?? `published stack member ${publication.member.position} changed or closed (#3268)`}`
                 : 'routing admission refused: published stack tips are unreadable; retry' };
             }
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
@@ -16403,7 +16403,7 @@ export class Conductor {
     if (publication.kind === 'unreadable' || publication.kind === 'refused') {
       await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
       return { kind: 'halted', reason: publication.kind === 'refused'
-        ? `routing admission refused: published stack member ${publication.member.position} changed or closed (#3268)`
+        ? `routing admission refused: ${publication.detail ?? `published stack member ${publication.member.position} changed or closed (#3268)`}`
         : 'routing admission refused: published stack tips are unreadable; retry' };
     }
     const roundId = await nextRoundId(this.projectRoot, slug);
