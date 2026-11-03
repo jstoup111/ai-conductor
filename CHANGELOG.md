@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-02
+## [1.7.0] - 2026-11-03
 
 ### Added
 
@@ -236,6 +236,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Routed repairs now keep eligible prerequisite-file work on the correct stack child. ([implementation PR #3567](https://github.com/jstoup111/ai-conductor/pull/3567)).
 - Stacked features whose 50-character slug ends in a hyphen no longer halt with a missing parent child branch. ([implementation PR #3577](https://github.com/jstoup111/ai-conductor/pull/3577)).
 - Stacked features no longer halt with a missing owner-task binding when a repair round combines manual-test failures with existing-task findings. ([implementation PR #3578](https://github.com/jstoup111/ai-conductor/pull/3578)).
+- Routed repairs no longer halt when manual test, PRD audit and as-built review all fail together, and routed builds no longer fail on Codex with an invalid output schema error. ([implementation PR #3581](https://github.com/jstoup111/ai-conductor/pull/3581)).
 
 ## Migration
 
