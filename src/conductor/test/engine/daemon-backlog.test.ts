@@ -1,4 +1,4 @@
-// Covers: task:5, task:4
+// Covers: task:5, task:4, task:23
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile as fsReadFile, readdir } from 'fs/promises';
 import { join } from 'path';

@@ -1,4 +1,4 @@
-// Covers: task:3, task:32, task:33
+// Covers: task:3, task:26, task:32, task:33
 //
 // FINISH-boundary tests for the stacked `rebase` step.  Each test drives the
 // conductor's engine-native `runRebaseStep` (daemon mode) — or, for the

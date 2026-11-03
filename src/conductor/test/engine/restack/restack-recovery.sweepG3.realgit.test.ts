@@ -1,4 +1,4 @@
-// Covers: task:1, task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29, task:rem-prd-audit-rem-prd-audit-R30, task:rem-prd-audit-rem-prd-audit-R31, task:rem-prd-audit-rem-v3-intent-restack
+// Covers: task:1, task:24, task:25, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29, task:rem-prd-audit-rem-prd-audit-R30, task:rem-prd-audit-rem-prd-audit-R31, task:rem-prd-audit-rem-v3-intent-restack
 //
 // Crash-recovery tests driven by journals that a real `runRestack` left
 // behind. A wrapping Git runner simulates process death the moment the
