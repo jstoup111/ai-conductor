@@ -47,6 +47,7 @@ function guard(input: {
   paths?: readonly string[];
   record?: RouteRecord;
   marker?: 'absent' | 'unreadable' | 'marker';
+  host?: number;
   durable?: boolean | 'git-error';
   topology?: SliceTopology;
   routingOn?: boolean;
@@ -63,7 +64,7 @@ function guard(input: {
   const readMarker = vi.fn(async () => {
     if (input.marker === 'absent') return { kind: 'absent' } as const;
     if (input.marker === 'unreadable') return { kind: 'unreadable' } as const;
-    return { kind: 'marker', slug: 'demo', blob: 'b'.repeat(40) as never, marker: { host: 1 as never, roundId: 'r1' as never } } as const;
+    return { kind: 'marker', slug: 'demo', blob: 'b'.repeat(40) as never, marker: { host: (input.host ?? 1) as never, roundId: 'r1' as never } } as const;
   });
   const readRoute = vi.fn(async () => input.record === undefined
     ? { kind: 'unreadable' as const }
@@ -126,6 +127,15 @@ describe('stack-commit-guard', () => {
       record: declared,
       env: { CONDUCT_DAEMON_SESSION: '1' },
     }).run()).resolves.toBe(0);
+  });
+
+  it('treats the leaf as the host when the round is hosted on the top position', async () => {
+    await expect(guard({ branch: 'feat/daemon-demo', record: route('audit'), host: 3 }).run()).resolves.toBe(0);
+
+    const lower = guard({ branch: 'feat/c2/demo', record: route('audit'), host: 3 });
+    await expect(lower.run()).resolves.toBe(1);
+    expect(lower.output.join('\n')).toContain('hosted on feat/daemon-demo');
+    expect(lower.output.join('\n')).not.toContain('feat/c3/demo');
   });
 
   it('fails closed when a marker exists but its route record is unreadable', async () => {
