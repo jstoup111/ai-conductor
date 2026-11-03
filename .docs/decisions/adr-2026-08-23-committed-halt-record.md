@@ -30,6 +30,8 @@ to be a separate artifact.
    is a sibling of `.docs/shipped/<slug>.md` and follows its discipline: rendered deterministically,
    staged path-scoped, committed with `--no-verify`, idempotent on identical bytes.
 
+> **Amended 2026-11-02 by #3582:** A feature in the stacked-child lifecycle keeps this record on `refs/conductor/<slug>/halt-record`, with no file and no branch commit (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 1). A non-stacked feature, including a leaf before its first child, is unchanged.
+
 2. **The record is produced at the single `writeHaltMarker` seam** in
    `src/conductor/src/engine/halt-marker.ts`, after the markers are written. No halt call site is
    edited, so no existing or future halt path can omit the record.
@@ -63,6 +65,8 @@ to be a separate artifact.
 
    > **Amended 2026-10-17 by #2945:** For a feature with published stack members, the push also passes the stack tip guard. On a mismatch the push is skipped, `halt_record_push_failed` is emitted with reason `stack-tip-mismatch`, and the record keeps its "may be ahead of the remote" note. A halt record is still never pushed to a child branch (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
 
+> **Amended 2026-11-02 by #3582:** A stacked feature's record is not pushed from any branch, including an active leaf (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 1).
+
 6. **Nothing in this path may throw.** The seam's existing contract ("a failed write must not
    crash the finish flow") extends unchanged over the record. Every arm returns a result;
    failures are reported as events, never propagated.
@@ -72,6 +76,8 @@ to be a separate artifact.
    timestamp, and that rewrite is committed. The file is not deleted.
 
 > **Amended 2026-10-21 by #2963:** the record is not deleted by resume or while its feature is in flight. Once the feature's `.docs/shipped/<stem>.md` record is on main, the operator-run `ai-conductor docs-prune` may remove it from main through a reviewed PR (adr-2026-10-15-operator-cli-prunes-shipped-decide-artifacts D1). The record then lives in git history only.
+
+> **Amended 2026-11-02 by #3582:** For a stacked feature, resume supersedes the record on the ref, reading it from `HEAD` when no ref exists yet (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 2).
 
 8. **The record is durable state, not a channel.** Per `.agents/skills/event-spine/SKILL.md` §4
    exception C, state artifacts are read by name and answer "what is true now". The occurrences

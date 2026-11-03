@@ -151,6 +151,8 @@ Option B.
    - **With no resolution ref,** the replay runs exactly as today.
 
 > **Amended 2026-10-31 by #3478:** Consumption is no longer limited to `feature-repair` journals. A matching resolution is consumed for a `base-refresh` range too. When no resolution matches, a decision whose child, `oldParent` and `oldTip` match is delivered to the resolver (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 3).
+> **Amended 2026-11-02 by #3582:** The tree and range comparisons ignore only this feature's own halt record, and consumption replays with halt-record handling. On a real mismatch the resolution ref is deleted and a fresh record for the live range and parent is written, so the halt carries `Restack-Conflict:` and both recipes; a resolution with no usable record is retired and the replay continues. This replaces "the resolution and the record are kept" (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decisions 3, 4 and 5).
+
 5. **A resolution lives until the restack that consumed it applies.**
    - The ready→moved transaction (`applyRestackMove`) carries `verify` lines asserting that the
      consumed resolution ref, the record and the parent pin are unchanged. If one changed after
