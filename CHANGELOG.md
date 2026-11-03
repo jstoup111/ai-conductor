@@ -241,6 +241,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A restack resolved by a provider session no longer silently discards the stacked child's commits. ([implementation PR #3584](https://github.com/jstoup111/ai-conductor/pull/3584)).
 - A feature whose test suite proof is preserved within its drift budget now reaches build_review after its base moves, instead of halting for an operator. ([implementation PR #3587](https://github.com/jstoup111/ai-conductor/pull/3587)).
 - Codex dispatches on probe-upgraded model tiers are now priced instead of recorded as free. ([implementation PR #3588](https://github.com/jstoup111/ai-conductor/pull/3588)).
+- Routed builds on Codex no longer halt with "routed prerequisite claim is malformed" when a completed result also fills claim fields. ([implementation PR #3589](https://github.com/jstoup111/ai-conductor/pull/3589)).
 
 ## Migration
 
