@@ -4,6 +4,7 @@ import {
   nextFinishPublicationTransition,
   advanceFinishPublication,
   observePublicationSnapshot,
+  routeFinishPublicationDisposition,
   type PublicationObservationPorts,
   type PublicationSnapshot,
 } from '../../src/engine/finish-publication.js';
@@ -107,6 +108,31 @@ describe('FINISH published-member refresh selection', () => {
       },
     })).resolves.toMatchObject({ kind: 'implementation_invalid' });
     expect(refreshPublishedMembers).not.toHaveBeenCalled();
+  });
+
+  it('refreshes members before posting the owed routed comment', async () => {
+    let stackRefresh: 'push-pending' | 'comments-owed' | 'settled' = 'push-pending';
+    const refreshPublishedMembers = vi.fn(async () => { stackRefresh = 'comments-owed'; });
+    const postRoutedComments = vi.fn(async () => { stackRefresh = 'settled'; });
+    const observe = async () => snapshot({ stackRefresh });
+    const effects = {
+      dispatchJudgment: async () => ({ kind: 'accepted' as const }),
+      refreshPublishedMembers,
+      postRoutedComments,
+    };
+
+    const refreshed = await advanceFinishPublication({ observe, effects });
+    const commented = await advanceFinishPublication({ observe, effects });
+
+    expect({ refreshed, commented, refreshCalls: refreshPublishedMembers.mock.calls.length, commentCalls: postRoutedComments.mock.calls.length })
+      .toEqual({
+        refreshed: { kind: 'advanced', transition: 'refresh_published_members' },
+        commented: { kind: 'advanced', transition: 'post_routed_comments' },
+        refreshCalls: 1,
+        commentCalls: 1,
+      });
+    expect(routeFinishPublicationDisposition({ kind: 'publication_progress', transition: 'post_routed_comments' }))
+      .toEqual({ kind: 'progress_finish', transition: 'post_routed_comments' });
   });
 
   it('selects the routed-comment transition after member refresh', () => {
