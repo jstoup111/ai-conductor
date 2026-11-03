@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: stack-preflight
+Resolved at: 2026-11-03T01:16:21.426Z
 Slug: a-published-stacked-child-changes-silently-when-a-
 Class: needs-human
 Halting step: unknown
