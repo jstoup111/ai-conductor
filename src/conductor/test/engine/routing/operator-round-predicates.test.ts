@@ -94,7 +94,7 @@ describe('operator round open predicate', () => {
     refused(await check(parseChildId(4)!), 'unknown-position');
     refused(await check(c1, { topology: { kind: 'unavailable', cause: 'plan-invalid' } }), 'topology-unavailable');
     refused(await check(c1, { topology: { kind: 'unsliced' } }), 'not-stacked');
-    refused(await check(c1, { routeOn: false }), 'routing-off');
+    refused(await check(c1, { published: true, routeOn: false }), 'routing-off');
 
     const unknown = await check(parseChildId(4)!);
     if (unknown.kind === 'refused') expect(unknown.refusal.text).toContain('1, 2, 3');
