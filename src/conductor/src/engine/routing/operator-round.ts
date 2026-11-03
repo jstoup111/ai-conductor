@@ -448,7 +448,7 @@ export async function checkOpenOperatorRound(
   }
   if (await readPublished(input.worktree, input.slug, { git })) {
     if (input.origin === 'rewind') {
-      return refuse('published-stack', `This stack is published and frozen by #3268; rewind cannot change it.`);
+      return refuse('published-stack', `published-stack: This stack is published and frozen by #3268; rewind cannot change it.`);
     }
     const publication = await preflightPublished(input.worktree, input.slug, { git });
     if (publication.kind === 'unreadable') {
