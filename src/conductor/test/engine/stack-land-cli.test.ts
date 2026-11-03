@@ -13,6 +13,8 @@ import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { openOperatorRound } from '../../src/engine/routing/operator-round.js';
 import { readRouteRecord } from '../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
+import { pushedTipRef } from '../../src/engine/push-lease.js';
+import { writePublicationRecord } from '../../src/engine/stack-publication-record.js';
 import { dispatchStackLandCommand } from '../../src/engine/stack-land-cli.js';
 import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { dispatchCliEntry } from '../../src/index.js';
@@ -235,6 +237,28 @@ async function soleOperatorRecord(subject: RealStackFixture) {
   return stored.record;
 }
 
+async function publishStack(subject: RealStackFixture) {
+  const branches = (await subject.git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat/']))
+    .stdout.split('\n').filter(Boolean)
+    .filter((branch) => branch !== 'feat/daemon-demo' || !branch.startsWith('feat/c'));
+  const members = await Promise.all(branches.map(async (branch) => {
+    const position = branch === 'feat/daemon-demo' ? 2 : Number(branch.match(/^feat\/c(\d+)\/demo$/)?.[1]);
+    const tip = (await subject.git(['rev-parse', branch])).stdout.trim();
+    await subject.git(['update-ref', pushedTipRef('demo', branch), tip]);
+    return { position: parseChildId(position)!, branch, pr: 100 + position };
+  }));
+  // Tip preflight deliberately reads the remote, not merely the local receipt.
+  // Keep this real bare remote ignored so the admission's clean-worktree gate
+  // observes exactly the feature state an operator would have.
+  const origin = join(subject.repo, 'origin.git');
+  await subject.git(['init', '--bare', '-q', '-b', 'main', origin]);
+  await writeFile(join(subject.repo, '.git', 'info', 'exclude'), 'origin.git\n');
+  await subject.git(['remote', 'add', 'origin', origin]);
+  for (const member of members) await subject.git(['push', '-q', 'origin', `${member.branch}:${member.branch}`]);
+  await expect(writePublicationRecord(subject.repo, 'demo', undefined, { version: 1, members }, { git: subject.git }))
+    .resolves.toEqual({ kind: 'updated' });
+}
+
 describe('stack land CLI open path', () => {
   // Covers: task:10
   it('refuses stack land from a daemon session before the handler can mutate anything', async () => {
@@ -258,6 +282,37 @@ describe('stack land CLI open path', () => {
     ])).toEqual({ kind: 'stack-land', slug: 'demo', child: '1', carry: ['2', '3'], reason: 'reviewer request' });
     expect(detectStackLandCommand(['node', 'ai-conductor', 'stack', 'land', '--slug', 'demo', '--child', '1', '--done'])).toBeNull();
     expect(detectStackLandCommand(['node', 'ai-conductor', 'stack', 'land', '--slug', '../demo', '--child', '1', '--reason', 'why'])).toBeNull();
+  });
+
+  // Covers: task:20
+  it('opens an intact published stack through stack-land-cli without a published-stack refusal', async () => {
+    const subject = await realStackFixture();
+    await publishStack(subject);
+    const output: string[] = [];
+
+    await expect(land(subject, {}, {}, output)).resolves.toBe(0);
+
+    expect(await soleOperatorRecord(subject)).toMatchObject({ kind: 'operator', phase: 'open' });
+    expect(output.join('\n')).toContain('stack land: opened r1 on child 1.');
+    expect(output.join('\n')).not.toContain('published-stack');
+  });
+
+  // Covers: task:20
+  it('refuses a changed published member without creating a route, lease, or park', async () => {
+    const subject = await realStackFixture();
+    await publishStack(subject);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await writeFile(join(subject.repo, 'changed-after-publication.txt'), 'changed\n');
+    await subject.git(['add', 'changed-after-publication.txt']);
+    await subject.git(['commit', '--no-verify', '-qm', 'change published member']);
+    await subject.git(['push', '-q', 'origin', 'feat/c1/demo:feat/c1/demo']);
+    const before = await realSnapshot(subject);
+    const output: string[] = [];
+
+    await expect(land(subject, {}, {}, output)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain('member 1 changed or closed (#3268)');
+    expect(await realSnapshot(subject)).toEqual(before);
   });
 
   it.each([
