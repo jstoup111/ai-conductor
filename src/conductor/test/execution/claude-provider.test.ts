@@ -112,6 +112,33 @@ describe('ClaudeProvider', () => {
     }, () => '/tmp')).toBe('/isolated/vitest-scope');
   });
 
+  it('does not cache an ambient TMPDIR when imported without a Vitest marker', async () => {
+    const savedEnvironment = {
+      testTmpRoot: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+      testTmpScope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,
+      tmpdir: process.env.TMPDIR,
+    };
+    delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    delete process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+    process.env.TMPDIR = '/tmp';
+    vi.resetModules();
+
+    try {
+      const { resolveSystemPromptTempRoot: resolveAfterUnmarkedImport } =
+        await import('../../src/execution/claude-provider.js');
+
+      expect(resolveAfterUnmarkedImport({}, () => '/fallback-temp-root')).toBe('/fallback-temp-root');
+    } finally {
+      if (savedEnvironment.testTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = savedEnvironment.testTmpRoot;
+      if (savedEnvironment.testTmpScope === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+      else process.env.AI_CONDUCTOR_TEST_TMP_SCOPE = savedEnvironment.testTmpScope;
+      if (savedEnvironment.tmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedEnvironment.tmpdir;
+      vi.resetModules();
+    }
+  });
+
   it.each([
     {
       name: 'non-zero streaming exit killed before its terminal result record',

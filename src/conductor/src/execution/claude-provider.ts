@@ -1050,9 +1050,9 @@ export class ClaudeProvider implements LLMProvider {
 const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
 
 // A test can temporarily override TMPDIR while exercising a subprocess path.
-// Preserve the startup marker so a concurrent or nested helper cannot redirect
-// a prompt file into the operator's real temp directory after clearing it.
-const testTmpRootAtModuleLoad = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? process.env.TMPDIR;
+// Preserve only the semantic Vitest marker: ambient TMPDIR may be the
+// operator's real temporary directory and must never become a cached test root.
+const testTmpRootAtModuleLoad = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
 
 /**
  * Resolve the private prompt-file parent without allowing a nested Vitest
