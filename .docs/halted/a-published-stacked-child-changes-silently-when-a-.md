@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-03T12:35:53.421Z
 Slug: a-published-stacked-child-changes-silently-when-a-
 Class: needs-human
 Halting step: unknown
