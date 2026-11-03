@@ -1622,7 +1622,14 @@ a routed round instead of appended to the leaf plan:
   bottom-up, one `revalidate` round per child, re-running only the child's queued gates. A pass with
   no new commits acknowledges the entry by compare-and-swap (`child_revalidated`, `outcome:
   passed`). A child that commits a fix exits through the restack (`outcome: fixed`), which can queue
-  the children above it. Leaf gates and FINISH wait until the queue is empty.
+  the children above it. Leaf gates and FINISH wait until the queue is empty. Resume preflight,
+  the routed-exit continuation, and BUILD-region entry admit queued children through one shared
+  sequence: drain the routing outboxes, reconcile, and consume the lowest queued child only when
+  reconciliation leaves nothing to continue. A child that reaches BUILD while still queued, with no
+  repair marker, is admitted into its `revalidate` round in the same run and entered as the routed
+  host. Admission refusals halt `child BUILD region refused: queued child <k>, queue generation
+  <g>; non-closed rounds: <rounds>; marker owner: <owner>; <detail>`; see
+  [recovery](../runbooks/stacked-feature-manual-recovery.md#9-queued-revalidation-refused-at-build-entry).
 - **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
   `build` takes the ordinary remediation path unchanged.
 - **Halts.** A routing refusal halts `needs-human` with its detail, for example
