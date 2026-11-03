@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "slug": "operator-restack-tip-resolution-always-refused-sta",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-02-operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-23-committed-halt-record.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-07-per-child-build-region.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-25-operator-recorded-restack-conflict-resolution.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/operator-restack-tip-resolution-always-refused-sta.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/operator-restack-tip-resolution-always-refused-sta.md"
+    }
+  ]
+}
