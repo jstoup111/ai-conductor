@@ -118,6 +118,25 @@ describe('operator round open predicate', () => {
     if (rewind.kind === 'refused') expect(rewind.refusal.text).toContain('#3268');
   });
 
+  // Covers: task:20
+  it('keeps a published stack frozen when whole-feature routing is disabled', async () => {
+    const subject = deps({
+      published: true,
+      publication: { kind: 'intact' },
+      routeOn: false,
+      acceptanceContract: true,
+    });
+
+    const result = await checkOpenOperatorRound(
+      { worktree: '/fixture', slug: 'demo', child: c1, carry: [], reason: 'reviewer request' },
+      subject,
+    );
+
+    refused(result, 'routing-off');
+    expect(subject.publishedStackRefusal).not.toHaveBeenCalled();
+    expect(subject.publishedStackTipPreflight).not.toHaveBeenCalled();
+  });
+
   it('refuses an open child without a closure ref and does not mutate its inputs', async () => {
     const { git, calls } = readOnlyGit({
       ['rev-parse -q --verify refs/conductor/demo/closed/c1']: { exitCode: 1, stdout: '', stderr: '' },
