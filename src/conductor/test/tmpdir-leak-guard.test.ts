@@ -411,6 +411,10 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
     expect(IGNORED_TMPDIR_PREFIXES).toContain(RUN_TMP_ROOT_PREFIX);
   });
 
+  it('exempts Gem Miner fixtures created by concurrent operator sessions', () => {
+    expect(IGNORED_TMPDIR_PREFIXES).toContain('gem-miner-');
+  });
+
   it('exempts only an exact Vitest tmpdir entry', () => {
     const diff = diffTmpdirEntries(
       snap([]),

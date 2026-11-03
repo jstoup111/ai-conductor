@@ -250,6 +250,7 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   '.', // dotfiles/dotdirs: .X11-unix, .ICE-unix, .font-unix, …
   'self-host-', // live provider homes owned by the running daemon
   'claude-', // active Claude Code session scratchpads
+  'gem-miner-', // concurrent Gem Miner session fixtures in the shared operator tmpdir
   'moshi-codex-rl.json', // active Codex rate-limit state
   'cc-daemon-', // daemon tmux session scratch
   'systemd-', // systemd-private-*, systemd-*.service-*

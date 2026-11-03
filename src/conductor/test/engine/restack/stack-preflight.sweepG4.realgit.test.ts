@@ -425,74 +425,72 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
     expect(await exists(join(subject.repo, '.pipeline', 'HALT'))).toBe(false);
   });
 
-  // Covers: S9.9, S9.10, task:30
-  it('sweepG4: deferred-base-refresh is persisted and no base refresh runs when the repair is refused for cascade cap, dirty overlap or conflict, or when the follow-on is refused checked-out-elsewhere', async () => {
-    const expectNoBaseRefresh = async (subject: Subject, records: readonly EventRecord[], advanced: string) => {
-      expect(restackCauses()).not.toContain('base-refresh');
-      expect(ofType(records, 'restack_planned').map((record) => record.cause)).not.toContain('base-refresh');
-      expect(ofType(records, 'restack_applied').map((record) => record.cause)).not.toContain('base-refresh');
-      expect(await subject.isAncestor(advanced, 'feat/c1/demo')).toBe(false);
-    };
-    // (a) Cascade cap exhausted for child 1.
-    {
-      const subject = await fixture();
-      const advanced = await advanceDefault(subject);
-      await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'operator.txt', 'X\n'));
-      const blob = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ version: 1, counts: { 1: 3 } }) })).stdout.trim();
-      await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
-      const consumed: string[] = [];
-      const { result, records } = await preflight(subject, { baseRefreshDue: true, consumeRekick: async () => { consumed.push('x'); } });
-      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
-      expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['cascade-cap', 'deferred-base-refresh']);
-      expect(consumed).toEqual([]);
-      await expectNoBaseRefresh(subject, records, advanced);
-      vi.mocked(runRestack).mockClear();
-    }
-    // (b) Dirty overlap with the checked-out leaf.
-    {
-      const subject = await fixture();
-      await subject.onBranch('main', () => subject.commit('base advance', 'main.txt', 'advanced\n'));
-      const advanced = await subject.rev('main');
-      await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'base.txt', 'X\n'));
-      await writeFile(join(subject.repo, 'base.txt'), 'operator wip\n');
-      const { result, records } = await preflight(subject, { baseRefreshDue: true });
-      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
-      expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['dirty-overlap', 'deferred-base-refresh']);
-      await expectNoBaseRefresh(subject, records, advanced);
-      vi.mocked(runRestack).mockClear();
-    }
-    // (c) Replay conflict the resolver cannot resolve.
-    {
-      const subject = await fixture();
-      const advanced = await advanceDefault(subject);
-      await subject.onBranch('feat/c1/demo', () => subject.commit('operator conflicting change', 'two.txt', 'operator\n'));
-      const { result, records } = await preflight(subject, {
-        baseRefreshDue: true, resolver: async () => ({ resolved: false, reason: 'cannot resolve' }), resolverCap: 1,
-      });
-      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
-      expect(ofType(records, 'restack_conflict').length).toBeGreaterThan(0);
-      expect(ofType(records, 'restack_refused').map((record) => record.reason)).toContain('deferred-base-refresh');
-      expect(ofType(records, 'restack_applied')).toEqual([]);
-      await expectNoBaseRefresh(subject, records, advanced);
-      vi.mocked(runRestack).mockClear();
-    }
-    // (d) Repair applies; the follow-on is refused checked-out-elsewhere.
-    {
-      const subject = await fixture();
-      const advanced = await advanceDefault(subject);
-      const x = await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'operator.txt', 'X\n'));
-      const elsewhere = await mkdtemp(join(tmpdir(), 'stack-preflight-sweep-elsewhere-'));
-      repositories.push(elsewhere);
-      await rm(elsewhere, { recursive: true, force: true });
-      await subject.git(['worktree', 'add', '-q', elsewhere, 'feat/c1/demo']);
-      const { result, records } = await preflight(subject, { baseRefreshDue: true });
-      expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
-      expect(await subject.rev('refs/conductor/demo/closed/c1')).toBe(x);
-      expect(ofType(records, 'restack_applied').map((record) => record.cause)).toContain('feature-repair');
-      expect(ofType(records, 'restack_applied').map((record) => record.cause)).not.toContain('base-refresh');
-      expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['checked-out-elsewhere', 'deferred-base-refresh']);
-      expect(await subject.isAncestor(advanced, 'feat/c1/demo')).toBe(false);
-    }
+  const expectNoBaseRefresh = async (subject: Subject, records: readonly EventRecord[], advanced: string) => {
+    expect(restackCauses()).not.toContain('base-refresh');
+    expect(ofType(records, 'restack_planned').map((record) => record.cause)).not.toContain('base-refresh');
+    expect(ofType(records, 'restack_applied').map((record) => record.cause)).not.toContain('base-refresh');
+    expect(await subject.isAncestor(advanced, 'feat/c1/demo')).toBe(false);
+  };
+
+  // Covers: S9.9, task:30
+  it('sweepG4: persists deferred-base-refresh when the repair is refused for cascade cap', async () => {
+    const subject = await fixture();
+    const advanced = await advanceDefault(subject);
+    await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'operator.txt', 'X\n'));
+    const blob = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ version: 1, counts: { 1: 3 } }) })).stdout.trim();
+    await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
+    const consumed: string[] = [];
+    const { result, records } = await preflight(subject, { baseRefreshDue: true, consumeRekick: async () => { consumed.push('x'); } });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
+    expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['cascade-cap', 'deferred-base-refresh']);
+    expect(consumed).toEqual([]);
+    await expectNoBaseRefresh(subject, records, advanced);
+  });
+
+  // Covers: S9.9, task:30
+  it('sweepG4: persists deferred-base-refresh when the repair is refused for dirty overlap', async () => {
+    const subject = await fixture();
+    await subject.onBranch('main', () => subject.commit('base advance', 'main.txt', 'advanced\n'));
+    const advanced = await subject.rev('main');
+    await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'base.txt', 'X\n'));
+    await writeFile(join(subject.repo, 'base.txt'), 'operator wip\n');
+    const { result, records } = await preflight(subject, { baseRefreshDue: true });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
+    expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['dirty-overlap', 'deferred-base-refresh']);
+    await expectNoBaseRefresh(subject, records, advanced);
+  });
+
+  // Covers: S9.9, task:30
+  it('sweepG4: persists deferred-base-refresh when the repair has an unresolved replay conflict', async () => {
+    const subject = await fixture();
+    const advanced = await advanceDefault(subject);
+    await subject.onBranch('feat/c1/demo', () => subject.commit('operator conflicting change', 'two.txt', 'operator\n'));
+    const { result, records } = await preflight(subject, {
+      baseRefreshDue: true, resolver: async () => ({ resolved: false, reason: 'cannot resolve' }), resolverCap: 1,
+    });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
+    expect(ofType(records, 'restack_conflict').length).toBeGreaterThan(0);
+    expect(ofType(records, 'restack_refused').map((record) => record.reason)).toContain('deferred-base-refresh');
+    expect(ofType(records, 'restack_applied')).toEqual([]);
+    await expectNoBaseRefresh(subject, records, advanced);
+  });
+
+  // Covers: S9.10, task:30
+  it('sweepG4: persists deferred-base-refresh when its follow-on is refused checked-out-elsewhere', async () => {
+    const subject = await fixture();
+    const advanced = await advanceDefault(subject);
+    const x = await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'operator.txt', 'X\n'));
+    const elsewhere = await mkdtemp(join(tmpdir(), 'stack-preflight-sweep-elsewhere-'));
+    repositories.push(elsewhere);
+    await rm(elsewhere, { recursive: true, force: true });
+    await subject.git(['worktree', 'add', '-q', elsewhere, 'feat/c1/demo']);
+    const { result, records } = await preflight(subject, { baseRefreshDue: true });
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.any(String) });
+    expect(await subject.rev('refs/conductor/demo/closed/c1')).toBe(x);
+    expect(ofType(records, 'restack_applied').map((record) => record.cause)).toContain('feature-repair');
+    expect(ofType(records, 'restack_applied').map((record) => record.cause)).not.toContain('base-refresh');
+    expect(ofType(records, 'restack_refused').map((record) => record.reason)).toEqual(['checked-out-elsewhere', 'deferred-base-refresh']);
+    expect(await subject.isAncestor(advanced, 'feat/c1/demo')).toBe(false);
   });
 
   // Covers: S9.13, task:30
