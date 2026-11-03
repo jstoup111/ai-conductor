@@ -240,6 +240,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A routed repair round hosted on the top child of a stack can now commit; previously the stack commit guard refused every commit on the leaf branch. ([implementation PR #3583](https://github.com/jstoup111/ai-conductor/pull/3583)).
 - A restack resolved by a provider session no longer silently discards the stacked child's commits. ([implementation PR #3584](https://github.com/jstoup111/ai-conductor/pull/3584)).
 - A feature whose test suite proof is preserved within its drift budget now reaches build_review after its base moves, instead of halting for an operator. ([implementation PR #3587](https://github.com/jstoup111/ai-conductor/pull/3587)).
+- Codex dispatches on probe-upgraded model tiers are now priced instead of recorded as free. ([implementation PR #3588](https://github.com/jstoup111/ai-conductor/pull/3588)).
 
 ## Migration
 
