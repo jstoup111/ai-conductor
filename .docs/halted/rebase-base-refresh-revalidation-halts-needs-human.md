@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-03T10:39:20.362Z
 Slug: rebase-base-refresh-revalidation-halts-needs-human
 Class: needs-human
 Halting step: unknown
