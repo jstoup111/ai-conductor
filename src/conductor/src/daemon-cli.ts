@@ -152,6 +152,7 @@ import {
   type DaemonTeardownOptions,
 } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
+import { publishedFeatureReopened } from './engine/stack-refresh-ledger.js';
 import {
   createRefreshThrottle,
   createStalenessWarner,
@@ -2743,6 +2744,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       isOperatorParked(projectRoot, slug, (err) =>
         log(`anomaly checking if ${slug} is parked: ${err.message}`),
       ),
+    isPublishedFeatureReopened: (slug) => publishedFeatureReopened(join(worktreeBase, slug), slug),
     hasDurableChildState: (slug) => hasDurableChildState(join(worktreeBase, slug), slug),
     acquireFeatureDispatchLease: (slug) => acquireFeatureDispatchLease(projectRoot, slug, 'daemon re-kick'),
   };
@@ -2793,6 +2795,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // A completed claim is reopened only for durable published-stack work
+      // that still has an open routed round or an undrained refresh ledger.
+      isPublishedFeatureReopened: (slug) => publishedFeatureReopened(join(worktreeBase, slug), slug),
       sweepProviderScratch: async () => {
         const { buildAuthTokenPath } = resolveSelfHostConfig(config);
         const token = await readDaemonBuildToken(buildAuthTokenPath);

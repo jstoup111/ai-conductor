@@ -7,6 +7,7 @@ import { setImmediate as waitForImmediate } from 'node:timers/promises';
 import {
   runDaemon,
   guardedDispatchWith,
+  pickEligible,
   type BacklogItem,
   type DaemonDeps,
   type FeatureOutcome,
@@ -72,6 +73,36 @@ async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome
 }
 
 describe('engine/daemon — runDaemon', () => {
+  // Covers: task:23
+  it('reopens a completed claim and dispatches it when published work becomes active again', async () => {
+    const claims = new InMemoryWorkClaims();
+    claims.complete('published');
+    const reopened = vi.fn(async () => true);
+
+    await expect(pickEligible({ items: [{ slug: 'published' }] }, {
+      claims,
+      isPublishedFeatureReopened: reopened,
+    })).resolves.toEqual({ slug: 'published' });
+
+    expect(reopened).toHaveBeenCalledWith('published');
+    expect(claims.isCompleted('published')).toBe(false);
+  });
+
+  // Covers: task:23
+  it('keeps a completed claim deduplicated when publication work is drained or parked', async () => {
+    const claims = new InMemoryWorkClaims();
+    claims.complete('published');
+    await expect(pickEligible({ items: [{ slug: 'published' }] }, {
+      claims, isPublishedFeatureReopened: async () => false,
+    })).resolves.toBeUndefined();
+
+    const reopened = new InMemoryWorkClaims();
+    reopened.complete('published');
+    await expect(pickEligible({ items: [{ slug: 'published' }] }, {
+      claims: reopened, isParked: async () => true, isPublishedFeatureReopened: async () => true,
+    })).resolves.toBeUndefined();
+  });
+
   it('refreshes the snapshot and all dispatch gates on a full-pool pass', async () => {
     let release: ((outcome: FeatureOutcome) => void) | undefined;
     let stop = false;

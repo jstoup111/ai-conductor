@@ -399,6 +399,8 @@ export interface RekickSweepDeps {
    * (backward-compatible). Throws → treated as NOT processed (fail-open).
    */
   isProcessed?: (slug: string) => Promise<boolean>;
+  /** A published routed landing is active work even after its prior completion. */
+  isPublishedFeatureReopened?: (slug: string) => Promise<boolean>;
   /** Warn-once: has the "already shipped" skip already been logged for this slug? */
   hasWarned?: (slug: string) => Promise<boolean>;
   /** Warn-once: record that the "already shipped" skip was logged for this slug. */
@@ -501,7 +503,7 @@ export async function rekickSweep(
         log(`re-kick ${slug}: isProcessed check FAILED (${errMsg(err)}); treating as unprocessed`);
         processed = false;
       }
-      if (processed) {
+      if (processed && !(await deps.isPublishedFeatureReopened?.(slug) ?? false)) {
         skipped.push(slug);
         let fallback = warnedShippedByDeps.get(deps);
         if (!fallback) {
