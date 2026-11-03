@@ -81,18 +81,6 @@ describe('acceptance: conduct migrates onto the only TS CLI', () => {
     expect(install.stdout).toContain('Updated conduct script symlink');
     expect(await readlink(conduct)).toBe(CANONICAL_LAUNCHER);
 
-    const firstLink = await lstat(conduct);
-    const secondInstall = spawnSync(
-      INSTALLER,
-      ['--update', '--providers', 'codex', '--allow-worktree-root'],
-      { env, encoding: 'utf8', timeout: 20_000 },
-    );
-    const secondLink = await lstat(conduct);
-
-    expect(secondInstall.status, secondInstall.stderr).toBe(0);
-    expect(secondInstall.stdout).toContain('conduct script already current');
-    expect(secondLink.ino).toBe(firstLink.ino);
-
     const help = spawnSync(conduct, ['--help'], {
       env,
       encoding: 'utf8',
@@ -102,5 +90,22 @@ describe('acceptance: conduct migrates onto the only TS CLI', () => {
     expect(help.status, help.stderr).toBe(0);
     expect(help.stdout).toMatch(/Usage:\s+ai-conductor/i);
     expect(help.stderr.split('\n').filter((line) => line === 'conduct is deprecated; use ai-conductor instead')).toHaveLength(1);
+  });
+
+  it('preserves an already-current conduct symlink on update', async () => {
+    await rm(conduct);
+    await symlink(CANONICAL_LAUNCHER, conduct);
+    const firstLink = await lstat(conduct);
+
+    const install = spawnSync(
+      INSTALLER,
+      ['--update', '--providers', 'codex', '--allow-worktree-root'],
+      { env, encoding: 'utf8', timeout: 20_000 },
+    );
+    const secondLink = await lstat(conduct);
+
+    expect(install.status, install.stderr).toBe(0);
+    expect(install.stdout).toContain('conduct script already current');
+    expect(secondLink.ino).toBe(firstLink.ino);
   });
 });
