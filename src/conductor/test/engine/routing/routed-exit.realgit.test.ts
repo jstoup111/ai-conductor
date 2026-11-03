@@ -208,10 +208,36 @@ describe('routed exit (real local Git)', () => {
     await expect(readVerdict(subject.repo, 'finish')).resolves.toMatchObject({ satisfied: false });
   });
 
+  // Covers: task:22
+  it('keeps FINISH done and re-pends rebase on an unpublished leaf return', async () => {
+    const subject = await leafFixture(false);
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({
+      feature_desc: 'demo', rebase: 'done', finish: 'done',
+      prd_audit: 'done', architecture_review_as_built: 'done', manual_test: 'done',
+    }));
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [leaf]: 'done' } }));
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+    if (stored.kind !== 'record') throw new Error('fixture route is missing');
+
+    await expect(returnToLeaf(subject.repo, 'demo', stored, { git: subject.gitRunner })).resolves.toEqual({ kind: 'leaf-returned' });
+
+    const state = JSON.parse(await readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, string>;
+    expect(state).toMatchObject({ rebase: 'pending', finish: 'done' });
+    await expect(readVerdict(subject.repo, 'rebase')).resolves.toMatchObject({ satisfied: false });
+  });
+
   // Covers: task:4
-  it('records a published leaf host tip and its owed round comment in the settling transaction', async () => {
+  it('records a published leaf host tip and its owed round comment without moving the bare remote', async () => {
     const subject = await leafFixture(true);
     await publishLeafFixture(subject);
+    const origin = join(subject.repo, 'origin.git');
+    await subject.git(['init', '--bare', '-q', '-b', 'main', origin]);
+    await writeFile(join(subject.repo, '.git', 'info', 'exclude'), 'origin.git\n');
+    await subject.git(['remote', 'add', 'origin', origin]);
+    for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) {
+      await subject.git(['push', '-q', 'origin', `${branch}:${branch}`]);
+    }
+    const remoteBefore = (await subject.git(['ls-remote', '--heads', 'origin'])).stdout;
     let rejected = false;
     const rejectingGit: GitRunner = async (args, options) => {
       if (!rejected && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(refreshLedgerRefFor('demo'))) {
@@ -247,6 +273,7 @@ describe('routed exit (real local Git)', () => {
     const settle = updateTransactions(recorded.calls).find((input) => input.includes(refreshLedgerRefFor('demo')));
     expect(settle).toContain(routeRecordRefFor('demo', roundId));
     expect(settle).toContain(`delete ${repairMarkerRefFor('demo')}`);
+    await expect(subject.git(['ls-remote', '--heads', 'origin'])).resolves.toMatchObject({ stdout: remoteBefore });
   });
 
   // Covers: task:4
