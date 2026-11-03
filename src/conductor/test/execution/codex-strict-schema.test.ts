@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, BUILD_REVIEW_JUDGED_V3_SCHEMAS, parseBuildReviewCustomReviewerPayload } from '../../src/engine/build-review-domain.js';
 import { AS_BUILT_VERDICT_SCHEMA, validateAsBuiltVerdict } from '../../src/engine/as-built-contract.js';
 import { PRD_WIDENING_RECONCILIATION_SCHEMA } from '../../src/engine/prd-widening-contract.js';
+import { PREREQUISITE_CLAIM_SCHEMA, parseBuilderClaim } from '../../src/engine/routing/prerequisite-claim.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 
 type Json = Record<string, unknown>;
@@ -42,6 +43,54 @@ describe('toCodexStrictSchema', () => {
     const strict = toCodexStrictSchema(schema);
     expect(typelessOrOneOfNodes(strict)).toEqual([]);
     expect(objectsMissingRequiredKeys(strict)).toEqual([]);
+  });
+
+  describe('a contract whose root is a union of object branches', () => {
+    const strict = toCodexStrictSchema(PREREQUISITE_CLAIM_SCHEMA) as Json;
+
+    it('sends a closed object root, which is the only root strict mode accepts', () => {
+      expect(strict.type).toBe('object');
+      expect(strict.additionalProperties).toBe(false);
+      expect(strict).not.toHaveProperty('oneOf');
+      expect(strict).not.toHaveProperty('anyOf');
+      expect(Object.keys(strict.properties as Json).sort()).toEqual(['child', 'outcome', 'paths', 'symbols']);
+      expect(typelessOrOneOfNodes(strict)).toEqual([]);
+      expect(objectsMissingRequiredKeys(strict)).toEqual([]);
+    });
+
+    it('keeps each branch value of a shared property', () => {
+      expect((strict.properties as Json).outcome).toEqual({
+        anyOf: [
+          { type: 'string', const: 'completed' },
+          { type: 'string', const: 'blocked-by-prerequisite' },
+        ],
+      });
+    });
+
+    it('leaves no required-only subschema, since strict mode demands a type on each', () => {
+      expect(JSON.stringify(strict)).not.toContain('{"required":');
+    });
+
+    it('round-trips both claim shapes through the closed parser', () => {
+      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'completed', child: null, paths: null, symbols: null,
+      }))).toEqual({ kind: 'none' });
+      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: ['parseB'],
+      }))).toEqual({
+        kind: 'claim',
+        claim: { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] },
+      });
+    });
+
+    it('still rejects a claim that only the branch rules forbid', () => {
+      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: null,
+      }))).toEqual({ kind: 'malformed' });
+      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'completed', child: 2, paths: null, symbols: null,
+      }))).toEqual({ kind: 'malformed' });
+    });
   });
 
   it('infers the JSON type of a const and a single-typed enum, and leaves mixed enums alone', () => {
