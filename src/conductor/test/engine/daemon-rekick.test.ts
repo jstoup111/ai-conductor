@@ -690,6 +690,7 @@ function fakeDeps(opts: {
   clearFails?: Set<string>;
   lastRekickSha?: Map<string, string>;
   isProcessed?: (slug: string) => Promise<boolean>;
+  isPublishedFeatureReopened?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
   markRekicked?: (slug: string, sha: string) => Promise<void>;
@@ -726,6 +727,14 @@ function fakeDeps(opts: {
         }
       : {}),
     ...(opts.isOperatorParked ? { isOperatorParked: opts.isOperatorParked } : {}),
+    ...(opts.isPublishedFeatureReopened
+      ? {
+          isPublishedFeatureReopened: async (slug: string) => {
+            trace.events.push(`isPublishedFeatureReopened:${slug}`);
+            return opts.isPublishedFeatureReopened!(slug);
+          },
+        }
+      : {}),
     ...(opts.markRekicked ? { markRekicked: opts.markRekicked } : {}),
     ...(opts.readHaltClass
       ? {
@@ -1063,6 +1072,31 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(true);
   });
 
+  it('re-kicks a processed halted feature when published refresh work reopens it', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['published-refresh'],
+      isProcessed: async () => true,
+      isPublishedFeatureReopened: async () => true,
+    });
+
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: ['published-refresh'], skipped: [] });
+    expect(trace.events).toContain('isProcessed:published-refresh');
+    expect(trace.events).toContain('isPublishedFeatureReopened:published-refresh');
+    expect(trace.cleared).toEqual(new Set(['published-refresh']));
+  });
+
+  it('keeps a processed halted feature skipped after a drained published refresh ledger', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['drained-refresh'],
+      isProcessed: async () => true,
+      isPublishedFeatureReopened: async () => false,
+    });
+
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: [], skipped: ['drained-refresh'] });
+    expect(trace.events).toContain('isPublishedFeatureReopened:drained-refresh');
+    expect(trace.cleared).toEqual(new Set());
+  });
+
   it('isProcessed throws → treated as NOT processed (fail-open), error logged, sweep continues', async () => {
     const last = new Map<string, string>();
     const { deps, trace } = fakeDeps({
@@ -1127,6 +1161,18 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const res = await rekickSweep(deps, SHA_B);
     expect(res.skipped).toEqual(['parked-slug']);
     expect(trace.events.some((e) => e.startsWith('isProcessed:'))).toBe(false);
+  });
+
+  it('operator-parked slug does not consult the published-refresh reopening predicate', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['parked-published-refresh'],
+      isOperatorParked: async () => true,
+      isProcessed: async () => true,
+      isPublishedFeatureReopened: async () => true,
+    });
+
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: [], skipped: ['parked-published-refresh'] });
+    expect(trace.events.some((event) => event.startsWith('isPublishedFeatureReopened:'))).toBe(false);
   });
 
   it('operator-parked slug is skipped across multiple sweeps at different SHAs; no lastRekickSha set', async () => {

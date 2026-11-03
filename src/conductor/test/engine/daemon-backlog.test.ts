@@ -28,8 +28,81 @@ import {
   makeIsProcessed,
 } from '../../src/engine/shipped-record.js';
 import { writeAutoPark } from '../../src/engine/park-marker.js';
+import { type LocalGitRunner } from '../../src/engine/local-git-runner.js';
+import { publishedFeatureReopened } from '../../src/engine/stack-refresh-ledger.js';
 
 const execFile = promisify(execFileCb);
+
+const TASK_23_SHA_A = 'a'.repeat(40);
+const TASK_23_SHA_B = 'b'.repeat(40);
+
+/**
+ * The smallest durable Git model that reaches the published-reopen predicate.
+ * It keeps this test at the ledger boundary: discovery tests below only need
+ * to consume the predicate's boolean result.
+ */
+function task23RefreshGit(state: 'open-round' | 'push-pending' | 'drained'): LocalGitRunner {
+  const publicationBlob = '1'.repeat(40);
+  const queueBlob = '2'.repeat(40);
+  const ledgerBlob = '3'.repeat(40);
+  const slug = 'task-23';
+  const branch = 'feature/task-23';
+  const ledger = {
+    version: 1,
+    members: {
+      [branch]: { position: 1, publishedTip: TASK_23_SHA_A, recordedTip: TASK_23_SHA_B, pr: 23 },
+    },
+    rounds: [],
+    aboveOwed: [],
+    posted: [],
+  };
+
+  return async (args) => {
+    const ref = args.at(-1);
+    if (args[0] === 'rev-parse' && ref === `refs/conductor/${slug}/publication`) {
+      return { exitCode: 0, stdout: `${publicationBlob}\n`, stderr: '' };
+    }
+    if (args[0] === 'cat-file' && ref === publicationBlob) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ version: 1, members: [{ position: 1, branch, pr: 23 }] }),
+        stderr: '',
+      };
+    }
+    if (args[0] === 'rev-parse' && ref === `refs/conductor/${slug}/revalidate`) {
+      return state === 'open-round'
+        ? { exitCode: 0, stdout: `${queueBlob}\n`, stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'cat-file' && ref === queueBlob) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          generation: 1,
+          entries: [{
+            child: 1, position: 1, closureSha: TASK_23_SHA_A, gates: ['test_suite'],
+            replay: { oldParent: TASK_23_SHA_A, newParent: TASK_23_SHA_B }, state: 'queued',
+          }],
+          outbox: [],
+        }),
+        stderr: '',
+      };
+    }
+    if (args[0] === 'for-each-ref') return { exitCode: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse' && ref === `refs/conductor/${slug}/refresh`) {
+      return { exitCode: 0, stdout: `${ledgerBlob}\n`, stderr: '' };
+    }
+    if (args[0] === 'cat-file' && ref === ledgerBlob) {
+      return { exitCode: 0, stdout: JSON.stringify(ledger), stderr: '' };
+    }
+    if (args[0] === 'rev-parse' && ref === `refs/conductor/${slug}/pushed/${branch}`) {
+      return state === 'drained'
+        ? { exitCode: 0, stdout: `${TASK_23_SHA_B}\n`, stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: '' };
+    }
+    throw new Error(`unexpected Task 23 git call: ${args.join(' ')}`);
+  };
+}
 
 // A working-tree-backed tree source: reads `.docs/` straight off the filesystem.
 // Used by the vetting-logic unit tests so they stay fast and git-free while
@@ -95,6 +168,92 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     isProcessed?: (slug: string) => Promise<boolean>,
     log?: (m: string) => void,
   ) => (await discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) })).items;
+
+  describe('Task 23: published-stack reopen eligibility', () => {
+    async function writeEligible(slug: string): Promise<void> {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
+    }
+
+    it('recognizes both an open routed round and a closed round with an unpushed refresh ledger', async () => {
+      await expect(publishedFeatureReopened('/fixture', 'task-23', {
+        git: task23RefreshGit('open-round'),
+      })).resolves.toBe(true);
+      await expect(publishedFeatureReopened('/fixture', 'task-23', {
+        git: task23RefreshGit('push-pending'),
+      })).resolves.toBe(true);
+    });
+
+    it('keeps a closed round completed once its refresh ledger is drained', async () => {
+      await expect(publishedFeatureReopened('/fixture', 'task-23', {
+        git: task23RefreshGit('drained'),
+      })).resolves.toBe(false);
+    });
+
+    it('dispatches a processed slug when its published routed round is open', async () => {
+      await writeEligible('open-published-round');
+      const reopened = vi.fn(async () => true);
+
+      const result = await discoverBacklog(dir, async () => true, undefined, {
+        treeSource: fsTreeSource(dir),
+        isPublishedFeatureReopened: reopened,
+        isOperatorParked: async () => false,
+      });
+
+      expect(result.items.map((item) => item.slug)).toEqual(['open-published-round']);
+      expect(reopened).toHaveBeenCalledWith('open-published-round');
+    });
+
+    it('dispatches a processed slug when a closed round still has an unpushed ledger entry', async () => {
+      await writeEligible('pending-published-refresh');
+
+      const result = await discoverBacklog(dir, async () => true, undefined, {
+        treeSource: fsTreeSource(dir),
+        isPublishedFeatureReopened: async () => true,
+        isOperatorParked: async () => false,
+      });
+
+      expect(result.items.map((item) => item.slug)).toEqual(['pending-published-refresh']);
+    });
+
+    it('retains processed dedup for a drained ledger and for an operator-parked reopened feature', async () => {
+      await writeEligible('drained-published-refresh');
+      await writeEligible('parked-published-refresh');
+      const reopened = vi.fn(async (slug: string) => slug === 'parked-published-refresh');
+
+      const result = await discoverBacklog(dir, async () => true, undefined, {
+        treeSource: fsTreeSource(dir),
+        isPublishedFeatureReopened: reopened,
+        isOperatorParked: async (slug) => slug === 'parked-published-refresh',
+      });
+
+      expect(result.items).toEqual([]);
+      expect(reopened).toHaveBeenCalledWith('drained-published-refresh');
+      expect(reopened).toHaveBeenCalledWith('parked-published-refresh');
+    });
+
+    it('keeps a no-worktree reopen predicate and shipped-record dedup from dispatching', async () => {
+      await writeEligible('no-worktree-published-refresh');
+      await writeEligible('shipped-published-refresh');
+      await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/shipped/shipped-published-refresh.md'),
+        renderShippedRecord({ slug: 'shipped-published-refresh', specHash: 'deadbeef' }),
+      );
+      const logs: string[] = [];
+
+      const result = await discoverBacklog(dir, async (slug) => slug === 'no-worktree-published-refresh', (message) => logs.push(message), {
+        treeSource: fsTreeSource(dir),
+        // This is the production predicate's no-worktree result: no durable
+        // publication state can be read from a worktree that does not exist.
+        isPublishedFeatureReopened: async () => false,
+      });
+
+      expect(result.items).toEqual([]);
+      expect(logs.join('\n')).toMatch(/shipped-published-refresh.*shipped dedup/i);
+    });
+  });
 
   describe('resolveStoriesRef', () => {
     it('reports an unresolvable explicit Stories reference', async () => {
