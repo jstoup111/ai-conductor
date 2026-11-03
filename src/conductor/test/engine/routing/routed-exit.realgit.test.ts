@@ -331,6 +331,45 @@ describe('routed exit (real local Git)', () => {
     await expect(subject.git(['ls-remote', '--heads', 'origin'])).resolves.toMatchObject({ stdout: remoteBefore });
   });
 
+  // Covers: task:25
+  it('passes a published routed exit through restack while leaving every bare-remote tip unchanged', async () => {
+    const subject = await fixture(true);
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [
+        { position: host, branch: 'feat/c1/demo', pr: 101 },
+        { position: childTwo, branch: 'feat/c2/demo', pr: 102 },
+        { position: leaf, branch: 'feat/daemon-demo', pr: 103 },
+      ],
+    }, { git: subject.gitRunner })).resolves.toEqual({ kind: 'updated' });
+    for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) {
+      await subject.gitRunner(['update-ref', pushedTipRef('demo', branch), (await subject.gitRunner(['rev-parse', branch])).stdout.trim()]);
+    }
+    const origin = join(subject.repo, 'origin.git');
+    await subject.git(['init', '--bare', '-q', '-b', 'main', origin]);
+    await writeFile(join(subject.repo, '.git', 'info', 'exclude'), 'origin.git\n');
+    await subject.git(['remote', 'add', 'origin', origin]);
+    for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) {
+      await subject.git(['push', '-q', 'origin', `${branch}:${branch}`]);
+    }
+    const remoteBefore = (await subject.git(['ls-remote', '--heads', 'origin'])).stdout;
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'restacked' });
+
+    const ledger = await readRefreshLedger(subject.repo, 'demo', { git: subject.gitRunner });
+    if (ledger.kind !== 'ledger') throw new Error('published routed exit did not write a refresh ledger');
+    expect(Object.fromEntries(Object.entries(ledger.ledger.members).map(([branch, member]) => [branch, member.recordedTip]))).toEqual({
+      'feat/c1/demo': (await subject.gitRunner(['rev-parse', 'feat/c1/demo'])).stdout.trim(),
+      'feat/c2/demo': (await subject.gitRunner(['rev-parse', 'feat/c2/demo'])).stdout.trim(),
+      'feat/daemon-demo': (await subject.gitRunner(['rev-parse', 'feat/daemon-demo'])).stdout.trim(),
+    });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'restacked' } },
+    });
+    await expect(subject.git(['ls-remote', '--heads', 'origin'])).resolves.toMatchObject({ stdout: remoteBefore });
+  });
+
   // Covers: task:4
   it('records no ledger entry or owed comment when a published leaf exits without a commit', async () => {
     const subject = await leafFixture(false);
