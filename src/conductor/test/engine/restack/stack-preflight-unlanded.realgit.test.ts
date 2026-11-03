@@ -1,4 +1,4 @@
-// Covers: task:17
+// Covers: task:17, task:26
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
+import { pushedTipRef } from '../../../src/engine/push-lease.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -112,19 +113,66 @@ describe('runStackPreflight unlanded closed-child commits (real local Git)', () 
     ].join('\n'));
   });
 
-  it('keeps the published-stack halt ahead of the unlanded landing instruction', async () => {
+  it('directs an intact published stack with raw commits to stack land', async () => {
     const subject = await fixture();
     await subject.onBranch('feat/c1/demo', () => subject.commit('raw review edit', 'review.txt', 'X\n'));
+    const tip = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+    const origin = join(subject.repo, 'origin.git');
+    await subject.git(['init', '--bare', '-q', '-b', 'main', origin]);
+    await writeFile(join(subject.repo, '.git', 'info', 'exclude'), 'origin.git\n');
+    await subject.git(['remote', 'add', 'origin', origin]);
+    await subject.git(['push', '-q', 'origin', 'feat/c1/demo:feat/c1/demo']);
+    await subject.git(['update-ref', pushedTipRef('demo', 'feat/c1/demo'), tip]);
     await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
       version: 1,
       members: [{ position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 }],
     })).resolves.toEqual({ kind: 'updated' });
+    const before = await subject.refs();
 
-    await expect(preflight(subject)).resolves.toMatchObject({ result: { kind: 'halted' } });
+    const { result, planned } = await preflight(subject);
 
+    expect(result).toEqual({
+      kind: 'halted',
+      detail: 'published stack requires ai-conductor stack land --slug demo --child 1 --reason "<why>"',
+    });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('restack refused (published-stack) child 1');
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('unlanded-closed-child-commits');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      'published stack requires ai-conductor stack land --slug demo --child 1 --reason "<why>"\n',
+    );
+    expect(planned).toEqual([]);
+    expect(await subject.refs()).toBe(before);
+  });
+
+  it('halts raw commits on a published stack whose recorded tip no longer matches origin', async () => {
+    const subject = await fixture();
+    await subject.onBranch('feat/c1/demo', () => subject.commit('raw review edit', 'review.txt', 'X\n'));
+    const receipt = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+    const origin = join(subject.repo, 'origin.git');
+    await subject.git(['init', '--bare', '-q', '-b', 'main', origin]);
+    await writeFile(join(subject.repo, '.git', 'info', 'exclude'), 'origin.git\n');
+    await subject.git(['remote', 'add', 'origin', origin]);
+    await subject.git(['push', '-q', 'origin', 'feat/c1/demo:feat/c1/demo']);
+    await subject.git(['update-ref', pushedTipRef('demo', 'feat/c1/demo'), receipt]);
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [{ position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 }],
+    })).resolves.toEqual({ kind: 'updated' });
+    await subject.onBranch('feat/c1/demo', () => subject.commit('reviewer moved tip', 'reviewer.txt', 'Y\n'));
+    await subject.git(['push', '-q', 'origin', 'feat/c1/demo:feat/c1/demo']);
+    const before = await subject.refs();
+
+    const { result, planned } = await preflight(subject);
+
+    expect(result).toEqual({
+      kind: 'halted',
+      detail: 'published stack cannot open a landing: member 1 changed or closed (#3268)',
+    });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      'published stack cannot open a landing: member 1 changed or closed (#3268)\n',
+    );
+    expect(planned).toEqual([]);
+    expect(await subject.refs()).toBe(before);
   });
 
   it('ignores a halt-record-only commit, while routing-off preserves feature repair', async () => {

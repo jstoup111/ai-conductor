@@ -194,6 +194,8 @@ type ScratchCleanupAttempt = number | 'unknown';
 export type FinishPublicationTransition =
   | 'establish_pr'
   | 'establish_child_prs'
+  | 'refresh_published_members'
+  | 'post_routed_comments'
   | 'verify_release_readiness'
   | 'author_pr_prose'
   | 'judge_pr_prose'
@@ -252,6 +254,24 @@ export type StackPublicationEvent =
       eventId: string;
     }
   | { type: 'stack_members_unreachable'; child: ChildId; pr: number }
+  | {
+      type: 'stack_member_refreshed';
+      child: ChildId;
+      pr: number;
+      oldTip: string;
+      newTip: string;
+      /** A resumed FINISH may re-deliver this completed occurrence. */
+      eventId: string;
+    }
+  | {
+      /** A routed-comment receipt became durable after a guarded PR mutation. */
+      type: 'stack_member_comment_posted';
+      pr: number;
+      roundId: string;
+      marker: string;
+      /** Derived from the marker, so recovery replays the same occurrence. */
+      eventId: string;
+    }
   | { type: 'stack_tip_diverged'; prs: readonly number[] };
 
 /** Closed, non-diagnostic context for credential-park progress telemetry. */

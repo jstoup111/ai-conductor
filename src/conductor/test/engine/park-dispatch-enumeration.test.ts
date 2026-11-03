@@ -48,6 +48,7 @@ describe('Task 5 — park guard covers the claim path', () => {
       release: vi.fn(),
       list: vi.fn(() => []),
       complete: vi.fn(),
+      reopen: vi.fn(),
       isCompleted: vi.fn(() => false),
       park: vi.fn(),
       unpark: vi.fn(),

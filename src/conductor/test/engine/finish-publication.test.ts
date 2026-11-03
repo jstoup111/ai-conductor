@@ -1141,7 +1141,7 @@ describe('finish-publication domain types', () => {
     await expect(publicationProgressAllowance({
       ...readyPublicationSnapshot(),
       stack: 'members-missing',
-    } as PublicationSnapshot)).resolves.toBe(2 * 9);
+    } as PublicationSnapshot)).resolves.toBe(2 * 10);
   });
 
   // Covers: task:10

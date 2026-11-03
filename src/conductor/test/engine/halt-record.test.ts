@@ -1,5 +1,5 @@
-// Covers: task:22
-import { afterEach, describe, expect, it } from 'vitest';
+// Covers: task:6, task:22
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -18,7 +18,13 @@ import {
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { clearHaltForResume } from '../../src/engine/daemon-rekick.js';
-import type { RemoteGitExecutionResult } from '../../src/engine/remote-git-operations.js';
+import { executeRemoteGit, type RemoteGitExecutionResult } from '../../src/engine/remote-git-operations.js';
+import { pushedTipRef } from '../../src/engine/push-lease.js';
+import { writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { refreshLedgerRefFor } from '../../src/engine/stack-refresh-ledger.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 const input = {
   slug: 'operator-decision',
@@ -53,6 +59,41 @@ describe('halt record rendering', () => {
       'Push status: this record may be ahead of the remote; push is not guaranteed.',
     );
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(input.haltBody);
+  });
+
+  it('refuses halt-record leaf publication through the pending-ledger guard and emits halt_record_push_failed', async () => {
+    const { root, origin, leaf, rewritten } = await makePendingPublishedStackHaltRepository();
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ path: string; reason: string }> = [];
+    const transport = vi.fn(async (args: string[]) => {
+      if (args[0] === 'push') throw new Error('refused push reached transport');
+      const result = await execa('git', args, { cwd: root, reject: false });
+      if ((result.exitCode ?? 1) !== 0) throw new Error(`git ${args.join(' ')} failed`);
+      return { stdout: result.stdout };
+    });
+    events.on('halt_record_push_failed', (event) => {
+      if (event.type === 'halt_record_push_failed') failures.push({ path: event.path, reason: event.reason });
+    });
+
+    await expect(writeHaltMarker(root, input.haltBody, input.haltClass, events, {
+      git: localGit(root),
+      mutation: stackMutation(),
+      remoteGit: (args, dependencies) => executeRemoteGit(args, {
+        ...dependencies,
+        config: async () => ({ stdout: 'git@github.com:acme/rocket.git\n' }),
+        runRemoteGit: transport,
+      }),
+    })).resolves.toEqual({ status: 'written' });
+
+    expect(await gitValue(origin, 'refs/heads/feat/daemon-demo')).toBe(leaf);
+    expect(await gitValue(root, pushedTipRef('demo', 'feat/daemon-demo'))).toBe(leaf);
+    expect(await gitValue(root, 'HEAD')).not.toBe(rewritten);
+    expect(transport).toHaveBeenCalledWith(
+      expect.arrayContaining(['ls-remote']),
+      expect.objectContaining({ credential: 'write' }),
+    );
+    expect(transport.mock.calls.map(([args]) => args[0])).toEqual(['ls-remote']);
+    expect(failures).toEqual([{ path: haltRecordPath('demo'), reason: 'stack-tip-mismatch' }]);
   });
 
   it('renders every operator pickup field for a halted feature', () => {
@@ -279,6 +320,103 @@ function successfulRemote(): HaltRecordRemoteOptions {
       stdout: args[0] === 'rev-parse' ? `${'a'.repeat(40)}\n` : '',
     }),
     remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'executed', targets: [] }),
+  };
+}
+
+async function makePendingPublishedStackHaltRepository(): Promise<{
+  root: string;
+  origin: string;
+  leaf: string;
+  rewritten: string;
+}> {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'halt-record-published-stack-'));
+  scratchRoots.push(fixtureRoot);
+  const primary = join(fixtureRoot, 'primary');
+  const root = join(fixtureRoot, 'demo');
+  const origin = join(fixtureRoot, 'origin.git');
+  await mkdir(primary);
+  await initTestRepo(primary);
+  await writeFile(join(primary, 'seed.txt'), 'seed\n');
+  await execa('git', ['add', '.'], { cwd: primary });
+  await execa('git', ['commit', '-m', 'seed'], { cwd: primary });
+  await execa('git', ['init', '--bare', '--initial-branch=main', origin], { cwd: fixtureRoot });
+  await execa('git', ['remote', 'add', 'origin', origin], { cwd: primary });
+
+  await execa('git', ['checkout', '-b', 'feat/c1/demo'], { cwd: primary });
+  const child1 = await commitFile(primary, 'child-1');
+  await execa('git', ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'], { cwd: primary });
+  await execa('git', ['checkout', '-b', 'feat/c3/demo'], { cwd: primary });
+  const child3 = await commitFile(primary, 'child-3');
+  await execa('git', ['push', 'origin', 'HEAD:refs/heads/feat/c3/demo'], { cwd: primary });
+  await execa('git', ['worktree', 'add', '-b', 'feat/daemon-demo', root], { cwd: primary });
+  scratchRoots.push(root);
+  const leaf = await commitFile(root, 'leaf');
+  await execa('git', ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'], { cwd: root });
+  await execa('git', ['fetch', 'origin', '+refs/heads/feat/daemon-demo:refs/remotes/origin/feat/daemon-demo'], { cwd: root });
+
+  const c1 = parseChildId(1)!;
+  const c3 = parseChildId(3)!;
+  const c5 = parseChildId(5)!;
+  const record: PublicationRecord = {
+    version: 1,
+    members: [
+      { position: c1, branch: 'feat/c1/demo', pr: 101 },
+      { position: c3, branch: 'feat/c3/demo', pr: 103 },
+      { position: c5, branch: 'feat/daemon-demo', pr: 500 },
+    ],
+  };
+  await expect(writePublicationRecord(root, 'demo', undefined, record)).resolves.toEqual({ kind: 'updated' });
+  for (const [branch, tip] of [
+    ['feat/c1/demo', child1], ['feat/c3/demo', child3], ['feat/daemon-demo', leaf],
+  ] as const) {
+    await execa('git', ['update-ref', pushedTipRef('demo', branch), tip], { cwd: root });
+  }
+
+  await execa('git', ['reset', '--hard', 'main'], { cwd: root });
+  const rewritten = await commitFile(root, 'recorded-rewrite');
+  const ledger = JSON.stringify({
+    version: 1,
+    members: {
+      'feat/daemon-demo': {
+        position: c5, pr: 500, publishedTip: leaf, recordedTip: rewritten,
+      },
+    },
+    rounds: [], aboveOwed: [], posted: [],
+  });
+  const blob = await execa('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: ledger });
+  await execa('git', ['update-ref', refreshLedgerRefFor('demo'), blob.stdout.trim()], { cwd: root });
+  return { root, origin, leaf, rewritten };
+}
+
+async function commitFile(cwd: string, name: string): Promise<string> {
+  await writeFile(join(cwd, `${name}.txt`), `${name}\n`);
+  await execa('git', ['add', '.'], { cwd });
+  await execa('git', ['commit', '-m', name], { cwd });
+  return gitValue(cwd, 'HEAD');
+}
+
+async function gitValue(cwd: string, ref: string): Promise<string> {
+  return (await execa('git', ['rev-parse', '--verify', ref], { cwd })).stdout.trim();
+}
+
+function localGit(cwd: string): HaltRecordRemoteOptions['git'] {
+  return async (args, options) => {
+    const result = await execa('git', args, { cwd, input: options?.input, reject: false });
+    if ((result.exitCode ?? 1) !== 0) throw new Error(result.stderr || `git ${args.join(' ')} failed`);
+    return { stdout: result.stdout };
+  };
+}
+
+function stackMutation(): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'acme/rocket', defaultBranch: 'main', specBranch: 'feat/daemon-demo',
+      featureMarker: '.docs/specs/demo.md', publication: 'initial',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/specs/demo.md', content: 'Owner: alice\n' }] },
+    },
   };
 }
 

@@ -1,5 +1,5 @@
-// Covers: task:21, task:rem-prd-audit-rem-v3-divergence-mapping, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection
-import { afterEach, describe, expect, it } from 'vitest';
+// Covers: task:5, task:6, task:21, task:rem-prd-audit-rem-v3-divergence-mapping, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { preparePushedTip, pushedTipRef } from '../../src/engine/push-lease.js';
 import { readPublicationRecord, writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { authorizePublishedStackRefresh, refreshLedgerRefFor } from '../../src/engine/stack-refresh-ledger.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
@@ -103,6 +104,29 @@ function dependencies(repository: string, calls: string[][]) {
   };
 }
 
+/**
+ * The remote-Git adapter is deliberately a mock: a refusal may perform its
+ * one read, but must never ask this boundary to transport a push.
+ */
+function readOnlyTransport(repository: string, calls: string[][]) {
+  return vi.fn(async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'push') throw new Error('refused push reached transport');
+    const result = await git(repository, args);
+    if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed`);
+    return { stdout: result.stdout };
+  });
+}
+
+async function writeRefreshLedger(repository: string, member: { branch: string; position: number; pr: number; publishedTip: string; recordedTip: string }): Promise<void> {
+  const payload = JSON.stringify({ version: 1, members: { [member.branch]: member }, rounds: [], aboveOwed: [], posted: [] });
+  // `git()` deliberately has no stdin seam; use the existing shell-free test
+  // runner only for this one Git object write.
+  const written = await execa('git', ['hash-object', '-w', '--stdin'], { cwd: repository, input: payload, reject: false });
+  if ((written.exitCode ?? 1) !== 0) throw new Error('could not write refresh ledger');
+  await git(repository, ['update-ref', refreshLedgerRefFor('demo'), written.stdout.trim()]);
+}
+
 describe('published stack tip guard', () => {
   it('leases a verified fast-forward from the recorded leaf tip after reading every member once', async () => {
     const { repository } = await fixture();
@@ -174,6 +198,154 @@ describe('published stack tip guard', () => {
 
     expect(await sha(origin, 'refs/heads/feat/daemon-demo')).toBe(leaf);
     expect(calls).toHaveLength(1);
+  });
+
+  it('permits only FINISH to force a source descending from the recorded refresh tip', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    const recordedTip = await commit(repository, 'restacked-child');
+    const source = await commit(repository, 'restacked-follow-up');
+    await writeRefreshLedger(repository, {
+      branch: 'feat/c1/demo', position: c1, pr: 101, publishedTip: child1, recordedTip,
+    });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'],
+      { ...dependencies(repository, calls), publishedStackRefreshAuthorization: authorizePublishedStackRefresh('demo') },
+    )).resolves.toMatchObject({ kind: 'executed' });
+
+    expect(await sha(origin, 'refs/heads/feat/c1/demo')).toBe(source);
+    expect(calls.at(-1)).toContain(`--force-with-lease=refs/heads/feat/c1/demo:${child1}`);
+  });
+
+  it('refuses an unauthorized rewrite descending from the ledger recorded tip before mocked transport', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    const transport = readOnlyTransport(repository, calls);
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    const recordedTip = await commit(repository, 'restacked-child');
+    const source = await commit(repository, 'restacked-follow-up');
+    await writeRefreshLedger(repository, {
+      branch: 'feat/c1/demo', position: c1, pr: 101, publishedTip: child1, recordedTip,
+    });
+
+    expect((await git(repository, ['merge-base', '--is-ancestor', recordedTip, source])).exitCode).toBe(0);
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'], {
+        ...dependencies(repository, calls), runRemoteGit: transport,
+      },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
+
+    expect(await sha(origin, 'refs/heads/feat/c1/demo')).toBe(child1);
+    expect(calls.map((call) => call[0])).toEqual(['ls-remote']);
+    expect(transport.mock.calls.map(([args]) => args[0])).toEqual(['ls-remote']);
+  });
+
+  it('refuses an authorized rewrite whose source does not descend from the ledger recorded tip before mocked transport', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    const transport = readOnlyTransport(repository, calls);
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    const recordedTip = await commit(repository, 'recorded-restack');
+    await git(repository, ['reset', '--hard', 'main']);
+    const source = await commit(repository, 'unrecorded-rewrite');
+    await writeRefreshLedger(repository, {
+      branch: 'feat/c1/demo', position: c1, pr: 101, publishedTip: child1, recordedTip,
+    });
+
+    expect((await git(repository, ['merge-base', '--is-ancestor', recordedTip, source])).exitCode).not.toBe(0);
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'], {
+        ...dependencies(repository, calls),
+        runRemoteGit: transport,
+        publishedStackRefreshAuthorization: authorizePublishedStackRefresh('demo'),
+      },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
+
+    expect(await sha(origin, 'refs/heads/feat/c1/demo')).toBe(child1);
+    expect(calls.map((call) => call[0])).toEqual(['ls-remote']);
+    expect(transport.mock.calls.map(([args]) => args[0])).toEqual(['ls-remote']);
+  });
+
+  it('names the mismatched member despite refresh authorization without reaching mocked transport', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    const transport = readOnlyTransport(repository, calls);
+    await git(origin, ['update-ref', 'refs/heads/feat/c3/demo', child1]);
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    const recordedTip = await commit(repository, 'restacked-child');
+    await commit(repository, 'restacked-follow-up');
+    await writeRefreshLedger(repository, {
+      branch: 'feat/c1/demo', position: c1, pr: 101, publishedTip: child1, recordedTip,
+    });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'], {
+        ...dependencies(repository, calls),
+        runRemoteGit: transport,
+        publishedStackRefreshAuthorization: authorizePublishedStackRefresh('demo'),
+      },
+    )).resolves.toMatchObject({
+      kind: 'refused', reason: 'stack-tip-mismatch', members: [{ pr: 103, position: c3 }],
+    });
+
+    expect(await sha(origin, 'refs/heads/feat/c3/demo')).toBe(child1);
+    expect(calls.map((call) => call[0])).toEqual(['ls-remote']);
+    expect(transport.mock.calls.map(([args]) => args[0])).toEqual(['ls-remote']);
+  });
+
+  it('refuses an authorized rewrite with an unreadable ledger before mocked transport', async () => {
+    const { repository, origin, child1 } = await fixture();
+    const calls: string[][] = [];
+    const transport = readOnlyTransport(repository, calls);
+    await git(repository, ['checkout', 'feat/c1/demo']);
+    await git(repository, ['reset', '--hard', 'main']);
+    await commit(repository, 'unreadable-ledger-rewrite');
+    const malformed = await execa('git', ['hash-object', '-w', '--stdin'], { cwd: repository, input: 'not json', reject: false });
+    await git(repository, ['update-ref', refreshLedgerRefFor('demo'), malformed.stdout.trim()]);
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/c1/demo'], {
+        ...dependencies(repository, calls),
+        runRemoteGit: transport,
+        publishedStackRefreshAuthorization: authorizePublishedStackRefresh('demo'),
+      },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
+
+    expect(await sha(origin, 'refs/heads/feat/c1/demo')).toBe(child1);
+    expect(calls.map((call) => call[0])).toEqual(['ls-remote']);
+    expect(transport.mock.calls.map(([args]) => args[0])).toEqual(['ls-remote']);
+  });
+
+  it('preserves the pushed receipt when a mocked lease rejection follows a remote move', async () => {
+    const { repository, origin, child1, leaf } = await fixture();
+    const calls: string[][] = [];
+    await commit(repository, 'leaf-fast-forward');
+    const transport = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'ls-remote') {
+        const result = await git(repository, args);
+        return { stdout: result.stdout };
+      }
+      await git(origin, ['update-ref', 'refs/heads/feat/daemon-demo', child1]);
+      throw new Error('stale lease');
+    });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'], {
+        ...dependencies(repository, calls), runRemoteGit: transport,
+      },
+    )).resolves.toMatchObject({ kind: 'failed', error: 'stale lease' });
+
+    expect(await sha(origin, 'refs/heads/feat/daemon-demo')).toBe(child1);
+    expect(await sha(repository, pushedTipRef('demo', 'feat/daemon-demo'))).toBe(leaf);
+    expect(calls.map((call) => call[0])).toEqual(['ls-remote', 'push']);
   });
 
   it('does not guard a stack record that has been torn down', async () => {

@@ -486,6 +486,7 @@ export async function dispatchRewindCommand(
         child,
         carry: [],
         reason,
+        origin: 'rewind',
       });
       if (checked.kind === 'refused') {
         console.error(`rewind: ${checked.refusal.text}`);

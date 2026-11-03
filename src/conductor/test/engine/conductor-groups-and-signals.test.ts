@@ -110,6 +110,8 @@ import type { RemediationProjection } from '../../src/engine/remediation-project
 import * as parkMarker from '../../src/engine/park-marker.js';
 import * as remediationTaskAppend from '../../src/engine/remediation-task-append.js';
 import * as repairRestage from '../../src/engine/repair-restage.js';
+import type { ProvisionOptions, SandboxBuildEnv } from '../../src/engine/self-host/sandbox-build-env.js';
+import { emitTranscriptHarvest, transcriptCapture } from '../../src/engine/self-host/transcript-harvest.js';
 
 import type {
   InvokeOptions,
@@ -5350,11 +5352,41 @@ describe('engine/conductor', () => {
   });
 
   it('captures same-session legacy Claude dispatches in distinct attempt directories', async () => {
-    await mkdir(join(dir, 'skills'), { recursive: true });
-    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
     const captures: string[] = [];
     events.on('provider_transcripts_captured', (event) => {
       if (event.type === 'provider_transcripts_captured') captures.push(event.path);
+    });
+    const provisionSandbox = vi.fn(async (options: ProvisionOptions): Promise<SandboxBuildEnv> => {
+      const { captureIdentity } = options;
+      if (!captureIdentity) throw new Error('expected legacy dispatch capture identity');
+      const configDir = await mkdtemp(join(dir, 'legacy-sandbox-'));
+      return {
+        configDir,
+        childEnv: () => ({ ...process.env, CLAUDE_CONFIG_DIR: configDir }),
+        teardown: async () => {
+          try {
+            const capture = transcriptCapture({
+              ...captureIdentity,
+              provider: 'claude',
+              worktreeRoot: options.worktreeRoot,
+            });
+            const transcript = join(configDir, 'projects', 'legacy-project', 'session.jsonl');
+            const content = await readFile(transcript, 'utf8');
+            await mkdir(join(capture.destination, 'projects', 'legacy-project'), { recursive: true });
+            await writeFile(join(capture.destination, 'projects', 'legacy-project', 'session.jsonl'), content);
+            await emitTranscriptHarvest(options.events, {
+              ...captureIdentity,
+              provider: 'claude',
+              path: capture.path,
+              interrupted: false,
+            }, {
+              kind: 'captured', files: 1, bytes: Buffer.byteLength(content), skipped: [], omittedLines: 0,
+            });
+          } finally {
+            await rm(configDir, { recursive: true, force: true });
+          }
+        },
+      };
     });
     const runner: StepRunner = {
       selfHostRunId: () => 'legacy-held-run',
@@ -5383,7 +5415,7 @@ describe('engine/conductor', () => {
         resolveHarnessRoot: vi.fn(),
         resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
         relink: vi.fn(),
-        provisionSandbox: sandboxModule.provisionSandboxBuildEnv,
+        provisionSandbox,
         versionGate: vi.fn(),
         releaseGate: vi.fn(),
       } as any,

@@ -46,7 +46,7 @@ import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './res
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { routedRoundOpen } from '../routing/round-admission.js';
+import { routedRoundOpen } from '../routing/routed-round-open.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,
@@ -720,6 +720,11 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
             : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
         }
         if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
+          if (await routedRoundOpen(options.worktree, options.slug, { git })) {
+            return await cleanJournal(options.worktree, journal, git)
+              ? { kind: 'cleaned' }
+              : { kind: 'unavailable', detail: 'cannot remove routed published restack journal' };
+          }
           await haltRestack(options.worktree, 'published-stack', options.events, {
             child: journal.journal.ranges[0]?.child,
           });

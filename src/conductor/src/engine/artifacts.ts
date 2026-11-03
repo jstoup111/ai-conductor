@@ -2335,9 +2335,11 @@ async function validatePriorChildGreenAttribution(
       reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} requires an active child and feature slug`,
     };
   }
+  // Child context supplies the existing feature slug. Re-slugifying it can
+  // strip a trailing hyphen or truncate a valid identity and select other refs.
   const childBase = await resolveChildBase(
     dir,
-    slugify(ctx.featureDesc),
+    ctx.featureDesc,
     ctx.activeChild,
     { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
   );
@@ -3456,9 +3458,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base without the feature slug`,
           };
         }
+        // Resolve the supplied identity verbatim, as prior-child-green does.
         const childBase = await resolveChildBase(
           dir,
-          slugify(ctx.featureDesc),
+          ctx.featureDesc,
           ctx.activeChild,
           { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
         );

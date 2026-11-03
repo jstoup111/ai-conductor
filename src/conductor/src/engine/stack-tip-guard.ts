@@ -1,6 +1,12 @@
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
-import { pushedTipIntentRef, pushedTipRef, recordPushedTip, type PushLeaseGitRunner } from './push-lease.js';
+import {
+  adoptPushedTipIntentAtRemoteTip,
+  decodePushedTipIntent,
+  pushedTipRef,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import { activePublicationRecord, type PublicationMember } from './stack-publication-record.js';
+import { readRefreshLedger, type PublishedStackRefreshAuthorization } from './stack-refresh-ledger.js';
 import type { GitRunner } from './rebase.js';
 
 /** The result of checking one published stack write at the remote-Git choke point. */
@@ -8,8 +14,6 @@ export type PublishedStackWriteGuard =
   | { readonly kind: 'not-published-stack' }
   | { readonly kind: 'allow'; readonly expected: string }
   | { readonly kind: 'refuse'; readonly members: readonly PublicationMember[] };
-
-type Intent = { readonly expected: string | undefined; readonly new: string; readonly object: string };
 
 function remoteRef(branch: string): string {
   return `refs/heads/${branch}`;
@@ -25,27 +29,6 @@ async function readRef(git: PushLeaseGitRunner, ref: string): Promise<string | u
   const result = await git(['rev-parse', '--verify', '--quiet', ref]);
   const value = result.stdout.trim();
   return result.exitCode === 0 && value !== '' ? value : undefined;
-}
-
-async function readIntent(git: PushLeaseGitRunner, slug: string, branch: string): Promise<Intent | undefined> {
-  const object = await readRef(git, pushedTipIntentRef(slug, branch));
-  if (object === undefined) return undefined;
-  const content = await git(['cat-file', '-p', object]);
-  if (content.exitCode !== 0) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(content.stdout);
-    if (typeof parsed !== 'object' || parsed === null
-      || typeof (parsed as { new?: unknown }).new !== 'string'
-      || ((parsed as { expected?: unknown }).expected !== undefined
-        && typeof (parsed as { expected?: unknown }).expected !== 'string')) return undefined;
-    return {
-      object,
-      expected: (parsed as { expected?: string }).expected,
-      new: (parsed as { new: string }).new,
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 function asGitRunner(git: PushLeaseGitRunner): GitRunner {
@@ -68,6 +51,8 @@ export async function guardPublishedStackWrite(input: {
   readonly source: string;
   /** The remote-Git choke point established durable stacked-child state. */
   readonly durableChildState: true;
+  /** Present only for the FINISH refresh of a durable routed-restack ledger. */
+  readonly refreshAuthorization?: PublishedStackRefreshAuthorization;
   readonly git: PushLeaseGitRunner;
   readonly lsRemote: (args: readonly string[]) => Promise<{ readonly stdout: string }>;
 }): Promise<PublishedStackWriteGuard> {
@@ -93,18 +78,10 @@ export async function guardPublishedStackWrite(input: {
   for (const candidate of stored.record.members) {
     const ref = remoteRef(candidate.branch);
     const remoteTip = shaFor(remoteTips.stdout, ref);
-    const intent = await readIntent(input.git, input.slug, candidate.branch);
-    if (remoteTip !== undefined && intent?.new === remoteTip) {
-      const adopted = await recordPushedTip({
-        cwd: input.cwd,
-        prepared: {
-          slug: input.slug,
-          branch: candidate.branch,
-          expected: intent.expected,
-          new: intent.new,
-          intentObject: intent.object,
-        },
-        git: input.git,
+    const intent = await decodePushedTipIntent({ git: input.git, slug: input.slug, branch: candidate.branch });
+    if (remoteTip !== undefined && intent.kind === 'decoded' && intent.prepared.new === remoteTip) {
+      const adopted = await adoptPushedTipIntentAtRemoteTip({
+        cwd: input.cwd, remoteTip, prepared: intent.prepared, git: input.git,
       });
       if (!adopted) {
         mismatched.push(candidate);
@@ -123,7 +100,18 @@ export async function guardPublishedStackWrite(input: {
   const expected = recorded.get(branch);
   if (expected === undefined) return { kind: 'refuse', members: [member] };
   const fastForward = await input.git(['merge-base', '--is-ancestor', expected, input.source]);
-  return fastForward.exitCode === 0
+  if (fastForward.exitCode === 0) return { kind: 'allow', expected };
+
+  // Rewrites remain forbidden by default.  FINISH may refresh precisely the
+  // recorded result of a routed restack, but not an arbitrary descendant and
+  // not a ledger belonging to another feature.
+  if (input.refreshAuthorization?.slug !== input.slug) return { kind: 'refuse', members: [member] };
+  const refresh = await readRefreshLedger(input.cwd, input.slug, { git: asGitRunner(input.git) });
+  if (refresh.kind !== 'ledger') return { kind: 'refuse', members: [member] };
+  const ledgerMember = refresh.ledger.members[branch];
+  if (ledgerMember === undefined) return { kind: 'refuse', members: [member] };
+  const recordedAncestor = await input.git(['merge-base', '--is-ancestor', ledgerMember.recordedTip, input.source]);
+  return recordedAncestor.exitCode === 0
     ? { kind: 'allow', expected }
     : { kind: 'refuse', members: [member] };
 }

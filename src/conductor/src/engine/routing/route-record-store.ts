@@ -1,11 +1,18 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { journalRefFor, readRestackJournal, type ReadRestackJournalResult, type RestackJournal } from '../restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
+import { refreshLedgerRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
+import {
+  readRevalidationQueue,
+  readRouteRecord,
+  type ReadRepairMarkerResult,
+  type ReadRevalidationQueueResult,
+  type RoutingStateReaderDependencies,
+  type StoredRouteRecord,
+} from './routing-state-reader.js';
 import {
   MAX_ROUTE_ROUNDS,
   isLegalHostTransition,
-  parseRepairMarker,
   parseRoundId,
   parseRevalidationQueueRecord,
   parseRouteRecord,
@@ -18,10 +25,12 @@ import {
 import type { ConductorEvent } from '../../types/events.js';
 import { routedRepairPhaseEvent, withOutboxEvent } from './routing-events.js';
 
-export type StoredRouteRecord = { readonly kind: 'record'; readonly slug: string; readonly blob: CommitSha; readonly record: RouteRecord };
-export type ReadRouteRecordResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | StoredRouteRecord;
-export type ReadRepairMarkerResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | { readonly kind: 'marker'; readonly slug: string; readonly blob: CommitSha; readonly marker: RepairMarker };
-export type ReadRevalidationQueueResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | { readonly kind: 'queue'; readonly slug: string; readonly blob: CommitSha; readonly queue: RevalidationQueueRecord };
+export type {
+  StoredRouteRecord,
+  ReadRouteRecordResult,
+  ReadRepairMarkerResult,
+  ReadRevalidationQueueResult,
+} from './routing-state-reader.js';
 export type WriteRouteRecordResult = { readonly kind: 'updated' } | { readonly kind: 'cas-failed' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
 export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { readonly kind: 'unavailable' };
 
@@ -65,10 +74,12 @@ export type RoutingTransactionOp =
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'delete-marker'; readonly old: CommitSha }
+  /** The published-stack refresh receipt travels with leaf settlement. */
+  | { readonly kind: 'update-refresh-ledger'; readonly previous?: CommitSha; readonly next: CommitSha }
   /** A value-only fence for authority refs not otherwise written by this transaction. */
   | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
-export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
+export interface RouteRecordStoreDependencies extends RoutingStateReaderDependencies { readonly git?: GitRunner }
 /**
  * Every newly admitted audit or operator route seals its authored-task
  * denominator. A revalidate route authors no remediation tasks, so it seals none.
@@ -84,34 +95,7 @@ export type CreateRouteRecordInput = Pick<
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
 export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
 
-async function readBlob(ref: string, git: GitRunner): Promise<{ readonly kind: 'absent' } | { readonly kind: 'unreadable' } | { readonly blob: CommitSha; readonly content: string }> {
-  try {
-    const refResult = await git(['rev-parse', '-q', '--verify', ref]);
-    if (refResult.exitCode === 1) return { kind: 'absent' };
-    const blob = refResult.exitCode === 0 ? parseCommitSha(refResult.stdout.trim()) : undefined;
-    if (!blob) return { kind: 'unreadable' };
-    const content = await git(['cat-file', '-p', blob]);
-    return content.exitCode === 0 ? { blob, content: content.stdout } : { kind: 'unreadable' };
-  } catch { return { kind: 'unreadable' }; }
-}
-
-export async function readRouteRecord(worktree: string, slug: string, roundId: RoundId, dependencies: RouteRecordStoreDependencies = {}): Promise<ReadRouteRecordResult> {
-  const value = await readBlob(routeRecordRefFor(slug, roundId), dependencies.git ?? makeGitRunner(worktree));
-  if ('blob' in value) { const record = parseRouteRecord(value.content); return record ? { kind: 'record', slug, blob: value.blob, record } : { kind: 'unreadable', blob: value.blob }; }
-  return { kind: value.kind };
-}
-
-export async function readRepairMarker(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<ReadRepairMarkerResult> {
-  const value = await readBlob(repairMarkerRefFor(slug), dependencies.git ?? makeGitRunner(worktree));
-  if ('blob' in value) { const marker = parseRepairMarker(value.content); return marker ? { kind: 'marker', slug, blob: value.blob, marker } : { kind: 'unreadable', blob: value.blob }; }
-  return { kind: value.kind };
-}
-
-export async function readRevalidationQueue(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<ReadRevalidationQueueResult> {
-  const value = await readBlob(revalidationQueueRefFor(slug), dependencies.git ?? makeGitRunner(worktree));
-  if ('blob' in value) { const queue = parseRevalidationQueueRecord(value.content); return queue ? { kind: 'queue', slug, blob: value.blob, queue } : { kind: 'unreadable', blob: value.blob }; }
-  return { kind: value.kind };
-}
+export { readRepairMarker, readRevalidationQueue, readRouteRecord } from './routing-state-reader.js';
 
 /** Allocates the next route namespace segment without mutating any ref. */
 export async function nextRoundId(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<NextRoundIdResult> {
@@ -229,6 +213,9 @@ export async function writeRoutingTransaction(
         case 'delete-marker':
           lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
           break;
+        case 'update-refresh-ledger':
+          lines.push(`update ${refreshLedgerRefFor(slug)} ${op.next} ${op.previous ?? ZERO_SHA}`);
+          break;
         case 'verify-ref':
           lines.push(`verify ${op.ref} ${op.value}`);
           break;
@@ -264,6 +251,7 @@ export async function writeRoutingTransaction(
         case 'create-pin': expectRef(op.ref, undefined); break;
         case 'update-marker':
         case 'delete-marker': expectRef(repairMarkerRefFor(slug), op.old); break;
+        case 'update-refresh-ledger': expectRef(refreshLedgerRefFor(slug), op.previous); break;
         case 'verify-ref': expectRef(op.ref, op.value); break;
       }
     }

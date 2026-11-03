@@ -17,10 +17,12 @@ import {
 } from './route-record-store.js';
 import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type HostState, type RegionGate, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
-import { publishedStackRefusal } from '../stack-publication.js';
+import { publishedStackTipPreflight } from '../stack-publication.js';
 import { advanceRound, requestRoutedExit, selectNextHost, type RequestRoutedExitInput } from './routed-exit.js';
 import { readRevalidationQueue } from './route-record-store.js';
 import { childBranchFor } from '../feature-branch-identity.js';
+
+export { routedRoundOpen } from './routed-round-open.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string; readonly fence?: true };
 
@@ -91,12 +93,12 @@ export async function admitRound(
 ): Promise<AdmitRoundResult> {
   const fence = await checkRoundAdmissionFence(worktree, slug, record, dependencies);
   if (fence !== undefined) return fence;
-  // The conductor performs this check before allocating a route record. Keep
-  // the same fence at the durable admission boundary so a publication that
-  // lands between route planning and this transaction cannot open the round.
-  if (await publishedStackRefusal(worktree, slug, { git: dependencies.git })) {
-    return { kind: 'refused', detail: 'routing admission refused: published-stack' };
-  }
+  // A routed round is the sole route through the publication freeze.  Repeat
+  // the remote receipt check at the durable boundary so planning cannot race a
+  // reviewer moving a member before the marker transaction.
+  const publication = await publishedStackTipPreflight(worktree, slug, { git: dependencies.git });
+  if (publication.kind === 'unreadable') return { kind: 'refused', detail: 'routing admission refused: published stack tips are unreadable; retry' };
+  if (publication.kind === 'refused') return { kind: 'refused', detail: `routing admission refused: ${publication.detail ?? `published stack member ${publication.member.position} changed or closed (#3268)`}` };
   const marker = await readRepairMarker(worktree, slug, dependencies);
   if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
   const stored = await readRouteRecord(worktree, slug, record.roundId, dependencies);
@@ -407,21 +409,4 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     }
   }
   return marker.kind === 'absent' && !deferred ? { kind: 'quiescent' } : { kind: 'deferred' };
-}
-
-/** True when routing durability says that automatic base movement would race a round. */
-export async function routedRoundOpen(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<boolean> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
-  const queue = await readRevalidationQueue(worktree, slug, { git });
-  if (queue.kind === 'unreadable') return true;
-  if (queue.kind === 'queue' && queue.queue.entries.length > 0) return true;
-  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-  if (listed.exitCode !== 0) return true;
-  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
-    const id = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (!id) return true;
-    const record = await readRouteRecord(worktree, slug, id, { git });
-    if (record.kind !== 'record' || record.record.phase !== 'closed') return true;
-  }
-  return false;
 }

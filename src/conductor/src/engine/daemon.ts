@@ -135,6 +135,8 @@ export interface PickEligibleCtx {
    * operator un-parks it.
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  /** Durable exception to completed-state dedup for a published routed landing. */
+  isPublishedFeatureReopened?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -171,7 +173,8 @@ export async function pickEligible(
       }
       // marker cleared, or progress-gated re-kick eligible → fall through
     } else if (ctx.claims.isCompleted(b.slug)) {
-      continue; // done/error — permanently excluded this run
+      if (!ctx.isPublishedFeatureReopened || !await ctx.isPublishedFeatureReopened(b.slug)) continue;
+      ctx.claims.reopen(b.slug);
     } else if (ctx.isHalted && (await ctx.isHalted(b.slug))) {
       // A feature this process never dispatched but whose worktree carries a
       // live `.pipeline/HALT` marker — parked for a human by a PRIOR run. The
@@ -284,6 +287,8 @@ export interface DaemonDeps {
    * full contract). Absent → behavior is unchanged (backward-compatible).
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  /** Durable published-landing check; absent preserves ordinary completion dedup. */
+  isPublishedFeatureReopened?: (slug: string) => Promise<boolean>;
   /**
    * Optional, slug-keyed HALT disposition reader for the progress-gated
    * re-kick path. A failed read is treated as `unclassified` and therefore
@@ -1728,6 +1733,7 @@ export async function runDaemon(
         isHalted: deps.isHalted,
         isParked: deps.isParked,
         isProgressReKickEligible: isProgressReKickEligibleBounded,
+        isPublishedFeatureReopened: deps.isPublishedFeatureReopened,
       };
 
       // The first selection intentionally observes any inherited live HALT

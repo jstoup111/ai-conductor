@@ -1,4 +1,5 @@
 import { MAX_CHILD_ID, type ChildId } from '../child-context.js';
+import { parseRefName, type RefName } from '../restack/restack-types.js';
 import { MAX_ROUTE_ROUNDS, type RoundId } from './route-types.js';
 
 /** A round can pin every child except its host. */
@@ -6,6 +7,13 @@ export const MAX_REJECTED_PINS_PER_ROUND = MAX_CHILD_ID - 1;
 
 function root(slug: string): string {
   return `refs/conductor/${slug}`;
+}
+
+/** The durable receipt for routed refreshes of an already published stack. */
+export function refreshLedgerRefFor(slug: string): RefName {
+  const ref = parseRefName(`${root(slug)}/refresh`);
+  if (!ref) throw new Error(`invalid refresh ledger ref for ${slug}`);
+  return ref;
 }
 
 function rejectedPinNumber(n: number): number {
@@ -45,7 +53,7 @@ export function closureRefFor(slug: string, child: ChildId): string {
  * a finite enumeration: teardown must never discover a namespace by prefix.
  */
 export function routingTeardownRefNames(slug: string): readonly string[] {
-  const refs = [repairMarkerRefFor(slug), revalidationQueueRefFor(slug)];
+  const refs = [repairMarkerRefFor(slug), revalidationQueueRefFor(slug), refreshLedgerRefFor(slug)];
   for (let child = 1; child <= MAX_CHILD_ID; child += 1) {
     refs.push(redRefFor(slug, child as ChildId));
   }

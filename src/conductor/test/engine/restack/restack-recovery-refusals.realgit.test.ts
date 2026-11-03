@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import {
   journalRefFor,
   pinStagingRef,
@@ -19,6 +20,7 @@ import { recoverRestackJournal } from '../../../src/engine/restack/restack-recov
 import { replayChildRange } from '../../../src/engine/restack/restack-replay.js';
 import { syncRestackedWorktree } from '../../../src/engine/restack/restack-sync.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
@@ -209,5 +211,40 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     expect(await readRestackJournal(synced.repo, 'demo')).toEqual({ kind: 'missing' });
     expect(calls.filter((call) => call[0] === 'update-ref').flat().join('\n')).not.toContain('refs/heads/feat/c1/demo');
     await expect(readFile(join(synced.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:25
+  it('settles a published routed exit journal while suppressing its queued base refresh', async () => {
+    const subject = await fixture();
+    const moved = await movedJournal(subject);
+    const child = parseChildId(1);
+    const roundId = parseRoundId('r1');
+    if (!child || !roundId) throw new Error('fixture ids should parse');
+    const applied = {
+      ...moved.journal,
+      cause: 'feature-repair' as const,
+      followOnCause: 'base-refresh' as const,
+      state: 'applied' as const,
+      routed: { roundId, host: child, routeOld: subject.oldTip, markerOld: subject.oldTip },
+    };
+    const appliedBlob = await writeRestackJournalBlob(subject.repo, applied);
+    await subject.git(['update-ref', journalRefFor('demo'), appliedBlob, moved.blob]);
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [{ position: child, branch: 'feat/c1/demo', pr: 101 }],
+    }, { git: makeGitRunner(subject.repo) })).resolves.toEqual({ kind: 'updated' });
+    const memberTipBeforeRecovery = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+    await subject.git(['checkout', '-q', 'main']);
+    await writeFile(join(subject.repo, 'later-base.txt'), 'later\n');
+    await subject.git(['add', 'later-base.txt']);
+    await subject.git(['commit', '-qm', 'later base advance']);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo), suppressFollowOn: true,
+    })).resolves.toEqual({ kind: 'cleaned' });
+
+    expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(memberTipBeforeRecovery);
+    await expect(readRestackJournal(subject.repo, 'demo')).resolves.toEqual({ kind: 'missing' });
   });
 });

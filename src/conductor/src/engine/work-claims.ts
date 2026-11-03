@@ -28,6 +28,7 @@ export interface WorkClaims {
   release(slug: string): void;
   list(): readonly string[];
   complete(slug: string): void;
+  reopen(slug: string): void;
   isCompleted(slug: string): boolean;
   park(slug: string): void;
   unpark(slug: string): void;
@@ -56,6 +57,10 @@ export class InMemoryWorkClaims implements WorkClaims {
 
   complete(slug: string): void {
     this.completedSlugs.add(slug);
+  }
+
+  reopen(slug: string): void {
+    this.completedSlugs.delete(slug);
   }
 
   isCompleted(slug: string): boolean {

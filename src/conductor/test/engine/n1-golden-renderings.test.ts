@@ -37,6 +37,9 @@ const DURABLE_CHILD_STATE_PROBE_PAIR = [
   ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
   ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
 ] as const;
+const N1_PUBLICATION_REF_PROBE = [
+  'rev-parse', '-q', '--verify', 'refs/conductor/n1-golden/publication',
+] as const;
 
 describe('N=1 golden renderings', () => {
   const roots: string[] = [];
@@ -111,7 +114,7 @@ describe('N=1 golden renderings', () => {
   }, 30_000);
 
   // Covers: task:17, task:rem-operator-17-r3
-  it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes and one durable-child-state probe pair', async () => {
+  it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes, durable-child-state probes, and publication-record reads', async () => {
     if (RECORD) return;
     const repositoryRoot = join(import.meta.dirname, '..', '..', '..', '..');
     const [preChange, current] = await Promise.all([
@@ -123,12 +126,16 @@ describe('N=1 golden renderings', () => {
 
     // The pre-change fixture contains eight repeated probes from the retired
     // coverage_binding lifecycle step, followed by the one D3 probe that must
-    // remain for every cardinality when durable child state is checked.
+    // remain for every cardinality when durable child state is checked. The
+    // publication guard also reads its absent ref at each FINISH transition.
     expect(parseProbeGolden(preChange.stdout)).toEqual([
       ...coverageBindingProbePairs,
       ...DURABLE_CHILD_STATE_PROBE_PAIR,
     ]);
-    expect(parseProbeGolden(current)).toEqual(DURABLE_CHILD_STATE_PROBE_PAIR);
+    expect(parseProbeGolden(current)).toEqual([
+      ...DURABLE_CHILD_STATE_PROBE_PAIR,
+      ...Array.from({ length: 9 }, () => N1_PUBLICATION_REF_PROBE),
+    ]);
   });
 
   it.each(CELLS)('matches golden for $name', async (cell) => {
@@ -519,8 +526,8 @@ describe('N=1 golden renderings', () => {
     await expectFinishGolden('git-argv', JSON.stringify(normalGit.parity, null, 2));
     await expectFinishGolden('git-probe-argv', `${JSON.stringify(normalGit.probes, null, 2)}\n`);
     expect(normalGit.probes).toEqual([
-      ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
-      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
+      ...DURABLE_CHILD_STATE_PROBE_PAIR,
+      ...Array.from({ length: 9 }, () => N1_PUBLICATION_REF_PROBE),
     ]);
     await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
     await expectFinishGolden('shipped-record', normalizeRecord(normal.record));

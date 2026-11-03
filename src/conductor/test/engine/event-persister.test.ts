@@ -1,4 +1,4 @@
-// Covers: task:4, task:3, task:1, task:2, task:5, task:rem-operator-5-r2
+// Covers: task:4, task:3, task:1, task:2, task:5, task:18, task:rem-operator-5-r2
 // Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
@@ -324,6 +324,52 @@ describe('EventPersister', () => {
       pr: 101,
       state: 'merged',
       eventId: 'stack-member-101-merged',
+    } as ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('deduplicates replayed posted-comment occurrences by eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'stack_member_comment_posted',
+      pr: 101,
+      roundId: 'r1',
+      marker: '<!-- conductor:routed-fix:r1:101 -->',
+      eventId: 'stack-member-comment:marker-r1-101',
+    } as ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('A posted comment leaves one `stack_member_comment_posted` line in `.pipeline/events.jsonl` with the PR, round and marker', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+    await emitter.emit({
+      type: 'stack_member_comment_posted', pr: 101, roundId: 'r1',
+      marker: '<!-- conductor:routed-fix:r1:101 -->', eventId: 'stack-member-comment:r1-101',
+    });
+    persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim()).toContain('"type":"stack_member_comment_posted"');
+    expect((await readFile(eventsPath, 'utf8')).trim()).toContain('"pr":101');
+  });
+
+  it('deduplicates replayed refreshed-member occurrences by eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'stack_member_refreshed',
+      child: ROUTING_CHILD,
+      pr: 101,
+      oldTip: 'a'.repeat(40),
+      newTip: 'b'.repeat(40),
+      eventId: 'stack-refresh:101:old:new',
     } as ConductorEvent;
 
     await expect(persister.persistDurably(event)).resolves.toBe('persisted');

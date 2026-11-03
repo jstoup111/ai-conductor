@@ -46,6 +46,12 @@ export interface PreparedPushedTip {
   readonly intentObject: string;
 }
 
+/** The durable intent is either absent, malformed, or safe to use for a CAS receipt update. */
+export type PushedTipIntentDecodeResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'malformed' }
+  | { readonly kind: 'decoded'; readonly prepared: PreparedPushedTip };
+
 export function pushedTipRef(slug: string, branch: string): string {
   return `refs/conductor/${slug}/pushed/${branch}`;
 }
@@ -79,16 +85,17 @@ function trackingRef(branch: string): string {
   return `refs/remotes/origin/${branchName(branch)}`;
 }
 
-async function readPushIntent(
-  git: PushLeaseGitRunner,
-  slug: string,
-  branch: string,
-): Promise<{ readonly intent: PushLeaseIntent; readonly object: string } | undefined> {
-  const ref = pushedTipIntentRef(slug, branch);
-  const object = await currentRef(git, ref);
-  if (!object) return undefined;
-  const content = await git(['cat-file', '-p', object]);
-  if (content.exitCode !== 0) return undefined;
+/** Decode the durable intent without deciding how a caller treats malformed state. */
+export async function decodePushedTipIntent(input: {
+  readonly slug: string;
+  readonly branch: string;
+  readonly git: PushLeaseGitRunner;
+}): Promise<PushedTipIntentDecodeResult> {
+  const ref = pushedTipIntentRef(input.slug, input.branch);
+  const object = await currentRef(input.git, ref);
+  if (!object) return { kind: 'absent' };
+  const content = await input.git(['cat-file', '-p', object]);
+  if (content.exitCode !== 0) return { kind: 'malformed' };
   try {
     const parsed: unknown = JSON.parse(content.stdout);
     if (
@@ -96,16 +103,19 @@ async function readPushIntent(
       || typeof (parsed as { new?: unknown }).new !== 'string'
       || ((parsed as { expected?: unknown }).expected !== undefined
         && typeof (parsed as { expected?: unknown }).expected !== 'string')
-    ) return undefined;
+    ) return { kind: 'malformed' };
     return {
-      object,
-      intent: {
+      kind: 'decoded',
+      prepared: {
+        slug: input.slug,
+        branch: input.branch,
         expected: (parsed as { expected?: string }).expected,
         new: (parsed as { new: string }).new,
+        intentObject: object,
       },
     };
   } catch {
-    return undefined;
+    return { kind: 'malformed' };
   }
 }
 
@@ -153,10 +163,11 @@ export async function forcePushWithExpectedLease<RemoteResult extends ExpectedLe
   const tracking = trackingRef(branch);
   const initialTracking = await currentRef(git, tracking);
   const recorded = await currentRef(git, pushedTipRef(input.slug, branch));
-  const outstanding = await readPushIntent(git, input.slug, branch);
+  const decodedIntent = await decodePushedTipIntent({ git, slug: input.slug, branch });
+  const outstanding = decodedIntent.kind === 'decoded' ? decodedIntent.prepared : undefined;
   const discardOutstanding = async (): Promise<void> => {
     if (!outstanding) return;
-    await git(['update-ref', '-d', pushedTipIntentRef(input.slug, branch), outstanding.object]);
+    await git(['update-ref', '-d', pushedTipIntentRef(input.slug, branch), outstanding.intentObject]);
   };
 
   const fetched = await git([
@@ -177,17 +188,9 @@ export async function forcePushWithExpectedLease<RemoteResult extends ExpectedLe
   // when the remote still names the intent's exact new SHA.  CAS-record it
   // before making a new decision, so the next lease has a durable anchor.
   let expected = recorded;
-  if (expected !== actual && outstanding?.intent.new === actual) {
-    const adopted = await recordPushedTip({
-      cwd: input.cwd,
-      prepared: {
-        slug: input.slug,
-        branch,
-        expected: outstanding.intent.expected,
-        new: outstanding.intent.new,
-        intentObject: outstanding.object,
-      },
-      git,
+  if (expected !== actual && outstanding?.new === actual) {
+    const adopted = await adoptPushedTipIntentAtRemoteTip({
+      cwd: input.cwd, remoteTip: actual, prepared: outstanding, git,
     });
     if (!adopted) {
       await discardOutstanding();
@@ -283,6 +286,21 @@ export async function recordPushedTip(input: {
     prepared.intentObject,
   ]);
   return removed.exitCode === 0;
+}
+
+/**
+ * Adopt a transport that reached exactly the SHA it durably announced.
+ * Callers observe the remote and decide whether malformed or mismatched
+ * intent is terminal; this helper owns only the CAS receipt update.
+ */
+export async function adoptPushedTipIntentAtRemoteTip(input: {
+  readonly cwd: string;
+  readonly remoteTip: string;
+  readonly prepared: PreparedPushedTip;
+  readonly git?: PushLeaseGitRunner;
+}): Promise<boolean> {
+  if (input.prepared.new !== input.remoteTip) return false;
+  return recordPushedTip({ cwd: input.cwd, prepared: input.prepared, git: input.git });
 }
 
 /** A failed or refused remote push never leaves a stale intent behind. */

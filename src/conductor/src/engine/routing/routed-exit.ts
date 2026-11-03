@@ -6,9 +6,11 @@ import { EventPersister } from '../event-persister.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import type { RestackResolver } from '../restack/restack-resolver.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
-import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
-import { publishedStackRefusal } from '../stack-publication.js';
+import { activePublicationRecord } from '../stack-publication-record.js';
+import { refreshLedgerUpdateLines } from '../stack-refresh-ledger.js';
+import { pushedTipRef } from '../push-lease.js';
+import { parseCommitSha } from '../restack/restack-types.js';
 import {
   drainOutbox,
   drainQueueOutbox,
@@ -161,7 +163,7 @@ async function hasOtherOpenRound(worktree: string, slug: string, roundId: RoundI
   return false;
 }
 
-async function restageLeafGates(worktree: string): Promise<string | undefined> {
+async function restageLeafGates(worktree: string, slug: string): Promise<string | undefined> {
   const statePath = `${worktree}/.pipeline/conduct-state.json`;
   const state = await readState(statePath);
   if (!state.ok) return state.error.message;
@@ -175,7 +177,12 @@ async function restageLeafGates(worktree: string): Promise<string | undefined> {
   const postRegion = registry.slice(buildReview + 1, finish)
     .map((step) => step.name)
     .filter((name) => !builtins.has(name) && !CHILD_REGION_STEPS.includes(name as never));
-  const gates = ['prd_audit', 'architecture_review_as_built', 'manual_test', ...postRegion] as StepName[];
+  const publication = await activePublicationRecord(worktree, slug, { git: makeGitRunner(worktree) });
+  const gates = [
+    'prd_audit', 'architecture_review_as_built', 'manual_test',
+    ...postRegion.filter((gate) => publication === undefined || gate !== 'rebase'),
+    ...(publication === undefined ? [] : ['finish']),
+  ] as StepName[];
   const result = await applyStateChanges(statePath, state.value, Object.fromEntries(gates.map((gate) => [gate, 'pending'])), 're-pend leaf gates after routed return');
   if ('message' in result) return result.message;
   try {
@@ -229,7 +236,7 @@ export async function returnToLeaf(
   // discards its landing. Returning from that path is bookkeeping only: the
   // leaf's prior whole-feature validation remains authoritative.
   if (!options.abandon) {
-    const restageFailure = await restageLeafGates(worktree);
+    const restageFailure = await restageLeafGates(worktree, slug);
     if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
   }
   const closed = { ...currentStored.record, phase: 'closed' as const };
@@ -340,6 +347,37 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   if (typeof closure !== 'string') {
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
+    const entry = stored.record.entry;
+    const head = await resolveGitRef(git, 'HEAD');
+    const published = entry?.host === input.host && typeof head === 'string' && head !== entry.pinnedBase
+      ? await activePublicationRecord(input.worktree, input.slug, { git })
+      : undefined;
+    if (published !== undefined) {
+      const member = published.record.members.find((candidate) => candidate.position === input.host);
+      const recordedTip = typeof head === 'string' ? parseCommitSha(head) : undefined;
+      const pushedTip = member === undefined ? undefined : await resolveGitRef(git, pushedTipRef(input.slug, member.branch));
+      if (member === undefined || !recordedTip || typeof pushedTip !== 'string') {
+        return halted(`routed exit host ${input.host}: published leaf refresh evidence is unavailable`);
+      }
+      const ledger = await refreshLedgerUpdateLines(input.worktree, input.slug, {
+        moves: [{ position: member.position, branch: member.branch, pr: member.pr, pushedTip: pushedTip as never, recordedTip }],
+        round: {
+          roundId: input.roundId,
+          kind: stored.record.kind,
+          host: input.host,
+          marker: `<!-- conductor:routed-fix:${input.roundId}:${member.pr} -->`,
+        },
+      }, { git });
+      if (ledger.kind !== 'lines') return halted(`routed exit host ${input.host}: published leaf refresh ledger is unreadable`);
+      const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+        { kind: 'update-record', previous: stored, record: done.record },
+        { kind: 'delete-marker', old: marker.blob },
+        { kind: 'update-refresh-ledger', previous: ledger.previous, next: ledger.blob },
+      ], { git });
+      return wrote.kind === 'updated'
+        ? { kind: 'no-commit-done' }
+        : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote.kind}`);
+    }
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
       { kind: 'update-record', previous: stored, record: done.record },
       { kind: 'delete-marker', old: marker.blob },
@@ -378,11 +416,6 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     return wrote.kind === 'updated'
       ? { kind: 'no-commit-done' }
       : halted(`routed exit host ${input.host}: no-commit compare-and-swap ${wrote.kind}`);
-  }
-
-  if (await publishedStackRefusal(input.worktree, input.slug, { git })) {
-    await haltRestack(input.worktree, 'published-stack', input.events, { child: input.host });
-    return halted(`routed exit host ${input.host}: published stack`);
   }
 
   let built = stored;

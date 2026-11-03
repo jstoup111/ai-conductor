@@ -69,6 +69,12 @@ describe('stacked FINISH publication (sweep G4)', () => {
         if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'remote') return { stdout: 'origin\n' };
         if (args[0] === 'rev-list') return { stdout: '3\n' };
+        if (args[0] === 'rev-parse' && args.at(-1) === 'refs/conductor/demo/refresh') {
+          return { stdout: '', exitCode: 1 };
+        }
+        // FINISH establishment protects its post-rebase write with an
+        // expected-SHA lease. Model both the tracking tip and the existing
+        // pushed receipt so the fixture reaches the guarded remote boundary.
         if (args[0] === 'rev-parse') return { stdout: `${remoteTip}\n` };
         if (args[0] === 'for-each-ref') {
           return { stdout: 'refs/heads/feat/c1/demo\nrefs/heads/feat/c2/demo\nrefs/heads/feat/daemon-demo\n' };
@@ -128,6 +134,7 @@ describe('stacked FINISH publication (sweep G4)', () => {
         expect(args.join(' ')).not.toMatch(/feat\/c\d+\/demo/);
         const refspec = args.find((arg) => arg.includes(':refs/heads/'));
         expect(refspec).toBe('HEAD:refs/heads/feat/daemon-demo');
+        expect(args).toContain(`--force-with-lease=refs/heads/feat/daemon-demo:${remoteTip}`);
       }
       expect(rawPushes).toEqual([]);
       expect(outcome).toEqual({ kind: 'publication_progress', transition: 'establish_pr' });

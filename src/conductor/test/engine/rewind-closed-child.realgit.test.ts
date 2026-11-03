@@ -106,6 +106,41 @@ async function flatFeatureFixture(): Promise<{ root: string; repo: string }> {
 }
 
 describe('rewind --child on a closed child (real local Git)', () => {
+  // Covers: task:26
+  it('keeps rewind --child frozen through checkOpenOperatorRound with no state or ref mutation', async () => {
+    const subject = await closedChildFixture();
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [{ position: c1, branch: 'feat/c1/demo', pr: 101 }],
+    })).resolves.toEqual({ kind: 'updated' });
+    const git = makeGitRunner(subject.repo);
+    const statePaths = [
+      join(subject.repo, '.pipeline', 'conduct-state.json'),
+      join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'),
+      join(subject.repo, '.pipeline', 'HALT'),
+      join(subject.repo, '.pipeline', 'HALT.class'),
+    ];
+    const before = {
+      refs: (await git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout,
+      state: await Promise.all(statePaths.map((path) => readFile(path, 'utf8'))),
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', child: '1', target: 'test_suite', reason: 'retry' }, subject.repo, {
+        resolveMainRoot: async () => subject.root, resolveOperator: async () => 'operator@example.test',
+      })).resolves.toBe(1);
+      expect(error.mock.calls).toEqual([
+        ['rewind: published-stack: This stack is published and frozen by #3268; rewind cannot change it.'],
+      ]);
+      await expect(Promise.all([
+        git(['for-each-ref', '--format=%(refname) %(objectname)']).then((result) => result.stdout),
+        Promise.all(statePaths.map((path) => readFile(path, 'utf8'))),
+      ])).resolves.toEqual([before.refs, before.state]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('refuses --child on a flat feature before changing refs or state', async () => {
     const subject = await flatFeatureFixture();
     const git = makeGitRunner(subject.repo);

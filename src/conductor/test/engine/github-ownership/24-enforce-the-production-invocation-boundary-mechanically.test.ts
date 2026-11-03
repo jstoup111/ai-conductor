@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:17
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolve } from 'node:path';
@@ -388,5 +388,15 @@ describe('GitHub invocation audit', () => {
 
   it('accepts only the classified shipped invocation inventory', () => {
     expect(auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'))).toEqual([]);
+  });
+
+  it('identifies the Task 17 routed-comment caller and its guarded GitHub invocation', async () => {
+    const production = await readFile(resolve(__dirname, '../../../src/engine/finish-publication-production.ts'), 'utf8');
+    const callerStart = production.indexOf('export async function postRoutedComments');
+    const callerEnd = production.indexOf('\nfunction markerForRoutedComment', callerStart);
+    const caller = callerStart === -1 || callerEnd === -1 ? '' : production.slice(callerStart, callerEnd);
+
+    expect(caller).toContain('export async function postRoutedComments');
+    expect(caller).toMatch(/executeGithubOperation\(\{[\s\S]*?operation:\s*'pull-request\.comment\.create'/);
   });
 });

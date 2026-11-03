@@ -1,4 +1,4 @@
-// Covers: task:9, task:16
+// Covers: task:9, task:16, task:21
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import { readRoutedGrowthSnapshot, rebuildLedgerFromReceipts } from '../../../sr
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
 
 const roots: string[] = [];
 const child = parseChildId(1)!;
@@ -110,6 +111,45 @@ describe('open operator round (real local Git)', () => {
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { entry: { pinnedBase: subject.closure } },
     });
+  });
+
+  it('clears finished markers only after opening a published landing', async () => {
+    const subject = await fixture();
+    await writeFile(join(subject.repo, '.pipeline', 'finish-choice'), 'keep\n');
+    await writeFile(join(subject.repo, '.pipeline', 'DONE'), 'done\n');
+    await writePublicationRecord(subject.repo, 'demo', undefined, { version: 1, members: [] });
+
+    await expect(open(subject)).resolves.toMatchObject({ kind: 'opened' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'finish-choice'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'DONE'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves finished markers when published landing admission is refused', async () => {
+    const subject = await fixture();
+    await writeFile(join(subject.repo, '.pipeline', 'finish-choice'), 'keep\n');
+    await writeFile(join(subject.repo, '.pipeline', 'DONE'), 'done\n');
+    await writePublicationRecord(subject.repo, 'demo', undefined, { version: 1, members: [] });
+    let transactions = 0;
+    const refusing: GitRunner = async (args, options) => {
+      if (args[0] === 'update-ref' && args[1] === '--stdin' && ++transactions === 2) {
+        return { exitCode: 1, stdout: '', stderr: 'admission refused' };
+      }
+      return subject.git(args, options);
+    };
+
+    await expect(open(subject, refusing)).resolves.toMatchObject({ kind: 'refused' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'finish-choice'), 'utf8')).resolves.toBe('keep\n');
+    await expect(readFile(join(subject.repo, '.pipeline', 'DONE'), 'utf8')).resolves.toBe('done\n');
+  });
+
+  it('preserves finished markers on an unpublished operator round', async () => {
+    const subject = await fixture();
+    await writeFile(join(subject.repo, '.pipeline', 'finish-choice'), 'keep\n');
+    await writeFile(join(subject.repo, '.pipeline', 'DONE'), 'done\n');
+
+    await expect(open(subject)).resolves.toMatchObject({ kind: 'opened' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'finish-choice'), 'utf8')).resolves.toBe('keep\n');
+    await expect(readFile(join(subject.repo, '.pipeline', 'DONE'), 'utf8')).resolves.toBe('done\n');
   });
 
   // Covers: task:rem-as-built-rem-as-built-r3

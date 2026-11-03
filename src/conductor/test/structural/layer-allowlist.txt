@@ -116,7 +116,6 @@ engine/remediation-append.ts -> engine/plan-task-parse.ts
 engine/remediation-case-effects.ts -> engine/build-review-adjudication.ts
 engine/remote-git-operations.ts -> engine/child-cursor.ts
 engine/remote-git-operations.ts -> engine/rebase.ts
-engine/remote-git-operations.ts -> engine/stack-tip-guard.ts
 engine/repair-obligations.ts -> engine/autoheal.ts
 engine/repair-plan-binding.ts -> engine/artifacts.ts
 engine/repair-plan-binding.ts -> engine/repair-obligations.ts
@@ -155,7 +154,6 @@ engine/restack/restack-recovery.ts -> engine/restack/restack-replay.ts
 engine/restack/restack-recovery.ts -> engine/restack/restack-resolver.ts
 engine/restack/restack-recovery.ts -> engine/restack/restack-sync.ts
 engine/restack/restack-recovery.ts -> engine/restack/restack-transition.ts
-engine/restack/restack-recovery.ts -> engine/routing/round-admission.ts
 engine/restack/restack-recovery.ts -> engine/stack-publication.ts
 engine/restack/restack-replay.ts -> engine/rebase.ts
 engine/restack/restack-replay.ts -> engine/routing/rem-block-merge.ts
@@ -193,20 +191,15 @@ engine/routing/routed-exit.ts -> engine/gate-verdicts.ts
 engine/routing/routed-exit.ts -> engine/halt-marker.ts
 engine/routing/routed-exit.ts -> engine/rebase.ts
 engine/routing/routed-exit.ts -> engine/restack/restack-executor.ts
-engine/routing/routed-exit.ts -> engine/restack/restack-move.ts
 engine/routing/routed-exit.ts -> engine/routing/revalidation-queue.ts
 engine/routing/routed-exit.ts -> engine/routing/route-record-store.ts
-engine/routing/routed-exit.ts -> engine/stack-publication.ts
 engine/slice-topology.ts -> engine/artifacts.ts
 engine/slice-topology.ts -> engine/plan-slices.ts
 engine/slice-topology.ts -> engine/rebase.ts
 engine/slice-topology.ts -> engine/remediation-append.ts
-engine/stack-publication-record.ts -> engine/rebase.ts
 engine/stack-publication.ts -> engine/halt-marker.ts
 engine/stack-publication.ts -> engine/rebase.ts
 engine/stack-publication.ts -> engine/remote-git-operations.ts
-engine/stack-publication.ts -> engine/stack-publication-record.ts
-engine/stack-tip-guard.ts -> engine/stack-publication-record.ts
 engine/state.ts -> engine/filesystem-conduct-state-store.ts
 engine/task-attribution.ts -> engine/plan-task-parse.ts
 engine/task-digests.ts -> engine/repair-obligations.ts

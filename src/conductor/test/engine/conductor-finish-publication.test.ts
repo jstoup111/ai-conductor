@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execa } from 'execa';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  refreshPublishedStackMembers,
+} from '../../src/engine/finish-publication-production.js';
 import {
   advanceFinishPublication,
   routeFinishPublicationDisposition,
@@ -27,7 +31,12 @@ import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { haltStackTipDiverged, observeStackDimension } from '../../src/engine/stack-publication.js';
-import type { PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { refreshLedgerRefFor } from '../../src/engine/stack-refresh-ledger.js';
+import { pushedTipRef } from '../../src/engine/push-lease.js';
+import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
+import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -162,6 +171,51 @@ async function expectNoSyntheticFinishEvidence(dir: string): Promise<void> {
   for (const path of SYNTHETIC_FINISH_EVIDENCE_PATHS) {
     await expect(readFile(join(dir, path), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   }
+}
+
+async function createPublishedRefreshFixture(root: string) {
+  const remote = join(root, 'origin.git');
+  const branch = 'feat/daemon-finish-publication';
+  await initTestRepo(root);
+  await writeFile(join(root, 'leaf.txt'), 'base\n');
+  await execa('git', ['add', '.'], { cwd: root });
+  await execa('git', ['commit', '-m', 'seed'], { cwd: root });
+  await execa('git', ['init', '--bare', '--initial-branch=main', remote], { cwd: root });
+  await execa('git', ['remote', 'add', 'origin', remote], { cwd: root });
+  await execa('git', ['checkout', '-b', branch], { cwd: root });
+  await writeFile(join(root, 'leaf.txt'), 'published\n');
+  await execa('git', ['commit', '-am', 'published leaf'], { cwd: root });
+  const oldTip = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout;
+  await execa('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: root });
+  await writePublicationRecord(root, 'finish-publication', undefined, {
+    version: 1,
+    members: [{ position: parseChildId(1)!, branch, pr: 101 }],
+  });
+  await execa('git', ['update-ref', pushedTipRef('finish-publication', branch), oldTip], { cwd: root });
+  await execa('git', ['reset', '--hard', 'main'], { cwd: root });
+  await writeFile(join(root, 'leaf.txt'), 'refreshed\n');
+  await execa('git', ['commit', '-am', 'refresh leaf'], { cwd: root });
+  const recordedTip = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout;
+  const ledger = {
+    version: 1,
+    members: { [branch]: { position: parseChildId(1)!, pr: 101, publishedTip: oldTip, recordedTip } },
+    rounds: [], aboveOwed: [], posted: [],
+  };
+  const ledgerObject = (await execa('git', ['hash-object', '-w', '--stdin'], {
+    cwd: root, input: JSON.stringify(ledger),
+  })).stdout;
+  await execa('git', ['update-ref', refreshLedgerRefFor('finish-publication'), ledgerObject], { cwd: root });
+  return { remote, branch, oldTip, recordedTip };
+}
+
+function localMutation(): GithubMutationExecutionContext {
+  return {
+    provenance: { repository: 'acme/rocket', defaultBranch: 'main', specBranch: 'spec/demo', featureMarker: '.docs/specs/demo.md', publication: 'initial' },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/specs/demo.md', content: 'Owner: alice\n' }] },
+    },
+  };
 }
 
 // Covers: task:6, task:9
@@ -765,6 +819,110 @@ describe('Conductor FINISH publication routing', () => {
       step: 'manual_test',
       reason: 'manual test evidence contains FAIL rows',
     }]);
+  });
+
+  it('stops at a failed routed leaf gate before FINISH can refresh the published bare remote', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Routed round r9\n\n| Story | Result |\n|---|---|\n| Leaf gate | FAIL |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M',
+      architecture_review: 'skipped',
+      manual_test: 'done',
+    });
+
+    const subject = await createPublishedRefreshFixture(dir);
+    const before = (await execa('git', ['ls-remote', '--heads', subject.remote], { cwd: dir })).stdout;
+    const remoteGit = vi.fn(async (args: readonly string[], dependencies: Parameters<typeof executeRemoteGit>[1]) => executeRemoteGit(args, {
+      ...dependencies,
+      config: async () => ({ stdout: 'git@github.com:acme/rocket.git\n' }),
+    }));
+    const advance = vi.fn(async () => {
+      await refreshPublishedStackMembers({
+        root: dir, slug: 'finish-publication', mutation: localMutation(), remoteGit,
+        git: async (args, options) => {
+          const result = await execa('git', [...args], { cwd: dir, input: options?.input, reject: false });
+          return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+        },
+      });
+      throw ROUTED_SENTINEL;
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events: new ConductorEventEmitter(),
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: true,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).not.toHaveBeenCalled();
+    expect(remoteGit).not.toHaveBeenCalled();
+    expect((await execa('git', ['ls-remote', '--heads', subject.remote], { cwd: dir })).stdout).toBe(before);
+  });
+
+  it('reaches FINISH only after the routed leaf gate passes and refreshes the bare remote', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Routed round r9\n\n| Story | Result |\n|---|---|\n| Leaf gate | PASS |\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'manual-test-fail-evidence.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writePrdAuditFixture(dir, 'fixture-run', 'PASS', 'baseline');
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M',
+      architecture_review: 'skipped',
+      manual_test: 'done',
+      session_started_at: Date.now() - 60_000,
+      validation__prd_audit: 'done',
+      validation__architecture_review_as_built: 'done',
+    } as ConductState);
+
+    const subject = await createPublishedRefreshFixture(dir);
+    const before = (await execa('git', ['ls-remote', '--heads', subject.remote], { cwd: dir })).stdout;
+    const remoteGit = vi.fn(async (args: readonly string[], dependencies: Parameters<typeof executeRemoteGit>[1]) => executeRemoteGit(args, {
+      ...dependencies,
+      config: async () => ({ stdout: 'git@github.com:acme/rocket.git\n' }),
+    }));
+    const advance = vi.fn(async () => {
+      await refreshPublishedStackMembers({
+        root: dir, slug: 'finish-publication', mutation: localMutation(), remoteGit,
+        git: async (args, options) => {
+          const result = await execa('git', [...args], { cwd: dir, input: options?.input, reject: false });
+          return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+        },
+      });
+      throw ROUTED_SENTINEL;
+    });
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, finishPublication: { advance }, events: new ConductorEventEmitter(),
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: true,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).toHaveBeenCalledOnce();
+    expect(remoteGit).toHaveBeenCalledWith(
+      ['push', 'origin', `${subject.recordedTip}:refs/heads/${subject.branch}`], expect.anything(),
+    );
+    const after = (await execa('git', ['ls-remote', '--heads', subject.remote], { cwd: dir })).stdout;
+    expect(after).not.toBe(before);
+    expect(after).toContain(`${subject.recordedTip}\trefs/heads/${subject.branch}`);
   });
 
   it('blocks publication when a retained done prd_audit has an unsatisfied on-disk verdict', async () => {

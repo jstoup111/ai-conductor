@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:20, task:26
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,6 +45,7 @@ function readOnlyGit(overrides: Partial<Record<string, { exitCode: number; stdou
 function deps(options: {
   readonly topology?: object;
   readonly published?: boolean;
+  readonly publication?: object;
   readonly open?: boolean;
   readonly marker?: object;
   readonly queue?: object;
@@ -62,6 +63,9 @@ function deps(options: {
     git: defaultGit,
     loadSliceTopology: vi.fn().mockResolvedValue(options.topology ?? sliced()),
     publishedStackRefusal: vi.fn().mockResolvedValue(options.published ?? false),
+    publishedStackTipPreflight: vi.fn().mockResolvedValue(options.publication ?? (options.published
+      ? { kind: 'refused', member: { position: c1, branch: 'feat/c1/demo', pr: 1 } }
+      : { kind: 'not-published' })),
     routedRoundOpen: vi.fn().mockResolvedValue(options.open ?? false),
     routingFenceOpen: vi.fn().mockReturnValue(options.fence ?? true),
     readRepairMarker: readMarker,
@@ -90,7 +94,7 @@ describe('operator round open predicate', () => {
     refused(await check(parseChildId(4)!), 'unknown-position');
     refused(await check(c1, { topology: { kind: 'unavailable', cause: 'plan-invalid' } }), 'topology-unavailable');
     refused(await check(c1, { topology: { kind: 'unsliced' } }), 'not-stacked');
-    refused(await check(c1, { routeOn: false }), 'routing-off');
+    refused(await check(c1, { published: true, routeOn: false }), 'routing-off');
 
     const unknown = await check(parseChildId(4)!);
     if (unknown.kind === 'refused') expect(unknown.refusal.text).toContain('1, 2, 3');
@@ -100,6 +104,37 @@ describe('operator round open predicate', () => {
     if (unavailable.kind === 'refused') expect(unavailable.refusal.text).toContain('#3365');
     const published = await check(c1, { published: true });
     if (published.kind === 'refused') expect(published.refusal.text).toContain('#3268');
+  });
+
+  it('admits an intact published stack for stack land but keeps rewind frozen', async () => {
+    const admitted = await check(c1, { published: true, publication: { kind: 'intact' }, acceptanceContract: true });
+    expect(admitted).toMatchObject({ kind: 'accepted', host: c1 });
+
+    const rewind = await checkOpenOperatorRound(
+      { worktree: '/fixture', slug: 'demo', child: c1, carry: [], reason: 'why', origin: 'rewind' },
+      deps({ published: true, publication: { kind: 'intact' }, acceptanceContract: true }),
+    );
+    expect(rewind).toMatchObject({ kind: 'refused', refusal: { kind: 'published-stack' } });
+    if (rewind.kind === 'refused') expect(rewind.refusal.text).toContain('#3268');
+  });
+
+  // Covers: task:20
+  it('keeps a published stack frozen when whole-feature routing is disabled', async () => {
+    const subject = deps({
+      published: true,
+      publication: { kind: 'intact' },
+      routeOn: false,
+      acceptanceContract: true,
+    });
+
+    const result = await checkOpenOperatorRound(
+      { worktree: '/fixture', slug: 'demo', child: c1, carry: [], reason: 'reviewer request' },
+      subject,
+    );
+
+    refused(result, 'routing-off');
+    expect(subject.publishedStackRefusal).not.toHaveBeenCalled();
+    expect(subject.publishedStackTipPreflight).not.toHaveBeenCalled();
   });
 
   it('refuses an open child without a closure ref and does not mutate its inputs', async () => {

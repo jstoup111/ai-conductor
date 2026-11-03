@@ -213,7 +213,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { activePublicationRecord } from './stack-publication-record.js';
-import { publishedStackRefusal } from './stack-publication.js';
+import { publishedStackRefusal, publishedStackTipPreflight } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
@@ -225,7 +225,8 @@ import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
-import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
+import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds } from './routing/round-admission.js';
+import { routedRoundOpen } from './routing/routed-round-open.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { consumeLowestQueued } from './routing/revalidation-queue.js';
@@ -5257,9 +5258,12 @@ export class Conductor {
           }
           const declaredPositions = topology.positions as ChildId[];
           if (declaredPositions.length > 1) {
-            if (await publishedStackRefusal(this.projectRoot, this.featureSlug)) {
+            const publication = await publishedStackTipPreflight(this.projectRoot, this.featureSlug);
+            if (publication.kind === 'unreadable' || publication.kind === 'refused') {
               await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
-              return { kind: 'halt', haltClass: 'needs-human', detail: 'routing admission refused: published-stack' };
+              return { kind: 'halt', haltClass: 'needs-human', detail: publication.kind === 'refused'
+                ? `routing admission refused: ${publication.detail ?? `published stack member ${publication.member.position} changed or closed (#3268)`}`
+                : 'routing admission refused: published stack tips are unreadable; retry' };
             }
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
@@ -16478,9 +16482,12 @@ export class Conductor {
       if (preflight.kind !== 'available') return preflight;
     }
 
-    if (await publishedStackRefusal(this.projectRoot, slug)) {
+    const publication = await publishedStackTipPreflight(this.projectRoot, slug);
+    if (publication.kind === 'unreadable' || publication.kind === 'refused') {
       await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
-      return { kind: 'halted', reason: 'routing admission refused: published-stack' };
+      return { kind: 'halted', reason: publication.kind === 'refused'
+        ? `routing admission refused: ${publication.detail ?? `published stack member ${publication.member.position} changed or closed (#3268)`}`
+        : 'routing admission refused: published stack tips are unreadable; retry' };
     }
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };

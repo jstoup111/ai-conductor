@@ -60,12 +60,29 @@ import {
   type PrProseJudgmentRequest,
   type PrProseJudgmentResult,
   type ReleaseReadinessObservation,
+  type StackRefresh,
 } from './finish-publication.js';
 import { createShipDraftPublicationDependencies, createTargetBoundGithubOperationRunner } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
-import { pushedTipRef } from './push-lease.js';
+import {
+  adoptPushedTipIntentAtRemoteTip,
+  decodePushedTipIntent,
+  pushedTipRef,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import {
+  authorizePublishedStackRefresh,
+  readRefreshLedger,
+  refreshPendingState,
+  routedMemberAboveCommentMarker,
+  routedCommentTargets,
+  type RefreshLedger,
+  type RoutedCommentTarget,
+} from './stack-refresh-ledger.js';
+import { parseCommitSha } from './restack/restack-types.js';
+import { renderHostComment, renderMemberAboveComment } from './routed-fix-comment.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
@@ -397,6 +414,303 @@ function publicationRecordGit(git: GitRunner, cwd: string): PublicationRecordGit
       return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
     }
   };
+}
+
+/** Read the durable refresh ledger and every member's pushed receipt for FINISH. */
+export async function observePublishedStackRefresh(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+}): Promise<StackRefresh> {
+  const stored = await readRefreshLedger(input.root, input.slug, { git: input.git });
+  if (stored.kind === 'absent') return 'not-applicable';
+  if (stored.kind === 'unreadable') return 'unreadable';
+
+  const pushedTips: Record<string, ReturnType<typeof parseCommitSha> | undefined> = {};
+  for (const branch of Object.keys(stored.ledger.members)) {
+    const receipt = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, branch)]);
+    const tip = receipt.exitCode === 0 ? parseCommitSha(receipt.stdout.trim()) : undefined;
+    if (!tip) return 'unreadable';
+    pushedTips[branch] = tip;
+  }
+  return refreshPendingState(stored.ledger, pushedTips);
+}
+
+/**
+ * A FINISH observation reads GitHub member heads against local pushed-tip
+ * receipts.  A completed transport can leave exactly one receipt behind, so
+ * reconcile that durable intent before the observation treats the moved head
+ * as an external stack divergence.
+ */
+async function reconcileOutstandingPublishedPushIntents(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+}): Promise<void> {
+  const publication = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (publication === undefined) return;
+
+  for (const member of publication.record.members) {
+    await adoptCompletedPushIntent({
+      root: input.root,
+      slug: input.slug,
+      branch: member.branch,
+      git: input.git,
+    });
+  }
+}
+
+/**
+ * A transport may reach the remote immediately before executeRemoteGit records
+ * its pushed-tip receipt.  Reconcile only an exact durable intent before a
+ * retry asks the guard to evaluate that now-moved remote tip.
+ */
+async function adoptCompletedPushIntent(input: {
+  root: string;
+  slug: string;
+  branch: string;
+  git: PublicationRecordGitRunner;
+}): Promise<boolean> {
+  let remoteTip: string | undefined;
+  try {
+    const remote = await input.git(['ls-remote', '--heads', 'origin', `refs/heads/${input.branch}`]);
+    if (remote.exitCode !== 0) return false;
+    remoteTip = remote.stdout.split('\n').find((line) => line.endsWith(`\trefs/heads/${input.branch}`))?.split('\t', 1)[0]?.trim();
+    if (!remoteTip) return true;
+
+    const pushLeaseGit: PushLeaseGitRunner = async (args, text) => {
+      const result = await input.git([...args], text === undefined ? undefined : { input: text });
+      return { stdout: result.stdout, exitCode: result.exitCode };
+    };
+    const intent = await decodePushedTipIntent({ git: pushLeaseGit, slug: input.slug, branch: input.branch });
+    if (intent.kind === 'absent') return true;
+    if (intent.kind === 'malformed') return false;
+    if (intent.prepared.new !== remoteTip) return true;
+    return adoptPushedTipIntentAtRemoteTip({
+      cwd: input.root, remoteTip, prepared: intent.prepared, git: pushLeaseGit,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Apply the ledger in stack order.  Each member has its own guarded transport
+ * call so a restart can observe durable receipts and continue at the first
+ * member still owing a push.
+ */
+export async function refreshPublishedStackMembers(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+  mutation?: GithubMutationExecutionContext;
+  remoteGit?: typeof executeRemoteGit;
+  events?: { emit(event: Extract<ConductorEvent, { type: 'stack_member_refreshed' | 'stack_tip_diverged' }>): Promise<void> };
+}): Promise<void> {
+  const stored = await readRefreshLedger(input.root, input.slug, { git: input.git });
+  if (stored.kind !== 'ledger') {
+    throw new StackPublicationHaltError('stack_tip_diverged', 'published stack refresh ledger is unreadable');
+  }
+  const authorization = authorizePublishedStackRefresh(input.slug);
+  const members = Object.entries(stored.ledger.members)
+    .map(([branch, member]) => ({ branch, member }))
+    .sort((left, right) => left.member.position - right.member.position);
+  for (const { branch, member } of members) {
+    const receipt = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, branch)]);
+    const oldTip = receipt.exitCode === 0 ? receipt.stdout.trim() : undefined;
+    if (oldTip === member.recordedTip) continue;
+    if (!oldTip) {
+      await haltStackTipDiverged(input.root, [{ pr: member.pr, position: member.position }], input.events,
+        `published stack refresh receipt is unreadable at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh receipt is unreadable at position ${member.position}`);
+    }
+    if (!await adoptCompletedPushIntent({ root: input.root, slug: input.slug, branch, git: input.git })) {
+      await haltStackTipDiverged(input.root, [{ pr: member.pr, position: member.position }], input.events,
+        `published stack refresh push intent is unreadable at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh push intent is unreadable at position ${member.position}`);
+    }
+    const adoptedReceipt = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, branch)]);
+    if (adoptedReceipt.exitCode === 0 && adoptedReceipt.stdout.trim() === member.recordedTip) continue;
+    const remote = await (input.remoteGit ?? executeRemoteGit)([
+      'push', 'origin', `${member.recordedTip}:refs/heads/${branch}`,
+    ], {
+      cwd: input.root,
+      config: async (args) => input.git([...args]),
+      runRemoteGit: async (args, options) => {
+        const result = await input.git(args, { credential: options.credential, endpoint: options.endpoint });
+        if (result.exitCode !== 0) throw new Error(result.stderr ?? 'published stack refresh push failed');
+        return { stdout: result.stdout };
+      },
+      mutation: input.mutation,
+      pushLeaseGit: async (args, text) => {
+        const result = await input.git([...args], text === undefined ? undefined : { input: text });
+        return { stdout: result.stdout, exitCode: result.exitCode };
+      },
+      publishedStackRefreshAuthorization: authorization,
+    });
+    if (remote.kind !== 'executed') {
+      await haltStackTipDiverged(input.root, remote.kind === 'refused' && remote.members?.length
+        ? remote.members
+        : [{ pr: member.pr, position: member.position }], input.events,
+      `published stack refresh refused at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `published stack refresh refused at position ${member.position}`);
+    }
+    await input.events?.emit({
+      type: 'stack_member_refreshed', child: member.position, pr: member.pr,
+      oldTip, newTip: member.recordedTip,
+      eventId: `stack-refresh:${member.pr}:${oldTip}:${member.recordedTip}`,
+    });
+  }
+}
+
+type RoutedCommentBody = { readonly kind: 'body'; readonly body: string } | { readonly kind: 'retryable' };
+
+/**
+ * Post the comment associated with each durable refresh receipt. The read and
+ * create remain a narrow direct boundary for this task; the guarded-operation
+ * migration is owned by Task 17.
+ */
+export async function postRoutedComments(input: {
+  root: string;
+  slug: string;
+  baseBranch: string;
+  repository: string;
+  git: PublicationRecordGitRunner;
+  gh: GhRunner;
+  /** Guarded mutation authority; a missing authority must never fall back to raw gh. */
+  operations?: GithubOperationRunner;
+  /** Production binds every comment to the PR it will mutate. */
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
+  /** Posted-comment telemetry is best-effort after its durable receipt. */
+  events?: ConductorEventEmitter;
+  routedCommentTargets?: typeof routedCommentTargets;
+  renderHostComment?: typeof renderHostComment;
+  renderMemberAboveComment?: typeof renderMemberAboveComment;
+}): Promise<void> {
+  const targetsResult = await (input.routedCommentTargets ?? routedCommentTargets)({
+    worktree: input.root,
+    slug: input.slug,
+    baseBranch: input.baseBranch,
+    git: input.git,
+  });
+  if (targetsResult.kind !== 'targets') throw new StackPublicationRetryError('routed comment targets are unreadable');
+
+  for (const target of targetsResult.targets) {
+    const receipt = await readRefreshLedger(input.root, input.slug, { git: input.git });
+    if (receipt.kind !== 'ledger') throw new StackPublicationRetryError('routed comment receipt is unreadable');
+    const marker = markerForRoutedComment(receipt.ledger, target);
+    if (marker === undefined) throw new StackPublicationRetryError('routed comment receipt is missing');
+    if (receipt.ledger.posted.includes(marker)) continue;
+
+    const rendered: RoutedCommentBody = target.kind === 'host'
+      ? await (input.renderHostComment ?? renderHostComment)({ worktree: input.root, slug: input.slug, target, git: input.git })
+      : await (input.renderMemberAboveComment ?? renderMemberAboveComment)({ worktree: input.root, slug: input.slug, target, git: input.git });
+    if (rendered.kind !== 'body') throw new StackPublicationRetryError('routed comment body is unreadable');
+
+    let comments: readonly string[];
+    try {
+      comments = await readPullRequestComments(input.gh, input.root, input.repository, target.pr);
+    } catch (error) {
+      throw new StackPublicationRetryError(
+        `routed comment lookup failed for PR #${target.pr}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!comments.some((body) => body.includes(marker))) {
+      const operationTarget: GithubOperationTarget = {
+        repository: input.repository,
+        kind: 'pull-request',
+        number: target.pr,
+      };
+      const operations = input.operationsForTarget?.(operationTarget) ?? input.operations;
+      if (!operations) throw new StackPublicationRetryError(`guarded routed comment operation is unavailable for PR #${target.pr}`);
+      const created = await executeGithubOperation({
+        operation: 'pull-request.comment.create',
+        repository: input.repository,
+        resource: { kind: 'pull-request', number: target.pr },
+        context: { actor: 'finish-publication' },
+        payload: { body: rendered.body },
+      }, operations, { events: input.events });
+      if (created.kind !== 'executed') {
+        throw new StackPublicationRetryError(`routed comment create failed for PR #${target.pr}: ${created.kind}`);
+      }
+    }
+    if (!await recordRoutedCommentReceipt(input.git, receipt, marker)) {
+      throw new StackPublicationRetryError(`routed comment receipt CAS failed for PR #${target.pr}`);
+    }
+    // The receipt is the idempotency boundary. A crash after remote creation
+    // but before it can emit is recovered by the marker scan above, which then
+    // re-delivers this deterministic occurrence without creating another comment.
+    const roundId = roundForRoutedComment(receipt.ledger, target);
+    try {
+      await input.events?.emit({
+        type: 'stack_member_comment_posted',
+        pr: target.pr,
+        roundId,
+        marker,
+        eventId: `stack-member-comment:${createHash('sha256').update(marker).digest('hex')}`,
+      });
+    } catch {
+      // Comment publication remains durable even if its observational sink is unavailable.
+    }
+  }
+}
+
+function markerForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarget): string | undefined {
+  if (target.kind === 'host') {
+    const round = ledger.rounds.find((entry) => entry.roundId === target.roundId);
+    if (!round) return undefined;
+    return Object.values(ledger.members).some((member) => member.position === round.host && member.pr === target.pr)
+      ? round.marker : undefined;
+  }
+  const marker = routedMemberAboveCommentMarker(target);
+  return ledger.aboveOwed.some((entry) => entry.marker === marker) ? marker : undefined;
+}
+
+function roundForRoutedComment(ledger: RefreshLedger, target: RoutedCommentTarget): string {
+  if (target.kind === 'host') return target.roundId;
+  const round = ledger.rounds.find((entry) => Object.values(ledger.members).some(
+    (member) => member.position === entry.host && member.pr === target.hostPr,
+  ));
+  // A member-above receipt always descends from a routed host. Retain a
+  // stable non-empty value if a damaged ledger loses that relation, while the
+  // marker remains the event's authoritative identity.
+  return round?.roundId ?? 'unknown';
+}
+
+async function readPullRequestComments(
+  gh: GhRunner,
+  cwd: string,
+  repository: string,
+  pr: number,
+): Promise<readonly string[]> {
+  const stdout = await runTrackerRepositoryRead(
+    gh,
+    cwd,
+    'pull-request.read',
+    repository,
+    { kind: 'pull-request', number: pr },
+    ['pr', 'view', String(pr), '-R', repository, '--json', 'comments'],
+  );
+  const parsed = JSON.parse(stdout) as { comments?: unknown };
+  if (!Array.isArray(parsed.comments)) throw new Error(`comments are unreadable for PR #${pr}`);
+  return parsed.comments.flatMap((comment) =>
+    typeof (comment as { body?: unknown } | null)?.body === 'string'
+      ? [(comment as { body: string }).body]
+      : [],
+  );
+}
+
+async function recordRoutedCommentReceipt(
+  git: PublicationRecordGitRunner,
+  receipt: Extract<Awaited<ReturnType<typeof readRefreshLedger>>, { kind: 'ledger' }>,
+  marker: string,
+): Promise<boolean> {
+  const updated: RefreshLedger = { ...receipt.ledger, posted: [...receipt.ledger.posted, marker] };
+  const hashed = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(updated) });
+  const blob = hashed.exitCode === 0 ? parseCommitSha(hashed.stdout.trim()) : undefined;
+  if (!blob) return false;
+  const applied = await git(['update-ref', receipt.ref, blob, receipt.blob]);
+  return applied.exitCode === 0;
 }
 
 /** Stack API calls are bound to the latest durable record immediately before transport. */
@@ -1770,6 +2084,15 @@ export function createProductionFinishPublicationCoordinator(
           stack: {
             observeStackDimension: async () => {
               if (!state.feature_desc) return 'not-applicable';
+              // Recover a transport that completed just before its receipt was
+              // recorded before comparing GitHub's current heads to those
+              // receipts. A non-matching remote is intentionally left for
+              // observeStackDimension to classify as stack-tip-diverged.
+              await reconcileOutstandingPublishedPushIntents({
+                root: deps.projectRoot,
+                slug: state.feature_desc,
+                git: publicationRecordGit(deps.git, deps.projectRoot),
+              });
               const cursor = await resolveObservationChild();
               // The leaf URL is the authoritative repository binding. Before
               // the ordinary establish-PR transition finishes, the stack is
@@ -1789,6 +2112,18 @@ export function createProductionFinishPublicationCoordinator(
                   deps.events,
                   detail,
                 ),
+              });
+            },
+            observeStackRefresh: async () => {
+              if (!state.feature_desc) return 'not-applicable';
+              // A refresh ledger is only meaningful for a published stack.
+              // Preserve the N=1 FINISH path without probing an unrelated ref.
+              const cursor = await resolveObservationChild();
+              if (cursor.kind === 'no-child') return 'not-applicable';
+              return observePublishedStackRefresh({
+                root: deps.projectRoot,
+                slug: state.feature_desc,
+                git: publicationRecordGit(deps.git, deps.projectRoot),
               });
             },
           },
@@ -1948,6 +2283,33 @@ export function createProductionFinishPublicationCoordinator(
               remoteMutation: publicationMutation,
               remoteMutationForTarget: mutationForRemoteRef,
               remoteGit: deps.remoteGit,
+              events: deps.events,
+            });
+          },
+          refreshPublishedMembers: async () => {
+            if (!state.feature_desc) throw new Error('missing stack refresh identity');
+            await refreshPublishedStackMembers({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              git: publicationRecordGit(deps.git, deps.projectRoot),
+              mutation: publicationMutation,
+              remoteGit: deps.remoteGit,
+              events: deps.events,
+            });
+          },
+          postRoutedComments: async () => {
+            if (!state.feature_desc || !state.pr_url) throw new Error('missing routed comment identity');
+            const retained = repositoryAndNumber(state.pr_url);
+            if (!retained) throw new Error('invalid retained PR identity for routed comments');
+            await postRoutedComments({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              baseBranch: deps.baseBranch,
+              repository: retained.repository,
+              git: publicationRecordGit(deps.git, deps.projectRoot),
+              gh: deps.gh,
+              operations,
+              operationsForTarget,
               events: deps.events,
             });
           },
