@@ -11,6 +11,7 @@ import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
+import { pushedTipRef } from '../../../src/engine/push-lease.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -112,9 +113,16 @@ describe('runStackPreflight unlanded closed-child commits (real local Git)', () 
     ].join('\n'));
   });
 
-  it('keeps the published-stack halt ahead of the unlanded landing instruction', async () => {
+  it('directs an intact published stack with raw commits to stack land', async () => {
     const subject = await fixture();
     await subject.onBranch('feat/c1/demo', () => subject.commit('raw review edit', 'review.txt', 'X\n'));
+    const tip = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+    const origin = join(subject.repo, 'origin.git');
+    await subject.git(['init', '--bare', '-q', '-b', 'main', origin]);
+    await writeFile(join(subject.repo, '.git', 'info', 'exclude'), 'origin.git\n');
+    await subject.git(['remote', 'add', 'origin', origin]);
+    await subject.git(['push', '-q', 'origin', 'feat/c1/demo:feat/c1/demo']);
+    await subject.git(['update-ref', pushedTipRef('demo', 'feat/c1/demo'), tip]);
     await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
       version: 1,
       members: [{ position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 }],
@@ -123,7 +131,7 @@ describe('runStackPreflight unlanded closed-child commits (real local Git)', () 
     await expect(preflight(subject)).resolves.toMatchObject({ result: { kind: 'halted' } });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('published stack cannot open a landing: tips are unreadable (#3268)');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('ai-conductor stack land --slug demo --child 1 --reason "<why>"');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('unlanded-closed-child-commits');
   });
 
