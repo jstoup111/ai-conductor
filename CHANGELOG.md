@@ -238,6 +238,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked features no longer halt with a missing owner-task binding when a repair round combines manual-test failures with existing-task findings. ([implementation PR #3578](https://github.com/jstoup111/ai-conductor/pull/3578)).
 - Routed repairs no longer halt when manual test, PRD audit and as-built review all fail together, and routed builds no longer fail on Codex with an invalid output schema error. ([implementation PR #3581](https://github.com/jstoup111/ai-conductor/pull/3581)).
 - A routed repair round hosted on the top child of a stack can now commit; previously the stack commit guard refused every commit on the leaf branch. ([implementation PR #3583](https://github.com/jstoup111/ai-conductor/pull/3583)).
+- A restack resolved by a provider session no longer silently discards the stacked child's commits. ([implementation PR #3584](https://github.com/jstoup111/ai-conductor/pull/3584)).
 
 ## Migration
 
