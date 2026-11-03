@@ -1737,6 +1737,32 @@ export async function advancedPublicationTransition(
 }
 
 /**
+ * An authoring response can be lost or report a guarded publish failure after
+ * GitHub has already accepted the prose. Re-observation is authoritative in
+ * all of those cases: only non-placeholder, determinate prose can advance
+ * the authoring transition before its failure-specific disposition is chosen.
+ */
+async function advanceReobservedAuthorPrProse(
+  emit: PublicationEventEmitter | undefined,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+): Promise<
+  Extract<
+    AdvanceFinishPublicationResult,
+    { kind: 'advanced' | 'human_required' | 'publication_retry' }
+  > | undefined
+> {
+  if (
+    after.pr.identity !== 'one' ||
+    after.pr.prose === 'placeholder' ||
+    after.pr.prose === 'indeterminate'
+  ) {
+    return undefined;
+  }
+  return advancedPublicationTransition(emit, 'author_pr_prose', before, after);
+}
+
+/**
  * Keep the three prose-specific human exits aligned: an unchanged authoring
  * or judgment pass and the FINISH progress allowance halt all name the
  * originating judgment when the observed revision carried one. Other
@@ -2084,18 +2110,12 @@ async function advanceFinishPublicationUnreconciled(
       }
 
       if (publicationFailure !== undefined) {
-        if (
-          observedAfterAuthoring.pr.identity === 'one' &&
-          observedAfterAuthoring.pr.prose !== 'placeholder' &&
-          observedAfterAuthoring.pr.prose !== 'indeterminate'
-        ) {
-          return advancedPublicationTransition(
-            input.emit,
-            'author_pr_prose',
-            snapshot,
-            observedAfterAuthoring,
-          );
-        }
+        const transition = await advanceReobservedAuthorPrProse(
+          input.emit,
+          snapshot,
+          observedAfterAuthoring,
+        );
+        if (transition) return transition;
         return {
           kind: 'human_required',
           reason: 'publication_operation_failed',
@@ -2109,18 +2129,12 @@ async function advanceFinishPublicationUnreconciled(
       // The fixed-point guard below applies only once the authoring pass itself
       // completed successfully and therefore claimed to have made progress.
       if (dispatchFailure) {
-        if (
-          observedAfterAuthoring.pr.identity === 'one' &&
-          observedAfterAuthoring.pr.prose !== 'placeholder' &&
-          observedAfterAuthoring.pr.prose !== 'indeterminate'
-        ) {
-          return advancedPublicationTransition(
-            input.emit,
-            'author_pr_prose',
-            snapshot,
-            observedAfterAuthoring,
-          );
-        }
+        const transition = await advanceReobservedAuthorPrProse(
+          input.emit,
+          snapshot,
+          observedAfterAuthoring,
+        );
+        if (transition) return transition;
         return {
           kind: 'publication_retry',
           transition: 'author_pr_prose',
@@ -2128,6 +2142,15 @@ async function advanceFinishPublicationUnreconciled(
         };
       }
 
+      const reobservedProgress = await advanceReobservedAuthorPrProse(
+        input.emit,
+        snapshot,
+        observedAfterAuthoring,
+      );
+      if (reobservedProgress) return reobservedProgress;
+
+      // Preserve the existing fixed-point and indeterminate dispositions for
+      // observations that did not establish re-observed prose progress.
       const transition = await advancedPublicationTransition(
         input.emit,
         'author_pr_prose',
@@ -2135,13 +2158,6 @@ async function advanceFinishPublicationUnreconciled(
         observedAfterAuthoring,
       );
       if (transition) return transition;
-      if (
-        observedAfterAuthoring.pr.identity === 'one' &&
-        observedAfterAuthoring.pr.prose !== 'placeholder' &&
-        observedAfterAuthoring.pr.prose !== 'indeterminate'
-      ) {
-        return { kind: 'advanced', transition: 'author_pr_prose' };
-      }
 
       return {
         kind: 'publication_retry',
