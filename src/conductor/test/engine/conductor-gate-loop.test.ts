@@ -488,7 +488,8 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     await conductor.run();
 
     expect(observed).toEqual(['build_review']);
-    expect(inspect).toHaveBeenCalledTimes(1);
+    // The completion recheck, then the read-only settle at build_review's dispatch.
+    expect(inspect).toHaveBeenCalledTimes(2);
     expect(ensure).not.toHaveBeenCalled();
   });
 
@@ -502,8 +503,12 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       { status: 'CURRENT' as const, evidence: {} as never },
     ]) {
       const stateFilePath = await installFixture('unsatisfied-verdict');
-      const inspect = vi.fn(async () => inspection);
-      const recordPreservation = vi.fn(async () => undefined);
+      // Models the real verifier: the record is what turns the next read CURRENT.
+      let recorded = false;
+      const inspect = vi.fn(async () => (recorded
+        ? { status: 'CURRENT' as const, evidence: {} as never }
+        : inspection));
+      const recordPreservation = vi.fn(async () => { recorded = true; });
       const conductor = new Conductor({
         projectRoot,
         stateFilePath,
@@ -525,7 +530,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
 
       await conductor.run();
 
-      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(inspect).toHaveBeenCalledTimes(2);
       expect(recordPreservation).toHaveBeenCalledTimes(
         inspection.status === 'PRESERVED_WITHIN_BUDGET' ? 1 : 0,
       );
@@ -536,6 +541,58 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         type: 'test_suite_verification',
         freshness: { status: 'CURRENT' },
         budgetVerdict: { outcome: 'preserved_within_budget', categories: { source: 1 } },
+      }),
+    ]);
+  });
+
+  it('records a preserved proof when resume enters directly at build_review, before its dispatch', async () => {
+    const stateFilePath = await installFixture('satisfied-verdict');
+    const events = new ConductorEventEmitter();
+    const verificationEvents: unknown[] = [];
+    events.on('test_suite_verification', (event) => { verificationEvents.push(event); });
+    const order: string[] = [];
+    // Models the real verifier: the record is what turns the next read CURRENT.
+    let recorded = false;
+    const inspect = vi.fn(async () => (recorded
+      ? { status: 'CURRENT' as const, evidence: {} as never }
+      : {
+        status: 'PRESERVED_WITHIN_BUDGET' as const,
+        evidence: { driftLedger: [{ categories: { source: 3 } }] } as never,
+      }));
+    const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: {
+        run: async (step) => {
+          order.push(`dispatch:${step}`);
+          throw new Error('stop after build-review dispatch');
+        },
+      },
+      events,
+      resume: true,
+      verifyArtifacts: true,
+      fullSuiteVerifier: {
+        inspect,
+        ensure,
+        recordPreservation: async () => {
+          order.push('record');
+          recorded = true;
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(order[0]).toBe('record');
+    expect(order.slice(1).every((entry) => entry === 'dispatch:build_review')).toBe(true);
+    expect(order.filter((entry) => entry === 'record')).toHaveLength(1);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(verificationEvents).toEqual([
+      expect.objectContaining({
+        type: 'test_suite_verification',
+        freshness: { status: 'CURRENT' },
+        budgetVerdict: { outcome: 'preserved_within_budget', categories: { source: 3 } },
       }),
     ]);
   });

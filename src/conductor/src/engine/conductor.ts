@@ -11836,6 +11836,7 @@ export class Conductor {
                 })();
               }
             }
+            if (step.name === 'build_review' && !missingWorktree) await this.settlePreservedSuiteProof(state);
             result =
               missingWorktree ??
               (step.name === 'complexity'
@@ -16402,6 +16403,31 @@ export class Conductor {
       throw new Error('Full-suite verifier does not expose the required preservation recording seam');
     }
     await this.fullSuiteVerifier.recordPreservation(inspection);
+  }
+
+  /**
+   * build_review accepts only CURRENT proof, and a within-budget preservation
+   * turns CURRENT only once recorded (adr-2026-08-28 D4). An entry that skipped
+   * `test_suite` (resume, routed host, `--from`) acts on that judgement here, the
+   * one boundary all of them cross. A failure leaves assembly's own proof check
+   * to refuse; it is never treated as proof.
+   */
+  private async settlePreservedSuiteProof(state: ConductState): Promise<void> {
+    if (!this.verifyArtifacts || getStepStatus(state, 'test_suite') !== 'done') return;
+    try {
+      const inspection = await this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
+      if (inspection.status !== 'PRESERVED_WITHIN_BUDGET') return;
+      await this.recordFullSuitePreservation(inspection);
+      const budgetVerdict = testSuiteBudgetVerdict(inspection);
+      await this.events.emit({
+        type: 'test_suite_verification',
+        freshness: { status: 'CURRENT' },
+        mode: inspection.evidence.mode ?? 'aggregate',
+        ...(budgetVerdict === undefined ? {} : { budgetVerdict }),
+      });
+    } catch {
+      // Assembly re-inspects and fails closed with the typed proof error.
+    }
   }
 
   private manualTestExhaustionReason(count: number, evidence: string): string {
