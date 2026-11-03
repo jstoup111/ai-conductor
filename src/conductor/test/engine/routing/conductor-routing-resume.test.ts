@@ -1,4 +1,4 @@
-// Covers: task:6, task:9, task:10, task:67, task:rem-prd-audit-W7
+// Covers: task:3, task:6, task:7, task:8, task:9, task:10, task:67, task:rem-prd-audit-W7
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   routedExit: undefined as undefined | (() => Promise<unknown>),
   consumeQueued: undefined as undefined | (() => Promise<unknown>),
+  queueAdmission: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
 }));
 
 vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal) => {
@@ -25,6 +26,14 @@ vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOrigin
     ...actual,
     consumeLowestQueued: (...args: Parameters<typeof actual.consumeLowestQueued>) =>
       mocks.consumeQueued === undefined ? actual.consumeLowestQueued(...args) : mocks.consumeQueued(),
+  };
+});
+vi.mock('../../../src/engine/routing/queue-admission.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/queue-admission.js')>();
+  return {
+    ...actual,
+    admitQueuedRevalidation: (...args: Parameters<typeof actual.admitQueuedRevalidation>) =>
+      mocks.queueAdmission === undefined ? actual.admitQueuedRevalidation(...args) : mocks.queueAdmission(...args),
   };
 });
 
@@ -51,6 +60,7 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 afterEach(async () => {
   mocks.routedExit = undefined;
   mocks.consumeQueued = undefined;
+  mocks.queueAdmission = undefined;
   await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -98,6 +108,70 @@ async function fixture() {
 }
 
 describe('routed round conductor resume', () => {
+  it('keeps the reconciliation refusal detail when a routed exit cannot reconcile', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'unavailable', detail: 'r1 route record is unreadable' } });
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = host;
+
+    await expect(resumed.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'child BUILD region refused: child 1 routed round reconciliation refused: r1 route record is unreadable',
+    );
+  });
+
+  it('halts when routed-exit queue admission is unavailable', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'none' } });
+    mocks.queueAdmission = async () => ({ kind: 'unavailable', detail: 'cannot consume routed revalidation queue' });
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = host;
+
+    await expect(resumed.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8'))
+      .resolves.toContain('child BUILD region refused: cannot consume routed revalidation queue');
+  });
+
   it('consumes queued revalidation before selecting the next region after a resumed routed exit', async () => {
     const subject = await fixture();
     const host = parseChildId(1)!;
@@ -150,6 +224,48 @@ describe('routed round conductor resume', () => {
     expect(result).toMatchObject({ index: ALL_STEPS.findIndex((step) => step.name === 'acceptance_specs'), activeChild: { child: queued } });
   });
 
+  // Covers: task:3
+  it('restores whole-feature state and resumes manual test after a leaf return with no queued admission', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const wholeFeatureState: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', manual_test: 'pending',
+    };
+    await writeState(statePath, wholeFeatureState);
+    const childState: ConductState = {
+      ...wholeFeatureState,
+      manual_test: 'done',
+    };
+    const routed = {
+      kind: 'repair-pending' as const, child: host, position: host, isLeaf: true,
+      branch: 'feat/c1/demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    const admission = vi.fn(async () => ({ kind: 'none' as const }));
+    mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'leaf-returned' as const, roundId } });
+    mocks.queueAdmission = admission;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as {
+      activeRegionChild: typeof host;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown>;
+    };
+    conductor.activeRegionChild = host;
+
+    await expect(conductor.continueRoutedHostExit(childState, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true))
+      .resolves.toEqual({ index: ALL_STEPS.findIndex((step) => step.name === 'manual_test') });
+
+    expect(admission).toHaveBeenCalledOnce();
+    expect(admission).toHaveBeenCalledWith(expect.objectContaining({ reconciled: { kind: 'leaf-returned', roundId } }));
+    expect(childState).toEqual(wholeFeatureState);
+  });
+
   it('surfaces a remediation PR when a resumed routed exit halts', async () => {
     const subject = await fixture();
     const host = parseChildId(1)!;
@@ -186,6 +302,27 @@ describe('routed round conductor resume', () => {
 
     await expect(resumed.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
     expect(loopHalts).toEqual([{ reason: 'routed exit needs remediation', prUrl: 'https://example.test/remediation/123' }]);
+  });
+
+  // Covers: task:8
+  it('keeps a restack-reported routed-exit halt and does not admit the queue', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r4')!;
+    const state: ConductState = { feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' };
+    const routed = { kind: 'repair-pending' as const, child: host, position: host, isLeaf: true, branch: 'feat/c1/demo', repairChildren: [host], routedRepair: { child: host, roundId } };
+    mocks.routedExit = async () => ({ kind: 'exit-halted', detail: 'routed exit host 1: base-refresh restack halted' });
+    const admission = vi.fn(async () => ({ kind: 'none' as const }));
+    mocks.queueAdmission = admission;
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'), featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(), stepRunner: { run: vi.fn() }, childRegionLifecycle: { resolveActiveChild: async () => routed },
+    }) as unknown as { activeRegionChild: typeof host; continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion?: boolean) => Promise<unknown> };
+    conductor.activeRegionChild = host;
+
+    await expect(conductor.continueRoutedHostExit(state, () => 0, true)).resolves.toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('routed exit host 1: base-refresh restack halted');
+    expect(admission).not.toHaveBeenCalled();
   });
 
   it('does not halt or fabricate receipt accounting when a routing-eligible resume has no route records', async () => {

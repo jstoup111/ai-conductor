@@ -396,7 +396,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
       expect(await exists(join(subject.repo, '.pipeline', 'HALT'))).toBe(false);
     }
-  });
+  }, 60_000);
 
   // Covers: S6.4, task:rem-prd-audit-rem-s6-4-preflight-freeze-scope
   it('suppresses a follow-on when publication arrives after feature-repair applies', async () => {

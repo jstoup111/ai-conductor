@@ -44,6 +44,8 @@ import { NO_AUTOLAUNCH_ENV } from '../src/engine/engineer/daemon-launch.js';
 // Keeping the conventional aliases together matters for child tools that do
 // not select TMPDIR first.
 const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+const runTmpScope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+const originalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
 if (runTmpRoot) {
   process.env.TMPDIR = runTmpRoot;
   process.env.TMP = runTmpRoot;
@@ -68,6 +70,18 @@ process.env.AI_CONDUCTOR_ENGINEER_DIR = testEngineerDir;
 // suite cannot fall back to the operator's engineer store.
 afterEach(() => {
   process.env.AI_CONDUCTOR_ENGINEER_DIR = testEngineerDir;
+  // `vi.unstubAllEnvs()` restores the process state that existed before a
+  // test's stubs, which can discard the run-scoped temp markers installed by
+  // the Vitest launcher. Reassert the entire redirect for the next test so a
+  // provider-created prompt file cannot fall back to the operator's /tmp.
+  if (runTmpRoot) {
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = runTmpRoot;
+    process.env.TMPDIR = runTmpRoot;
+    process.env.TMP = runTmpRoot;
+    process.env.TEMP = runTmpRoot;
+  }
+  if (runTmpScope) process.env.AI_CONDUCTOR_TEST_TMP_SCOPE = runTmpScope;
+  if (originalTmpdir) process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR = originalTmpdir;
 });
 if (!process.env.AI_CONDUCTOR_USER_CONFIG_DIR?.trim()) {
   process.env.AI_CONDUCTOR_USER_CONFIG_DIR = mkdtempSync(

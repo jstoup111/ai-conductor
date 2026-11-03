@@ -13,14 +13,14 @@ import { readRestackJournal, type RestackJournalOwner } from './restack-journal.
 import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
-import { routingEligible, routingSettingOn } from '../routing/route-types.js';
+import { assertNever, routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes, readRepairMarker, readRouteRecord } from '../routing/route-record-store.js';
 import { resolveGitRef } from '../routing/git-ref-resolver.js';
 import { closureRefFor, repairMarkerRefFor } from '../routing/routing-refs.js';
 import { diagnoseAffectedRounds, exitRoutedHostAndReconcile, reconcileRounds, recordRoundStall, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { checkOperatorTips, formatOperatorHaltReason } from '../routing/operator-round.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
-import { consumeLowestQueued } from '../routing/revalidation-queue.js';
+import { admitQueuedRevalidation } from '../routing/queue-admission.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { formatStackCursorRefusal, type StackCursorFailureCause } from '../stack-cursor-recovery.js';
@@ -335,24 +335,46 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       reconciled.kind === 'leaf-returned' ||
       reconciled.kind === 'quiescent'
     ) {
-      const consumed = await consumeLowestQueued(options.worktree, options.slug, { git: options.git });
-      if (consumed.kind === 'admitted') return { kind: 'navigate-host', roundId: consumed.roundId, host: consumed.host };
-      if (consumed.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
-      if (consumed.kind === 'stalled') {
-        // Queue admission discovered an unreadable durable round. Reconcile
-        // again to preserve the round set and bounded escalation on the
-        // existing routing-stall event spine.
-        const stalled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
-        if (stalled.kind === 'stalled') {
-          const recorded = await recordRoundStall(options.worktree, options.slug, stalled, stallEvents);
+      const admission = await admitQueuedRevalidation({
+        worktree: options.worktree,
+        slug: options.slug,
+        reconciled,
+        ...(options.git === undefined ? {} : { git: options.git }),
+      });
+      switch (admission.kind) {
+        case 'admitted':
+          return { kind: 'navigate-host', roundId: admission.roundId, host: admission.host };
+        case 'unavailable':
+          return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
+        case 'stalled': {
+          if ('haltClass' in admission) return { kind: 'halted', haltClass: admission.haltClass, detail: admission.detail };
+          const recorded = await recordRoundStall(options.worktree, options.slug, admission, stallEvents);
           return { kind: 'halted', ...recorded };
         }
-        return { kind: 'halted', detail: consumed.detail ?? 'routing queue consumption stalled', haltClass: 'mechanical' };
+        case 'continue':
+          switch (admission.reconciled.kind) {
+            case 'navigate-host':
+            case 'navigate-leaf-to-build':
+              return admission.reconciled;
+            case 'resume-exit':
+              return {
+                kind: 'halted',
+                haltClass: 'mechanical',
+                detail: `routing queue admission unexpectedly continued with ${admission.reconciled.kind}`,
+              };
+            default:
+              return assertNever(admission.reconciled);
+          }
+        case 'none':
+        case 'busy':
+          break;
+        default:
+          return assertNever(admission);
       }
       // The exit continuation has already reconciled the durable return. Do
       // not reuse the pre-exit cursor and manufacture a feature-repair
       // restack from the former host's closure.
-      if (reconciled.kind === 'leaf-returned' && consumed.kind === 'none') {
+      if (reconciled.kind === 'leaf-returned' && admission.kind === 'none') {
         if (!await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
           // A carried child deliberately survives an operator abandon.  It is
           // no longer covered by the just-closed round, so do not let the
@@ -376,8 +398,8 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       if (await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
         return {
           kind: 'unavailable',
-          detail: consumed.kind === 'busy' && consumed.detail !== undefined
-            ? `routing queue remains busy while routed rounds are open: ${consumed.detail}`
+          detail: admission.kind === 'busy' && admission.detail !== undefined
+            ? `routing queue remains busy while routed rounds are open: ${admission.detail}`
             : 'routing rounds remain open after reconciliation',
         };
       }

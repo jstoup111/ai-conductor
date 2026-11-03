@@ -474,3 +474,39 @@ If no such commit exists, regenerate the record as described in
 [Shipped record reconciliation](shipped-record-reconciliation.md).
 
 **Verification.** `gh pr checks <pr>` shows `shipped-record` passing on the new head.
+
+## 9. Queued revalidation refused at BUILD entry
+
+Engines before this fix halted `needs-human` with `revalidating child <k> has no matching repair
+marker` whenever a base refresh queued a closed child that reached BUILD before preflight admitted
+it. Fixed engines admit that child at BUILD entry in the same run
+([revalidation](../reference/configuration.md#stacked_prs)). On an older engine, clear the HALT
+once a fixed engine is current; the next dispatch admits the child.
+
+**Symptom.**
+
+```text
+child BUILD region refused: queued child <k>, queue generation <g>; non-closed rounds: <rounds>; marker owner: <owner>; <detail>
+```
+
+**Diagnosis.** Read `<detail>` and `.pipeline/HALT.class`:
+
+| Detail | Class | Meaning |
+| --- | --- | --- |
+| `routing is ineligible` | `needs-human` | The feature no longer satisfies routing eligibility. |
+| `routing rounds stalled: …` or a busy fence / marker owner | `mechanical`, then `needs-human` | Another round or admission holds the queue. The first two identical stalls retry on their own; the third needs a human. |
+| `region-entry queue admission returned <kind>; resume preflight must recover it` | `mechanical` | Reconciliation has other work first. The next dispatch's preflight handles it. |
+| `cannot drain routing outbox: …`, `cannot consume routed revalidation queue`, `unreadable ref: …`, or `revalidate route record is unreadable: …` | `needs-human` | Routing state cannot be read or written. |
+| `repair marker does not match the revalidating child` or `revalidate route record is not open` | `needs-human` | The marker and the queue disagree. |
+
+`non-closed rounds` lists each open round with its unsettled hosts; `marker owner` names the
+`repairing` holder or `none`. Confirm with [section 1](#1-inspect-stack-and-routing-state).
+
+**Recovery.** For `mechanical` halts, wait for the re-kick. For a stall that reached
+`needs-human`, close the superseded round as in [section 3](#3-two-routed-rounds-open-at-once). For
+an unreadable ref or a marker mismatch, inspect the named ref with `git cat-file -p` and repair it
+through the engine's own commands, never a hand-written `git update-ref` on a route blob. Then
+clear the halt with an [audited clear](stalled-or-stuck-feature.md#audited-clear).
+
+**Verification.** The next dispatch enters child `<k>` as the routed host, and
+`.pipeline/events.jsonl` later records `child_revalidated` for it.
