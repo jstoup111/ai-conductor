@@ -8,8 +8,9 @@
  * `type` on every subschema and rejects `oneOf`, so the copy types each bare
  * `const`/`enum` and rewrites `oneOf` as `anyOf`. The root must be a plain
  * object, so a root union of object branches is sent as one object holding
- * every branch's properties; the engine's closed parser still enforces which
- * combinations are valid.
+ * every branch's properties. That object cannot stop a result filling another
+ * branch's properties, so the result keeps only what its own branch declares;
+ * the engine's closed parser still enforces which combinations are valid.
  */
 
 type JsonObject = Record<string, unknown>;
@@ -41,6 +42,17 @@ function inferredType(schema: JsonObject): string | undefined {
   return types.size === 1 ? [...types][0] : undefined;
 }
 
+/** The branches of a root union, when every one of them is an object with properties. */
+function rootObjectBranches(schema: unknown): readonly JsonObject[] | undefined {
+  if (!isObject(schema) || schema.type !== undefined) return undefined;
+  const branches = schema.oneOf ?? schema.anyOf;
+  if (!Array.isArray(branches) || branches.length === 0) return undefined;
+  const objectBranches = branches.filter(isObject);
+  return objectBranches.length === branches.length && objectBranches.every((branch) => propertiesOf(branch) !== undefined)
+    ? objectBranches
+    : undefined;
+}
+
 /**
  * Merges a root union of object branches into the one object strict mode accepts.
  * A property stays required only when every branch requires it, and branch-level
@@ -48,11 +60,8 @@ function inferredType(schema: JsonObject): string | undefined {
  * cannot express them.
  */
 function withObjectRoot(schema: unknown): unknown {
-  if (!isObject(schema) || schema.type !== undefined) return schema;
-  const branches = schema.oneOf ?? schema.anyOf;
-  if (!Array.isArray(branches) || branches.length === 0) return schema;
-  const objectBranches = branches.filter(isObject);
-  if (objectBranches.length !== branches.length || objectBranches.some((branch) => propertiesOf(branch) === undefined)) return schema;
+  const objectBranches = rootObjectBranches(schema);
+  if (objectBranches === undefined) return schema;
   const variants = new Map<string, Map<string, unknown>>();
   for (const branch of objectBranches) {
     for (const [key, property] of Object.entries(propertiesOf(branch)!)) {
@@ -100,9 +109,29 @@ function strictCopy(schema: unknown): unknown {
   return strict;
 }
 
-/** Removes the nulls `toCodexStrictSchema` admitted for originally optional properties. */
+/** The one branch whose `const` properties all match `value`, if exactly one branch does. */
+function discriminatedBranch(branches: readonly JsonObject[], value: JsonObject): JsonObject | undefined {
+  const matching = branches.filter((branch) => {
+    const consts = Object.entries(propertiesOf(branch)!).filter(([, property]) => isObject(property) && 'const' in property);
+    return consts.length > 0 && consts.every(([key, property]) => value[key] === (property as JsonObject).const);
+  });
+  return matching.length === 1 ? matching[0] : undefined;
+}
+
+/** Drops what only the merged root admitted: properties of other branches, not unknown ones. */
+function withoutOtherBranchProperties(schema: unknown, value: unknown): unknown {
+  const branches = rootObjectBranches(schema);
+  if (branches === undefined || !isObject(value)) return value;
+  const branch = discriminatedBranch(branches, value);
+  if (branch === undefined) return value;
+  const declared = propertiesOf(branch)!;
+  const isOtherBranchProperty = (key: string) => !(key in declared) && branches.some((other) => key in propertiesOf(other)!);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !isOtherBranchProperty(key)));
+}
+
+/** Reverses what `toCodexStrictSchema` admitted: other branches' properties and optional nulls. */
 export function fromCodexStrictResult(schema: unknown, value: unknown): unknown {
-  return withoutAdmittedNulls(withObjectRoot(schema), value);
+  return withoutAdmittedNulls(withObjectRoot(schema), withoutOtherBranchProperties(schema, value));
 }
 
 function withoutAdmittedNulls(schema: unknown, value: unknown): unknown {
