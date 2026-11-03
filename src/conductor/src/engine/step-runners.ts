@@ -3013,6 +3013,7 @@ export class DefaultStepRunner implements StepRunner {
         dangerouslySkipPermissions: true,
         systemPrompt,
         cwd: ctx.projectRoot,
+        ...(ctx.environment === undefined ? {} : { env: ctx.environment }),
       },
     );
     if (providerResult) {
@@ -3040,6 +3041,7 @@ export class DefaultStepRunner implements StepRunner {
       model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: ctx.projectRoot,
+      ...(ctx.environment === undefined ? {} : { env: ctx.environment }),
     }, async () => ({ sessionId: uuidv4(), resume: false }));
 
     return parseRebaseResolutionOutput(result.output);

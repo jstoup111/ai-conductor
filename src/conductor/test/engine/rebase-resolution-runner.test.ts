@@ -109,6 +109,14 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
     expect(decided.systemPrompt).toContain("Operator decision for commit C on src/flag.ts: keep upstream's resolveReviewScope seam. Apply this decision; do not escalate the same question again.");
   });
 
+  it('delivers the restack environment to the resolver session', async () => {
+    const provider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
+    const environment = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/helpers/hooks' };
+    await runner.resolveRebaseConflict({ ...sampleCtx, environment });
+    expect(((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions).env).toEqual(environment);
+  });
+
   it('keeps the plain-rebase prompt byte-identical when no operator decision is provided', async () => {
     const provider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
@@ -301,11 +309,13 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
       configuredProviders: ['codex'],
     });
 
-    const result = await runner.resolveRebaseConflict(sampleCtx);
+    const environment = { GIT_COMMITTER_NAME: 'Journal Committer' };
+    const result = await runner.resolveRebaseConflict({ ...sampleCtx, environment });
 
     expect(result.resolved).toBe(false);
     expect(codex.invoke).toHaveBeenCalledOnce();
     const options = (codex.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(options.env).toEqual(environment);
     expect(options.prompt).toBe('$rebase');
     expect(options.systemPrompt).toContain('full replay');
     expect(options.systemPrompt).toContain('source intent');

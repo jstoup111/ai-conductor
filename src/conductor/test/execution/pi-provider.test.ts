@@ -1441,6 +1441,15 @@ describe('PiProvider subagents', () => {
     await rm(isolatedHome, { recursive: true, force: true });
   });
 
+  it('overlays the dispatch environment on the spawned session', async () => {
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({
+      ...invokeOptions,
+      env: { GIT_CONFIG_VALUE_0: '/helpers/hooks' },
+    });
+    const [, , options] = spawn.mock.calls[0]!;
+    expect((options.env as NodeJS.ProcessEnv).GIT_CONFIG_VALUE_0).toBe('/helpers/hooks');
+  });
+
   it('loads the installed extension, seeds the isolated home, and scopes its temp root there', async () => {
     await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({
       ...invokeOptions,

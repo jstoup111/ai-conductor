@@ -1164,6 +1164,7 @@ export class CodexProvider implements LLMProvider {
     // process.env underneath it) so the child cannot resolve the daemon's pane.
     const environment = withDaemonSessionMarker({
       ...(options.selfHost?.env ?? {}),
+      ...options.env,
       ...auth,
     });
     return scrubTmuxEnvironment(options.managedSessionContext

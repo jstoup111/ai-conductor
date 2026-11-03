@@ -279,6 +279,11 @@ export interface InvokeOptions {
    */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /**
+   * Per-dispatch environment overlaid on the spawned session, so commands the
+   * session runs see it. Applied after any self-host overlay.
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
    * Working directory for the spawned `claude` process. CRITICAL for the daemon:
    * each feature runs in its own git worktree, so the agent's file writes and
    * commits must land in that worktree — not the daemon's main checkout. When

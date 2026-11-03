@@ -178,6 +178,13 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('overlays the dispatch environment on the spawned session', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
+    await provider.invoke({ ...baseOptions, env: { GIT_CONFIG_VALUE_0: '/helpers/hooks' } });
+    const [, , options] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+    expect((options.env as NodeJS.ProcessEnv).GIT_CONFIG_VALUE_0).toBe('/helpers/hooks');
+  });
+
   it('carries the guarded child PATH in the shell-environment policy only for a guarded dispatch', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
     const setPath = (args: readonly string[]) => args.filter((arg) => arg.startsWith('shell_environment_policy.set.PATH='));

@@ -1037,6 +1037,7 @@ export class ClaudeProvider implements LLMProvider {
     const environment = withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
+      ...options.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
       ...FOREGROUND_ONLY_ENV,
     });
