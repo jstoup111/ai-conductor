@@ -861,6 +861,13 @@ describe('ClaudeProvider', () => {
       ]);
     });
 
+    it('overlays the dispatch environment on the spawned session', async () => {
+      mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
+      await provider.invoke({ ...baseOptions, env: { GIT_CONFIG_VALUE_0: '/helpers/hooks' } });
+      const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(options.env.GIT_CONFIG_VALUE_0).toBe('/helpers/hooks');
+    });
+
     it('checks a current permit immediately before the injected subprocess factory', async () => {
       const callOrder: string[] = [];
       const subprocessFactory = vi.fn(() => {

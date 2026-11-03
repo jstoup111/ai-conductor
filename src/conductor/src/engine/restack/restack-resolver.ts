@@ -202,7 +202,26 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       const rewrites = await readRewrites(rewritePath);
       // Git may reap a detached resolver checkout as the final rebase action.
       // post-rewrite is therefore the durable authority for its resulting tip.
-      let tip = [...rewrites.values()].at(-1) ?? options.newParent;
+      const rewrittenTip = [...rewrites.values()].at(-1);
+      if (rewrittenTip === undefined) {
+        // No rewrites means every candidate dropped out, leaving HEAD on the new
+        // parent. Anything else is a replay the engine cannot account for, and
+        // adopting the parent would silently discard this child's commits.
+        const head = await tempGit(['rev-parse', 'HEAD']);
+        if (head.exitCode !== 0 || head.stdout.trim() !== options.newParent) {
+          return {
+            outcome: {
+              kind: 'conflict_halt',
+              conflicts: [],
+              reason: `restack resolver finished child ${options.range.child} without a rewrite list; refusing to discard its commits`,
+            },
+            tip: undefined,
+            rewrites,
+            candidates,
+          };
+        }
+      }
+      let tip = rewrittenTip ?? options.newParent;
       if (options.haltRecordSlug !== undefined) {
         const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned, runGit);
         tip = carried.tip;

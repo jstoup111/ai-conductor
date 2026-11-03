@@ -1739,6 +1739,8 @@ export interface ResolutionContext {
   baseRef: string;
   /** An operator answer recorded for the conflicting replay, when available. */
   operatorDecision?: { answer: string; commit: string; paths: readonly string[] };
+  /** Environment the resolver session's git commands must run under. */
+  environment?: NodeJS.ProcessEnv;
   /** Explicit sweep-only exception; all normal callers remain strict. */
   supersessionJudgement?: boolean;
 }

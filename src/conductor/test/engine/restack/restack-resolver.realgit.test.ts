@@ -157,6 +157,27 @@ describe('resolveRestackConflict (real local Git)', () => {
     }
   });
 
+  it('refuses to report the bare new parent when a replayed resolver session left no rewrite list', async () => {
+    const subject = await fixture();
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp,
+      comparisonCommits: [subject.carried], cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        // A provider session that never received context.environment: the
+        // rebase finishes, but the engine's post-rewrite hook does not run.
+        await git(['add', 'shared.txt']);
+        await git(['rebase', '--continue'], { env: { GIT_EDITOR: 'true' } });
+        return { resolved: true };
+      },
+    });
+    expect(result.tip).toBeUndefined();
+    expect(result.outcome).toMatchObject({ kind: 'conflict_halt' });
+    expect((result.outcome as { reason: string }).reason).toContain('rewrite');
+    expect(await worktreePaths(subject.repo)).toEqual([subject.repo]);
+  });
+
   it('cleans the detached worktree after a rejected resolver hand-off', async () => {
     const subject = await fixture();
     const result = await resolveRestackConflict({
