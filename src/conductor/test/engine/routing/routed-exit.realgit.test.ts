@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
+import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readVerdict, verdictPathFor, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { pushedTipRef } from '../../../src/engine/push-lease.js';
@@ -31,6 +32,8 @@ import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../s
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
 import { readRefreshLedger, refreshLedgerRefFor } from '../../../src/engine/stack-refresh-ledger.js';
+import { ALL_STEPS } from '../../../src/engine/steps.js';
+import type { ConductState, StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
 
@@ -185,13 +188,12 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
-  it('re-pends FINISH but preserves rebase and its verdict after a published leaf return', async () => {
+  it('re-pends FINISH and every leaf gate but preserves rebase after a published leaf return', async () => {
     const subject = await leafFixture(false);
     await publishLeafFixture(subject);
-    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({
-      feature_desc: 'demo', rebase: 'done', finish: 'done',
-      prd_audit: 'done', architecture_review_as_built: 'done', manual_test: 'done',
-    }));
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(state, { feature_desc: 'demo', complexity_tier: 'L' });
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify(state));
     await writeVerdict(subject.repo, 'rebase', {
       satisfied: true, reason: 'existing rebase', checkedAt: 1,
     });
@@ -202,10 +204,58 @@ describe('routed exit (real local Git)', () => {
 
     await expect(returnToLeaf(subject.repo, 'demo', stored, { git: subject.gitRunner })).resolves.toEqual({ kind: 'leaf-returned' });
 
-    const state = JSON.parse(await readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, string>;
-    expect(state).toMatchObject({ finish: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending', manual_test: 'pending', rebase: 'done' });
+    const restagedState = JSON.parse(await readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, string>;
+    expect(restagedState).toMatchObject({ finish: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending', manual_test: 'pending', rebase: 'done' });
     await expect(readFile(verdictPathFor(subject.repo, 'rebase'), 'utf8')).resolves.toBe(beforeRebaseVerdict);
-    await expect(readVerdict(subject.repo, 'finish')).resolves.toMatchObject({ satisfied: false });
+    for (const gate of ['manual_test', 'prd_audit', 'architecture_review_as_built', 'finish'] as StepName[]) {
+      await expect(readVerdict(subject.repo, gate)).resolves.toMatchObject({ satisfied: false });
+    }
+  });
+
+  it('continues a published leaf return without dispatching rebase or writing a stale-verdict HALT', async () => {
+    const subject = await leafFixture(false);
+    await publishLeafFixture(subject);
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(state, { feature_desc: 'demo', complexity_tier: 'L' });
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify(state));
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: true, reason: 'published base remains current', checkedAt: 1,
+    });
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [leaf]: 'done' } }));
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
+    if (stored.kind !== 'record') throw new Error('fixture route is missing');
+    await expect(returnToLeaf(subject.repo, 'demo', stored, { git: subject.gitRunner })).resolves.toEqual({ kind: 'leaf-returned' });
+
+    const dispatched: StepName[] = [];
+    let parkAfterValidationGroup = false;
+    const runner: StepRunner = {
+      run: async (step) => {
+        dispatched.push(step);
+        if (step === 'architecture_review_as_built') parkAfterValidationGroup = true;
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(),
+      operatorParkBoundary: async () => parkAfterValidationGroup,
+      stepRunner: runner,
+    });
+
+    await conductor.run();
+
+    expect(dispatched).toContain('manual_test');
+    expect(dispatched).toContain('prd_audit');
+    expect(dispatched).toContain('architecture_review_as_built');
+    expect(dispatched).not.toContain('rebase');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // Covers: task:22
@@ -215,6 +265,10 @@ describe('routed exit (real local Git)', () => {
       feature_desc: 'demo', rebase: 'done', finish: 'done',
       prd_audit: 'done', architecture_review_as_built: 'done', manual_test: 'done',
     }));
+    await writeVerdict(subject.repo, 'finish', {
+      satisfied: true, reason: 'existing finish', checkedAt: 1,
+    });
+    const beforeFinishVerdict = await readFile(verdictPathFor(subject.repo, 'finish'), 'utf8');
     await replaceRoute(subject, (record) => ({ ...record, hosts: { [leaf]: 'done' } }));
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
     if (stored.kind !== 'record') throw new Error('fixture route is missing');
@@ -224,6 +278,7 @@ describe('routed exit (real local Git)', () => {
     const state = JSON.parse(await readFile(join(subject.repo, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, string>;
     expect(state).toMatchObject({ rebase: 'pending', finish: 'done' });
     await expect(readVerdict(subject.repo, 'rebase')).resolves.toMatchObject({ satisfied: false });
+    await expect(readFile(verdictPathFor(subject.repo, 'finish'), 'utf8')).resolves.toBe(beforeFinishVerdict);
   });
 
   // Covers: task:4
