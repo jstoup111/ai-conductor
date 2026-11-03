@@ -136,7 +136,7 @@ describe('Conductor published-stack routing admission', () => {
     const { root } = await publishedStackFixture();
     const events = new ConductorEventEmitter();
     const emitted: unknown[] = [];
-    events.on('restack_refused', (event) => emitted.push(event));
+    events.on('restack_refused', (event) => { emitted.push(event); });
     const conductor = remediationConductorFor(root, events);
 
     const outcome = await (conductor as any).planRemediation(
@@ -155,7 +155,7 @@ describe('Conductor published-stack routing admission', () => {
     const { root } = await publishedStackFixture();
     const events = new ConductorEventEmitter();
     const emitted: unknown[] = [];
-    events.on('restack_refused', (event) => emitted.push(event));
+    events.on('restack_refused', (event) => { emitted.push(event); });
     const conductor = conductorFor(root, events);
 
     await expect((conductor as any).admitRoutedTasklessKickback(
