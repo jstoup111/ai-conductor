@@ -87,8 +87,29 @@ describe('toCodexStrictSchema', () => {
       expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
         outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: null,
       }))).toEqual({ kind: 'malformed' });
+    });
+
+    it('reads a completed result as no claim when it also fills fields only the blocked branch declares', () => {
+      // The merged root cannot forbid these, and Codex fills them: seen on a
+      // routed BUILD whose retries were exhausted despite all tasks completing.
+      for (const fields of [
+        { child: null, paths: ['a.ts'], symbols: ['parseB'] },
+        { child: 2, paths: ['a.ts'], symbols: null },
+      ]) {
+        expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, { outcome: 'completed', ...fields })))
+          .toEqual({ kind: 'none' });
+      }
+    });
+
+    it('keeps a property no branch declares, so the closed parser still rejects it', () => {
       expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
-        outcome: 'completed', child: 2, paths: null, symbols: null,
+        outcome: 'completed', child: null, paths: null, symbols: null, extra: true,
+      }))).toEqual({ kind: 'malformed' });
+    });
+
+    it('leaves a result whose discriminator matches no branch for the parser to reject', () => {
+      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'unknown', child: 2, paths: ['a.ts'], symbols: null,
       }))).toEqual({ kind: 'malformed' });
     });
   });
