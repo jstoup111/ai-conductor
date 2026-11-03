@@ -4,7 +4,7 @@
 
 import { execa } from 'execa';
 import { loadConfig } from './config.js';
-import { childBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
+import { childBranchFor, leafBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
 import { readRepairMarker, readRouteRecord, type ReadRepairMarkerResult, type ReadRouteRecordResult } from './routing/route-record-store.js';
 import { routingSettingOn, type RoundId } from './routing/route-types.js';
@@ -107,9 +107,14 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   }
   if (stored.record.kind !== 'operator' && stored.record.kind !== 'audit') return 0;
 
+  // The top position is built on the leaf branch, so a round hosted there
+  // commits on the leaf rather than on a child branch.
+  const hostIsLeaf = marker.marker.host === topology.positions[topology.positions.length - 1];
   const host = childBranchFor(identity.slug, marker.marker.host);
-  const hostBranch = host.ok ? host.branch : `child ${marker.marker.host}`;
-  const isHost = identity.kind === 'child' && identity.child === marker.marker.host;
+  const hostBranch = hostIsLeaf ? leafBranchFor(identity.slug) : host.ok ? host.branch : `child ${marker.marker.host}`;
+  const isHost = hostIsLeaf
+    ? identity.kind === 'leaf'
+    : identity.kind === 'child' && identity.child === marker.marker.host;
   if (!isHost) {
     return refuse(
       print,
