@@ -283,3 +283,12 @@ Task 2 (event reason) → Task 3 (settle decision) → Task 4 (conductor settle)
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-5.r1: Remove dead isDerivedAlreadyCompleteRepairPhase from src/conductor/src/engine/routing/routing-events.ts, plus its import and its assertions (lines 55-57) in src/conductor/test/engine/routing/routing-events.test.ts. Keep the routedRepairPhaseEvent coverage and task 5's crash-recovery tests, which use isDerivedAlreadyCompleteHost
+**Gate:** as-built
+**Rationale:** Verified (100%, grep): isDerivedAlreadyCompleteRepairPhase at src/conductor/src/engine/routing/routing-events.ts:36 has no production caller. Crash recovery in conductor.ts:1029-1051 and host-region-entry.ts:465 uses isDerivedAlreadyCompleteHost (route-types.ts:771). Its only callers are its own unit assertions at test/engine/routing/routing-events.test.ts:55-57. Approved architecture still governs, so this is clear implementation drift inside plan task 5, which introduced the helper. The repair needs no architectural or product decision. Removing the helper and those assertions keeps task 5's done-when coverage, because the crash-state test (no re-admit of a repairing host) exercises the production isDerivedAlreadyCompleteHost path. Leave routedRepairPhaseEvent and its reason field alone: the derived-already-complete repair transition still emits them.
+**Parent task:** 5
+**Governing clause:** Task 5
+**Done when:**
+- Task 5 is satisfied by this task.
+- The repair for task rem-as-built-5.r1 is committed and its targeted tests pass.
