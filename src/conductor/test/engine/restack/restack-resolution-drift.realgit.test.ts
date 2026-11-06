@@ -1,4 +1,4 @@
-// Covers: task:5, task:6, task:7, task:8, task:10, task:11
+// Covers: task:5, task:6, task:7, task:8
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -183,7 +183,7 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
 
   it('does not consume a recorded --tip when child 3 gained a mixed halt-record commit', async () => {
     const subject = await fixture('src/leaf.ts');
-    await haltAndRecordTip(subject, { child: '3', path: 'src/leaf.ts', subject: 'leaf' });
+    const prior = await haltAndRecordTip(subject, { child: '3', path: 'src/leaf.ts', subject: 'leaf' });
     await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
     await writeFile(join(subject.repo, haltRecordPathFor('demo')), 'Status: resolved\n');
     await writeFile(join(subject.repo, 'src', 'a.ts'), 'changed\n');
@@ -192,13 +192,21 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
 
     await expectRecordedLeafRangeStale(subject);
 
+    const before = (await subject.git([
+      'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
+    ])).stdout;
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'must not resolve' }), resolverCap: 1,
     })).resolves.toMatchObject({ kind: 'halted' });
 
+    expect((await subject.git([
+      'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
+    ])).stdout).toBe(before);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('range');
     await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(3))])).resolves.toMatchObject({ exitCode: 1 });
+    const fresh = await readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) });
+    expect(fresh).toMatchObject({ kind: 'record', record: { child: 3, commit: prior.commit, paths: prior.paths } });
   });
 
   it('does not consume a recorded --tip when child 3 gained a halt-record merge commit', async () => {
