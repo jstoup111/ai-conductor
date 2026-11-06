@@ -169,7 +169,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
         detail: `Existing-task work ${source.id} has no admitted owner-task binding`,
       };
     }
-    if (!(source.existingTask && source.ownerTaskIds.length > 0) && isResidue(source)) { residue.push(source); continue; }
+    if (!(source.existingTask && source.ownerTaskIds?.length > 0) && isResidue(source)) { residue.push(source); continue; }
     if (source.ownerTaskIds === undefined || source.ownerTaskIds.length === 0) {
       return {
         kind: 'halt', haltClass: 'needs-human',
