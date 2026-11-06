@@ -1,4 +1,4 @@
-// Covers: tasks:26,28,29,30,31,32, task:rem-prd-audit-W2, task:rem-prd-audit-W4, task:rem-as-built-W3
+// Covers: task:1, tasks:26,28,29,30,31,32, task:rem-prd-audit-W2, task:rem-prd-audit-W4, task:rem-as-built-W3
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
@@ -29,6 +29,96 @@ const input = (admitted: Parameters<typeof routeAdmittedRound>[0]['admitted']) =
 });
 
 describe('routeAdmittedRound', () => {
+  const task25Input = (admitted: Parameters<typeof routeAdmittedRound>[0]['admitted']) => ({
+    ...input(admitted),
+    sliceMembership: { taskSlices: { T4: 1, T25: 3 }, titles: ['four', 'middle', 'twenty-five'] },
+  });
+  const task25BoundAdrFinding = () => ({
+    id: 'adr-x-d2-existing', gap: gap('adr-x-d2-existing', 'T25'), gateSource: 'as-built',
+    ownerTaskIds: ['T25'], citedPaths: ['adr-x D2'], existingTask: true,
+    provenance: {
+      kind: 'as-built' as const,
+      reference: { kind: 'adr-decision' as const, stem: 'adr-x', decision: 2 },
+      summary: 'The existing task must own this ADR finding.',
+    },
+  });
+
+  it('routes an existing-task-bound ADR finding to its T25 task owner and host', async () => {
+    const judge = vi.fn();
+    const routed = await routeAdmittedRound({ ...task25Input([task25BoundAdrFinding()]), judge });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(judge).not.toHaveBeenCalled();
+    expect(routed.items).toEqual([expect.objectContaining({
+      findingId: 'adr-x-d2-existing', owner: 3, host: 3, existingTask: true, taskIds: ['T25'],
+    })]);
+    expect(routed.items[0]?.reason).not.toBe('residue-default');
+    expect(routed.items[0]?.reason).not.toBe('residue-judged');
+  });
+
+  it('sends only an unbound residue item to the residue judge alongside an existing-task-bound ADR finding', async () => {
+    const judge = vi.fn(async (prompt: string) => {
+      const request = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { items: Array<{ itemId: string }> };
+      expect(request.items.map(({ itemId }) => itemId)).toEqual(['unbound-adr']);
+      return { success: true, output: JSON.stringify({ version: 'v1', items: [{ itemId: 'unbound-adr', child: 3, candidates: [3], rationale: 'owns D2' }] }) };
+    });
+    const routed = await routeAdmittedRound({
+      ...task25Input([
+        task25BoundAdrFinding(),
+        {
+          id: 'unbound-adr', gap: gap('unbound-adr', 'repair-unbound'), gateSource: 'as-built', citedPaths: [],
+          provenance: { kind: 'as-built', reference: { kind: 'adr-decision', stem: 'adr-y', decision: 2 }, summary: 'An unbound ADR finding.' },
+        },
+      ]), judge,
+    });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+  });
+
+  it('keeps a sole residue candidate as residue-judged but defaults an alternate candidate set', async () => {
+    const routeResidue = async (answer: { readonly candidates: readonly number[]; readonly rationale: string }) => {
+      const judge = vi.fn(async () => ({
+        success: true,
+        output: JSON.stringify({ version: 'v1', items: [{ itemId: 'unbound-adr', child: 3, ...answer }] }),
+      }));
+      return routeAdmittedRound({
+        ...task25Input([{
+          id: 'unbound-adr', gap: gap('unbound-adr', 'repair-unbound'), gateSource: 'as-built', citedPaths: [],
+          provenance: { kind: 'as-built', reference: { kind: 'adr-decision', stem: 'adr-x', decision: 2 }, summary: 'An unbound ADR finding.' },
+        }]), judge,
+      });
+    };
+
+    const judged = await routeResidue({ candidates: [3], rationale: 'owns D2' });
+    const defaulted = await routeResidue({ candidates: [1, 3], rationale: 'alternate' });
+    expect(judged).toMatchObject({ kind: 'routed', items: [expect.objectContaining({ owner: 3, reason: 'residue-judged' })] });
+    expect(defaulted).toMatchObject({ kind: 'routed', items: [expect.objectContaining({ owner: 1, reason: 'residue-default' })] });
+  });
+
+  it('halts an existing-task ADR finding without an owner-task binding before residue routing', async () => {
+    const judge = vi.fn();
+    const finding = task25BoundAdrFinding();
+    const routed = await routeAdmittedRound({ ...task25Input([{ ...finding, ownerTaskIds: [] }]), judge });
+
+    expect(routed).toMatchObject({ kind: 'halt', haltClass: 'needs-human', detail: expect.stringContaining('adr-x-d2-existing') });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('hosts mixed manual-test FAIL work at the existing T25-bound ADR finding task host', async () => {
+    const judge = vi.fn();
+    const routed = await routeAdmittedRound({
+      ...task25Input([task25BoundAdrFinding()]), judge,
+      consolidatedManualTestFail: ['manual_test: FAIL row'],
+    });
+
+    expect(judge).not.toHaveBeenCalled();
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ findingId: 'manual-test-fail', owner: 3, host: 3, reason: 'mixed-round' }),
+    ]));
+  });
+
   it('places task-bound work mechanically and orders its hosts', async () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
