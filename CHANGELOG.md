@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-03
+## [1.7.0] - 2026-11-06
 
 ### Added
 
