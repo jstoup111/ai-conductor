@@ -1648,7 +1648,7 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
   });
 
-  it('fails closed with a default-branch resolution anomaly when origin/HEAD is unset and neither origin/main nor origin/master exist', async () => {
+  it('uses the remote default branch when origin/HEAD is unset and neither origin/main nor origin/master exist', async () => {
     const mod = await loadAutoheal();
 
     // Create a bare repo to act as origin, but push under a branch name that
@@ -1664,11 +1664,10 @@ describe('getEvidenceRange', () => {
 
     const range = await mod.getEvidenceRange(gitDir, 'unreachable-anchor-sha');
 
+    // `originDefaultBranch` also asks the remote. Its authoritative `trunk`
+    // answer is valid even though no local origin/HEAD tracking ref exists.
     expect(range.commits).toHaveLength(0);
-    expect(range.anomalies).toHaveLength(1);
-    // Must never silently guess `main` — the anomaly must name default-branch
-    // resolution failure, not just "origin/main does not exist".
-    expect(range.anomalies[0]).toMatch(/default branch/i);
+    expect(range.anomalies).toEqual([]);
 
     await rm(bareDir, { recursive: true, force: true });
   });
