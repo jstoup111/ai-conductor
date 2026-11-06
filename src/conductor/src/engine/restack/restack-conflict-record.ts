@@ -1,11 +1,12 @@
 import { execa } from 'execa';
 import { parseChildId, type ChildId } from '../child-context.js';
+import { haltRecordPathFor, haltRecordTree } from './halt-record-bookkeeping.js';
 import { parseCommitSha, type ChildRange, type CommitSha, type RefName, type RestackOpId } from './restack-types.js';
 
 const ZERO_SHA = '0'.repeat(40) as CommitSha;
 
 interface GitRunner {
-  (args: string[], opts?: { input?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  (args: string[], opts?: { input?: string; env?: NodeJS.ProcessEnv }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 interface CommitterStamp { readonly name: string; readonly email: string; readonly date: string; }
@@ -444,8 +445,24 @@ export async function consumeRecordedResolution(
     return { kind: 'stale', field: 'range' };
   }
   const liveTree = await runGit(input.git, ['rev-parse', '--verify', `${input.parent}^{tree}`]);
-  if (liveTree?.exitCode !== 0 || parseCommitSha(liveTree.stdout.trim()) !== stored.record.newParentTree) {
+  const liveTreeSha = liveTree?.exitCode === 0 ? parseCommitSha(liveTree.stdout.trim()) : undefined;
+  if (!liveTreeSha) {
     return { kind: 'stale', field: 'parent-tree' };
+  }
+  // An identical raw tree needs no temporary-index masking.  When the trees
+  // differ, only this feature's halt record is bookkeeping, so compare the
+  // two trees after removing precisely that path from each one.
+  if (liveTreeSha !== stored.record.newParentTree) {
+    try {
+      const path = haltRecordPathFor(input.slug);
+      const [maskedLiveTree, maskedRecordedTree] = await Promise.all([
+        haltRecordTree(input.git, liveTreeSha, path, { kind: 'write', record: undefined }),
+        haltRecordTree(input.git, stored.record.newParentTree, path, { kind: 'write', record: undefined }),
+      ]);
+      if (maskedLiveTree !== maskedRecordedTree) return { kind: 'stale', field: 'parent-tree' };
+    } catch {
+      return { kind: 'stale', field: 'parent-tree' };
+    }
   }
 
   const replayRange: ChildRange = {
