@@ -2295,8 +2295,9 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     });
 
     // A reserved/failed deferral is durable unfinished evidence: it must never
-    // resolve by benign absence into a terminal PASS.
-    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: clean PASS cannot settle open deferral case ${caseId} (${status})`);
+    // resolve by benign absence into a terminal PASS. The halt names the
+    // operator command that resolves it (adr-2026-10-20 D7).
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: clean PASS cannot settle open deferral case ${caseId} (${status}); resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case ${caseId} --rationale "<why>"`);
     expect((await run.state()).build_review).not.toBe('done');
     const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string }> };
     expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'open' })]);

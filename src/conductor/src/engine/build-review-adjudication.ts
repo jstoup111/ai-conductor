@@ -105,10 +105,20 @@ export function reduceBuildReviewAdjudication(input: {
       reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ${formatBuildReviewResolveCaseCommand({ feature: input.feature, child: input.child, caseId: failedActionWithCurrentSource.id })}`,
     };
   }
-  // /ai-conductor:session-command-context
-  if (input.cases.some(hasUnfinishedEffect)) {
-    return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
+  const unfinished = input.cases.filter(hasUnfinishedEffect);
+  if (unfinished.length > 0) {
+    // An open case (e.g. a deferral whose intake was never filed) has no
+    // engine path to `applied`; name the command that resolves it.
+    const open = unfinished.find(isOpenRemediationCase);
+    return {
+      route: 'halt',
+      remainingMechanical: input.mechanical !== 'healthy',
+      reason: open === undefined
+        ? 'remediation effect is not finalized'
+        : `remediation effect is not finalized for case ${open.id}; resolve with ${formatBuildReviewResolveCaseCommand({ feature: input.feature, child: input.child, caseId: open.id })}`,
+    };
   }
+  // /ai-conductor:session-command-context
   const currentDecisionOwners = [...new Set(input.cases
     .filter(isBuildReviewDecisionStop)
     .filter((record) => record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)))

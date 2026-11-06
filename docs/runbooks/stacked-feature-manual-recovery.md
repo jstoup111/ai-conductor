@@ -436,7 +436,7 @@ The child regression halt still says `build-review accept has no --child yet`; t
 `accept --child <k>` works.
 
 For the other build_review halts, see
-[open action case](stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case) and
+[open action case](stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-or-deferral-case) and
 [recurrence limit](stalled-or-stuck-feature.md#build_review-halted-on-a-recurrence-limit).
 
 ## 8. Shipped-record hash mismatch on a stacked PR

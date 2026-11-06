@@ -6067,13 +6067,13 @@ export class Conductor {
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
     // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
-      const actionResolution = survivingObligation.effect.kind === 'action'
-        ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
-        : '';
+      // Every surviving obligation is open, so resolve-case can retire it,
+      // whatever its effect kind (adr-2026-10-20 D7).
+      const resolution = `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`;
       await drainOutbox();
       return {
         kind: 'invalid',
-        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${resolution}`,
       };
     }
     // /ai-conductor:session-command-context
