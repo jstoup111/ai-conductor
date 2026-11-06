@@ -243,6 +243,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex dispatches on probe-upgraded model tiers are now priced instead of recorded as free. ([implementation PR #3588](https://github.com/jstoup111/ai-conductor/pull/3588)).
 - Routed builds on Codex no longer halt with "routed prerequisite claim is malformed" when a completed result also fills claim fields. ([implementation PR #3589](https://github.com/jstoup111/ai-conductor/pull/3589)).
 - build_review halts on an open deferral case, or on an unfinished remediation effect, now print the exact `ai-conductor build-review resolve-case` command that recovers them. ([implementation PR #3592](https://github.com/jstoup111/ai-conductor/pull/3592)).
+- Stacked routed repairs now continue past already-complete hosts and stay assigned to their task-owning child. ([implementation PR #3595](https://github.com/jstoup111/ai-conductor/pull/3595)).
 
 ## Migration
 
