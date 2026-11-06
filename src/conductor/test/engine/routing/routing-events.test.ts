@@ -1,9 +1,9 @@
-// Covers: task:rem-prd-audit-W10, task:1
+// Covers: task:rem-prd-audit-W10, task:1, task:2
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { routingRoundSupersededEvent } from '../../../src/engine/routing/routing-events.js';
+import { routedRepairPhaseEvent, routingRoundSupersededEvent } from '../../../src/engine/routing/routing-events.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 
 const SOURCE_ROOT = join(import.meta.dirname, '../../../src');
@@ -37,6 +37,23 @@ function routingEventLiteralViolations(files: readonly SourceFile[]): string[] {
 }
 
 describe('routing event constructors', () => {
+  it('carries a derived-already-complete reason only when supplied for a routed repair phase', () => {
+    const withReason = routedRepairPhaseEvent(
+      parseRoundId('r2')!,
+      parseChildId(1)!,
+      'repairing',
+      false,
+      'derived-already-complete',
+    );
+    const withoutReason = routedRepairPhaseEvent(parseRoundId('r2')!, parseChildId(1)!, 'repairing', false);
+
+    expect(withReason).toMatchObject({
+      type: 'routed_repair_phase', roundId: 'r2', host: 1, phase: 'repairing', credit: false,
+      reason: 'derived-already-complete',
+    });
+    expect(withoutReason).not.toHaveProperty('reason');
+  });
+
   it('creates an identified supersession occurrence for the lowest dropped host', () => {
     const event = routingRoundSupersededEvent(
       { roundId: parseRoundId('r4')! } as RouteRecord,

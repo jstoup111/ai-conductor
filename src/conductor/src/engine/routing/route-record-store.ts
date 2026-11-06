@@ -295,12 +295,15 @@ export function transitionHost(
   stored: StoredRouteRecord,
   host: import('../child-context.js').ChildId,
   to: import('./route-types.js').HostState,
-  options: { readonly credit: boolean },
+  options: { readonly credit: boolean; readonly reason?: 'derived-already-complete' },
 ): { readonly kind: 'updated'; readonly record: RouteRecord } | { readonly kind: 'illegal-transition' } {
   const from = stored.record.hosts[host];
   if (from === undefined || !isLegalHostTransition(from, to)) return { kind: 'illegal-transition' };
   const record = { ...stored.record, hosts: { ...stored.record.hosts, [host]: to } };
-  return { kind: 'updated', record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit)) };
+  return {
+    kind: 'updated',
+    record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit, options.reason)),
+  };
 }
 
 /** Applies the host state recorded when a routed repair leaves the restack. */

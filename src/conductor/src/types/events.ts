@@ -2356,6 +2356,7 @@ type ConductorEventBody =
       host: ChildId;
       phase: HostState;
       credit: boolean;
+      reason?: 'derived-already-complete';
       child: ChildId;
     }
   | {

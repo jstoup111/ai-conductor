@@ -1,4 +1,4 @@
-// Covers: task:3, task:5
+// Covers: task:2, task:3, task:5
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -155,6 +155,35 @@ describe('ref-backed route record store', () => {
       expect(result?.record?.outbox).toHaveLength(1);
       expect(result?.record?.outbox[0]?.event).toMatchObject({
         type: 'routed_repair_phase', host: c1, phase: 'restacked',
+      });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards a derived-already-complete reason into the repairing phase outbox event', async () => {
+    const fixture = await createRepo();
+    try {
+      await routeFixture(fixture, { ...routeRecord, hosts: { [c1]: 'admitted' } });
+      const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('expected stored route record');
+
+      const result = routeRecordStore.transitionHost(stored, c1, 'repairing', {
+        credit: false,
+        reason: 'derived-already-complete',
+      });
+
+      expect(result).toMatchObject({
+        kind: 'updated',
+        record: {
+          hosts: { [c1]: 'repairing' },
+          outbox: [{
+            event: {
+              type: 'routed_repair_phase', host: c1, phase: 'repairing', credit: false,
+              reason: 'derived-already-complete',
+            },
+          }],
+        },
       });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
