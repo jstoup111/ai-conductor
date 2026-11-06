@@ -225,6 +225,7 @@ import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import { routeAdmittedRound } from './routing/round-router.js';
+import { isDerivedAlreadyCompleteRepairPhase } from './routing/routing-events.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
@@ -1093,11 +1094,7 @@ export class Conductor {
       case 'resume': {
         const route = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
         const derivedNoOp = route.kind === 'record' && route.record.hosts[enteredExecution.target.child] === 'repairing' &&
-          route.record.outbox.some(({ event }) => {
-            const phase = event as Partial<Extract<ConductorEvent, { type: 'routed_repair_phase' }>>;
-            return phase.type === 'routed_repair_phase' && phase.host === enteredExecution.target.child &&
-              phase.phase === 'repairing' && phase.reason === 'derived-already-complete';
-          });
+          route.record.outbox.some(({ event }) => isDerivedAlreadyCompleteRepairPhase(event, enteredExecution.target.child));
         return derivedNoOp ? resumeDerivedNoOpExit() : enteredExecution;
       }
       case 'derived-already-complete': {

@@ -32,6 +32,12 @@ export function routedRepairPhaseEvent(
   };
 }
 
+/** Identifies a repairing transition created when route entry found no work. */
+export function isDerivedAlreadyCompleteRepairPhase(event: ConductorEvent, host: ChildId): boolean {
+  return event.type === 'routed_repair_phase' && event.host === host &&
+    event.phase === 'repairing' && event.reason === 'derived-already-complete';
+}
+
 /** Creates the durable operator-landing occurrence paired with its route mutation. */
 export function operatorRoundEvent(
   roundId: RoundId,

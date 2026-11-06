@@ -102,7 +102,7 @@ async function routeStack(
       provenance: { kind: 'taskless-obligation' },
       ...(options.existingTask ? { existingTask: true, ownerTaskIds: ['T1'] } : {}),
     }],
-    sliceMembership: { taskSlices: {}, titles: [] }, planText: '', appendedChildren: {},
+    sliceMembership: { taskSlices: { T1: 1 }, titles: [] }, planText: '', appendedChildren: {},
     declaredPositions: [child(1), child(2), child(3)], leafTip: leafBranchFor('demo'),
     roundId: 'r1' as RoundId, judge: residueJudge(), git,
   });

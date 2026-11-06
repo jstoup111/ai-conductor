@@ -170,6 +170,7 @@ describe('routed exit (real local Git)', () => {
       ...record,
       hosts: { [host]: 'restacked', [childTwo]: 'admitted' },
       currentHostIndex: 1,
+      entry: undefined,
     }));
 
     await expect(settleDerivedNoOpHost({
@@ -184,6 +185,7 @@ describe('routed exit (real local Git)', () => {
       ...record,
       hosts: { [host]: 'rerouted', [childTwo]: 'admitted' },
       currentHostIndex: 1,
+      entry: undefined,
     }));
 
     await expect(settleDerivedNoOpHost({
@@ -201,7 +203,7 @@ describe('routed exit (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
     })).resolves.toEqual({ kind: 'halt' });
 
-    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
   });
 
   // Covers: task:3
@@ -211,6 +213,7 @@ describe('routed exit (real local Git)', () => {
       ...record,
       hosts: { [host]: 'done', [childTwo]: 'admitted' },
       currentHostIndex: 1,
+      entry: undefined,
     }));
     const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
 
@@ -218,7 +221,7 @@ describe('routed exit (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
     })).resolves.toEqual({ kind: 'halt' });
 
-    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
   });
 
   // Covers: task:3
@@ -243,7 +246,7 @@ describe('routed exit (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
     })).resolves.toEqual({ kind: 'refused' });
 
-    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
   });
 
   // Covers: task:3
@@ -256,7 +259,7 @@ describe('routed exit (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
     })).resolves.toEqual({ kind: 'refused' });
 
-    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
   });
 
   // Covers: task:4
