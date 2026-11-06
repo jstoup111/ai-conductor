@@ -1,4 +1,4 @@
-// Covers: task:13
+// Covers: task:13, task:14
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { haltRecordPath } from '../../src/engine/halt-record.js';
+import { haltRecordPath, supersedeHaltRecord } from '../../src/engine/halt-record.js';
 import { haltRecordRefFor, readHaltRecordRef } from '../../src/engine/halt-record-ref.js';
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../src/engine/restack/restack-journal.js';
@@ -112,6 +112,72 @@ describe('stacked halt records (real local Git)', () => {
     expect((await journal.git(['rev-parse', journalRefFor('demo')])).stdout.trim()).toBe(journalBlob);
     expect(await featureTips(journal.worktree)).toEqual(before);
     await expect(refExists(journal.worktree, haltRecordRefFor('demo'))).resolves.toBe(true);
+  });
+
+  it('clears a stacked halt on the record ref while preserving its audit trail and every feature tip', async () => {
+    const subject = await fixture({ durable: true });
+    const before = await featureTips(subject.worktree);
+    await writeHaltMarker(subject.worktree, 'operator decision required\n', 'needs-human', undefined, subject.remote);
+
+    await expect(supersedeHaltRecord(subject.worktree, 'demo', 'operator resume', subject.remote)).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
+
+    await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining('Status: resolved\nResolution cause: operator resume\n'),
+    });
+    await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', text: expect.stringContaining('operator decision required\n'),
+    });
+    expect(await featureTips(subject.worktree)).toEqual(before);
+    await expect(subject.git(['log', '-p', haltRecordRefFor('demo')])).resolves.toMatchObject({
+      stdout: expect.stringContaining('+Status: halted'),
+    });
+    await expect(subject.git(['log', '-p', haltRecordRefFor('demo')])).resolves.toMatchObject({
+      stdout: expect.stringContaining('+Status: resolved'),
+    });
+  });
+
+  it('leaves the closed first child equal to its closed ref after halting and clearing', async () => {
+    const subject = await fixture({ durable: true });
+    await writeHaltMarker(subject.worktree, 'operator decision required\n', 'needs-human', undefined, subject.remote);
+    await expect(supersedeHaltRecord(subject.worktree, 'demo', 'operator resume', subject.remote)).resolves.toMatchObject({ kind: 'written' });
+
+    await expect(subject.git(['rev-parse', 'refs/heads/feat/c1/demo'])).resolves.toMatchObject({
+      stdout: (await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout,
+    });
+  });
+
+  it('leaves the active leaf unchanged and never pushes while halting and clearing', async () => {
+    const subject = await fixture({ durable: true });
+    const before = await head(subject.worktree);
+    await writeHaltMarker(subject.worktree, 'operator decision required\n', 'needs-human', undefined, subject.remote);
+    await expect(supersedeHaltRecord(subject.worktree, 'demo', 'operator resume', subject.remote)).resolves.toMatchObject({ kind: 'written' });
+
+    expect(await head(subject.worktree)).toBe(before);
+    expect(subject.pushes).toEqual([]);
+  });
+
+  it('upgrades a committed stacked halt to a resolved record ref without a branch commit', async () => {
+    const subject = await fixture({ durable: true });
+    await mkdir(join(subject.worktree, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.worktree, haltRecordPath('demo')), 'Status: halted\n\n## HALT\n\nlegacy halt\n');
+    await subject.git(['add', haltRecordPath('demo')]);
+    await subject.git(['commit', '-qm', 'legacy halt record']);
+    const before = await featureTips(subject.worktree);
+
+    await expect(supersedeHaltRecord(subject.worktree, 'demo', 'operator resume', subject.remote)).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
+
+    await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining('Status: resolved\nResolution cause: operator resume\n'),
+    });
+    expect(await featureTips(subject.worktree)).toEqual(before);
+  });
+
+  it('returns noop without creating a record ref when no stacked halt record exists', async () => {
+    const subject = await fixture({ durable: true });
+
+    await expect(supersedeHaltRecord(subject.worktree, 'demo', 'operator resume', subject.remote)).resolves.toEqual({ kind: 'noop' });
+
+    await expect(refExists(subject.worktree, haltRecordRefFor('demo'))).resolves.toBe(false);
   });
 });
 

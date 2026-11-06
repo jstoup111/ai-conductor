@@ -205,6 +205,12 @@ export async function supersedeHaltRecord(
   remote: HaltRecordRemoteOptions = {},
 ): Promise<HaltRecordResult> {
   try {
+    const durableChildState = await hasDurableChildState(root, slug);
+    if (durableChildState === 'git-error') {
+      return { kind: 'failed', reason: 'could not determine durable child state' };
+    }
+    if (durableChildState) return supersedeStackedHalt(root, slug, cause);
+
     const relPath = haltRecordPath(slug);
     const path = join(root, relPath);
     let current: string;
@@ -235,6 +241,32 @@ export async function supersedeHaltRecord(
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) };
   }
+}
+
+async function supersedeStackedHalt(
+  root: string,
+  slug: string,
+  cause: string,
+): Promise<HaltRecordResult> {
+  const ref = haltRecordRefFor(slug);
+  const previous = await readHaltRecordRef(root, slug);
+  if (previous.kind === 'unavailable') return { kind: 'failed', reason: `could not read ${ref}` };
+  if (previous.kind === 'missing') return { kind: 'noop' };
+
+  const superseded = supersedeHaltRecordText(previous.text, { cause, resolvedAt: new Date().toISOString() });
+  if (superseded === previous.text) return { kind: 'noop' };
+
+  const appended = await appendHaltRecordRef(
+    root,
+    slug,
+    superseded,
+    previous.source === 'ref' ? previous.commit : undefined,
+  );
+  if (appended.kind === 'updated') return { kind: 'written', path: ref };
+  return {
+    kind: 'failed',
+    reason: appended.kind === 'stale' ? `could not compare-and-swap ${ref}` : `could not write ${ref}`,
+  };
 }
 
 export async function publishHaltRecord(
