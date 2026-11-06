@@ -14,7 +14,7 @@ import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { resolveExecutionChild } from '../../../src/engine/routing/execution-child.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { type RouteRecord, parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -97,6 +97,71 @@ async function operatorRoundFixture(declared: boolean) {
   await expect(writeRoutingTransaction(root, 'demo', [{ kind: 'update-record', previous: stored, record: operator }]))
     .resolves.toEqual({ kind: 'updated' });
   return root;
+}
+
+/** A sealed three-child stack with an audit round admitted at child one. */
+async function threeHostRoundFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'no-op-guard-three-host-'));
+  roots.push(root);
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'no-op-guard@example.test']);
+  await git(['config', 'user.name', 'No-op guard']);
+  await writeFile(join(root, '.gitignore'), '.pipeline/\n');
+  await mkdir(join(root, '.ai-conductor'), { recursive: true });
+  await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-task-1: Repair\n');
+  await git(['add', '.gitignore', '.ai-conductor/config.yml', '.docs/plans/demo.md']);
+  await git(['commit', '-qm', 'base']);
+  await git(['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'child-1.txt'), 'closed child one\n');
+  await git(['add', 'child-1.txt']);
+  await git(['commit', '-qm', 'closed child one']);
+  const closedOne = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim());
+  if (!closedOne) throw new Error('invalid child one closure');
+  await git(['update-ref', closureRefFor('demo', child), closedOne]);
+  await git(['checkout', '-qb', 'feat/c2/demo']);
+  await writeFile(join(root, 'child-2.txt'), 'closed child two\n');
+  await git(['add', 'child-2.txt']);
+  await git(['commit', '-qm', 'closed child two']);
+  const closedTwo = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim());
+  if (!closedTwo) throw new Error('invalid child two closure');
+  await git(['update-ref', closureRefFor('demo', parseChildId(2)!), closedTwo]);
+  await git(['checkout', '-qb', leafBranchFor('demo')]);
+  await writeFile(join(root, 'leaf.txt'), 'leaf\n');
+  await git(['add', 'leaf.txt']);
+  await git(['commit', '-qm', 'leaf']);
+  await sealStack(root, [1, 2, 3]);
+  await mkdir(join(root, '.pipeline', 'children', String(child)), { recursive: true });
+  const parentState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+  await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({ ...parentState, feature_desc: 'demo' }));
+  await writeFile(join(root, '.pipeline', 'children', String(child), 'conduct-state.json'), JSON.stringify({
+    acceptance_specs: 'done', build: 'pending', test_suite: 'skipped', build_review: 'skipped',
+  }));
+  const created = await createRouteRecord(root, 'demo', {
+    roundId, sealedAuthored: 1, kind: 'audit',
+    items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
+    allocation: {
+      [child]: { remTaskIds: ['rem-task-1'], blockBodies: ['### Task rem-task-1: Repair\n'] },
+      [parseChildId(2)!]: { remTaskIds: [], blockBodies: [] },
+      [parseChildId(3)!]: { remTaskIds: [], blockBodies: [] },
+    },
+  });
+  if (created.kind !== 'created') throw new Error(`create route record: ${created.kind}`);
+  const admitted = await admitRound(root, 'demo', created.record, child, { git });
+  if (admitted.kind !== 'admitted') throw new Error(`admit route record: ${admitted.detail}`);
+  const stored = await readRouteRecord(root, 'demo', roundId, { git });
+  if (stored.kind !== 'record') throw new Error('missing admitted route record');
+  const entryTree = (await git(['rev-parse', `${closedOne}^{tree}`])).stdout.trim();
+  await expect(writeRoutingTransaction(root, 'demo', [{
+    kind: 'update-record', previous: stored, record: {
+      ...stored.record,
+      entry: { host: child, pinnedBase: closedOne, tree: entryTree as never },
+    },
+  }], { git })).resolves.toEqual({ kind: 'updated' });
+  await git(['checkout', '-q', 'feat/c1/demo']);
+  return { root, git, closedOne, closedTwo };
 }
 
 function routedConductor(
@@ -185,6 +250,103 @@ describe('routed host no-op guard placement', () => {
     expect(routedPhases.findIndex((event) => event.phase === 'repairing')).toBeLessThan(
       routedPhases.findIndex((event) => event.phase === 'done'),
     );
+  });
+
+  // Covers: task:4
+  it('restacks an entry-created frozen block through child 2 and the leaf', async () => {
+    const { root, git } = await threeHostRoundFixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const runner = { run: vi.fn(async () => ({ success: true })) };
+    let frozenBlock: string | undefined;
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build', verifyArtifacts: false, events, stepRunner: runner,
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+      childRegionLifecycle: {
+        enterHostRegion: async ({ host }) => {
+          if (host !== child) return { kind: 'entered' } as never;
+          await writeFile(join(root, 'frozen-block.txt'), 'frozen block\n');
+          await git(['add', 'frozen-block.txt']);
+          await git(['commit', '-qm', 'append frozen routed block']);
+          frozenBlock = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+          return { kind: 'derived-already-complete', detail: 'frozen block is already complete' } as never;
+        },
+      },
+    });
+    const cursor = await resolveActiveChild(root, 'demo');
+    const execution = resolveExecutionChild(cursor, 'demo');
+    const entered = await (conductor as unknown as {
+      enterRoutedHostRegion(current: typeof execution, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+    }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
+    await persister.stop();
+
+    expect(entered).toBeTruthy();
+    expect(runner.run).not.toHaveBeenCalled();
+    const carriedBlock = (await git(['rev-list', 'feat/c2/demo', '--', 'frozen-block.txt'])).stdout.trim();
+    expect(carriedBlock).not.toBe('');
+    await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'restacked', 2: 'admitted', 3: 'pending' } },
+    });
+    expect(frozenBlock).toBeTruthy();
+    await expect(git(['merge-base', '--is-ancestor', carriedBlock, 'feat/c2/demo'])).resolves.toMatchObject({ exitCode: 0 });
+    await expect(git(['merge-base', '--is-ancestor', carriedBlock, 'feat/daemon-demo'])).resolves.toMatchObject({ exitCode: 0 });
+    const phases = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+      .map((line) => JSON.parse(line) as { type: string; host?: number; phase?: string })
+      .filter((event) => event.type === 'routed_repair_phase' && event.host === 1)
+      .map((event) => event.phase);
+    expect(phases).toContain('built');
+    expect(phases).toContain('restacked');
+    expect(phases.indexOf('built')).toBeLessThan(phases.indexOf('restacked'));
+  }, 10_000);
+
+  // Covers: task:4
+  it('closes a final no-op leaf round, returns to the leaf, and re-pends its gates', async () => {
+    const { root, git } = await threeHostRoundFixture();
+    const stored = await readRouteRecord(root, 'demo', roundId, { git });
+    const marker = await readRepairMarker(root, 'demo', { git });
+    if (stored.kind !== 'record' || marker.kind !== 'marker') throw new Error('missing admitted route fixture');
+    const leafHost = parseChildId(3)!;
+    await expect(writeRoutingTransaction(root, 'demo', [
+      {
+        kind: 'update-record', previous: stored, record: {
+          ...stored.record,
+          hosts: { [child]: 'restacked', [parseChildId(2)!]: 'done', [leafHost]: 'admitted' },
+          currentHostIndex: 2,
+          entry: undefined,
+        },
+      },
+      { kind: 'replace-marker', previous: marker, marker: { host: leafHost, roundId } },
+    ], { git })).resolves.toEqual({ kind: 'updated' });
+    await git(['checkout', '-q', leafBranchFor('demo')]);
+    const runner = { run: vi.fn(async () => ({ success: true })) };
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build', verifyArtifacts: false, events, stepRunner: runner,
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+      childRegionLifecycle: {
+        enterHostRegion: async () => ({ kind: 'derived-already-complete', detail: 'leaf work is already complete' }) as never,
+      },
+    });
+    const cursor = await resolveActiveChild(root, 'demo');
+    const execution = resolveExecutionChild(cursor, 'demo');
+    const leafResult = await (conductor as unknown as {
+      enterRoutedHostRegion(current: typeof execution, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+    }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
+    await persister.stop();
+
+    expect(leafResult).not.toBe(false);
+    expect(runner.run).not.toHaveBeenCalled();
+    await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { phase: 'closed', hosts: { 1: 'restacked', 2: 'done', 3: 'done' } },
+    });
+    await expect(git(['symbolic-ref', '--short', 'HEAD'])).resolves.toMatchObject({ stdout: 'feat/daemon-demo' });
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, string>;
+    expect(state).toMatchObject({ manual_test: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending' });
   });
 
   // Covers: task:4
