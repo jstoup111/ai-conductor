@@ -14,8 +14,11 @@ import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { resolveExecutionChild } from '../../../src/engine/routing/execution-child.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
+import { settleDerivedNoOpHost } from '../../../src/engine/routing/routed-exit.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { dispatchStackRoundsCommand } from '../../../src/engine/stack-rounds-cli.js';
+import { resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { type RouteRecord, parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -367,6 +370,81 @@ describe('routed host no-op guard placement', () => {
     );
     await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
+
+  // Covers: task:5
+  it('retains an uncleared no-op halt without changing routing refs', async () => {
+    const { root, git } = await threeHostRoundFixture();
+    await writeFile(join(root, '.pipeline', 'HALT'), 'Outcome: derived-already-complete\n');
+    await writeFile(join(root, '.pipeline', 'HALT.class'), 'needs-human');
+    const before = (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout;
+
+    await expect(resolveHaltRetention(async () => readFile(join(root, '.pipeline', 'HALT.class'), 'utf8'))).resolves.toEqual({
+      haltClass: 'needs-human', retained: true,
+    });
+    await expect(git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:5
+  it('reports a recovered no-op round and its next-host marker', async () => {
+    const { root, git } = await threeHostRoundFixture();
+    const settled = await settleDerivedNoOpHost({ worktree: root, slug: 'demo', roundId, host: child, git });
+    expect(settled).toEqual({ kind: 'settled' });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'build', verifyArtifacts: false, events, stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+      childRegionLifecycle: { enterHostRegion: async ({ host }) => host === child
+        ? { kind: 'resume', pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim() as never }
+        : { kind: 'entered', pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim() as never } },
+    });
+    const cursor = await resolveActiveChild(root, 'demo');
+    const entered = await (conductor as unknown as {
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+    }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor);
+    await persister.stop();
+
+    expect(entered).not.toBe(false);
+    await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'done', 2: 'admitted', 3: 'pending' } },
+    });
+    const printed: string[] = [];
+    await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-inspect', slug: 'demo' }, {
+      cwd: root, resolveMainRoot: async () => root, resolveWorktree: async () => root, print: (line) => printed.push(line), git,
+    } as never)).resolves.toBe(0);
+    expect(printed.join('\n')).toContain('hosts 1:done, 2:admitted, 3:pending');
+    expect(printed.join('\n')).toContain('repair marker: host 2 round r1');
+  }, 10_000);
+
+  // Covers: task:5
+  it('resumes a crashed derived no-op settle through its exit without re-admitting host 1', async () => {
+    const { root, git } = await threeHostRoundFixture();
+    await expect(settleDerivedNoOpHost({ worktree: root, slug: 'demo', roundId, host: child, git })).resolves.toEqual({ kind: 'settled' });
+    const entries = vi.fn(async ({ host }: { host: number }) => ({
+      kind: host === child ? 'resume' : 'entered',
+      pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
+    } as never));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'build', verifyArtifacts: false, events, stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+      childRegionLifecycle: { enterHostRegion: entries },
+    });
+    const cursor = await resolveActiveChild(root, 'demo');
+    await expect((conductor as unknown as {
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+    }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.not.toBe(false);
+    await persister.stop();
+    expect(entries).toHaveBeenCalledWith(expect.objectContaining({ host: 1 }));
+    await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'done', 2: 'admitted' } },
+    });
+  }, 10_000);
 
   it('keeps ordinary host-entry halts on the child-refusal path', async () => {
     const root = await fixture();

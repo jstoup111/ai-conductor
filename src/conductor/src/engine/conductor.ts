@@ -1007,6 +1007,78 @@ export class Conductor {
     const enteredExecution = await this.resolveRoutedHostAdmission(execution, slug, cursor);
     if (enteredExecution === false) return false;
 
+    // A derived no-op writes its repairing transition before starting the
+    // ordinary routed exit.  If the process dies in that gap, the persisted
+    // reason is the only durable distinction from a normal repairing host,
+    // which must still resume its BUILD region.
+    const resumeDerivedNoOpExit = async (): Promise<ExecutionChildTargetResolution | false> => {
+      const continued = await exitRoutedHostAndReconcile({
+        worktree: this.projectRoot,
+        slug,
+        roundId: enteredExecution.roundId!,
+        host: enteredExecution.target.child,
+        events: this.events,
+        resolver: this.stepRunner.resolveRebaseConflict
+          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+          : undefined,
+        resolverCap: resolveRebaseResolutionAttempts(this.config),
+        persist: (event) => persistOnActiveEventSpine(this.events, event),
+        exit: this.requestRoutedExit,
+        reconcile: reconcileRounds,
+      });
+      if (continued.kind === 'exit-halted') {
+        const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
+        if (existing?.trim()) {
+          const body = existing.trim();
+          const prUrl = await this.surfaceRemediationPr(body);
+          await this.emitLoopHalt(body, prUrl);
+        } else {
+          await this.haltChildRegionRefusal(continued.detail);
+        }
+        return false;
+      }
+      if (continued.next.kind === 'unavailable') {
+        await this.haltChildRegionRefusal(
+          `child ${enteredExecution.target.child} routed round reconciliation refused: ${continued.next.detail}`,
+        );
+        return false;
+      }
+      const admission = await admitQueuedRevalidation({
+        worktree: this.projectRoot,
+        slug,
+        reconciled: continued.next,
+      });
+      switch (admission.kind) {
+        case 'unavailable':
+          await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
+          return false;
+        case 'stalled': {
+          if ('haltClass' in admission) {
+            await this.haltChildRegionRefusal(admission.detail, admission.haltClass);
+          } else {
+            const stall = await recordRoundStall(this.projectRoot, slug, admission, this.events);
+            await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
+          }
+          return false;
+        }
+        case 'admitted':
+        case 'none':
+        case 'busy':
+        case 'continue':
+          break;
+        default:
+          return assertNever(admission);
+      }
+      const next = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+      if (next.source === 'routed-host' || next.source === 'revalidating' || next.source === 'cursor') {
+        return this.enterRoutedHostRegion(next, slug, state);
+      }
+      await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(
+        await this.resolveActiveChild(this.projectRoot, slug) as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
+      ));
+      return false;
+    };
+
     const hostEntry = await this.enterHostRegion({
       worktree: this.projectRoot,
       slug,
@@ -1017,8 +1089,17 @@ export class Conductor {
     });
     switch (hostEntry.kind) {
       case 'entered':
-      case 'resume':
         return enteredExecution;
+      case 'resume': {
+        const route = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
+        const derivedNoOp = route.kind === 'record' && route.record.hosts[enteredExecution.target.child] === 'repairing' &&
+          route.record.outbox.some(({ event }) => {
+            const phase = event as Partial<Extract<ConductorEvent, { type: 'routed_repair_phase' }>>;
+            return phase.type === 'routed_repair_phase' && phase.host === enteredExecution.target.child &&
+              phase.phase === 'repairing' && phase.reason === 'derived-already-complete';
+          });
+        return derivedNoOp ? resumeDerivedNoOpExit() : enteredExecution;
+      }
       case 'derived-already-complete': {
         const settled = await settleDerivedNoOpHost({
           worktree: this.projectRoot,
@@ -1027,74 +1108,7 @@ export class Conductor {
           host: enteredExecution.target.child,
         });
         if (settled.kind === 'settled') {
-          const continued = await exitRoutedHostAndReconcile({
-            worktree: this.projectRoot,
-            slug,
-            roundId: enteredExecution.roundId!,
-            host: enteredExecution.target.child,
-            events: this.events,
-            resolver: this.stepRunner.resolveRebaseConflict
-              ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-              : undefined,
-            resolverCap: resolveRebaseResolutionAttempts(this.config),
-            persist: (event) => persistOnActiveEventSpine(this.events, event),
-            exit: this.requestRoutedExit,
-            reconcile: reconcileRounds,
-          });
-          if (continued.kind === 'exit-halted') {
-            const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
-            if (existing?.trim()) {
-              const body = existing.trim();
-              const prUrl = await this.surfaceRemediationPr(body);
-              await this.emitLoopHalt(body, prUrl);
-            } else {
-              await this.haltChildRegionRefusal(continued.detail);
-            }
-            return false;
-          }
-          if (continued.next.kind === 'unavailable') {
-            await this.haltChildRegionRefusal(
-              `child ${enteredExecution.target.child} routed round reconciliation refused: ${continued.next.detail}`,
-            );
-            return false;
-          }
-          const admission = await admitQueuedRevalidation({
-            worktree: this.projectRoot,
-            slug,
-            reconciled: continued.next,
-          });
-          switch (admission.kind) {
-            case 'unavailable':
-              await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
-              return false;
-            case 'stalled': {
-              if ('haltClass' in admission) {
-                await this.haltChildRegionRefusal(admission.detail, admission.haltClass);
-              } else {
-                const stall = await recordRoundStall(this.projectRoot, slug, admission, this.events);
-                await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
-              }
-              return false;
-            }
-            case 'admitted':
-            case 'none':
-            case 'busy':
-            case 'continue':
-              break;
-            default:
-              return assertNever(admission);
-          }
-          // The normal post-exit continuation below resolves the next cursor;
-          // region entry follows the same path directly rather than scheduling
-          // a second exit continuation for this already-settled host.
-          const next = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
-          if (next.source === 'routed-host' || next.source === 'revalidating' || next.source === 'cursor') {
-            return this.enterRoutedHostRegion(next, slug, state);
-          }
-          await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(
-            await this.resolveActiveChild(this.projectRoot, slug) as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
-          ));
-          return false;
+          return resumeDerivedNoOpExit();
         }
         const body =
           `routed host ${enteredExecution.target.child} entry derived already complete: ${hostEntry.detail}\n` +
