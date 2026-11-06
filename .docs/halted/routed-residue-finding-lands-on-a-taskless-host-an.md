@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-06T12:57:34.314Z
 Slug: routed-residue-finding-lands-on-a-taskless-host-an
 Class: needs-human
 Halting step: unknown
