@@ -677,6 +677,7 @@ export class PiProvider implements LLMProvider {
     const environment = scrubTmuxEnvironment(withDaemonSessionMarker({
       ...(options.selfHost?.env ?? {}),
       ...options.env,
+      ...options.environmentOverlay,
       ...(subagentsTempRoot === undefined ? {} : { PI_SUBAGENTS_TEMP_ROOT: subagentsTempRoot }),
     }));
     const managedEnvironment = options.managedSessionContext

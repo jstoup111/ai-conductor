@@ -1165,6 +1165,7 @@ export class CodexProvider implements LLMProvider {
     const environment = withDaemonSessionMarker({
       ...(options.selfHost?.env ?? {}),
       ...options.env,
+      ...options.environmentOverlay,
       ...auth,
     });
     return scrubTmuxEnvironment(options.managedSessionContext
