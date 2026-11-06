@@ -235,7 +235,7 @@ describe('routed host no-op guard placement', () => {
         current: ExecutionChildResolution, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution,
       ): Promise<{ readonly target: { readonly child: number } } | false>;
     }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
-    await persister.stop();
+    persister.stop();
 
     expect(entered).toMatchObject({ target: { child: leaf } });
     expect(runner.run).not.toHaveBeenCalled();
@@ -283,7 +283,7 @@ describe('routed host no-op guard placement', () => {
     const entered = await (conductor as unknown as {
       enterRoutedHostRegion(current: ExecutionChildResolution, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
-    await persister.stop();
+    persister.stop();
 
     expect(entered).toBeTruthy();
     expect(runner.run).not.toHaveBeenCalled();
@@ -340,7 +340,7 @@ describe('routed host no-op guard placement', () => {
     const leafResult = await (conductor as unknown as {
       enterRoutedHostRegion(current: ExecutionChildResolution, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
-    await persister.stop();
+    persister.stop();
 
     expect(leafResult).not.toBe(false);
     expect(runner.run).not.toHaveBeenCalled();
@@ -406,7 +406,7 @@ describe('routed host no-op guard placement', () => {
     const entered = await (conductor as unknown as {
       enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor);
-    await persister.stop();
+    persister.stop();
 
     expect(entered).not.toBe(false);
     await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
@@ -477,7 +477,7 @@ describe('routed host no-op guard placement', () => {
     await expect(settleDerivedNoOpHost({ worktree: root, slug: 'demo', roundId, host: child, git })).resolves.toEqual({ kind: 'settled' });
     const settled = await readRouteRecord(root, 'demo', roundId, { git });
     if (settled.kind !== 'record') throw new Error('missing settled route record');
-    await expect(drainOutbox(root, settled, async () => {}, { git })).resolves.toMatchObject({ kind: 'drained' });
+    await expect(drainOutbox(root, settled, async () => 'persisted' as const, { git })).resolves.toMatchObject({ kind: 'drained' });
     const entries = vi.fn(async ({ host }: { host: number }) => ({
       kind: host === child ? 'resume' : 'entered',
       pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
@@ -495,7 +495,7 @@ describe('routed host no-op guard placement', () => {
     await expect((conductor as unknown as {
       enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.not.toBe(false);
-    await persister.stop();
+    persister.stop();
     expect(entries).not.toHaveBeenCalledWith(expect.objectContaining({ host: 1 }));
     expect(entries).toHaveBeenCalledWith(expect.objectContaining({ host: 2 }));
     await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
