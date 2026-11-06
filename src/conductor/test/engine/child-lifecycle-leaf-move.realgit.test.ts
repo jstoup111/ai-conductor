@@ -1,4 +1,4 @@
-// Covers: task:16
+// Covers: task:16, task:17
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 const execFile = promisify(execFileCallback);
 const firstChild = { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'feat/c1/demo', isLeaf: false };
 
+let fixtureRoot: string;
 let repository: string;
 
 async function git(args: string[], cwd = repository): Promise<string> {
@@ -67,8 +68,28 @@ async function addLeafCommit(path: string, body: string, message: string): Promi
   return sha;
 }
 
+async function addBareOrigin(): Promise<string> {
+  const origin = join(fixtureRoot, 'origin.git');
+  await execFile('git', ['init', '--bare', '-q', origin]);
+  await execFile('git', ['--git-dir', origin, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
+  await git(['remote', 'add', 'origin', origin]);
+  await git(['push', '-q', 'origin', 'feat/daemon-demo:main']);
+  return origin;
+}
+
+async function cloneOrigin(origin: string): Promise<void> {
+  const clone = join(fixtureRoot, 'clone');
+  await execFile('git', ['clone', '-q', origin, clone]);
+  repository = clone;
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test User']);
+  await git(['switch', '-c', 'feat/daemon-demo']);
+}
+
 beforeEach(async () => {
-  repository = await mkdtemp(join(tmpdir(), 'child-lifecycle-leaf-move-'));
+  fixtureRoot = await mkdtemp(join(tmpdir(), 'child-lifecycle-leaf-move-'));
+  repository = join(fixtureRoot, 'repo');
+  await mkdir(repository);
   await git(['init', '-q', '-b', 'feat/daemon-demo']);
   await git(['config', 'user.email', 'test@example.com']);
   await git(['config', 'user.name', 'Test User']);
@@ -78,7 +99,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(repository, { recursive: true, force: true });
+  await rm(fixtureRoot, { recursive: true, force: true });
 });
 
 describe('advanceChildRegion leaf move', () => {
@@ -167,5 +188,47 @@ describe('advanceChildRegion leaf move', () => {
       kind: 'refused', reason: expect.stringContaining('concurrent update refused'),
     });
     await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${concurrentTip}\n`);
+  });
+
+  it('uses remote show after origin/HEAD is deleted and excludes the origin default from stray commits', async () => {
+    const origin = await addBareOrigin();
+    await cloneOrigin(origin);
+    const childTip = await prepareClosedChild();
+    await git(['switch', 'feat/daemon-demo']);
+    const defaultOnly = await commit('src/default.ts', 'export const base = true;\n', 'base advancement');
+    await git(['update-ref', 'refs/remotes/origin/main', defaultOnly]);
+    await git(['switch', 'feat/c1/demo']);
+    await git(['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+
+    await expect(advanceChildRegion(repository, 'demo', firstChild, noOpChildLifecycleEvents)).resolves.toEqual({ kind: 'completed' });
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${childTip}\n`);
+  });
+
+  it('moves the leaf when default-branch discovery fails but the leaf has no commits outside the tip', async () => {
+    const childTip = await prepareClosedChild();
+    await git(['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+
+    await expect(advanceChildRegion(repository, 'demo', firstChild, noOpChildLifecycleEvents)).resolves.toEqual({ kind: 'completed' });
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${childTip}\n`);
+  });
+
+  it('names a stray leaf commit when default-branch discovery fails', async () => {
+    await prepareClosedChild();
+    await git(['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+    const stray = await addLeafCommit('src/stray.ts', 'export const stray = true;\n', 'stray leaf work');
+
+    await expect(advanceChildRegion(repository, 'demo', firstChild, noOpChildLifecycleEvents)).resolves.toMatchObject({
+      kind: 'refused', reason: expect.stringContaining(stray),
+    });
+  });
+
+  it('does not exclude an unresolved origin default while checking leaf stray commits', async () => {
+    await addBareOrigin();
+    const childTip = await prepareClosedChild();
+    await git(['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+    await git(['update-ref', '-d', 'refs/remotes/origin/main']);
+
+    await expect(advanceChildRegion(repository, 'demo', firstChild, noOpChildLifecycleEvents)).resolves.toEqual({ kind: 'completed' });
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${childTip}\n`);
   });
 });

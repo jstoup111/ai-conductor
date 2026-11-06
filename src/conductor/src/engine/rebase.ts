@@ -206,9 +206,10 @@ export function isDegradedBase(base: ResolvedBase): boolean {
 
 /**
  * origin's default branch NAME (no `origin/` prefix) from
- * `git symbolic-ref refs/remotes/origin/HEAD`, e.g. `main` / `trunk`, or null
- * if there is no origin/HEAD. Shared by `resolveBase` (the rebase ref) and the
- * conductor's local-base discovery so the parse lives in one place.
+ * `git symbolic-ref refs/remotes/origin/HEAD`, then `git remote show origin`,
+ * e.g. `main` / `trunk`, or null if neither identifies one. Shared by
+ * `resolveBase` (the rebase ref), leaf movement, and the conductor's
+ * local-base discovery so the no-fetch discovery lives in one place.
  */
 export async function originDefaultBranch(git: GitRunner): Promise<string | null> {
   const head = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
@@ -216,6 +217,11 @@ export async function originDefaultBranch(git: GitRunner): Promise<string | null
     // e.g. "refs/remotes/origin/main" → "main"
     const m = head.stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
     if (m) return m[1];
+  }
+  const show = await git(['remote', 'show', 'origin']);
+  if (show.exitCode === 0) {
+    const m = show.stdout.match(/HEAD branch:\s*(\S+)/);
+    if (m && m[1] !== '(unknown)') return m[1];
   }
   return null;
 }
@@ -245,16 +251,8 @@ export async function resolveBaseCore(
     return { ref: localBase, kind: 'local', branch: localBase, degraded: 'no-origin' };
   }
 
-  // Discover the default branch name from origin/HEAD (never hardcode main).
-  let defaultBranch: string | null = await originDefaultBranch(git);
-  if (!defaultBranch) {
-    // Fall back to `git remote show origin` ("HEAD branch: <name>").
-    const show = await git(['remote', 'show', 'origin']);
-    if (show.exitCode === 0) {
-      const m = show.stdout.match(/HEAD branch:\s*(\S+)/);
-      if (m && m[1] !== '(unknown)') defaultBranch = m[1];
-    }
-  }
+  // Discover the default branch name without hardcoding main.
+  const defaultBranch = await originDefaultBranch(git);
   if (!defaultBranch) {
     // Discovery failed entirely — degrade to the local base, do not assume main.
     return { ref: localBase, kind: 'local', branch: localBase, degraded: 'discovery-failed' };

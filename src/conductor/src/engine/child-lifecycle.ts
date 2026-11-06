@@ -297,15 +297,21 @@ export async function moveLeaf(
   try {
     defaultBranch = await originDefaultBranch(git);
   } catch {
-    return refused(`cannot determine origin default branch while moving leaf ${branch}`);
+    defaultBranch = null;
   }
-  if (!defaultBranch) return refused(`cannot determine origin default branch while moving leaf ${branch}`);
-  const stray = await runGit(git, [
+  const strayArgs = [
     'rev-list',
     `refs/heads/${branch}`,
     `^${tip}`,
-    `^origin/${defaultBranch}`,
-  ]);
+  ];
+  if (defaultBranch) {
+    const defaultRef = `refs/remotes/origin/${defaultBranch}`;
+    const resolvedDefault = await runGit(git, ['rev-parse', '--verify', '--quiet', `${defaultRef}^{commit}`]);
+    if (resolvedDefault?.exitCode === 0 && resolvedDefault.stdout.trim()) {
+      strayArgs.push(`^origin/${defaultBranch}`);
+    }
+  }
+  const stray = await runGit(git, strayArgs);
   if (!stray || stray.exitCode !== 0) return refused(`cannot inspect leaf branch ${branch}`);
   for (const strayTip of stray.stdout.split('\n').filter(Boolean)) {
     if (!await isHaltRecordOnlyCommit(strayTip as CommitSha, slug, git)) {
