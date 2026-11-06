@@ -314,7 +314,7 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     await subject.git(['update-ref', journalRefFor('demo'), blob, prior.kind === 'journal' ? prior.blob : '']);
     const events: unknown[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('restack_resolution', (event) => events.push(event));
+    emitter.on('restack_resolution', (event) => { events.push(event); });
 
     await expect(recoverRestackJournal({
       worktree: subject.repo, slug: 'demo', git: subject.runner, events: emitter,

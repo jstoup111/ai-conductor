@@ -10,7 +10,7 @@ import { restackResolverForStepRunner } from '../../../src/daemon-cli.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
+import { resolveRestackConflict, type RestackResolutionContext, type RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { sealStack } from './restack-sweepG2-fixture.js';
@@ -90,13 +90,17 @@ async function subjects(subject: Fixture, range: string): Promise<string[]> {
 
 async function runWithResolver(
   subject: Fixture,
-  resolveRebaseConflict: Parameters<NonNullable<ReturnType<typeof restackResolverForStepRunner>>>[0],
+  resolveRebaseConflict: RestackResolver,
 ): Promise<{ readonly child: number; readonly newTip: string }[]> {
-  const resolver = restackResolverForStepRunner({ resolveRebaseConflict });
+  const resolver = restackResolverForStepRunner({
+    resolveRebaseConflict: (context) => resolveRebaseConflict(context as RestackResolutionContext),
+  });
   if (!resolver) throw new Error('expected production resolver');
   const events = new ConductorEventEmitter();
   const applied: Array<{ readonly child: number; readonly newTip: string }> = [];
-  events.on('restack_applied', (event) => applied.push(event));
+  events.on('restack_applied', (event) => {
+    if (event.type === 'restack_applied') applied.push({ child: event.child, newTip: event.newTip });
+  });
   const result = await runRestack({
     worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
     resolver, resolverCap: 1, events, git: makeGitRunner(subject.repo),

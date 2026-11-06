@@ -1,5 +1,6 @@
 // Covers: task:1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Options as ExecaOptions } from 'execa';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
@@ -44,7 +45,7 @@ function createFixtures(): readonly ProviderFixture[] {
 
   return [
     {
-      provider: new ClaudeProvider(noGitGuard, undefined, ((_file, _args, launch) => {
+      provider: new ClaudeProvider(noGitGuard, undefined, ((_file: string, _args: string[], launch: ExecaOptions) => {
         claudeEnvironments.push(launch.env ?? {});
         return Promise.resolve({ stdout: JSON.stringify({ type: 'result', result: 'done' }), stderr: '', exitCode: 0, failed: false });
       }) as never),
@@ -59,7 +60,7 @@ function createFixtures(): readonly ProviderFixture[] {
         })) as never,
         'codex',
         undefined,
-        ((_file, _args, launch) => {
+        ((_file: string, _args: readonly string[], launch: ExecaOptions) => {
           codexEnvironments.push(launch.env ?? {});
           return Promise.resolve({
             stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } })}\n${JSON.stringify({ type: 'turn.completed' })}`,
@@ -72,7 +73,7 @@ function createFixtures(): readonly ProviderFixture[] {
       spawnedEnvironment: () => codexEnvironments[0],
     },
     {
-      provider: new PiProvider(noGitGuard, 'pi', ((_file, _args, launch) => {
+      provider: new PiProvider(noGitGuard, 'pi', ((_file: string, _args: readonly string[], launch: ExecaOptions) => {
         piEnvironments.push(launch.env ?? {});
         return Promise.resolve({
           stdout: JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } }),

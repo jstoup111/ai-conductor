@@ -95,7 +95,7 @@ describe('restack resolver production wiring', () => {
   });
 
   it('passes the restack environment through the provider-aware resolver dispatch', async () => {
-    let options: InvokeOptions | undefined;
+    let options: Omit<InvokeOptions, 'sessionId' | 'resume'> | undefined;
     const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
       options = input.options;
       return refusal();

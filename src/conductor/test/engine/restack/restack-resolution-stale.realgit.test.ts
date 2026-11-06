@@ -220,7 +220,7 @@ describe('stale restack resolutions (real local Git)', () => {
     const advanced = await advanceParent(value);
     const events = new ConductorEventEmitter();
     const refused: unknown[] = [];
-    events.on('restack_refused', (event) => refused.push(event));
+    events.on('restack_refused', (event) => { refused.push(event); });
 
     await expect(runRestack({ worktree: value.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: value.runner }))
       .resolves.toMatchObject({ kind: 'halted' });
@@ -368,7 +368,7 @@ describe('stale restack resolutions (real local Git)', () => {
     await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--tip', answerTip), { ...resolveDeps(tipSubject.repo), git: tipSubject.runner })).resolves.toBe(0);
     const events = new ConductorEventEmitter();
     const consumed: unknown[] = [];
-    events.on('restack_resolution', (event) => consumed.push(event));
+    events.on('restack_resolution', (event) => { consumed.push(event); });
     await expect(runRestack({ worktree: tipSubject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: tipSubject.runner }))
       .resolves.toMatchObject({ kind: 'applied' });
     expect(consumed).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed' }));

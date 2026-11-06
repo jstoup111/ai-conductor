@@ -11,7 +11,13 @@ import { ConductorEventEmitter } from '../../../src/engine/conductor-event-emitt
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
 import { haltRecordPathFor } from '../../../src/engine/restack/halt-record-bookkeeping.js';
-import { consumeRecordedResolution, readConflictRecord, recordAnswer, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import {
+  consumeRecordedResolution,
+  readConflictRecord,
+  recordAnswer,
+  resolutionRefFor,
+  type RestackConflictRecord,
+} from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { sealStack } from './restack-sweepG2-fixture.js';
@@ -171,7 +177,7 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
     await commitLeafHaltRecord(subject, 'Status: resolved\n');
     const events: unknown[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('restack_resolution', (event) => events.push(event));
+    emitter.on('restack_resolution', (event) => { events.push(event); });
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
@@ -235,7 +241,7 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
     const advanced = await commitHaltRecord(subject, 'Status: resolved\n');
     const events: unknown[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('restack_resolution', (event) => events.push(event));
+    emitter.on('restack_resolution', (event) => { events.push(event); });
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced,
@@ -258,7 +264,7 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
     const advanced = await commitHaltRecord(subject, 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n');
     const events: unknown[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('restack_resolution', (event) => events.push(event));
+    emitter.on('restack_resolution', (event) => { events.push(event); });
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced,
