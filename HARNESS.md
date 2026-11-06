@@ -435,5 +435,7 @@ summary to subsequent agents (e.g., Plan) instead of re-exploring the same scope
   feature is not done while its docs are stale; the `finish` step verifies the
   README/docs reflect what shipped before opening the PR.
 - **Operator-actionable halts are branch-visible.** An operator-actionable halt
-  on a feature branch lands a committed `.docs/halted/<slug>.md` record; a
-  `mechanical` halt does not.
+  on a non-stacked feature branch lands a committed `.docs/halted/<slug>.md`
+  record. A stacked feature's record lives locally at
+  `refs/conductor/<slug>/halt-record`, without a branch commit or push; a
+  `mechanical` halt does not write either record.

@@ -9,6 +9,8 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import { hasDurableChildState } from './child-cursor.js';
+import { appendHaltRecordRef, haltRecordRefFor, readHaltRecordRef } from './halt-record-ref.js';
 import {
   forcePushWithExpectedLease,
   type ForcePushWithExpectedLeaseResult,
@@ -33,6 +35,8 @@ export interface HaltRecordInput {
   haltBody: string;
   /** Active child position when this feature is running as a stacked delivery. */
   child?: ChildId;
+  /** Ref-backed storage location for a stacked feature's record. */
+  recordRef?: string;
 }
 
 /** The operator action that resolved a previously raised halt. */
@@ -43,7 +47,7 @@ export interface HaltRecordResolution {
 
 /** Outcome of an attempt to persist the durable halt record. */
 export type HaltRecordResult =
-  | { kind: 'written' }
+  | { kind: 'written'; path?: string }
   | { kind: 'noop' }
   | { kind: 'skipped' }
   | { kind: 'failed'; reason: string }
@@ -112,7 +116,9 @@ export function renderHaltRecord(input: HaltRecordInput): string {
     (input.child === undefined ? '' : `Child: ${input.child}\n`) +
     `Head SHA: ${input.headSha}\n` +
     `Halted at: ${input.haltedAt}\n\n` +
-    `Push status: this record may be ahead of the remote; push is not guaranteed.\n\n` +
+    (input.recordRef === undefined
+      ? `Push status: this record may be ahead of the remote; push is not guaranteed.\n\n`
+      : `Push status: this record is stored locally at ${input.recordRef}; it is not pushed.\n\n`) +
     `## HALT\n\n` +
     `${fence}text\n${input.haltBody}${bodySuffix}${fence}\n`
   );
@@ -141,6 +147,14 @@ export async function recordHalt(
   try {
     if (!await resolveRecordability(root, input.haltClass)) return { kind: 'skipped' };
 
+    const durableChildState = await hasDurableChildState(root, input.slug);
+    if (durableChildState === 'git-error') {
+      return { kind: 'failed', reason: 'could not determine durable child state' };
+    }
+    if (durableChildState) {
+      return recordStackedHalt(root, input);
+    }
+
     const relPath = haltRecordPath(input.slug);
     await mkdir(join(root, dirname(relPath)), { recursive: true });
     await writeFile(join(root, relPath), renderHaltRecord(input));
@@ -161,6 +175,26 @@ export async function recordHalt(
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) };
   }
+}
+
+async function recordStackedHalt(root: string, input: HaltRecordInput): Promise<HaltRecordResult> {
+  const ref = haltRecordRefFor(input.slug);
+  const previous = await readHaltRecordRef(root, input.slug);
+  if (previous.kind === 'unavailable') {
+    return { kind: 'failed', reason: `could not read ${ref}` };
+  }
+  const expected = previous.kind === 'record' && previous.source === 'ref' ? previous.commit : undefined;
+  const appended = await appendHaltRecordRef(
+    root,
+    input.slug,
+    renderHaltRecord({ ...input, recordRef: ref }),
+    expected,
+  );
+  if (appended.kind === 'updated') return { kind: 'written', path: ref };
+  return {
+    kind: 'failed',
+    reason: appended.kind === 'stale' ? `could not compare-and-swap ${ref}` : `could not write ${ref}`,
+  };
 }
 
 /** Resolve and commit an existing halt record, preserving its original halt details. */
