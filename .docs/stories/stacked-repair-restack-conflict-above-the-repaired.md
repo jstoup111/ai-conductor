@@ -104,15 +104,15 @@ As an operator who recorded a resolution, I want the next dispatch to carry it i
 - Given a recorded resolution, when the restack is driven by journal recovery resuming a planned journal instead of a fresh executor run, then the resolution is consumed with the same result.
 
 #### Negative Paths
-- Given a recorded resolution, when another change moved `closed/c1` before the next dispatch so that the parent being built has a different tree from the recorded one, then the restack moves no ref, halts needs-human with reason `restack-resolution-stale` naming the parent tree mismatch, emits `restack_refused` with that reason, and keeps both the resolution and the conflict record.
-- Given a recorded resolution, when child 2's journaled range differs from the record's old parent or old tip at the next dispatch, then the restack halts `restack-resolution-stale` naming the range mismatch, and moves no ref.
+- Given a recorded resolution, when another change moved `closed/c1` before the next dispatch so that the parent being built has a different tree from the recorded one, then the restack moves no branch or closure ref, emits `restack_refused` with reason `restack-resolution-stale` naming the parent tree mismatch, deletes the resolution, writes a fresh conflict record for the live parent, and halts needs-human with the reason, a `Restack-Conflict` line and both recipes.
+- Given a recorded resolution, when child 2's journaled range differs from the record's old parent or old tip at the next dispatch, then the restack moves no branch or closure ref, deletes the resolution, writes a fresh conflict record for the live range, and halts `restack-resolution-stale` naming the range mismatch with a `Restack-Conflict` line and both recipes.
 - Given a recorded resolution, when the rebuilt result fails the path-ownership check at consumption, then the restack halts needs-human naming the unowned paths and moves no ref.
-- Given a resolution ref for child 2 but no conflict record, when the next dispatch reaches child 2, then the restack halts `restack-resolution-stale` naming the missing record, and moves no ref.
+- Given a resolution ref for child 2 but no conflict record, when the next dispatch reaches child 2, then the restack deletes the orphan resolution, emits `restack_resolution` with action `retired`, and runs the ordinary replay of child 2.
 
 ### Done When
 - [ ] A real-git test runs halt → `stack restack-resolve` → second restack and asserts the applied refs, child 2's tree, a single occurrence of each repair commit in the child 2 and leaf histories, and the `resolved` journal status.
 - [ ] A real-git test with two replayed children above the origin proves tree-matched consumption when the lower child's commit id changes.
-- [ ] Real-git tests for each stale and ownership case assert the halt reason, the named field, unmoved refs, and retained resolution refs.
+- [ ] Real-git tests for each stale and ownership case assert the halt reason, the named field, unmoved branch and closure refs, and the deleted resolution.
 - [ ] A recovery test asserts `resumePlanned` consumes the resolution the same way.
 
 ## Story 4: An operator-resolved restack keeps every post-restack guarantee
@@ -150,7 +150,7 @@ As an operator, I want my recorded resolution kept until it is used and then cle
 - Given a feature carrying a recorded resolution and a conflict record, when the feature is torn down by the single-slug reclaim, then all of those refs are deleted by name.
 
 #### Negative Paths
-- Given a recorded resolution, when the next restack aborts for any reason before applying, then the resolution ref and both conflict refs are unchanged and still name the same objects.
+- Given a recorded resolution that still matches its record, when the next restack aborts for a reason other than that resolution being stale, then the resolution ref and both conflict refs are unchanged and still name the same objects.
 - Given a recorded resolution consumed by a restack, when one of the resolution or conflict refs changes before the ref move, then the move's compare-and-swap fails, the restack does not apply, it halts `stack-ref-changed` naming the changed ref, and no branch or closure ref has moved.
 - Given a teardown of another feature whose slug is a prefix of `demo`, when it runs, then none of `demo`'s resolution or conflict refs is deleted.
 

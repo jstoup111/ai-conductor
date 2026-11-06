@@ -347,6 +347,8 @@ Operator decisions (2026-10-10):
 > in both the executor path and the recovery path. Rollback leaves them untouched
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 13).
 
+> **Amended 2026-11-02 by #3582:** "Outstanding" reads `refs/conductor/<slug>/halt-record` first, then the committed record at the active branch tip (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 2).
+
 5. **One atomic move, then a worktree sync that never loses local work.**
    - **Checks at `ready`, before any ref moves.** The planner refuses with nothing moved, never
      autostashing, in any of these cases:
@@ -433,6 +435,8 @@ Operator decisions (2026-10-10):
 > newest-record bookkeeping commit as a replayed one before the path-ownership check.
 
 > **Amended 2026-10-31 by #3478:** An unresolved `base-refresh` conflict also writes the conflict record and recipe. An operator can answer the resolver's missing decision with `ai-conductor stack restack-resolve --decision`. The next restack passes that decision to this decision's resolver primitive as `operatorDecision` when the child and range match. The FR-8, FR-9 and path-ownership guards still apply to the result (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts).
+
+> **Amended 2026-11-02 by #3582:** The resolver's Git environment reaches the provider, and an accepted tip is the temporary checkout's HEAD rather than the last rewritten-list entry, which is now only a fallback. A todo with candidates never settles at `newParent`, and a candidate subject missing from the settled range halts as unresolved (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decisions 6 and 7).
 
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
