@@ -38,7 +38,7 @@ Early overlap scan over these restack modules: `No overlap detected; no open blo
 | Risk | Type | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | The resolver drops a merge's hand edit inside a file the child owns; no guard detects content loss inside owned paths | Technical | Low | Medium | Same limit as ordinary conflicts, stated in decision 3; moved closed children re-validate under the shipped path |
-| A `--tip` recorded for this halt goes stale, as for every restack conflict, until #3557 ships | Integration | High until #3557 | Medium | `--decision` needs no parent-tree match and remains available; #3557 owns the fix |
+| A `--tip` recorded for this halt goes stale, as for every restack conflict, until #3582 ships | Integration | High until #3582 | Medium | `--decision` needs no parent-tree match and remains available. #3582 (`adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref` decisions 3 and 4) masks halt-record drift and re-halts a genuinely stale resolution through `haltRecordedRestackConflict`, which this spec gives the flattened-tip recipe |
 | In a `--tip` rebase, the chain's automatic entry for a Q-carried merge conflicts when main later edited those lines | Technical | Low | Low | A human resolves it; path ownership refuses a result that changes unowned paths |
 | A resolution empties a flattened entry only partway through the rebase, so the rebase stops as it does for an ordinary commit today | Technical | Low | Low | Ends in the ordinary conflict halt under the existing budget |
 

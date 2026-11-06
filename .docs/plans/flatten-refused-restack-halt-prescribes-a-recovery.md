@@ -21,7 +21,7 @@ The plan has 12 tasks. A stacked restack conflict on a child whose range contain
 - **Halt.** `haltRecordedRestackConflict` runs the builder when the range holds a merge, records its candidate subjects and tip, and passes the tip to `haltRestackConflict` as the recipe's starting point. Every conflict halt, including the `rem-*` body-mismatch halt, therefore gets the same treatment.
 - **Local pattern.** `replayChildRange` is the precedent for classification, the trailer and audit reporting. Preserve its `stacked` classification and message form. The hand-off differs only because it needs commits it can `pick`. To find comparable tests, search `test/engine/restack` for `Flattened-merge` and `rebase_merge_audit`.
 - **Test isolation.** Tests are real-git, in temporary repositories, and inject a fake resolver at `resolver` on `runRestack` and on recovery's options.
-- **Known gap.** A recorded `--tip` goes stale on parent-tree drift until #3557 ships. Task 9's fixture keeps the parent tree unchanged.
+- **Known gap.** A recorded `--tip` goes stale on parent-tree drift until #3582 ships. After it ships, a stale resolution re-halts through `haltRecordedRestackConflict`, so it gets this spec's flattened-tip recipe. Task 9's fixture keeps the parent tree unchanged.
 
 ## Prerequisites
 
@@ -206,7 +206,7 @@ The plan has 12 tasks. A stacked restack conflict on a child whose range contain
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/restack/restack-merge-bearing-conflict.realgit.test.ts` for every Done-when check below. Parse the commands from `.pipeline/HALT` and run them, resolving `shared.txt` by hand. Keep the parent tree unchanged, because #3557 owns parent-tree drift.
+1. Write failing tests in `src/conductor/test/engine/restack/restack-merge-bearing-conflict.realgit.test.ts` for every Done-when check below. Parse the commands from `.pipeline/HALT` and run them, resolving `shared.txt` by hand. Keep the parent tree unchanged, because #3582 owns parent-tree drift.
 2. Implement whatever the tests expose.
 3. Run the targeted test file and commit.
 
