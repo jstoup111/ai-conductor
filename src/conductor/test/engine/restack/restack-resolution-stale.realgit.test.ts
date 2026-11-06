@@ -187,6 +187,8 @@ describe('stale restack resolutions (real local Git)', () => {
     await expect(value.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(2))])).resolves.toMatchObject({ exitCode: 1 });
     const fresh = await readConflictRecord(value.repo, 'demo', { git: value.runner });
     if (fresh.kind !== 'record') throw new Error('expected fresh conflict record');
+    const journal = await readRestackJournal(value.repo, 'demo', { git: value.runner });
+    expect(journal).toMatchObject({ kind: 'journal', journal: { state: 'aborted', opId: fresh.record.opId } });
     const liveParent = sha((await value.git(['rev-parse', `${fresh.record.newParent}^{tree}`])).stdout);
     expect(fresh.record).toMatchObject({
       child: 2, oldParent: value.first, oldTip: value.second, newParentTree: liveParent,
@@ -202,6 +204,34 @@ describe('stale restack resolutions (real local Git)', () => {
     const persisted = (await readFile(join(value.repo, '.pipeline', 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line));
     expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'retired', tip: prior.tip }));
     expect(persisted).toContainEqual({ type: 'restack_refused', reason: 'restack-resolution-stale', child: 2, detail: 'parent-tree', ts: expect.any(String) });
+  });
+
+  it('retires a range-stale tip into a fresh conflict without moving stack refs', async () => {
+    const value = await subject();
+    const prior = await recordTip(value);
+    await value.git(['checkout', '-q', 'feat/c2/demo']);
+    await writeFile(join(value.repo, 'after-tip.txt'), 'changed\n');
+    await value.git(['add', 'after-tip.txt']);
+    await value.git(['commit', '-qm', 'feature content after resolution']);
+    const changedTip = sha((await value.git(['rev-parse', 'HEAD'])).stdout);
+    await value.git(['update-ref', 'refs/conductor/demo/closed/c2', changedTip]);
+    await value.git(['checkout', '-q', 'feat/daemon-demo']);
+    const before = await stackRefs(value);
+    const advanced = await advanceParent(value);
+    const events = new ConductorEventEmitter();
+    const refused: unknown[] = [];
+    events.on('restack_refused', (event) => refused.push(event));
+
+    await expect(runRestack({ worktree: value.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: value.runner }))
+      .resolves.toMatchObject({ kind: 'halted' });
+
+    expect(await stackRefs(value)).toEqual(before);
+    await expect(value.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(2))])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(readConflictRecord(value.repo, 'demo', { git: value.runner })).resolves.toMatchObject({
+      kind: 'record', record: { child: 2, oldTip: changedTip, commit: prior.record.commit, paths: prior.record.paths },
+    });
+    await expect(readFile(join(value.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatchObject(expect.stringContaining('restack-resolution-stale\nrange'));
+    expect(refused).toContainEqual(expect.objectContaining({ type: 'restack_refused', reason: 'restack-resolution-stale', child: 2, detail: 'range' }));
   });
 
   it('makes planned-journal recovery write the same fresh parent-tree conflict without moving refs', async () => {
@@ -266,6 +296,8 @@ describe('stale restack resolutions (real local Git)', () => {
     await expect(runRestack({ worktree: value.repo, slug: 'demo', cause: 'base-refresh', newDefault: value.newDefault, git: value.runner }))
       .resolves.toMatchObject({ kind: 'applied' });
     expect((await value.git(['cat-file', 'blob', conflictRecordRefFor('demo')])).stdout).toBe(before);
+    await expect(value.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(2))])).resolves.toMatchObject({ exitCode: 1 });
+    expect((await value.git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(value.second);
 
     const conflict = await subject();
     await conflict.git(['update-ref', resolutionRefFor('demo', child(2)), conflict.second]);
@@ -276,6 +308,7 @@ describe('stale restack resolutions (real local Git)', () => {
     const fresh = await readConflictRecord(conflict.repo, 'demo', { git: conflict.runner });
     expect(fresh).toMatchObject({ kind: 'record', record: { child: 2 } });
     await expect(readFile(join(conflict.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatchObject(expect.stringContaining('ai-conductor stack restack-resolve --slug demo --child 2 --tip <sha>'));
+    await expect(readFile(join(conflict.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatchObject(expect.stringContaining('ai-conductor stack restack-resolve --slug demo --child 2 --decision "<answer>"'));
   });
 
   it('keeps refs still when the fresh stale record cannot be written, then replays normally after retirement', async () => {
@@ -347,11 +380,13 @@ describe('stale restack resolutions (real local Git)', () => {
     const beforeInvalid = await readFile(join(decisionSubject.repo, '.pipeline', 'HALT'), 'utf8');
     const messages: string[] = [];
     await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--tip', decisionSubject.first), { ...resolveDeps(decisionSubject.repo, (message) => messages.push(message)), git: decisionSubject.runner })).resolves.toBe(1);
-    expect(messages.join('\n')).toContain('does not descend from recorded parent');
+    const decisionRecord = await readConflictRecord(decisionSubject.repo, 'demo', { git: decisionSubject.runner });
+    if (decisionRecord.kind !== 'record') throw new Error('expected stale conflict record');
+    expect(messages.join('\n')).toContain(`does not descend from recorded parent ${decisionRecord.record.newParent}`);
     expect(await readFile(join(decisionSubject.repo, '.pipeline', 'HALT'), 'utf8')).toBe(beforeInvalid);
     await expect(dispatchStackRestackResolve(command('--slug', 'demo', '--child', '2', '--decision', 'keep upstream'), { ...resolveDeps(decisionSubject.repo), git: decisionSubject.runner })).resolves.toBe(0);
     await expect(readFile(join(decisionSubject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
-    await expect(readFile(join(decisionSubject.repo, '.pipeline', 'events.jsonl'), 'utf8')).resolves.toContain('"restack_decision"');
+    await expect(readFile(join(decisionSubject.repo, '.pipeline', 'events.jsonl'), 'utf8')).resolves.toContain('"type":"restack_decision","opId":"' + decisionRecord.record.opId + '","child":2,"action":"recorded"');
     const resolver = vi.fn(async ({ projectRoot, environment }: { projectRoot: string; environment: NodeJS.ProcessEnv }) => {
       await writeFile(join(projectRoot, 'shared.txt'), 'decision resolved\n');
       const local = makeGitRunner(projectRoot);
