@@ -400,6 +400,29 @@ function uniqueSubjectCommit(
   return commits?.length === 1 ? commits[0] : undefined;
 }
 
+/** Map only unambiguous replay candidates through a subject-preserving rebuild. */
+export async function rewritesByUniqueSubject(
+  git: GitRunner,
+  originalRange: string,
+  rebuiltRange: string,
+  candidateSubjects: readonly string[],
+): Promise<ReadonlyMap<CommitSha, CommitSha>> {
+  const [originals, rebuilt] = await Promise.all([
+    subjectsByCommit(git, originalRange),
+    subjectsByCommit(git, rebuiltRange),
+  ]);
+  const counts = new Map<string, number>();
+  for (const subject of candidateSubjects) counts.set(subject, (counts.get(subject) ?? 0) + 1);
+  const rewrites = new Map<CommitSha, CommitSha>();
+  for (const subject of counts.keys()) {
+    if (counts.get(subject) !== 1) continue;
+    const original = uniqueSubjectCommit(originals, subject);
+    const replacement = uniqueSubjectCommit(rebuilt, subject);
+    if (original !== undefined && replacement !== undefined) rewrites.set(original, replacement);
+  }
+  return rewrites;
+}
+
 /**
  * Rebuild an operator-recorded resolution only when it still describes this
  * exact child range and the live replay parent has the recorded tree.
@@ -431,19 +454,16 @@ export async function consumeRecordedResolution(
     oldTip: tip,
   };
   const replay = await input.replay(replayRange, input.parent, input.committer, input.git);
-  const [originals, resolutions] = await Promise.all([
-    subjectsByCommit(input.git, `${input.range.oldParent}..${input.range.oldTip}`),
-    subjectsByCommit(input.git, `${stored.record.newParent}..${tip}`),
-  ]);
-  const recordedCounts = new Map<string, number>();
-  for (const subject of stored.record.candidateSubjects) recordedCounts.set(subject, (recordedCounts.get(subject) ?? 0) + 1);
+  const resolutionRewrites = await rewritesByUniqueSubject(
+    input.git,
+    `${input.range.oldParent}..${input.range.oldTip}`,
+    `${stored.record.newParent}..${tip}`,
+    stored.record.candidateSubjects,
+  );
   const rewrites = new Map<CommitSha, CommitSha>();
-  for (const subject of stored.record.candidateSubjects) {
-    if (recordedCounts.get(subject) !== 1) continue;
-    const original = uniqueSubjectCommit(originals, subject);
-    const resolution = uniqueSubjectCommit(resolutions, subject);
-    const rebuilt = resolution === undefined ? undefined : replay.rewrites.get(resolution);
-    if (original !== undefined && rebuilt !== undefined) rewrites.set(original, rebuilt);
+  for (const [original, resolution] of resolutionRewrites) {
+    const rebuilt = replay.rewrites.get(resolution);
+    if (rebuilt !== undefined) rewrites.set(original, rebuilt);
   }
   return {
     kind: 'consumed',
