@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { parseChildId, type ChildId } from '../child-context.js';
-import { haltRecordPathFor, haltRecordTree } from './halt-record-bookkeeping.js';
+import { haltRecordPathFor, haltRecordTree, isHaltRecordOnlyCommit } from './halt-record-bookkeeping.js';
 import { parseCommitSha, type ChildRange, type CommitSha, type RefName, type RestackOpId } from './restack-types.js';
 
 const ZERO_SHA = '0'.repeat(40) as CommitSha;
@@ -424,6 +424,29 @@ export async function rewritesByUniqueSubject(
   return rewrites;
 }
 
+/** A moved range boundary is safe only when every intervening commit is this feature's halt record. */
+async function descendsOnlyThroughHaltRecordCommits(
+  recorded: CommitSha,
+  live: CommitSha,
+  slug: string,
+  git: GitRunner,
+): Promise<boolean> {
+  if (recorded === live) return true;
+  const ancestor = await runGit(git, ['merge-base', '--is-ancestor', recorded, live]);
+  if (ancestor?.exitCode !== 0) return false;
+  const commits = await runGit(git, ['rev-list', '--reverse', `${recorded}..${live}`]);
+  if (commits?.exitCode !== 0) return false;
+  try {
+    for (const raw of commits.stdout.split('\n').filter(Boolean)) {
+      const commit = parseCommitSha(raw);
+      if (commit === undefined || !await isHaltRecordOnlyCommit(commit, slug, git)) return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Rebuild an operator-recorded resolution only when it still describes this
  * exact child range and the live replay parent has the recorded tree.
@@ -441,7 +464,11 @@ export async function consumeRecordedResolution(
   // consumption receives the caller's runner so the root is deliberately inert.
   const stored = await readConflictRecord('', input.slug, { git: input.git });
   if (stored.kind !== 'record' || stored.record.child !== input.range.child) return { kind: 'stale', field: 'record' };
-  if (stored.record.oldParent !== input.range.oldParent || stored.record.oldTip !== input.range.oldTip) {
+  const [parentMatches, tipMatches] = await Promise.all([
+    descendsOnlyThroughHaltRecordCommits(stored.record.oldParent, input.range.oldParent, input.slug, input.git),
+    descendsOnlyThroughHaltRecordCommits(stored.record.oldTip, input.range.oldTip, input.slug, input.git),
+  ]);
+  if (!parentMatches || !tipMatches) {
     return { kind: 'stale', field: 'range' };
   }
   const liveTree = await runGit(input.git, ['rev-parse', '--verify', `${input.parent}^{tree}`]);
