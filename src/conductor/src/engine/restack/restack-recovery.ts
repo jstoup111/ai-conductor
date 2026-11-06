@@ -44,6 +44,7 @@ import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver }
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
+import { readHaltRecordRef } from '../halt-record-ref.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { routedRoundOpen } from '../routing/round-admission.js';
@@ -376,10 +377,10 @@ async function unenteredLeafOwner(
   return identityMatches.length === 1 ? identityMatches[0] : undefined;
 }
 
-/** The committed halt record is the only durable answer after worktree loss. */
-async function hasOutstandingHalt(slug: string, git: GitRunner): Promise<boolean> {
-  const record = await runGit(git, ['show', `HEAD:.docs/halted/${slug}.md`]);
-  return record?.exitCode === 0 && /^Status:\s*halted\s*$/mi.test(record.stdout);
+/** The ref-backed record wins over a legacy committed record while a stack upgrades. */
+async function hasOutstandingHalt(worktree: string, slug: string, git: GitRunner): Promise<boolean> {
+  const record = await readHaltRecordRef(worktree, slug, { git });
+  return record.kind === 'record' && /^Status:\s*halted\s*$/mi.test(record.text);
 }
 
 /**
@@ -397,7 +398,7 @@ export async function cleanClearedAbortedRestackJournal(
   if (read.kind === 'missing') return 'none';
   if (read.kind !== 'journal') return 'unavailable';
   if (read.journal.state !== 'aborted') return 'none';
-  if (await hasOutstandingHalt(slug, git)) return 'none';
+  if (await hasOutstandingHalt(worktree, slug, git)) return 'none';
   return await cleanJournal(worktree, { slug: read.slug, blob: read.blob, journal: read.journal }, git)
     ? 'cleaned'
     : 'unavailable';
