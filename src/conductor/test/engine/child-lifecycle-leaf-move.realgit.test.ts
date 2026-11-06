@@ -70,7 +70,7 @@ async function addLeafCommit(path: string, body: string, message: string): Promi
 
 async function addBareOrigin(): Promise<string> {
   const origin = join(fixtureRoot, 'origin.git');
-  await execFile('git', ['init', '--bare', '-q', origin]);
+  await execFile('git', ['init', '--bare', '-q', '-b', 'main', origin]);
   await execFile('git', ['--git-dir', origin, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
   await git(['remote', 'add', 'origin', origin]);
   await git(['push', '-q', 'origin', 'feat/daemon-demo:main']);

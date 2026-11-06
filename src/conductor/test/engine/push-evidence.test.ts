@@ -278,7 +278,7 @@ describe('headPushedToUpstream', () => {
       bareRemoteDir = await mkdtemp(join(tmpdir(), 'push-evidence-remote-'));
       repoDir = await mkdtemp(join(tmpdir(), 'push-evidence-repo-'));
 
-      await execa('git', ['init', '--bare', '-q'], { cwd: bareRemoteDir });
+      await execa('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: bareRemoteDir });
       await execa('git', ['clone', '-q', bareRemoteDir, repoDir]);
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: repoDir });
       await execa('git', ['config', 'user.name', 'Test User'], { cwd: repoDir });

@@ -1,13 +1,20 @@
+import { execa } from 'execa';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { haltRecordPathFor } from './restack/halt-record-bookkeeping.js';
 import { parseCommitSha, type CommitSha, type RefName } from './restack/restack-types.js';
-import { makeGitRunner, type GitRunner } from './rebase.js';
 
 const ZERO_SHA = '0'.repeat(40) as CommitSha;
 
 export interface HaltRecordRefDependencies {
-  readonly git?: GitRunner;
+  readonly git?: HaltRecordGitRunner;
 }
+
+/** Minimal git seam kept local so halt-record storage does not depend on rebase orchestration. */
+export type HaltRecordGitRunner = (
+  args: string[],
+  options?: { input?: string; env?: NodeJS.ProcessEnv },
+) => Promise<{ exitCode: number; stdout: string; stderr?: string }>;
 
 export type AppendHaltRecordRefResult =
   | { readonly kind: 'updated'; readonly commit: CommitSha }
@@ -23,7 +30,19 @@ export function haltRecordRefFor(slug: string): RefName {
   return `refs/conductor/${slug}/halt-record` as RefName;
 }
 
-async function runGit(git: GitRunner, args: string[], input?: string, env?: NodeJS.ProcessEnv) {
+function makeHaltRecordGitRunner(cwd: string): HaltRecordGitRunner {
+  return async (args, options) => {
+    const result = await execa('git', args, {
+      cwd,
+      reject: false,
+      ...(options?.input === undefined ? {} : { input: options.input }),
+      ...(options?.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+    });
+    return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+  };
+}
+
+async function runGit(git: HaltRecordGitRunner, args: string[], input?: string, env?: NodeJS.ProcessEnv) {
   try {
     return await git(args, {
       ...(input === undefined ? {} : { input }),
@@ -34,7 +53,7 @@ async function runGit(git: GitRunner, args: string[], input?: string, env?: Node
   }
 }
 
-async function writeTree(git: GitRunner, slug: string, text: string): Promise<CommitSha | undefined> {
+async function writeTree(git: HaltRecordGitRunner, slug: string, text: string): Promise<CommitSha | undefined> {
   const blob = await runGit(git, ['hash-object', '-w', '--stdin'], text);
   const record = blob?.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
   if (!record) return undefined;
@@ -56,13 +75,13 @@ export async function appendHaltRecordRef(
   expected: CommitSha | undefined,
   dependencies: HaltRecordRefDependencies = {},
 ): Promise<AppendHaltRecordRefResult> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = dependencies.git ?? makeHaltRecordGitRunner(worktree);
   const tree = await writeTree(git, slug, text);
   if (!tree) return { kind: 'unavailable' };
   const committed = await runGit(git, [
     'commit-tree', tree,
     ...(expected === undefined ? [] : ['-p', expected]),
-  ], `halt record: ${slug}\n`, withEngineCommitEnv());
+  ], withDaemonCoAuthorTrailer(`halt record: ${slug}\n`), withEngineCommitEnv());
   const commit = committed?.exitCode === 0 ? parseCommitSha(committed.stdout.trim()) : undefined;
   if (!commit) return { kind: 'unavailable' };
   const updated = await runGit(git, ['update-ref', '--stdin'], [
@@ -82,7 +101,7 @@ export async function readHaltRecordRef(
   slug: string,
   dependencies: HaltRecordRefDependencies = {},
 ): Promise<ReadHaltRecordRefResult> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = dependencies.git ?? makeHaltRecordGitRunner(worktree);
   const ref = haltRecordRefFor(slug);
   const resolved = await runGit(git, ['rev-parse', '-q', '--verify', ref]);
   if (resolved === undefined || (resolved.exitCode !== 0 && resolved.exitCode !== 1)) return { kind: 'unavailable' };

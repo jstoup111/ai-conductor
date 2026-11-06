@@ -9,7 +9,7 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
-import { hasDurableChildState } from './child-cursor.js';
+import { hasDurableChildState } from './durable-child-state.js';
 import { appendHaltRecordRef, haltRecordRefFor, readHaltRecordRef } from './halt-record-ref.js';
 import {
   forcePushWithExpectedLease,
