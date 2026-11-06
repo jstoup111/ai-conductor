@@ -10,6 +10,8 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { redRefFor } from './routing/routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, serializeRoutedRedRecord } from './routing/red-record.js';
 import { routingSettingOn } from './routing/route-types.js';
+import { isHaltRecordOnlyCommit } from './restack/halt-record-bookkeeping.js';
+import type { CommitSha } from './restack/restack-types.js';
 import { loadSliceTopology } from './slice-topology.js';
 
 export type StartChildGitRunner = GitRunner;
@@ -305,8 +307,11 @@ export async function moveLeaf(
     `^origin/${defaultBranch}`,
   ]);
   if (!stray || stray.exitCode !== 0) return refused(`cannot inspect leaf branch ${branch}`);
-  const strayTip = stray.stdout.split('\n').find(Boolean);
-  if (strayTip) return refused(`cannot move leaf branch ${branch}; unrelated commit ${strayTip}`);
+  for (const strayTip of stray.stdout.split('\n').filter(Boolean)) {
+    if (!await isHaltRecordOnlyCommit(strayTip as CommitSha, slug, git)) {
+      return refused(`cannot move leaf branch ${branch}; unrelated commit ${strayTip}`);
+    }
+  }
   const moved = await runGit(git, ['update-ref', `refs/heads/${branch}`, tip, oldTip]);
   if (!moved || moved.exitCode !== 0) return refused(`cannot move leaf branch ${branch}; concurrent update refused`);
   return { kind: 'completed' };
