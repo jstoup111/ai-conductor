@@ -18,7 +18,7 @@ import {
   isHaltRecordOnlyCommit,
   mapOmittedHaltRecordCommits,
 } from './halt-record-bookkeeping.js';
-import { rewritesByUniqueSubject } from './restack-conflict-record.js';
+import { missingCandidateSubjects, rewritesByUniqueSubject } from './restack-conflict-record.js';
 
 /** Resolver dispatch receives the same immutable identity as every Git child. */
 export interface RestackResolutionContext extends ResolutionContext {
@@ -45,6 +45,8 @@ export interface ResolveRestackConflictOptions {
   readonly cap: number;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
   readonly git?: GitRunner;
+  /** Test seam for the Git runner rooted at the detached resolver checkout. */
+  readonly temporaryGit?: (worktree: string) => GitRunner;
 }
 
 export interface RestackConflictResolution {
@@ -205,7 +207,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         GIT_CONFIG_VALUE_2: 'true',
       }),
     };
-    const nativeTemporaryGit = makeGitRunner(temporaryWorktree);
+    const nativeTemporaryGit = options.temporaryGit?.(temporaryWorktree) ?? makeGitRunner(temporaryWorktree);
     // Every call rooted in the detached checkout, including rebase-state
     // inspection around a resolver's --continue, carries the journal stamp.
     const tempGit: GitRunner = (args, opts) => nativeTemporaryGit(args, {
@@ -235,12 +237,26 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         };
       }
       let tip = settledTip ?? rewrittenTip ?? options.newParent;
+      const candidateSubjects = await replayCandidateSubjects(runGit, candidates);
+      const missingSubjects = await missingCandidateSubjects(runGit, options.newParent, tip, candidateSubjects);
+      if (missingSubjects.length > 0) {
+        return {
+          outcome: {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `restack resolver finished child ${options.range.child} without candidate subjects: ${missingSubjects.join(', ')}`,
+          },
+          tip: undefined,
+          rewrites,
+          candidates,
+        };
+      }
       if (rewrites.size === 0 && candidates.length > 0) {
         const rebuilt = await rewritesByUniqueSubject(
           runGit,
           `${options.range.oldParent}..${options.range.oldTip}`,
           `${options.newParent}..${tip}`,
-          await replayCandidateSubjects(runGit, candidates),
+          candidateSubjects,
         );
         for (const [original, replacement] of rebuilt) rewrites.set(original, replacement);
       }
