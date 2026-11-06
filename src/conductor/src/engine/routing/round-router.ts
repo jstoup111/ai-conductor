@@ -169,7 +169,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
         detail: `Existing-task work ${source.id} has no admitted owner-task binding`,
       };
     }
-    if (isResidue(source)) { residue.push(source); continue; }
+    if (!(source.existingTask && (source.ownerTaskIds?.length ?? 0) > 0) && isResidue(source)) { residue.push(source); continue; }
     if (source.ownerTaskIds === undefined || source.ownerTaskIds.length === 0) {
       return {
         kind: 'halt', haltClass: 'needs-human',
@@ -214,7 +214,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   // the lowest task-owned host without ever asking the residue judge or
   // manufacturing another remediation task.
   const taskBoundHosts = hostOrder(
-    resolved.filter(({ source }) => !isResidue(source)).map(({ item }) => item.host),
+    resolved.filter(({ source }) => (source.existingTask && (source.ownerTaskIds?.length ?? 0) > 0) || !isResidue(source)).map(({ item }) => item.host),
   );
   // A residue item can be hosted below the task work it accompanies.  The
   // mixed FAIL remains taskless, so when residue coexists its durable host is

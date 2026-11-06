@@ -295,12 +295,25 @@ export function transitionHost(
   stored: StoredRouteRecord,
   host: import('../child-context.js').ChildId,
   to: import('./route-types.js').HostState,
-  options: { readonly credit: boolean },
+  options: { readonly credit: boolean; readonly reason?: 'derived-already-complete' },
 ): { readonly kind: 'updated'; readonly record: RouteRecord } | { readonly kind: 'illegal-transition' } {
   const from = stored.record.hosts[host];
-  if (from === undefined || !isLegalHostTransition(from, to)) return { kind: 'illegal-transition' };
-  const record = { ...stored.record, hosts: { ...stored.record.hosts, [host]: to } };
-  return { kind: 'updated', record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit)) };
+  if (from === undefined || !isLegalHostTransition(from, to) || (options.reason !== undefined && to !== 'repairing')) {
+    return { kind: 'illegal-transition' };
+  }
+  const priorReasons = stored.record.hostReasons ?? {};
+  const nextReasons = options.reason === undefined
+    ? Object.fromEntries(Object.entries(priorReasons).filter(([rawHost]) => Number(rawHost) !== host))
+    : { ...priorReasons, [host]: options.reason };
+  const record = {
+    ...stored.record,
+    hosts: { ...stored.record.hosts, [host]: to },
+    ...(Object.keys(nextReasons).length === 0 ? { hostReasons: undefined } : { hostReasons: nextReasons }),
+  };
+  return {
+    kind: 'updated',
+    record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit, options.reason)),
+  };
 }
 
 /** Applies the host state recorded when a routed repair leaves the restack. */

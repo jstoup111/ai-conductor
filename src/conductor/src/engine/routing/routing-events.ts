@@ -24,8 +24,12 @@ export function routedRepairPhaseEvent(
   host: ChildId,
   phase: HostState,
   credit: boolean,
+  reason?: 'derived-already-complete',
 ): Extract<ConductorEvent, { type: 'routed_repair_phase' }> {
-  return { type: 'routed_repair_phase', ...occurrence(), roundId, host, phase, credit, child: host };
+  return {
+    type: 'routed_repair_phase', ...occurrence(), roundId, host, phase, credit,
+    ...(reason === undefined ? {} : { reason }), child: host,
+  };
 }
 
 /** Creates the durable operator-landing occurrence paired with its route mutation. */

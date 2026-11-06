@@ -1567,8 +1567,12 @@ a routed round instead of appended to the leaf plan:
 - **Host entry.** At BUILD-region entry the engine pins the host's base and tree, switches to the
   host branch, writes the round's frozen `rem-*` task blocks into the host's plan in one commit with
   a `Round: r<n>` trailer, binds each item's repair obligation to the host branch, and seeds task
-  status. Resume verifies that state and never re-appends. An entry with nothing left to build halts
-  `needs-human` with `routed host <k> entry derived already complete`; other failures halt with
+  status. Resume verifies that state and never re-appends. An `audit` round host with nothing left to
+  build settles as a no-op while another host is still `pending`, `restacked`, or `rerouted`: it moves
+  to `repairing` without credit, the route record stores `hostReasons.<k>: derived-already-complete`,
+  and the ordinary routed exit runs. A restart in that window resumes the exit instead of re-entering
+  the host. With no other host left to advance, the entry halts `needs-human` with
+  `routed host <k> entry derived already complete`. Other failures halt with
   `routed host <k> entry halted:` or `entry refused:` plus the detail.
 - **Membership.** `prepare-commit-msg` stamps `Round: r<n>` on commits made on the current host
   (hidden `ai-conductor round-stamp`). `ai-conductor task` and `task-membership-check` accept the

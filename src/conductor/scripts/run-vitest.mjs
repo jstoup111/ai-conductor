@@ -9,6 +9,9 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
+// Global setup can build the engine before worker setup files run. Do not let
+// an inherited diff hook materialize files in the operator's real tmpdir.
+delete process.env.GIT_EXTERNAL_DIFF;
 // A managed daemon process uses this private bypass to keep its PATH-level gh
 // observer from recursing.  Test fixtures own their own gh boundary, so passing
 // the bypass through makes production adapters escape those fixtures.

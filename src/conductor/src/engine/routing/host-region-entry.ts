@@ -21,7 +21,7 @@ import { readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHos
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
-import { assertNever, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
+import { assertNever, isDerivedAlreadyCompleteHost, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
 export type EnterHostRegionResult =
@@ -458,6 +458,12 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const hostState = stored.record.hosts[input.host];
   if (hostState !== 'admitted' && hostState !== 'repairing') {
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} is not admitted` };
+  }
+  // This state is written before an ordinary exit begins.  It must bypass all
+  // repairing-entry effects (including task seeding and repair credit) after a
+  // crash, even once its outbox event has been drained.
+  if (isDerivedAlreadyCompleteHost(stored.record, input.host)) {
+    return { kind: 'derived-already-complete', detail: 'persisted derived-already-complete settle' };
   }
 
   const pinned = await pinHostEntry(input.worktree, input.slug, stored, input.host, git);

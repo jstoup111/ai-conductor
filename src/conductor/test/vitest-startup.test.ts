@@ -56,6 +56,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
     '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
+    '  gitExternalDiff: process.env.GIT_EXTERNAL_DIFF,',
     '  nodeOptions: process.env.NODE_OPTIONS,',
     '  managedGhObserverBypass: process.env.CONDUCT_GH_REAL_EXECUTABLE,',
     '}), \'utf8\');',
@@ -114,6 +115,14 @@ describe('run-vitest startup', () => {
 
     expect(result.exitCode).toBe(0);
     expect(observation.managedGhObserverBypass).toBeUndefined();
+  });
+
+  it('does not forward an inherited external Git diff hook to Vitest', async () => {
+    const result = await launch({ GIT_EXTERNAL_DIFF: '/tmp/leaking-diff-hook' });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string | undefined>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.gitExternalDiff).toBeUndefined();
   });
 
   it('fails without either Vitest binary and reclaims its run root', async () => {
