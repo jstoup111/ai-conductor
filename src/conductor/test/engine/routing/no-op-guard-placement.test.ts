@@ -15,7 +15,7 @@ import { resolveExecutionChild, type ExecutionChildResolution } from '../../../s
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { settleDerivedNoOpHost } from '../../../src/engine/routing/routed-exit.js';
-import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, drainOutbox, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { dispatchStackRoundsCommand } from '../../../src/engine/stack-rounds-cli.js';
 import { resolveHaltRetention } from '../../../src/engine/daemon-rekick.js';
@@ -472,9 +472,12 @@ describe('routed host no-op guard placement', () => {
   });
 
   // Covers: task:5
-  it('resumes a crashed derived no-op settle through its exit without re-admitting host 1', async () => {
+  it('resumes a drained-outbox no-op settle through its exit without entering or crediting host 1', async () => {
     const { root, git } = await threeHostRoundFixture();
     await expect(settleDerivedNoOpHost({ worktree: root, slug: 'demo', roundId, host: child, git })).resolves.toEqual({ kind: 'settled' });
+    const settled = await readRouteRecord(root, 'demo', roundId, { git });
+    if (settled.kind !== 'record') throw new Error('missing settled route record');
+    await expect(drainOutbox(root, settled, async () => {}, { git })).resolves.toMatchObject({ kind: 'drained' });
     const entries = vi.fn(async ({ host }: { host: number }) => ({
       kind: host === child ? 'resume' : 'entered',
       pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
@@ -493,7 +496,8 @@ describe('routed host no-op guard placement', () => {
       enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.not.toBe(false);
     await persister.stop();
-    expect(entries).toHaveBeenCalledWith(expect.objectContaining({ host: 1 }));
+    expect(entries).not.toHaveBeenCalledWith(expect.objectContaining({ host: 1 }));
+    expect(entries).toHaveBeenCalledWith(expect.objectContaining({ host: 2 }));
     await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
       kind: 'record', record: { hosts: { 1: 'done', 2: 'admitted' } },
     });

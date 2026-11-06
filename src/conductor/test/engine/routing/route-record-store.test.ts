@@ -177,6 +177,7 @@ describe('ref-backed route record store', () => {
         kind: 'updated',
         record: {
           hosts: { [c1]: 'repairing' },
+          hostReasons: { [c1]: 'derived-already-complete' },
           outbox: [{
             event: {
               type: 'routed_repair_phase', host: c1, phase: 'repairing', credit: false,
