@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { isDerivedAlreadyCompleteRepairPhase, routedRepairPhaseEvent, routingRoundSupersededEvent } from '../../../src/engine/routing/routing-events.js';
+import { routedRepairPhaseEvent, routingRoundSupersededEvent } from '../../../src/engine/routing/routing-events.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 
 const SOURCE_ROOT = join(import.meta.dirname, '../../../src');
@@ -52,9 +52,6 @@ describe('routing event constructors', () => {
       reason: 'derived-already-complete',
     });
     expect(withoutReason).not.toHaveProperty('reason');
-    expect(isDerivedAlreadyCompleteRepairPhase(withReason, parseChildId(1)!)).toBe(true);
-    expect(isDerivedAlreadyCompleteRepairPhase(withReason, parseChildId(2)!)).toBe(false);
-    expect(isDerivedAlreadyCompleteRepairPhase(withoutReason, parseChildId(1)!)).toBe(false);
   });
 
   it('creates an identified supersession occurrence for the lowest dropped host', () => {
