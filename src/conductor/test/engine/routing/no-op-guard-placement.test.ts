@@ -385,10 +385,12 @@ describe('routed host no-op guard placement', () => {
   });
 
   // Covers: task:5
-  it('reports a recovered no-op round and its next-host marker', async () => {
+  it('recovers a cleared no-op HALT from an admitted host and reports its next-host marker', async () => {
     const { root, git } = await threeHostRoundFixture();
-    const settled = await settleDerivedNoOpHost({ worktree: root, slug: 'demo', roundId, host: child, git });
-    expect(settled).toEqual({ kind: 'settled' });
+    await writeFile(join(root, '.pipeline', 'HALT'), 'Outcome: derived-already-complete\n');
+    await writeFile(join(root, '.pipeline', 'HALT.class'), 'needs-human');
+    await rm(join(root, '.pipeline', 'HALT'));
+    await rm(join(root, '.pipeline', 'HALT.class'));
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
     persister.start();
@@ -397,7 +399,7 @@ describe('routed host no-op guard placement', () => {
       fromStep: 'build', verifyArtifacts: false, events, stepRunner: { run: vi.fn(async () => ({ success: true })) },
       config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
       childRegionLifecycle: { enterHostRegion: async ({ host }) => host === child
-        ? { kind: 'resume', pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim() as never }
+        ? { kind: 'derived-already-complete', detail: 'every routed task is already evidence-complete' } as never
         : { kind: 'entered', pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim() as never } },
     });
     const cursor = await resolveActiveChild(root, 'demo');
@@ -417,6 +419,57 @@ describe('routed host no-op guard placement', () => {
     expect(printed.join('\n')).toContain('hosts 1:done, 2:admitted, 3:pending');
     expect(printed.join('\n')).toContain('repair marker: host 2 round r1');
   }, 10_000);
+
+  // Covers: task:5
+  it.each(['revalidate', 'operator'] as const)('does not apply the audit no-op halt to an entering %s host', async (kind) => {
+    const operatorRoot = kind === 'operator' ? await operatorRoundFixture(true) : undefined;
+    const fixture = kind === 'operator'
+      ? { root: operatorRoot!, git: makeGitRunner(operatorRoot!) }
+      : await threeHostRoundFixture();
+    const { root, git } = fixture;
+    if (kind === 'revalidate') {
+      const stored = await readRouteRecord(root, 'demo', roundId, { git });
+      if (stored.kind !== 'record') throw new Error('missing route record');
+      await expect(writeRoutingTransaction(root, 'demo', [{
+        kind: 'update-record', previous: stored, record: { ...stored.record, kind },
+      }], { git })).resolves.toEqual({ kind: 'updated' });
+    }
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'build', verifyArtifacts: false, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+      childRegionLifecycle: { enterHostRegion: async () => ({ kind: 'entered', pinnedBase: (await git(['rev-parse', 'HEAD'])).stdout.trim() as never }) },
+    });
+    const cursor = await resolveActiveChild(root, 'demo');
+    await expect((conductor as unknown as {
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+    }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.not.toBe(false);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:5
+  it('keeps a single-host audit admission and re-halts derived completion', async () => {
+    const { root, git } = await threeHostRoundFixture();
+    const stored = await readRouteRecord(root, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('missing route record');
+    await expect(writeRoutingTransaction(root, 'demo', [{
+      kind: 'update-record', previous: stored, record: { ...stored.record, hosts: { [child]: 'admitted' }, currentHostIndex: 0 },
+    }], { git })).resolves.toEqual({ kind: 'updated' });
+    const conductor = new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
+      fromStep: 'build', verifyArtifacts: false, events: new ConductorEventEmitter(), stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      config: { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
+      childRegionLifecycle: { enterHostRegion: async () => ({ kind: 'derived-already-complete', detail: 'no dispatchable work' } as never) },
+    });
+    const cursor = await resolveActiveChild(root, 'demo');
+    await expect((conductor as unknown as {
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+    }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.toBe(false);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/Outcome: derived-already-complete\n$/);
+    await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'admitted' } },
+    });
+  });
 
   // Covers: task:5
   it('resumes a crashed derived no-op settle through its exit without re-admitting host 1', async () => {
