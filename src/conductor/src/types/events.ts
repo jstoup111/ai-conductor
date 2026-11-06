@@ -2293,7 +2293,7 @@ type ConductorEventBody =
       type: 'restack_resolution';
       opId: RestackOpId;
       child: ChildId;
-      action: 'recorded' | 'consumed';
+      action: 'recorded' | 'consumed' | 'retired';
       tip: CommitSha;
       operator?: string;
     }

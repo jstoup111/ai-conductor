@@ -1,17 +1,17 @@
-// Covers: task:5, task:6
+// Covers: task:5, task:6, task:7, task:8, task:10, task:11
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { ConductorEventEmitter } from '../../../src/engine/conductor-event-emitter.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
 import { haltRecordPathFor } from '../../../src/engine/restack/halt-record-bookkeeping.js';
-import { readConflictRecord, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import { consumeRecordedResolution, readConflictRecord, recordAnswer, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { sealStack } from './restack-sweepG2-fixture.js';
@@ -67,9 +67,16 @@ async function fixture(defaultPath = 'src/flag.ts'): Promise<Fixture> {
   return { repo, git, newDefault };
 }
 
+interface ResolutionFixture {
+  readonly child: string;
+  readonly path: string;
+  readonly subject: string;
+  readonly haltRecord?: string;
+}
+
 async function haltAndRecordTip(
   subject: Fixture,
-  resolution = { child: '2', path: 'src/flag.ts', subject: 'child two' },
+  resolution: ResolutionFixture = { child: '2', path: 'src/flag.ts', subject: 'child two' },
 ): Promise<RestackConflictRecord> {
   await expect(runRestack({
     worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
@@ -82,18 +89,33 @@ async function haltAndRecordTip(
   await writeFile(join(subject.repo, resolution.path), 'resolved\n');
   await subject.git(['add', resolution.path]);
   await subject.git(['commit', '-qm', resolution.subject]);
+  if (resolution.haltRecord !== undefined) {
+    const path = haltRecordPathFor('demo');
+    await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.repo, path), resolution.haltRecord);
+    await subject.git(['add', path]);
+    await subject.git(['commit', '-qm', 'halt record: demo']);
+  }
   const tip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
   await subject.git(['checkout', '-q', 'feat/daemon-demo']);
 
-  await expect(dispatchStackRestackResolve({ slug: 'demo', child: resolution.child, tip }, {
-    cwd: subject.repo,
-    resolveMainRoot: async () => subject.repo,
-    resolveWorktree: async () => subject.repo,
-    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
-    resolveOperator: async () => 'operator@example.test',
-    print: () => undefined,
-    git: makeGitRunner(subject.repo),
-  })).resolves.toBe(0);
+  if (resolution.haltRecord === undefined) {
+    await expect(dispatchStackRestackResolve({ slug: 'demo', child: resolution.child, tip }, {
+      cwd: subject.repo,
+      resolveMainRoot: async () => subject.repo,
+      resolveWorktree: async () => subject.repo,
+      acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
+      resolveOperator: async () => 'operator@example.test',
+      print: () => undefined,
+      git: makeGitRunner(subject.repo),
+    })).resolves.toBe(0);
+  } else {
+    await expect(recordAnswer(subject.repo, 'demo', { kind: 'tip', child: child(Number(resolution.child)), tip }, {
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'updated' });
+    await rm(join(subject.repo, '.pipeline', 'HALT'), { force: true });
+    await rm(join(subject.repo, '.pipeline', 'HALT.class'), { force: true });
+  }
   return stored.record;
 }
 
@@ -116,6 +138,26 @@ async function commitHaltRecord(subject: Fixture, contents: string): Promise<Com
   const result = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
   await subject.git(['checkout', '-q', 'feat/daemon-demo']);
   return result;
+}
+
+async function expectRecordedLeafRangeStale(subject: Fixture): Promise<void> {
+  const stored = await readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) });
+  if (stored.kind !== 'record') throw new Error('expected conflict record');
+  const replay = vi.fn(async () => {
+    throw new Error('stale resolution must not replay');
+  });
+  const liveTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
+
+  await expect(consumeRecordedResolution({
+    slug: 'demo',
+    range: { child: child(3), oldParent: stored.record.oldParent, oldTip: liveTip, kind: 'leaf-active' },
+    parent: stored.record.newParent,
+    committer: { name: 'Resolution drift', email: 'resolution@example.test', date: '2030-01-01T00:00:00Z' },
+    git: makeGitRunner(subject.repo),
+    replay,
+  })).resolves.toEqual({ kind: 'stale', field: 'range' });
+
+  expect(replay).not.toHaveBeenCalled();
 }
 
 afterEach(async () => {
@@ -148,13 +190,15 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
     await subject.git(['add', '.docs/halted/demo.md', 'src/a.ts']);
     await subject.git(['commit', '-qm', 'mixed halt record']);
 
+    await expectRecordedLeafRangeStale(subject);
+
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'must not resolve' }), resolverCap: 1,
     })).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('range');
-    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(3))])).resolves.toMatchObject({ exitCode: 0 });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(3))])).resolves.toMatchObject({ exitCode: 1 });
   });
 
   it('does not consume a recorded --tip when child 3 gained a halt-record merge commit', async () => {
@@ -165,13 +209,15 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
     await subject.git(['merge', '--no-ff', 'halt-record-side', '-m', 'merge halt record']);
 
+    await expectRecordedLeafRangeStale(subject);
+
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'must not resolve' }), resolverCap: 1,
     })).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('range');
-    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(3))])).resolves.toMatchObject({ exitCode: 0 });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(3))])).resolves.toMatchObject({ exitCode: 1 });
   });
 
   it('consumes a recorded --tip when the rebuilt parent only gained this feature’s halt record', async () => {
@@ -192,6 +238,31 @@ describe('recorded resolution parent-tree drift (real local Git)', () => {
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
     await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(2))])).resolves.toMatchObject({ exitCode: 1 });
     expect(record.newParent).not.toBe(advanced);
+  });
+
+  it('omits an operator halt-record commit and carries the newest parent record while consuming the tip', async () => {
+    const subject = await fixture();
+    await haltAndRecordTip(subject, {
+      child: '2', path: 'src/flag.ts', subject: 'child two',
+      haltRecord: 'Status: halted\nHalted at: 2030-01-01T00:00:00Z\n',
+    });
+    await commitHaltRecord(subject, 'Status: halted\nHalted at: 2031-01-01T00:00:00Z\n');
+    const advanced = await commitHaltRecord(subject, 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n');
+    const events: unknown[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('restack_resolution', (event) => events.push(event));
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced,
+      events: emitter, git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'must not resolve' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    const rebuilt = sha((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout);
+    await expect(subject.git(['show', `${rebuilt}:${haltRecordPathFor('demo')}`]))
+      .resolves.toMatchObject({ stdout: 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n' });
+    await expect(subject.git(['log', '--format=%s', 'feat/c1/demo']))
+      .resolves.toMatchObject({ stdout: expect.stringContaining('halt record: demo') });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed', child: 2 }));
   });
 
   it.each([

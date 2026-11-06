@@ -97,6 +97,18 @@ export type ConsumeRecordedResolutionResult =
     readonly resolution: ConsumedConflictRefs;
   };
 
+/** Result of retiring a resolution which is no longer safe to consume. */
+export type RetireRecordedResolutionResult =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'unavailable' }
+  | {
+    readonly kind: 'retired';
+    readonly tip: CommitSha;
+    /** Present only when the durable record belongs to this resolution child. */
+    readonly record?: RestackConflictRecord;
+  };
+
 export interface ConsumeRecordedResolutionInput {
   readonly slug: string;
   readonly range: ChildRange;
@@ -363,6 +375,36 @@ export function conflictDeleteLines(slug: string, refs: ConsumedConflictRefs): r
     `delete ${conflictRecordRefFor(slug)} ${refs.record}`,
     `delete ${conflictParentRefFor(slug)} ${refs.parent}`,
   ];
+}
+
+/**
+ * Remove one obsolete operator tip with the exact value observed at retirement.
+ * A mismatched conflict record deliberately remains intact: it belongs to a
+ * different child and must not be destroyed while this child resumes ordinary
+ * replay.
+ */
+export async function retireRecordedResolution(
+  worktree: string,
+  slug: string,
+  child: ChildId,
+  dependencies: ConflictRecordDependencies = {},
+): Promise<RetireRecordedResolutionResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const ref = resolutionRefFor(slug, child);
+  const resolved = await runGit(git, ['rev-parse', '-q', '--verify', `${ref}^{commit}`]);
+  if (resolved?.exitCode === 1) return { kind: 'missing' };
+  const tip = resolved?.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
+  if (!tip) return { kind: 'unavailable' };
+  const stored = await readConflictRecord(worktree, slug, { git });
+  if (stored.kind === 'unreadable') return { kind: 'unavailable' };
+  const deleted = await runGit(git, ['update-ref', '-d', ref, tip]);
+  if (deleted?.exitCode === 0) {
+    return {
+      kind: 'retired', tip,
+      ...(stored.kind === 'record' && stored.record.child === child ? { record: stored.record } : {}),
+    };
+  }
+  return deleted === undefined ? { kind: 'unavailable' } : { kind: 'stale' };
 }
 
 /** Subjects are an operator-resolution contract, not a patch-equivalence hint. */
