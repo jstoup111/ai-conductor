@@ -4,6 +4,19 @@ spec_hash: 6c3920b57fa56830f908b8310ebd825b841a7243621f9ac1eb66fc493acaa997
 pr: https://github.com/jstoup111/ai-conductor/pull/3595
 shipped: 2026-11-06
 engine_version: 20261106T030422Z-ec349cdd4c6c
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is a test-runner hygiene fix outside the routing feature's stated outcomes. It is likely a by-product of getting test_suite to pass after the halt. It changes only the test harness environment, not shipped engine behavior."
+    accepted: false
+    authority: engine
+  - gate: architecture_review_as_built
+    finding: "as-built:ea09e1b8-5e44-4b19-a705-1cf8f2e3dee4:1"
+    class: REMEDIABLE
+    governing_clause: "Task 5"
+    outcome: remediated
+    summary: "Verified (99%): src/conductor/src/engine/routing/routing-events.ts:36 exports isDerivedAlreadyCompleteRepairPhase without a production caller. Repository-wide search finds only its definition and test calls at src/conductor/test/engine/routing/routing-events.test.ts:55–57. Introduced for task 5 crash recovery, it became obsolete when recovery switched to isDerivedAlreadyCompleteHost."
 ---
 
 ## Cost
