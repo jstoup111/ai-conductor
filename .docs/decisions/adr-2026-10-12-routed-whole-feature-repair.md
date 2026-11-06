@@ -137,6 +137,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      - existing-task gaps ride their host's retry hint without a restage, as today's consolidated
        dispatch does.
 
+   > **Amended 2026-11-05 by #3590:** An item with an admitted existing-task binding is task-bound, even when it is an as-built finding citing only `<adr-stem> D<n>`. Its owner comes from decision 2's `taskSlices[taskId]`, and it never reaches the residue judgement. The residue is only what has no such binding. The earliest-candidate default is unchanged (`architecture-review-2026-11-05-routed-residue-finding-lands-on-a-taskless-host-an`).
+
 4. **Owner and host are separate; the host moves upward only on evidence.**
    - The **host** is the child that builds the fix. It defaults to the owner. The host branch is
      resolved through `feature-branch-identity`, never by string assembly.
@@ -270,6 +272,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    - **The no-op guard.** In a stacked round, the route-into-no-op guard
      (`adr-2026-07-13-kickback-build-no-op-escalation` decision 1) runs at the host's region entry,
      after the frozen blocks are written. It never runs at the leaf's route resolution.
+
+   > **Amended 2026-11-05 by #3590:** A host that the guard finds already evidence-complete no longer halts by itself. When the round has a later `pending` host, or another host ended `restacked` or `rerouted`, the host settles. It is marked `repairing` with no credit, and its `routed_repair_phase` event carries `reason: 'derived-already-complete'`. It then leaves through the ordinary routed exit (the no-commit `done` exit, or `built → restacked` if region entry committed), and reconciliation continues the round. The needs-human halt remains only when no host in the round did work. A cleared halt re-enters the host and reaches the same settle (`architecture-review-2026-11-05-routed-residue-finding-lands-on-a-taskless-host-an`).
 
    > **Amended 2026-10-24 by #3203:** An operator round is admitted by the CLI under the feature dispatch lease, through `openOperatorRound`, not by the gate loop. Reconciliation's navigate result carries the round's `entryStep`. An undeclared `land` round halts `operator-round-undeclared` before the base-refresh deferral and the navigate arms. With routing eligible, a `repair-pending` cursor with no marker no longer runs the automatic `feature-repair` restack; it halts `unlanded-closed-child-commits` (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 2, 5, 8, 9 and 10).
 

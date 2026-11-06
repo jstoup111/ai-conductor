@@ -50,6 +50,8 @@ decision; audit-logged via the existing `kickback` event plus a new distinguishi
 
 > **Amended 2026-10-24 by #3203:** The guard does not run at an operator round's host entry: a `land` round's change is already committed, and a `rewind` round re-runs gates (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 1).
 
+> **Amended 2026-11-05 by #3590:** In a routed audit round, a no-op host halts only when no host in the round did work. Otherwise it settles with no provider run and no credit, its `routed_repair_phase` event records `reason: 'derived-already-complete'`, and the round moves to its remaining hosts (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+
 ### D2 — Zero-progress + unchanged-verdict escalation (post-build re-entry)
 
 Track, per gate, that the current build entry was reached via a kickback and record the prior gate
