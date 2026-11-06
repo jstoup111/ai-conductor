@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
+// Covers: task:3, task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { execFile as execFileCallback } from 'node:child_process';
@@ -10,6 +10,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor } from '../../../src/engine/restack/cascade-cap.js';
 import { RESTACK_CASCADE_TIER_DEFAULTS } from '../../../src/engine/restack/cascade-allowance.js';
@@ -24,7 +25,7 @@ vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => 
 });
 
 import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
-import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
+import { advanceRound, settleDerivedNoOpHost } from '../../../src/engine/routing/routed-exit.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
@@ -137,6 +138,127 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  // Covers: task:3
+  it('settles an admitted audit host when later hosts are pending', async () => {
+    const subject = await fixture(false);
+    const childThree = parseChildId(3)!;
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'admitted', [childTwo]: 'pending', [childThree]: 'pending' },
+    }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: {
+        hosts: { 1: 'repairing', 2: 'pending', 3: 'pending' },
+        outbox: [expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'routed_repair_phase', host: 1, phase: 'repairing', credit: false, reason: 'derived-already-complete',
+          }),
+        })],
+      },
+    });
+  });
+
+  // Covers: task:3
+  it('settles an admitted last host when another host is restacked', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'restacked', [childTwo]: 'admitted' },
+      currentHostIndex: 1,
+    }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+  });
+
+  // Covers: task:3
+  it('settles an admitted last host when another host is rerouted', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'rerouted', [childTwo]: 'admitted' },
+      currentHostIndex: 1,
+    }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+  });
+
+  // Covers: task:3
+  it('halts without writing for a single-host round', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [host]: 'admitted' }, currentHostIndex: 0 }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'halt' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+  });
+
+  // Covers: task:3
+  it('halts without writing for a last host after all other hosts are done', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'done', [childTwo]: 'admitted' },
+      currentHostIndex: 1,
+    }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'halt' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+  });
+
+  // Covers: task:3
+  it('never grants routed repair credit while settling a derived no-op host', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [host]: 'admitted', [childTwo]: 'pending' } }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+
+    expect((await readKickbackLedger(subject.repo)).routedRepairCredit).toBeUndefined();
+  });
+
+  // Covers: task:3
+  it('refuses without writing when the round is revalidate', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, kind: 'revalidate', hosts: { [host]: 'admitted', [childTwo]: 'pending' } }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'refused' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+  });
+
+  // Covers: task:3
+  it('refuses without writing when the round is operator', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, kind: 'operator', hosts: { [host]: 'admitted', [childTwo]: 'pending' } }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'refused' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: `${before}\n` });
+  });
+
   // Covers: task:4
   it('drains routing outboxes before reconciling a restacked exit', async () => {
     const subject = await fixture(false);
