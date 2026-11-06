@@ -46,6 +46,16 @@ function command(...args: string[]) {
   return parsed;
 }
 
+function printedRebaseRecipe(halt: string): string[] {
+  const line = halt.split('\n').find((entry) => entry.startsWith('git rebase --onto '));
+  if (!line) throw new Error('expected a git rebase recipe in HALT');
+  const [executable, subcommand, ...args] = line.split(' ');
+  if (executable !== 'git' || subcommand !== 'rebase' || args[0] !== '--onto') {
+    throw new Error(`expected a git rebase --onto recipe, got ${line}`);
+  }
+  return args;
+}
+
 function resolveDeps(repo: string, print: (message: string) => void = () => undefined) {
   return {
     cwd: repo, print,
@@ -216,6 +226,7 @@ describe('stale restack resolutions (real local Git)', () => {
     const changedTip = sha((await value.git(['rev-parse', 'HEAD'])).stdout);
     await value.git(['update-ref', 'refs/conductor/demo/closed/c2', changedTip]);
     await value.git(['checkout', '-q', 'feat/daemon-demo']);
+    await expect(value.runner(['rebase', '--onto', changedTip, value.second])).resolves.toMatchObject({ exitCode: 0 });
     const before = await stackRefs(value);
     const advanced = await advanceParent(value);
     const events = new ConductorEventEmitter();
@@ -348,7 +359,7 @@ describe('stale restack resolutions (real local Git)', () => {
     expect({ consumed, resolverCalls: resolver.mock.calls.length }).toEqual({ consumed: [], resolverCalls: 1 });
   });
 
-  it('lets an operator use the stale halt recipes for a tip or decision, while refusing a non-descendant tip without changing HALT', async () => {
+  it('consumes the tip produced by the stale-HALT rebase recipe without a test-side ref update', async () => {
     const tipSubject = await subject();
     await recordTip(tipSubject);
     const advanced = await advanceParent(tipSubject);
@@ -356,9 +367,15 @@ describe('stale restack resolutions (real local Git)', () => {
     const fresh = await readConflictRecord(tipSubject.repo, 'demo', { git: tipSubject.runner });
     if (fresh.kind !== 'record') throw new Error('expected stale conflict record');
     const halt = await readFile(join(tipSubject.repo, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain(`git rebase --onto ${fresh.record.newParent} ${fresh.record.oldParent}`);
+    const recipe = printedRebaseRecipe(halt);
+    expect(recipe).toEqual(['--onto', fresh.record.newParent, fresh.record.oldParent]);
     await tipSubject.git(['checkout', '-qb', 'recipe-tip', fresh.record.oldTip]);
-    const rebased = await tipSubject.runner(['rebase', '--onto', fresh.record.newParent, fresh.record.oldParent]);
+    const recipeCalls: string[][] = [];
+    const runRecipe = async () => {
+      recipeCalls.push(recipe);
+      return tipSubject.runner(['rebase', ...recipe]);
+    };
+    const rebased = await runRecipe();
     expect(rebased.exitCode).toBe(1);
     await writeFile(join(tipSubject.repo, 'shared.txt'), 'resolved again\n');
     await tipSubject.git(['add', 'shared.txt']);
@@ -371,8 +388,15 @@ describe('stale restack resolutions (real local Git)', () => {
     events.on('restack_resolution', (event) => { consumed.push(event); });
     await expect(runRestack({ worktree: tipSubject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: tipSubject.runner }))
       .resolves.toMatchObject({ kind: 'applied' });
-    expect(consumed).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed' }));
+    const appliedTip = sha((await tipSubject.git(['rev-parse', 'feat/c2/demo'])).stdout);
+    expect(consumed).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed', tip: appliedTip }));
+    expect(await tipSubject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).toMatchObject({ stdout: `${appliedTip}\n` });
+    expect(await tipSubject.git(['show', `${appliedTip}:shared.txt`])).toMatchObject({ stdout: 'resolved again\n' });
+    expect(recipeCalls).toEqual([['--onto', fresh.record.newParent, fresh.record.oldParent]]);
+    expect(recipeCalls.flat()).not.toContain('update-ref');
+  });
 
+  it('records a stale-HALT decision, clears HALT, and delivers it to the next resolver', async () => {
     const decisionSubject = await subject();
     await recordTip(decisionSubject);
     const decisionDefault = await advanceParent(decisionSubject);
