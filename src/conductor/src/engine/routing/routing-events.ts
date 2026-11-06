@@ -33,7 +33,7 @@ export function routedRepairPhaseEvent(
 }
 
 /** Identifies a repairing transition created when route entry found no work. */
-export function isDerivedAlreadyCompleteRepairPhase(event: ConductorEvent, host: ChildId): boolean {
+export function isDerivedAlreadyCompleteRepairPhase(event: Readonly<Record<string, unknown>>, host: ChildId): boolean {
   return event.type === 'routed_repair_phase' && event.host === host &&
     event.phase === 'repairing' && event.reason === 'derived-already-complete';
 }
