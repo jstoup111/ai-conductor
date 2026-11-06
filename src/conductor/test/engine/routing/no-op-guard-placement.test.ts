@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
+import { resolveActiveChild, type ActiveChildResolution } from '../../../src/engine/child-cursor.js';
 import { Conductor } from '../../../src/engine/conductor.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { resolveExecutionChild } from '../../../src/engine/routing/execution-child.js';
+import { resolveExecutionChild, type ExecutionChildResolution } from '../../../src/engine/routing/execution-child.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { settleDerivedNoOpHost } from '../../../src/engine/routing/routed-exit.js';
@@ -232,7 +232,7 @@ describe('routed host no-op guard placement', () => {
     const execution = resolveExecutionChild(cursor, 'demo');
     const entered = await (conductor as unknown as {
       enterRoutedHostRegion(
-        current: typeof execution, slug: string, state: Record<string, unknown>, cursor: typeof cursor,
+        current: ExecutionChildResolution, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution,
       ): Promise<{ readonly target: { readonly child: number } } | false>;
     }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
     await persister.stop();
@@ -281,7 +281,7 @@ describe('routed host no-op guard placement', () => {
     const cursor = await resolveActiveChild(root, 'demo');
     const execution = resolveExecutionChild(cursor, 'demo');
     const entered = await (conductor as unknown as {
-      enterRoutedHostRegion(current: typeof execution, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+      enterRoutedHostRegion(current: ExecutionChildResolution, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
     await persister.stop();
 
@@ -338,7 +338,7 @@ describe('routed host no-op guard placement', () => {
     const cursor = await resolveActiveChild(root, 'demo');
     const execution = resolveExecutionChild(cursor, 'demo');
     const leafResult = await (conductor as unknown as {
-      enterRoutedHostRegion(current: typeof execution, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+      enterRoutedHostRegion(current: ExecutionChildResolution, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(execution, 'demo', { feature_desc: 'demo' }, cursor);
     await persister.stop();
 
@@ -404,7 +404,7 @@ describe('routed host no-op guard placement', () => {
     });
     const cursor = await resolveActiveChild(root, 'demo');
     const entered = await (conductor as unknown as {
-      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor);
     await persister.stop();
 
@@ -414,7 +414,7 @@ describe('routed host no-op guard placement', () => {
     });
     const printed: string[] = [];
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-inspect', slug: 'demo' }, {
-      cwd: root, resolveMainRoot: async () => root, resolveWorktree: async () => root, print: (line) => printed.push(line), git,
+      cwd: root, resolveMainRoot: async () => root, resolveWorktree: async () => root, print: (line: string) => printed.push(line), git,
     } as never)).resolves.toBe(0);
     expect(printed.join('\n')).toContain('hosts 1:done, 2:admitted, 3:pending');
     expect(printed.join('\n')).toContain('repair marker: host 2 round r1');
@@ -442,7 +442,7 @@ describe('routed host no-op guard placement', () => {
     });
     const cursor = await resolveActiveChild(root, 'demo');
     await expect((conductor as unknown as {
-      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.not.toBe(false);
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -463,7 +463,7 @@ describe('routed host no-op guard placement', () => {
     });
     const cursor = await resolveActiveChild(root, 'demo');
     await expect((conductor as unknown as {
-      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.toBe(false);
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/Outcome: derived-already-complete\n$/);
     await expect(readRouteRecord(root, 'demo', roundId, { git })).resolves.toMatchObject({
@@ -490,7 +490,7 @@ describe('routed host no-op guard placement', () => {
     });
     const cursor = await resolveActiveChild(root, 'demo');
     await expect((conductor as unknown as {
-      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: typeof cursor): Promise<unknown>;
+      enterRoutedHostRegion(current: unknown, slug: string, state: Record<string, unknown>, cursor: ActiveChildResolution): Promise<unknown>;
     }).enterRoutedHostRegion(resolveExecutionChild(cursor, 'demo'), 'demo', { feature_desc: 'demo' }, cursor)).resolves.not.toBe(false);
     await persister.stop();
     expect(entries).toHaveBeenCalledWith(expect.objectContaining({ host: 1 }));
