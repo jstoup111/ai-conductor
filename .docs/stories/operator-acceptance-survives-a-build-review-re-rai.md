@@ -256,12 +256,15 @@ As an operator, I want a clean build_review PASS to settle an action case whose 
 - Given open action case O with a `failed` effect whose source is still raised and unaccepted, when a PASS is attempted, then settlement halts naming O and the exact command `ai-conductor build-review resolve-case --feature <slug> --case <O>`, with `--child <child>` when the case store is child-scoped.
 - Given open action case O whose source is not raised on a lap where any built-in or custom rubric had an infrastructure failure or incomplete scope, even when a reduced-coverage decision covers it, when the lap settles, then O is not retired by absence.
 - Given a failed deferral or an open decision stop that no operator resolved with `build-review resolve-case`, when a clean PASS is attempted, then settlement still blocks exactly as today.
+- Given open deferral case D with a `reserved` or `failed` effect, such as a deferral whose intake issue was never filed, when a clean PASS is attempted, then settlement blocks naming D and the exact command `ai-conductor build-review resolve-case --feature <slug> --case <D>`, with `--child <child>` when the case store is child-scoped (#3575).
+- Given an adjudication lap halts `remediation effect is not finalized` on an open case, when the halt is recorded, then it names that case and the exact `resolve-case` command; a halt whose unfinished effect belongs only to resolved cases keeps the bare reason (#3575).
 - Given settlement runs again after a crash, when O is retired, then O is resolved once and exactly one `remediation_case_reconciled` event exists for it.
 
 ### Done When
 - [ ] The #3303 store shape is replayed through the conductor and settles at PASS without a hand edit.
 - [ ] Tests pin the still-raised block, the unhealthy-lap no-retire and the deferral or decision-stop block.
 - [ ] The halt text test asserts the exact `resolve-case` command with and without `--child`.
+- [ ] The deferral clean-PASS halt and the not-finalized adjudication halt tests assert the exact `resolve-case` command.
 
 ---
 

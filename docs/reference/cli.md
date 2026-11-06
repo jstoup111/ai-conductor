@@ -238,7 +238,7 @@ empty rationale, an invalid child id, a non-interactive session, an unresolved i
 mismatch is refused without changing the store and exits 1. A resolved case can carry acceptance to
 later same-substance findings; see
 [post-join build-review adjudication](../explanation/gates.md#post-join-build-review-adjudication).
-Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case).
+Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-or-deferral-case).
 
 ## `ai-conductor done-when`
 

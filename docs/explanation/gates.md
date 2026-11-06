@@ -929,7 +929,7 @@ failure or incomplete scope in that lap; a reduced-coverage decision does not ma
 action case whose effect is `failed` or `reserved` also retires when every source is covered, and a
 `reserved` effect becomes `failed` with a diagnostic. A failed action whose source is still raised
 and unaccepted, a failed deferral, and an open decision stop still block; the halt names the exact
-[`resolve-case` command](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case)
+[`resolve-case` command](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-or-deferral-case)
 for an action case. Inspect the durable state and lifecycle events in
 [`artifacts`](../reference/artifacts.md#verdict-and-evidence-artifacts) when diagnosing a halt.
 
