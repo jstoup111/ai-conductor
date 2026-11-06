@@ -229,7 +229,8 @@ import { isDerivedAlreadyCompleteRepairPhase } from './routing/routing-events.js
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
-import { settleDerivedNoOpHost, type requestRoutedExit } from './routing/routed-exit.js';
+import { settleDerivedNoOpHost } from './routing/routed-exit.js';
+import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
