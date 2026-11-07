@@ -320,8 +320,7 @@ Most cycles will NOT trigger a memory write — that is correct. Only persist ge
 ### Refactoring
 
 Refactoring never happens during GREEN. It runs at batch boundaries through the `simplify` workflow
-(Claude `/simplify`; Codex `$simplify`), in its own commits, and uses simplify's thresholds: 3+
-similar blocks across files, or a method over 25 lines, 4 conditional branches, or 3 nesting levels.
+(Claude `/simplify`; Codex `$simplify`), in its own commits, and uses simplify's thresholds.
 
 ### User-Requested Exit During TDD
 
