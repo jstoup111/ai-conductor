@@ -1,4 +1,4 @@
-// Covers: task:3, task:8
+// Covers: task:3, task:8, task:12
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,7 +34,7 @@ afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repository) => rm(repository, { recursive: true, force: true })));
 });
 
-async function fixture(q: 'carried' | 'not-carried' | 'empty') {
+async function fixture(q: 'carried' | 'not-carried' | 'empty' | 'none' | 'clean') {
   const repo = await mkdtemp(join(tmpdir(), 'restack-merge-bearing-conflict-'));
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -67,7 +67,7 @@ async function fixture(q: 'carried' | 'not-carried' | 'empty') {
     await git(['add', 'shared.txt']);
     await git(['commit', '-qm', 'merge carried Q']);
     await git(['checkout', '-q', 'main']);
-  } else {
+  } else if (q !== 'none') {
     await git(['checkout', '-qb', 'uncarried-side', childOne]);
     await commit('uncarried side', 'side.txt', 'side\n');
     await git(['checkout', '-q', 'feat/c2/demo']);
@@ -84,7 +84,7 @@ async function fixture(q: 'carried' | 'not-carried' | 'empty') {
     await git(['commit', '-qm', 'new default carries merge']);
     newDefault = sha((await git(['rev-parse', 'HEAD'])).stdout);
   } else {
-    newDefault = await commit('new default', 'shared.txt', 'default\n');
+    newDefault = await commit('new default', q === 'clean' ? 'default.txt' : 'shared.txt', 'default\n');
   }
   await git(['update-ref', 'refs/conductor/demo/closed/c2', merge]);
   await git(['checkout', '-qb', 'feat/daemon-demo', merge]);
@@ -124,6 +124,20 @@ function resolveDeps(repo: string, print: (message: string) => void = () => unde
 }
 
 describe('runRestack merge-bearing conflicts (real local Git)', () => {
+  // Covers: task:12
+  it('uses plumbing replay for a clean merge-bearing child without dispatching the resolver or pinning a hand-off', async () => {
+    const subject = await fixture('clean');
+    let calls = 0;
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: async () => { calls += 1; return { resolved: false, reason: 'must not run' }; },
+    })).resolves.toMatchObject({ kind: 'applied' });
+    expect(calls).toBe(0);
+    const tip = sha((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout);
+    expect((await subject.git(['log', '--format=%B', `${subject.newDefault}..${tip}`])).stdout).toContain(`Flattened-merge: ${subject.merge}`);
+    await expect(subject.git(['show-ref', '--verify', '--quiet', conflictFlattenedTipRefFor('demo')])).rejects.toMatchObject({ code: 1 });
+  });
+
   // Covers: task:9
   it('consumes a resolution made by following the printed flattened-tip recipe', async () => {
     const subject = await fixture('not-carried');
