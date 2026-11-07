@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-06
+## [1.7.0] - 2026-11-07
 
 ### Added
 
@@ -244,6 +244,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Routed builds on Codex no longer halt with "routed prerequisite claim is malformed" when a completed result also fills claim fields. ([implementation PR #3589](https://github.com/jstoup111/ai-conductor/pull/3589)).
 - build_review halts on an open deferral case, or on an unfinished remediation effect, now print the exact `ai-conductor build-review resolve-case` command that recovers them. ([implementation PR #3592](https://github.com/jstoup111/ai-conductor/pull/3592)).
 - Stacked routed repairs now continue past already-complete hosts and stay assigned to their task-owning child. ([implementation PR #3595](https://github.com/jstoup111/ai-conductor/pull/3595)).
+- Operators resolve stacked restack conflicts without halt bookkeeping making valid tip resolutions stale. ([implementation PR #3596](https://github.com/jstoup111/ai-conductor/pull/3596)).
 
 ## Migration
 
