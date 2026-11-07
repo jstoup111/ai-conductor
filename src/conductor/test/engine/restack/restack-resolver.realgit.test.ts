@@ -7,7 +7,8 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
+import { missingCandidateSubjects } from '../../../src/engine/restack/restack-conflict-record.js';
+import { replayCandidateSubjects, resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
 import type { CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -102,7 +103,7 @@ async function refSnapshot(repo: string): Promise<string> {
   return (await execFile('git', ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/'], { cwd: repo })).stdout;
 }
 
-async function mergeFixture(kind: 'q-carried' | 'ancestry-only'): Promise<{
+async function mergeFixture(kind: 'q-carried' | 'ancestry-only' | 'flattened'): Promise<{
   repo: string;
   range: ChildRange;
   newParent: CommitSha;
@@ -121,23 +122,28 @@ async function mergeFixture(kind: 'q-carried' | 'ancestry-only'): Promise<{
   await git(['config', 'user.name', 'Merge fixture']);
   await git(['config', 'user.email', 'merge-fixture@example.test']);
   await writeFile(join(repo, 'shared.txt'), 'base\n');
+  await writeFile(join(repo, 'side.txt'), 'base\n');
   const base = await commit('base');
   await git(['checkout', '-qb', 'child']);
   await writeFile(join(repo, 'child.txt'), 'C\n');
   await commit('C');
   await git(['checkout', '-qb', 'side', base]);
-  await writeFile(join(repo, 'shared.txt'), 'side\n');
+  await writeFile(join(repo, 'side.txt'), 'side work\n');
   const sideSubject = 'S';
   await commit(sideSubject);
   await git(['checkout', '-q', 'main']);
-  await git(['merge', '--no-ff', '-m', 'carry side', 'side']);
-  await writeFile(join(repo, 'shared.txt'), 'parent later edit\n');
-  const newParent = await commit('parent later edit');
+  if (kind !== 'flattened') {
+    await git(['merge', '--no-ff', '-m', 'carry side', 'side']);
+    await writeFile(join(repo, 'side.txt'), 'later main edit\n');
+    await commit('later main edit');
+  }
+  await writeFile(join(repo, 'shared.txt'), 'parent conflict\n');
+  const newParent = await commit('parent conflict');
   await git(['checkout', '-q', 'child']);
   if (kind === 'q-carried') {
     await git(['merge', '--no-ff', '--no-commit', 'side']);
-    await writeFile(join(repo, 'shared.txt'), 'hand edit\n');
-    await git(['add', 'shared.txt']);
+    await writeFile(join(repo, 'hand.txt'), 'hand edit\n');
+    await git(['add', 'hand.txt']);
     await git(['commit', '-qm', 'M']);
   } else {
     await git(['merge', '--no-ff', '-m', 'M', 'side']);
@@ -160,7 +166,7 @@ describe('resolveRestackConflict (real local Git)', () => {
     const result = await resolveRestackConflict({
       worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
       resolver: async (context) => {
-        await writeFile(join(context.projectRoot, 'shared.txt'), 'hand edit\n');
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'settled child edit\n');
         const git = makeGitRunner(context.projectRoot);
         await git(['add', 'shared.txt'], { env: context.environment });
         await git(['rebase', '--continue'], { env: context.environment });
@@ -170,11 +176,34 @@ describe('resolveRestackConflict (real local Git)', () => {
 
     expect(result.outcome.kind).toBe('changed');
     expect(result.tip).toBeDefined();
-    expect((await execFile('git', ['show', `${result.tip}:shared.txt`], { cwd: subject.repo })).stdout).toBe('later child edit\n');
+    expect((await execFile('git', ['show', `${result.tip}:hand.txt`], { cwd: subject.repo })).stdout).toBe('hand edit\n');
+    expect((await execFile('git', ['show', `${result.tip}:side.txt`], { cwd: subject.repo })).stdout).toBe('later main edit\n');
     expect((await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout).toContain('M');
     expect((await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout).not.toContain(subject.sideSubject);
+    const candidateSubjects = await replayCandidateSubjects(makeGitRunner(subject.repo), result.candidates);
+    expect(candidateSubjects).not.toContain(subject.sideSubject);
+    await expect(missingCandidateSubjects(makeGitRunner(subject.repo), subject.newParent, result.tip!, candidateSubjects)).resolves.toEqual([]);
     expect(result.rewrites.get(subject.merge)).toBeDefined();
     expect(result.audit).toMatchObject({ flattenedMerges: [] });
+  });
+
+  it('maps a not-carried flattened merge rewrite to its original merge and reports it in the audit', async () => {
+    const subject = await mergeFixture('flattened');
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'settled child edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    const candidateSubjects = await replayCandidateSubjects(makeGitRunner(subject.repo), result.candidates);
+    expect(result.outcome.kind).toBe('changed');
+    expect(result.rewrites.get(subject.merge)).toBeDefined();
+    expect(result.audit).toMatchObject({ flattenedMerges: [subject.merge] });
+    expect(candidateSubjects).not.toContain(subject.sideSubject);
   });
 
   it('preserves the no-merge resolver path and reports no merge audit', async () => {
