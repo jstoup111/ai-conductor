@@ -37,7 +37,7 @@ async function dispatch(argv: string[]) {
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'decisions-cli-'));
-  await execFile('git', ['init', '-q'], { cwd: root });
+  await execFile('git', ['init', '-q', '-b', 'main'], { cwd: root });
   await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
   await writeRecord('adr-2026-01-02-runtime.md', [
     '**Date:** 2026-01-02',
