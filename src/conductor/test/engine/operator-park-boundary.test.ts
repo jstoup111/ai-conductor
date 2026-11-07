@@ -11,6 +11,7 @@ import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { resolveGroupMembership } from '../../src/engine/conductor.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type {
@@ -284,6 +285,107 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
+  });
+
+  // Covers: task:4
+  it('preempts at the next serial-unit boundary after the last settled unit', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const events = new ConductorEventEmitter();
+    const eventsPath = join(projectRoot, '.pipeline', 'events.jsonl');
+    const persister = new EventPersister(eventsPath, events);
+    persister.start();
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run }, events,
+      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
+      featureSlug: 'preempted-feature', operatorParkBoundary: async () => false,
+      preemptionRequested: () => run.mock.calls.length === 1,
+    });
+
+    const result = await conductor.run();
+    persister.stop();
+    const persistedEvents = (await readFile(eventsPath, 'utf8')).trim().split('\n').map(JSON.parse);
+
+    expect({ result, steps: run.mock.calls.map(([step]) => step), persistedEvents }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'step', name: 'memory' } },
+      steps: ['memory'],
+      persistedEvents: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'preemption_boundary', featureSlug: 'preempted-feature',
+          boundary: { kind: 'step', name: 'memory' },
+        }),
+      ]),
+    });
+    expect(persistedEvents.filter((event: ConductorEvent) => event.type === 'preemption_boundary')).toHaveLength(1);
+    expect(persistedEvents.some((event: ConductorEvent) => event.type === 'operator_park_boundary')).toBe(false);
+  });
+
+  // Covers: task:4
+  it('gives an active or unreadable operator park precedence over a yield', async () => {
+    const runCase = async (operatorParkBoundary: NonNullable<ConductorOptions['operatorParkBoundary']>) => {
+      const root = await mkdtemp(join(tmpdir(), 'operator-park-wins-'));
+      const path = join(root, 'conduct-state.json');
+      await writeState(path, stateWithPending('memory'));
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('operator_park_boundary', (event) => { seen.push(event); });
+      events.on('preemption_boundary', (event) => { seen.push(event); });
+      const result = await new Conductor({
+        projectRoot: root, stateFilePath: path, stepRunner: { run: async () => ({ success: true }) }, events,
+        fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
+        featureSlug: 'park-wins', operatorParkBoundary, preemptionRequested: () => true,
+      }).run();
+      await rm(root, { recursive: true, force: true });
+      return { result, seen };
+    };
+
+    await expect(runCase(async () => true)).resolves.toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+      seen: [expect.objectContaining({ type: 'operator_park_boundary' })],
+    });
+    await expect(runCase(async () => { throw new Error('unreadable'); })).resolves.toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+      seen: [expect.objectContaining({ type: 'operator_park_boundary' })],
+    });
+  });
+
+  // Covers: task:4
+  it('keeps ordinary park events unchanged and ignores preemption in interactive runs', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const parkEvents: ConductorEvent[] = [];
+    const parkEmitter = new ConductorEventEmitter();
+    parkEmitter.on('operator_park_boundary', (event) => { parkEvents.push(event); });
+    const parkResult = await new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: async () => ({ success: true }) }, events: parkEmitter,
+      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
+      featureSlug: 'ordinary-park', operatorParkBoundary: async () => true,
+    }).run();
+
+    const interactiveRoot = await mkdtemp(join(tmpdir(), 'interactive-preemption-'));
+    const interactiveStatePath = join(interactiveRoot, 'conduct-state.json');
+    await writeState(interactiveStatePath, stateWithPending('memory'));
+    const preemptionRequested = vi.fn(() => true);
+    const interactiveRun = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const interactiveResult = await new Conductor({
+      projectRoot: interactiveRoot, stateFilePath: interactiveStatePath, stepRunner: { run: interactiveRun }, events: new ConductorEventEmitter(),
+      fromStep: 'memory', mode: 'interactive', daemon: false, verifyArtifacts: false,
+      featureSlug: 'interactive-preemption', preemptionRequested,
+    }).run();
+    await rm(interactiveRoot, { recursive: true, force: true });
+
+    expect({ parkResult, parkEvents, interactiveResult, interactiveSteps: interactiveRun.mock.calls.length, preemptionCalls: preemptionRequested.mock.calls.length })
+      .toEqual({
+        parkResult: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+        parkEvents: [expect.objectContaining({ type: 'operator_park_boundary' })],
+        interactiveResult: undefined,
+        interactiveSteps: 1,
+        preemptionCalls: 0,
+      });
+  });
+
+  // Covers: task:4
+  it('declares preemption boundaries renderable and persistent only', () => {
+    expect(EVENT_SINKS.preemption_boundary).toEqual({ render: true, persist: true, audit: false, otel: false });
   });
 
   it('parks before the first pending serial unit when the boundary reader rejects', async () => {
@@ -640,7 +742,7 @@ describe('operator park boundary contract', () => {
       terminalMarkers: await terminalMarkerNames(projectRoot), eventTail: boundaries.at(-1) }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'test_suite', attempt: 1 } },
       suiteDispatches: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
       terminalMarkers: [],
       eventTail: boundaries.at(-1),
     });
@@ -663,7 +765,7 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
     });
   });
 
@@ -685,7 +787,7 @@ describe('operator park boundary contract', () => {
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
       runnerCalls: 1,
       refreshCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
     });
   });
 
@@ -714,7 +816,7 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'build_review', attempt: 2 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
     });
   });
 
@@ -743,7 +845,7 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length, retries, timeline, memory: persisted.ok ? persisted.value.memory : persisted }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 2 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
       retries: [expect.objectContaining({ step: 'memory', attempt: 2 })],
       timeline: ['retry', 'park'],
       memory: 'in_progress',

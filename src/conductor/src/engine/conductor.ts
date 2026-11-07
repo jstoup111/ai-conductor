@@ -580,6 +580,7 @@ import type {
   FinishPublicationCoordinator,
   NavigableStep,
   OperatorParkedTermination,
+  PreemptedTermination,
 } from "./conductor-options.js";
 import {
   clampToRunnablePrerequisite,
@@ -601,7 +602,7 @@ import {
 } from './step-completion.js';
 export { buildOutcomeRung, graderDispatchBackoffMs, toSpotAuditVerifierResult } from "./step-runner-types.js";
 export type { ComplexityAssessment, SpotAuditDispatchResult, StepRunOptions, StepRunResult, StepRunner } from "./step-runner-types.js";
-export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination } from "./conductor-options.js";
+export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination, PreemptedTermination } from "./conductor-options.js";
 export {
   clampToRunnablePrerequisite,
   earliestResolvablePrerequisiteIndex,
@@ -1346,7 +1347,9 @@ export class Conductor {
   }
 
   private featureSlug?: string;
+  private rawOperatorParkBoundary?: () => Promise<boolean>;
   private operatorParkBoundary?: () => Promise<boolean>;
+  private preemptionRequested?: () => boolean;
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
@@ -2994,7 +2997,11 @@ export class Conductor {
       },
     });
     this.featureSlug = opts.featureSlug;
-    this.operatorParkBoundary = opts.operatorParkBoundary;
+    this.rawOperatorParkBoundary = opts.operatorParkBoundary;
+    this.preemptionRequested = opts.preemptionRequested;
+    this.operatorParkBoundary = opts.preemptionRequested === undefined
+      ? opts.operatorParkBoundary
+      : async () => Boolean(await opts.operatorParkBoundary?.()) || opts.preemptionRequested!();
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
@@ -7477,7 +7484,7 @@ export class Conductor {
     return checkStepCompletion(this.projectRoot, 'build', { ...ctx, unverifiedDoneWhenNudgeSpent: true });
   }
 
-  async run(): Promise<OperatorParkedTermination | undefined> {
+  async run(): Promise<OperatorParkedTermination | PreemptedTermination | undefined> {
     this.shutdownRequested = false;
     await this.transcriptRetention.ready();
     // #788 regression guard: the phase-active marker creates `.pipeline/`
@@ -8412,9 +8419,9 @@ export class Conductor {
     let parkedForRouting = false;
     const stopAtOperatorParkBoundary =
       async (
-        alreadyObserved = false,
+        _alreadyObserved = false,
         observedBoundary?: SchedulingUnitRef,
-      ): Promise<OperatorParkedTermination | undefined> => {
+      ): Promise<OperatorParkedTermination | PreemptedTermination | undefined> => {
         if (
           !this.daemon ||
           this.featureSlug === undefined ||
@@ -8423,27 +8430,36 @@ export class Conductor {
           return undefined;
         }
 
-        const operatorParkRequested = alreadyObserved || await this.operatorParkBoundary().catch(() => true);
-        if (!operatorParkRequested) {
-          return undefined;
-        }
-
         const boundary: SchedulingUnitRef = observedBoundary ?? lastSettledUnit ?? { kind: 'pre-first-unit' };
+        const operatorParkRequested = await this.rawOperatorParkBoundary?.().catch(() => true) ?? false;
         // A declined attempt leaves the owning step in_progress, but the
         // admitted execution window still needs its truthful interruption
         // terminal. Close it before announcing the operator boundary so the
         // boundary is the event-stream terminal, rather than letting finally
         // append step_interrupted after it.
+        if (operatorParkRequested || (_alreadyObserved && !this.preemptionRequested?.())) {
+          await this.closeOpenExecutions();
+          await emitTracked({
+            type: 'operator_park_boundary',
+            featureSlug: this.featureSlug,
+            boundary,
+          });
+          process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
+          parkedAtOperatorBoundary = true;
+          return { kind: 'operator-parked', boundary };
+        }
+
+        if (!this.preemptionRequested?.()) return undefined;
         await this.closeOpenExecutions();
         await emitTracked({
-          type: 'operator_park_boundary',
+          type: 'preemption_boundary',
           featureSlug: this.featureSlug,
           boundary,
         });
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
-        parkedAtOperatorBoundary = true;
-        return { kind: 'operator-parked', boundary };
+        return { kind: 'preempted', boundary };
       };
     // Late declarations cannot reopen existing work, but their refusal must be
     // visible even when resume/settled-state short circuits skip the step loop.

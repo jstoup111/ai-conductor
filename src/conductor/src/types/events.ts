@@ -1393,6 +1393,11 @@ type ConductorEventBody =
       featureSlug: string;
       boundary: SchedulingUnitRef;
     }
+  | {
+      type: 'preemption_boundary';
+      featureSlug: string;
+      boundary: SchedulingUnitRef;
+    }
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent

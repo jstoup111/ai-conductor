@@ -177,6 +177,7 @@ export const EVENT_SINKS = {
   session_reset: { render: true, persist: true, audit: false, otel: false },
   credentials_park: { render: false, persist: true, audit: false, otel: false },
   operator_park_boundary: { render: true, persist: true, audit: false, otel: false },
+  preemption_boundary: { render: true, persist: true, audit: false, otel: false },
   credentials_park_progress: { render: true, persist: true, audit: false, otel: false },
   finish_publication_transition: { render: true, persist: true, audit: false, otel: false },
   finish_publication_blocked: { render: true, persist: true, audit: false, otel: false },
