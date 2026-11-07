@@ -76,6 +76,7 @@ async function fixture(q: 'carried' | 'not-carried' | 'empty' | 'none' | 'clean'
   }
 
   const merge = sha((await git(['rev-parse', 'feat/c2/demo'])).stdout);
+  if (q === 'none') await git(['checkout', '-q', 'main']);
   let newDefault: CommitSha;
   if (q === 'empty') {
     await writeFile(join(repo, 'shared.txt'), 'default\n');
@@ -124,6 +125,27 @@ function resolveDeps(repo: string, print: (message: string) => void = () => unde
 }
 
 describe('runRestack merge-bearing conflicts (real local Git)', () => {
+  // Covers: task:12
+  it('keeps an ordinary no-merge conflict record, HALT recipe, and refs unchanged', async () => {
+    const subject = await fixture('none');
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'ordinary conflict' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const record = await readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) });
+    if (record.kind !== 'record') throw new Error('expected conflict record');
+    expect(Object.keys(record.record).sort()).toEqual(['candidateSubjects', 'child', 'commit', 'newParent', 'newParentTree', 'oldParent', 'oldTip', 'opId', 'paths']);
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt.split('\n').slice(halt.split('\n').indexOf(`Restack-Conflict: 2 ${record.record.opId}`))).toEqual([
+      `Restack-Conflict: 2 ${record.record.opId}`,
+      `git switch -c restack-resolve/demo/c2 ${record.record.oldTip}`,
+      `git rebase --onto ${record.record.newParent} ${record.record.oldParent}`,
+      'ai-conductor stack restack-resolve --slug demo --child 2 --tip <sha>',
+      'ai-conductor stack restack-resolve --slug demo --child 2 --decision "<answer>"', '',
+    ]);
+    await expect(subject.git(['show-ref', '--verify', '--quiet', conflictFlattenedTipRefFor('demo')])).rejects.toMatchObject({ code: 1 });
+  });
+
   // Covers: task:12
   it('uses plumbing replay for a clean merge-bearing child without dispatching the resolver or pinning a hand-off', async () => {
     const subject = await fixture('clean');
