@@ -18,9 +18,11 @@ Use only the supplied projection version `v3`. Its closed input contains the lap
 digest, content digest, merge base, head SHA, and the whole changed diff by reference
 (`changedFiles`: each changed path, change kind, and hunk ranges).
 
-Read referenced files and per-path diffs as the engine prompt describes. Do not infer facts from a
-maker transcript, task-status narrative, a prior review, or state outside this projection and its
-referenced content.
+The session runs inside the feature worktree. The diff content is not embedded: read referenced
+files and obtain any per-path diff with `git diff <mergeBase>..HEAD -- <path>` (or inspect base
+content with `git show <mergeBase>:<path>`). Those worktree reads are part of this closed input.
+Do not infer facts from a maker transcript, task-status narrative, a prior review, or state outside
+this projection and its referenced content.
 
 Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review
 identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.
