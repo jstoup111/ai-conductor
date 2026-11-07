@@ -305,7 +305,7 @@ export async function runDaemonSetupTriage(
     projectRoot: context.projectRoot, baseBranch: context.baseBranch, baseSha: workOrderBaseSha,
     events: featureEvents, dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(context.config),
     isSelfHost: context.isSelfHost,
-    harnessRoot: await resolveHarnessRoot(),
+    harnessRoot: await resolveHarnessRoot() ?? undefined,
   });
   const dispatchFixSession = async () => {
     const sessionId = uuidv4();

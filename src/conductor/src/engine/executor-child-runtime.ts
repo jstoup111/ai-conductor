@@ -1,5 +1,7 @@
 import { mkdir } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { Conductor } from './conductor.js';
 import { loadMergedConfig } from './config.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
@@ -32,6 +34,8 @@ import { resolveDispatchStartTimeoutSeconds, resolveTeardownTimeoutSeconds } fro
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { isOperatorParked } from './park-marker.js';
 import { leafBranchFor } from './feature-branch-identity.js';
+
+const execFile = promisify(execFileCb);
 import { hasDurableChildState } from './child-cursor.js';
 import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
@@ -328,7 +332,13 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   });
   providerExecution.managedSessionContext = managedSessionContext;
   providerExecution.prepareManagedSessionObservation = createManagedSessionObservationPreparer(
-    (observation) => probeManagedObservationDestination(observation),
+    (observation) => probeManagedObservationDestination({
+      ...observation,
+      runProcess: async (executable, args) => {
+        const result = await execFile(executable, [...args]);
+        return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+      },
+    }),
   );
   const sessionTail = startSessionEventTail(worktree.path, events, order.slug);
   const baseBranch = await resolveExecutorChildBaseBranch(order, makeGitRunner(worktree.path));
