@@ -189,7 +189,7 @@ export async function pickEligible(
   return undefined;
 }
 
-export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked';
+export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked' | 'preempted';
 
 export interface FeatureOutcome {
   slug: string;
@@ -1118,6 +1118,10 @@ export async function runDaemon(
     const { slug } = worker;
     const outcome = await worker.completion;
     claims.release(slug);
+    // A yield is deliberately not a terminal lifecycle outcome: leave both
+    // durable state and operator-facing markers untouched so backlog order can
+    // resume this kept worktree normally.
+    if (outcome.status === 'preempted') return;
     await deps.onFeatureTerminalEffects?.(outcome);
     // A terminal collection is a maintenance trigger, not an inline sweep:
     // a slow reconciler must never hold the slot-release path hostage.

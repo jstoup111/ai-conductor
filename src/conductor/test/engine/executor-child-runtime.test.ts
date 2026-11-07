@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { makeExecutorChildFeatureRunner } from '../../src/engine/executor-child-runtime.js';
+import { buildExecutorChildConductorBoundaryOptions, makeExecutorChildFeatureRunner } from '../../src/engine/executor-child-runtime.js';
 import type { FeatureRunnerDeps, FeatureWorktree, WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
@@ -67,6 +67,21 @@ function lifecycle(
 }
 
 describe('executor child runtime lifecycle composition', () => {
+  // Covers: task:6
+  it('builds conductor options with the child yield predicate beside the root park boundary', async () => {
+    let yielded = false;
+    const boundaries = buildExecutorChildConductorBoundaryOptions({
+      projectRoot: '/project',
+      slug: 'feature',
+      preemptionRequested: () => yielded,
+    });
+
+    await expect(boundaries.operatorParkBoundary()).resolves.toBe(false);
+    expect(boundaries.preemptionRequested()).toBe(false);
+    yielded = true;
+    expect(boundaries.preemptionRequested()).toBe(true);
+  });
+
   it('seeds the order tier and track into conduct-state before the conductor runs', async () => {
     const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
     root = testRoot;

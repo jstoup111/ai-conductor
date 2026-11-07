@@ -906,6 +906,54 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     });
   });
 
+  // Covers: task:6
+  it('releases a preempted boundary stop without reading outcome or terminal side effects', async () => {
+    const featureDeps = deps({ done: false, halted: false });
+    const readOutcome = vi.fn(featureDeps.readOutcome);
+    const teardownWorktree = vi.fn(featureDeps.teardownWorktree);
+    const markProcessed = vi.fn(featureDeps.markProcessed);
+    const shipmentEvidence = vi.fn(featureDeps.shipmentEvidence!);
+    const escalateBuildFailure = vi.fn(async () => ({}));
+    const cleanupHaltPresentation = vi.fn(async () => 'confirmed' as const);
+    const enrollWatch = vi.fn(async () => {});
+    const stop = vi.fn();
+    const ended: string[] = [];
+    featureDeps.daemon = true;
+    featureDeps.runConductor = vi.fn(async () => ({
+      kind: 'preempted' as const,
+      boundary: { kind: 'step' as const, name: 'build' },
+    }));
+    featureDeps.readOutcome = readOutcome;
+    featureDeps.teardownWorktree = teardownWorktree;
+    featureDeps.markProcessed = markProcessed;
+    featureDeps.shipmentEvidence = shipmentEvidence;
+    featureDeps.escalateBuildFailure = escalateBuildFailure;
+    featureDeps.cleanupHaltPresentation = cleanupHaltPresentation;
+    featureDeps.enrollWatch = enrollWatch;
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      rootEvents: { emit: vi.fn(async (event) => { if (event.type === 'feature_dispatch_ended') ended.push(event.outcome); }) } as never,
+      providerExecution: { configuredProviders: ['claude'], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+      stop,
+    });
+
+    expect(await makeRunFeature(featureDeps)(ITEM)).toEqual({ slug: ITEM.slug, status: 'preempted' });
+    expect({
+      ended,
+      readOutcome: readOutcome.mock.calls.length,
+      teardownWorktree: teardownWorktree.mock.calls.length,
+      markProcessed: markProcessed.mock.calls.length,
+      shipmentEvidence: shipmentEvidence.mock.calls.length,
+      escalateBuildFailure: escalateBuildFailure.mock.calls.length,
+      cleanupHaltPresentation: cleanupHaltPresentation.mock.calls.length,
+      enrollWatch: enrollWatch.mock.calls.length,
+      stop: stop.mock.calls.length,
+    }).toEqual({
+      ended: ['terminated'], readOutcome: 0, teardownWorktree: 0, markProcessed: 0,
+      shipmentEvidence: 0, escalateBuildFailure: 0, cleanupHaltPresentation: 0, enrollWatch: 0, stop: 1,
+    });
+  });
+
   it('hands setup triage the feature emitter so forced setup re-runs ride the feature spine', async () => {
     // adr-2026-08-26-setup-once-per-worktree-marker decision 3: triage's forced
     // `prepareWorktree` emits `project_setup`, and it must land on the emitter

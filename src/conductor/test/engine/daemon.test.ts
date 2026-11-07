@@ -447,6 +447,44 @@ describe('engine/daemon — runDaemon', () => {
     expect(parked?.reason).toBeUndefined();
   });
 
+  // Covers: task:6
+  it('releases a preempted outcome without parking, completion, markers, or operator-stop narration', async () => {
+    const claims = new InMemoryWorkClaims();
+    const watchHaltCleared = vi.fn(() => vi.fn());
+    const onHaltWritten = vi.fn(async () => {});
+    const terminalEffects = vi.fn(async () => {});
+    const logs: string[] = [];
+    let stop = false;
+    const result = await runDaemon({
+      discoverBacklog: staticBacklog([{ slug: 'yielded' }]),
+      runFeature: async () => {
+        stop = true;
+        return { slug: 'yielded', status: 'preempted' as const };
+      },
+      claims,
+      watchHaltCleared,
+      onHaltWritten,
+      onFeatureTerminalEffects: terminalEffects,
+      featureLog: (slug) => (message) => logs.push(`${slug}:${message}`),
+      shouldStop: () => stop,
+    }, { concurrency: 1, once: false });
+
+    expect({
+      processed: result.processed,
+      claims: claims.list(),
+      parked: claims.listParked(),
+      completed: claims.isCompleted('yielded'),
+      watchRegistrations: watchHaltCleared.mock.calls.length,
+      haltStamps: onHaltWritten.mock.calls.length,
+      terminalEffects: terminalEffects.mock.calls.length,
+      operatorStopLogs: logs.filter((line) => line.includes('intentional operator stop')),
+      completionLogs: logs.filter((line) => line.includes('done yielded')),
+    }).toEqual({
+      processed: [], claims: [], parked: [], completed: false, watchRegistrations: 0,
+      haltStamps: 0, terminalEffects: 0, operatorStopLogs: [], completionLogs: [],
+    });
+  });
+
   it('keeps the pool running when a declined attempt returns an operator-parked termination', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-operator-park-pool-'));
     let releaseFeatureBRetry: (() => void) | undefined;
