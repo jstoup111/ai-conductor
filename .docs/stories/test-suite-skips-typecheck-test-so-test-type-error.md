@@ -11,7 +11,7 @@ As an operator, I want this repository's `test_suite` gate to run `typecheck:tes
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the committed project config, when `test_suite.commands` is loaded, then its first command runs `npm run typecheck --silent && npm run typecheck:test --silent`, followed by `npm test` and `test/test_harness_integrity.sh`.
+- Given the committed project config, when `test_suite.commands` is loaded, then its first command runs `npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent`, followed by `npm test` and `test/test_harness_integrity.sh`.
 - Given the committed project config, when a changed-mode `test_suite` lap runs, then its `changed_command` runs `npm run typecheck:test --silent` before Vitest.
 
 #### Negative Paths
