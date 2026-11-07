@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "mechanical-prerequisite-halt-loops-the-daemon-in-r",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-retryable-halt-cleared-at-dispatch-boundary.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/mechanical-prerequisite-halt-loops-the-daemon-in-r.md"
+    }
+  ]
+}
