@@ -285,6 +285,7 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
+
   });
 
   // Covers: task:4
@@ -414,6 +415,7 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
+
   });
 
   it('declines an ordinary-path retry after a park lands during attempt one', async () => {
@@ -449,7 +451,7 @@ describe('operator park boundary contract', () => {
   });
 
   // Covers: task:5
-  it('drains a yielded first serial attempt and preempts the free second attempt without spending accounting', async () => {
+  it('drains a yielded first serial attempt, then resumes its kept state without spending accounting', async () => {
     await writeState(statePath, stateWithPending('memory'));
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     const taskStatusPath = join(projectRoot, '.pipeline', 'task-status.json');
@@ -516,6 +518,29 @@ describe('operator park boundary contract', () => {
       evidence,
       terminalMarkers: [],
     });
+
+    const resumedRun = vi.fn<StepRunner['run']>(async () => ({ success: false, output: 'yield again after resume' }));
+    const resumed = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: resumedRun },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => resumedRun.mock.calls.length > 0,
+    });
+    await expect(resumed.run()).resolves.toEqual({
+      kind: 'operator-parked',
+      boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+    });
+    expect({
+      resumedSteps: resumedRun.mock.calls.map(([step]) => step),
+      taskStatuses: JSON.parse(await readFile(taskStatusPath, 'utf8')),
+    }).toEqual({ resumedSteps: ['memory'], taskStatuses });
   });
 
   it('routes a self-host admission cancellation to the operator-park terminal before retry accounting', async () => {

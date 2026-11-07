@@ -7,6 +7,7 @@ import { setImmediate as waitForImmediate } from 'node:timers/promises';
 import {
   runDaemon,
   guardedDispatchWith,
+  pickEligible,
   type BacklogItem,
   type DaemonDeps,
   type FeatureOutcome,
@@ -72,6 +73,22 @@ async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome
 }
 
 describe('engine/daemon — runDaemon', () => {
+  // Covers: task:9
+  it('re-admits a released preempted slug by backlog order, except while operator-parked', async () => {
+    const claims = new InMemoryWorkClaims();
+    expect(claims.claim('preempted')).toBe(true);
+    claims.release('preempted');
+    let operatorParked = false;
+    const backlog = { items: [{ slug: 'preempted' }, { slug: 'later' }] };
+    const context = { claims, isParked: async (slug: string) => slug === 'preempted' && operatorParked };
+
+    expect((await pickEligible(backlog, context))?.slug).toBe('preempted');
+    operatorParked = true;
+    expect((await pickEligible(backlog, context))?.slug).toBe('later');
+    operatorParked = false;
+    expect((await pickEligible(backlog, context))?.slug).toBe('preempted');
+  });
+
   // Covers: task:7
   it('asks the lowest-priority running feature to yield for an earlier critical arrival', async () => {
     let discovery = 0;

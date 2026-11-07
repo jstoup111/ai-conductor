@@ -19,7 +19,7 @@ export const DAEMON_EVENT_DEPTH: DaemonEventDepthTable = {
   remediation_adjudication_completed: 1, remediation_case_refuted: 1, step_started: 1, step_completed: 2, step_failed: 1, step_interrupted: 1, step_refused: 1, step_status_write_refused: 1,
   github_operation_refused: 1, github_operation_failed: 1, github_write_credential_fallback: 1, bot_co_author_skipped: 1, provider_attempt: 2, provider_attempt_started: 2,
   scratch_cleanup_reclaimed: 1, scratch_cleanup_retained: 1, scratch_cleanup_failed: 1, feature_usage_total: 2, provider_fallback: 0, session_policy: 2, step_retry: 1,
-  navigation_back: 0, rate_limit: 1, session_reset: 1, operator_park_boundary: 1, credentials_park_progress: 0, finish_publication_transition: 2, finish_publication_blocked: 1, finish_publication_disposition: 1,
+  navigation_back: 0, rate_limit: 1, session_reset: 1, operator_park_boundary: 1, preemption_boundary: 1, credentials_park_progress: 0, finish_publication_transition: 2, finish_publication_blocked: 1, finish_publication_disposition: 1,
   protected_artifact_rebaseline: 1, protected_artifact_rebaseline_refused: 1, protected_artifact_reseal: 1, protected_artifact_reseal_refused: 1, remediation_sealed_artifact_redirect: 1,
   remediation_disposition_rejected: 1, verdict_freshness: 1, build_review_base: 1, build_review_stale_mirage_regrade: 1, build_stall: 1, build_progress: 1, step_in_flight: 1, build_no_progress: 1,
   build_active_stall: 1, pipeline_tail_diagnostic: 1, renderer_error: 1, when_skip: 1, parallel_started: 1, parallel_completed: 2, gate_verdict: 1, test_suite_verification: 1,
