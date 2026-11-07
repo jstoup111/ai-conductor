@@ -128,7 +128,8 @@ command — inside this session.
 - Test must fail for the RIGHT reason (not a syntax error; a missing import of not-yet-written code
   is expected, but COMMIT step 5's stub check still applies)
 - Assert production behavior, not source text, a test-local helper or fixture, or a mock's canned return
-- A stub of the code under test (constant, empty, or pre-change return) must fail at least one assertion
+- Together, the tests for each `Covers:` target must fail against a stub of the code under test
+  (constant, empty, or pre-change return); a negative-path test may pass a stub if a sibling fails it
 - Test name describes the behavior: `test_expired_token_returns_401`, not `test_auth`
 - If tech-context loaded: follow stack test conventions (e.g., RSpec `describe`/`context`/`it`)
 - **Declare feature coverage with a `Covers:` marker.** Every test file this cycle creates or
