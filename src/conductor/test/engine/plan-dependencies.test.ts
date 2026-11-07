@@ -1,6 +1,7 @@
 // Covers: task:1
 import { describe, expect, it } from 'vitest';
 import {
+  findDependencyCycles,
   parsePlanDependencyGraph,
   transitiveDependencies,
 } from '../../src/engine/plan-dependencies.js';
@@ -58,5 +59,39 @@ describe('transitiveDependencies', () => {
       4: 'Task 3',
     }));
     expect(transitiveDependencies(graph.dependenciesByTaskId, '4')).toEqual(new Set(['3', '2', '1']));
+  });
+});
+
+describe('findDependencyCycles', () => {
+  it('returns a two-task dependency cycle', () => {
+    expect(findDependencyCycles(new Map([
+      ['1', ['2']],
+      ['2', ['1']],
+    ]))).toEqual([['1', '2']]);
+  });
+
+  it('returns a three-task cycle without its independent task', () => {
+    expect(findDependencyCycles(new Map([
+      ['1', []],
+      ['3', ['5']],
+      ['5', ['7']],
+      ['7', ['3']],
+    ]))).toEqual([['3', '5', '7']]);
+  });
+
+  it('returns a self-dependency as a one-task cycle', () => {
+    expect(findDependencyCycles(new Map([
+      ['1', []],
+      ['2', ['2']],
+    ]))).toEqual([['2']]);
+  });
+
+  it('returns no cycles for an acyclic diamond', () => {
+    expect(findDependencyCycles(new Map([
+      ['1', []],
+      ['2', ['1']],
+      ['3', ['1']],
+      ['4', ['2', '3']],
+    ]))).toEqual([]);
   });
 });
