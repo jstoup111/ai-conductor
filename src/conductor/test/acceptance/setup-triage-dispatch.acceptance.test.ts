@@ -60,7 +60,7 @@ type FutureDeps = FeatureRunnerDeps & {
 
 it('daemon setup-fix dispatch carries the selected provider model policy', async () => {
   const source = await readFile(
-    new URL('../../src/daemon-cli.ts', import.meta.url),
+    new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url),
     'utf8',
   );
   const marker = source.indexOf('featureDesc: `setup-fix-${item.slug}`');
@@ -71,10 +71,10 @@ it('daemon setup-fix dispatch carries the selected provider model policy', async
 });
 
 it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned provider execution', async () => {
-  const source = await readFile(
-    new URL('../../src/daemon-cli.ts', import.meta.url),
-    'utf8',
-  );
+  const source = (await Promise.all([
+    readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
+  ])).join('\n');
   const sourceFile = ts.createSourceFile(
     'daemon-cli.ts',
     source,

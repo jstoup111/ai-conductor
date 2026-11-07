@@ -11,17 +11,17 @@ async function source(name: string): Promise<string> {
 
 describe('stack preflight entry-point wiring', () => {
   it('runs daemon preflight after the operator-park boundary and before the one-shot re-kick', async () => {
-    const daemon = await source('../daemon-cli.ts');
-    const parked = daemon.indexOf('const parked = await isOperatorParked');
+    const daemon = await source('daemon-feature-lifecycle.ts');
+    const parked = daemon.indexOf('let parked = false');
     const preflight = daemon.indexOf('const stackPreflight = await runDaemonRekickStackPreflight');
-    const rebase = daemon.indexOf('const resume = await resumeRebaseFirst');
+    const rebase = daemon.indexOf('const resume = isRekick');
 
     expect(parked).toBeGreaterThanOrEqual(0);
     expect(preflight).toBeGreaterThan(parked);
     expect(rebase).toBeGreaterThan(preflight);
 
     const dispatch = daemon.slice(preflight, rebase);
-    expect(dispatch).toContain("baseRefreshDue: existsSync(rekickPath)");
+    expect(dispatch).toContain('baseRefreshDue: isRekick');
     expect(dispatch).toContain('consumeRekick: async () =>');
     expect(dispatch).toContain('await unlinkFile(rekickPath)');
     expect(dispatch).toContain("stackPreflight.kind === 'halted'");

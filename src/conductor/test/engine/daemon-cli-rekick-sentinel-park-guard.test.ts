@@ -25,7 +25,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DAEMON_CLI_SRC = join(__dirname, '../../src/daemon-cli.ts');
+const DAEMON_CLI_SRC = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
 
 describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on operator-park', () => {
   it('checks isOperatorParked and returns BEFORE the one-shot resumeRebaseFirst call, so a parked sentinel is never consumed', async () => {
@@ -34,7 +34,7 @@ describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on op
     // The real production primitive is already imported (Task 7 wiring).
     // Allow for other imports in the same statement (e.g., reconcileStrandedParkMarkers).
     expect(source).toMatch(
-      /import\s*\{[^}]*isOperatorParked[^}]*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
+      /import\s*\{[^}]*isOperatorParked[^}]*\}\s*from\s*['"]\.\/park-marker\.js['"]/,
     );
 
     // Isolate the region from the ranManualTest computation through the

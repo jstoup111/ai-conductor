@@ -106,7 +106,7 @@ describe('production FINISH coordinator wiring', () => {
   it('constructs the coordinator at both foreground and daemon composition roots', async () => {
     const [foreground, daemon] = await Promise.all([
       readFile(join(sourceRoot, 'index.ts'), 'utf8'),
-      readFile(join(sourceRoot, 'daemon-cli.ts'), 'utf8'),
+      readFile(join(sourceRoot, 'engine', 'daemon-feature-lifecycle.ts'), 'utf8'),
     ]);
 
     for (const source of [foreground, daemon]) {
@@ -138,7 +138,7 @@ describe('production FINISH coordinator wiring', () => {
   it('routes both production ready paths through the capture-verifying repair before ready', async () => {
     const [foreground, daemon, conductor] = await Promise.all([
       readFile(join(sourceRoot, 'index.ts'), 'utf8'),
-      readFile(join(sourceRoot, 'daemon-cli.ts'), 'utf8'),
+      readFile(join(sourceRoot, 'engine', 'daemon-feature-lifecycle.ts'), 'utf8'),
       readFile(join(sourceRoot, 'engine', 'finish-presentation-repair.ts'), 'utf8'),
     ]);
 

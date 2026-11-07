@@ -208,8 +208,9 @@ it('composes one ordered provider context across the interactive run after regis
 });
 
 it('composes isolated provider execution state for every daemon feature after one registry freeze', async () => {
-  const [daemonSource, runnerSource] = await Promise.all([
+  const [daemonSource, lifecycleSource, runnerSource] = await Promise.all([
     readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
     readFile(new URL('../../src/engine/daemon-runner.ts', import.meta.url), 'utf8'),
   ]);
   const daemonFile = ts.createSourceFile(
@@ -271,13 +272,12 @@ it('composes isolated provider execution state for every daemon feature after on
     runnerSource.indexOf('return async (item: BacklogItem)'),
     runnerSource.indexOf('async function captureEngineerSignal'),
   );
-  const mainRunBody = daemonSource.slice(
-    daemonSource.indexOf('const runConductorInWorktree'),
-    daemonSource.indexOf('// Task 15: Production wiring of setup-failure triage'),
+  const mainRunBody = lifecycleSource.slice(
+    lifecycleSource.indexOf('export async function runDaemonFeatureConductor'),
+    lifecycleSource.indexOf('export async function runDaemonSetupTriage'),
   );
-  const setupBody = daemonSource.slice(
-    daemonSource.indexOf('const runSetupTriage'),
-    daemonSource.indexOf('const deps = makeFeatureRunnerDeps'),
+  const setupBody = lifecycleSource.slice(
+    lifecycleSource.indexOf('export async function runDaemonSetupTriage'),
   );
   const rebaseBody = daemonSource.slice(
     daemonSource.indexOf('const resolver: RebaseResolver'),
@@ -370,10 +370,10 @@ it('composes isolated provider execution state for every daemon feature after on
 });
 
 it('freezes one daemon registry without retaining legacy global provider authority', async () => {
-  const source = await readFile(
-    new URL('../../src/daemon-cli.ts', import.meta.url),
-    'utf8',
-  );
+  const source = (await Promise.all([
+    readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
+  ])).join('\n');
   const sourceFile = ts.createSourceFile(
     'daemon-cli.ts',
     source,

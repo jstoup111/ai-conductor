@@ -384,13 +384,19 @@ describe('daemon setup-triage prepare wiring', () => {
       1,
       '/worktrees/after-quarantine',
       log,
-      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
+      expect.objectContaining({
+        verbose: true, force: true, baseSha, events, dispatchStart: true,
+        dispatchStartTimeoutSeconds: 300, skillNameRoot: expect.any(String),
+      }),
     );
     expect(prepare).toHaveBeenNthCalledWith(
       2,
       '/worktrees/after-fix',
       log,
-      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
+      expect.objectContaining({
+        verbose: true, force: true, baseSha, events, dispatchStart: true,
+        dispatchStartTimeoutSeconds: 300, skillNameRoot: expect.any(String),
+      }),
     );
   });
 

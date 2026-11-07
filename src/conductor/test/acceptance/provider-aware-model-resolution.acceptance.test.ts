@@ -436,12 +436,13 @@ describe('#902 real execution paths', () => {
   it('inline and daemon composition roots carry policy to every runner and conductor', async () => {
     const indexSource = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
     const daemonSource = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const lifecycleSource = await readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8');
 
     expect(indexSource).toContain('createProviderRuntimeSet');
     expect(daemonSource).toContain('createProviderRuntimeSet');
 
     const indexRunnerBlocks = indexSource.split('new DefaultStepRunner(').slice(1);
-    const daemonRunnerBlocks = daemonSource.split('new DefaultStepRunner(').slice(1);
+    const daemonRunnerBlocks = [daemonSource, lifecycleSource].join('\n').split('new DefaultStepRunner(').slice(1);
     expect(indexRunnerBlocks).toHaveLength(1);
     expect(daemonRunnerBlocks).toHaveLength(4);
     for (const block of [...indexRunnerBlocks, ...daemonRunnerBlocks]) {
@@ -449,7 +450,7 @@ describe('#902 real execution paths', () => {
     }
 
     const indexConductorBlock = indexSource.split('new Conductor(')[1]?.split(');')[0] ?? '';
-    const daemonConductorBlock = daemonSource.split('new Conductor(')[1]?.split(');')[0] ?? '';
+    const daemonConductorBlock = lifecycleSource.split('new Conductor(')[1]?.split(');')[0] ?? '';
     expect(indexConductorBlock).toContain('modelPolicy');
     expect(daemonConductorBlock).toContain('modelPolicy');
   });

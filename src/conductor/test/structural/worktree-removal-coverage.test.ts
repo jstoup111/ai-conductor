@@ -220,7 +220,6 @@ describe('structural: worktree-removal coverage', () => {
       'engine/daemon-deps.ts',
       'engine/daemon-park-cli.ts',
       'engine/engineer/worktree-authoring.ts',
-      'engine/executor-child-runtime.ts',
       'engine/park-reconciliation.ts',
       'engine/restack/restack-resolver.ts',
       'engine/shipment-evidence-cli.ts',

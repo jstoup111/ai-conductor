@@ -25,7 +25,7 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
      * is still present, and PASS after removal.
      */
 
-    const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
+    const daemonCliPath = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
     const content = readFileSync(daemonCliPath, 'utf-8');
 
     // Verify that daemon-cli.ts does NOT contain an import of rehabilitateHaltPr
@@ -47,7 +47,7 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
      * successful.
      */
 
-    const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
+    const daemonCliPath = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
     const content = readFileSync(daemonCliPath, 'utf-8');
 
     // Should still contain closeIssueOnImplementationMerge call

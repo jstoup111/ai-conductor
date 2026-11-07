@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_SRC = join(__dirname, '../../src/engine/daemon.ts');
 const DAEMON_REKICK_SRC = join(__dirname, '../../src/engine/daemon-rekick.ts');
-const DAEMON_CLI_SRC = join(__dirname, '../../src/daemon-cli.ts');
+const DAEMON_CLI_SRC = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
 
 describe('Task 2 — every build-start call site is park-guarded (enumeration regression)', () => {
   it('daemon.ts has exactly one deps.runFeature( call site, and it lives inside the dispatch closure', async () => {
@@ -110,7 +110,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
     expect(source).toMatch(
-      /import\s*\{[^}]*\bisOperatorParked\b[^}]*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
+      /import\s*\{[^}]*\bisOperatorParked\b[^}]*\}\s*from\s*['"]\.\/park-marker\.js['"]/,
     );
 
     const region = source.match(

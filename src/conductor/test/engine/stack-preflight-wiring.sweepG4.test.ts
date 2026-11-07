@@ -333,7 +333,6 @@ describe('stack preflight through the real daemon dispatch', () => {
       'supersede:stack-preflight',
       'recovery:none',
       'restack:feature-repair',
-      'resumeRebaseFirst',
       'conductor.run',
     ]);
     expect(await subject.git('rev-parse', 'refs/conductor/demo/closed/c1')).toBe(x);
@@ -407,9 +406,10 @@ describe('stack preflight through the real daemon dispatch', () => {
     expect(captured.trace[0]).toBe('recovery:recovered');
     expect(captured.trace.filter((entry) => entry.startsWith('restack:'))).toEqual([]);
     expect(seen.map((event) => event.type)).toEqual(['restack_applied', 'restack_applied', 'restack_applied', 'restack_recovered']);
-    // No second re-kick: resumeRebaseFirst found no REKICK and skipped.
-    expect(captured.rekickAtResume).toEqual([false]);
-    expect(captured.resumeResults).toEqual(['skipped']);
+    // No second re-kick: without REKICK the lifecycle does not invoke
+    // resumeRebaseFirst at all.
+    expect(captured.rekickAtResume).toEqual([]);
+    expect(captured.resumeResults).toEqual([]);
     expect(await readRestackJournal(subject.worktree, 'demo')).toEqual({ kind: 'missing' });
     for (const branch of ['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']) {
       await expect(subject.git('merge-base', '--is-ancestor', advanced, branch)).resolves.toBe('');

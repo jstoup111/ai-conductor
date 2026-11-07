@@ -2442,7 +2442,7 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
     const daemonCliSource = await readFile(
-      new URL('../../src/daemon-cli.ts', import.meta.url),
+      new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url),
       'utf8',
     );
 
@@ -2450,7 +2450,7 @@ describe('operator park boundary contract', () => {
       result,
       runnerCalls: run.mock.calls,
       logLines,
-      daemonWiresMarkerReadErrors: /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/.test(
+      daemonWiresMarkerReadErrors: /operatorParkBoundary:\s*async \(\)\s*=>\s*\{[\s\S]*?isOperatorParked\(projectRoot, item\.slug,[\s\S]*?featureLog\(`operator park marker read failed: \$\{error\.message\}`\)/.test(
         daemonCliSource,
       ),
     }).toEqual({

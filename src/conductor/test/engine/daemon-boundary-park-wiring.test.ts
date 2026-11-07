@@ -68,22 +68,22 @@ describe('daemon operator-park boundary wiring', () => {
 
   it('returns a typed pre-first-unit stop from the pre-rebase park decision', async () => {
     const source = await readFile(
-      new URL('../../src/daemon-cli.ts', import.meta.url),
+      new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url),
       'utf8',
     );
     const preRebasePark = source.match(
-      /const parked = await isOperatorParked\(projectRoot, item\.slug\);[\s\S]*?const resume = await resumeRebaseFirst/,
+      /let parked = false;[\s\S]*?const resume = isRekick/,
     )?.[0];
 
     expect(preRebasePark).toBeDefined();
     expect(preRebasePark).toMatch(
-      /const termination: OperatorParkedTermination = \{\s*kind: 'operator-parked',\s*boundary: \{ kind: 'pre-first-unit' \},\s*\};\s*return termination;/,
+      /return \{ kind: 'operator-parked', boundary: \{ kind: 'pre-first-unit' \} \};/,
     );
   });
 
   it('binds the daemon predicate to main projectRoot and item.slug, never the worktree root', async () => {
     const source = await readFile(
-      new URL('../../src/daemon-cli.ts', import.meta.url),
+      new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url),
       'utf8',
     );
     const constructor = source.match(
@@ -93,7 +93,7 @@ describe('daemon operator-park boundary wiring', () => {
     expect(constructor).toBeDefined();
     expect(constructor).toContain('featureSlug: item.slug');
     expect(constructor).toMatch(
-      /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/,
+      /operatorParkBoundary:\s*async \(\)\s*=>\s*\{[\s\S]*?isOperatorParked\(projectRoot, item\.slug/,
     );
     expect(constructor).not.toMatch(
       /operatorParkBoundary:[\s\S]*?isOperatorParked\(wt\.path/,

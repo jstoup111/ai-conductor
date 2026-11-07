@@ -417,6 +417,10 @@ describe('daemon feature provider-event persistence', () => {
       fileURLToPath(new URL('../../src/daemon-cli.ts', import.meta.url)),
       'utf-8',
     );
+    const lifecycleSource = await readFile(
+      fileURLToPath(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url)),
+      'utf-8',
+    );
     const depsSource = await readFile(
       fileURLToPath(new URL('../../src/engine/daemon-deps.ts', import.meta.url)),
       'utf-8',
@@ -431,16 +435,16 @@ describe('daemon feature provider-event persistence', () => {
         daemonSource.includes('createProviderExecution(featureEvents, featureLog)'),
       passesScopeIntoRunnerDeps: daemonSource.includes('beginFeatureRun,'),
       runConductorAcceptsFeatureBus:
-        /const runConductorInWorktree = async \([\s\S]*?featureEvents: ConductorEventEmitter/.test(
-          daemonSource,
+        /export async function runDaemonFeatureConductor\([\s\S]*?featureEvents: ConductorEventEmitter/.test(
+          lifecycleSource,
         ),
       conductorUsesFeatureBus:
-        /events:\s*featureEvents/.test(daemonSource),
+        /events:\s*featureEvents/.test(lifecycleSource),
       auditUsesFeatureBus:
-        /auditWriter\.subscribe\(featureEvents\)/.test(daemonSource),
+        /auditWriter\.subscribe\(featureEvents\)/.test(lifecycleSource),
       rebaseUsesFeatureBus:
         /resumeRebaseFirst\(\{[\s\S]*?events:\s*featureEvents/.test(
-          daemonSource,
+          lifecycleSource,
         ),
       depsForwardsScope:
         /beginFeatureRun:\s*cfg\.beginFeatureRun/.test(depsSource),
