@@ -158,7 +158,10 @@ rendered through the existing `featureLogFor(slug)` sink.
 > `haltClass` from the worktree's halt sidecar and `step` from the last forwarded `loop_halt`.
 > `parked` maps to `terminated`. The per-dispatch visualizer uses the worktree's persisted session
 > id, the installed harness version and the order's `sourceRef`, and is stopped and flushed at
-> collection. The IPC protocol is unchanged.
+> collection: the broker's attach hook returns an async stop, which the child executor awaits. The
+> IPC message types and the WorkOrder schema version are unchanged. The WorkOrder gains one optional
+> field, `baseBranch`, carrying the supervisor's configured base branch. An absent field keeps the
+> child's `originDefaultBranch` fallback.
 
 ### D5 — The child's lifecycle is bound to the supervisor
 On SIGTERM the supervisor sends a stop request to each child. The child takes today's shutdown

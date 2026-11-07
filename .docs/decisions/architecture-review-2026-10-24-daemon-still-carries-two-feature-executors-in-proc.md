@@ -48,7 +48,7 @@ are on the planning base and are rediscovery hints only.
 | 3 | REKICK rebase-first resume (`resumeRebaseFirst`, merged-PR guard) | same | absent: REKICK is read only to classify the dispatch | `.worktrees/path-policy-still-decides-feature-ownership-by-fol/.pipeline/REKICK`, written 2026-11-03 12:35Z, survived five later child dispatches |
 | 4 | Mechanical `Closes «sourceRef»` on the implementation PR (`closeIssueOnImplementationMerge`) | same | absent. Clean PRs get `Closes` only when the `/pr` prose carries it | — |
 | 5 | `AuditTrailWriter` on the feature bus | same | absent | the same worktree has 61 `gate_verdict` events and no `gate_pass`/`gate_fail` audit record; an in-process run on 2026-10-11 recorded 30 and 12 |
-| 6 | Self-host `skillNameRoot` (worktree copy) for StepRunner, prepare and triage | `skillNameRootFor` | always `resolveHarnessRoot()` | — |
+| 6 | Self-host `skillNameRoot` (worktree copy) for StepRunner, prepare and triage | `skillNameRootFor`, except forced setup prepare, which passes none in either path | always `resolveHarnessRoot()` | — |
 | 7 | Managed-session context and observation preparation | `beginFeatureRun` | absent from `providerExecution` | — |
 | 8 | Merged user and project config (`loadMergedConfig`) | daemon startup | `loadConfig` (project only) | — |
 | 9 | `onProviderSuppressed` emits `provider_suppressed` | `createProviderExecution` | absent | — |
@@ -59,12 +59,19 @@ are on the planning base and are rediscovery hints only.
 | 14 | `feature_dispatch_started`/`ended` carry `kind`, `tier`, `haltClass` and `step` | `makeRunFeature` | the supervisor emits `kind: 'initial'` only, with no tier, halt class or step; parked maps to `halted` | — |
 | 15 | OTel visualizer context: persisted session id, harness version, `sourceRef`, awaited stop and flush | `beginFeatureRun` | `runId: executor-«slug»`, `harnessVersion: 'unknown'`, no `sourceRef`, unawaited stop | — |
 | 16 | Feature-logged park-marker read errors and `diagnosticLog` | `runConductorInWorktree` | silent | — |
+| 17 | The supervisor's configured base branch (`opts.baseBranch`) for REKICK, finish publication and release classification | `runDaemonMode` | `originDefaultBranch`, else `main`: the WorkOrder carries only `baseSha` | — |
 
 Intentional differences that stay: the visualizer's pinned `engineVersion` (10-15 D4), the removed
 ownership context (decision 4), and per-child provider discovery (the child needs its own
-registry). Already covered in the child: rate-limit, availability, live-boundary and worktree-lock
+registry), and read-only review capabilities. The in-process daemon probes them once at startup;
+the child supplies none, so its StepRunner probes lazily at `build_review` through its default
+`probeReadOnlyReviewCapability` (verified: `step-runners.ts` falls back to the probe when a
+capability is absent). The verdict is the same and the cost moves to the first review. Already covered in the child: rate-limit, availability, live-boundary and worktree-lock
 brokering; shutdown and abort; dispatch lease admission (#3480); state seeding (#3331); outcome and
 deferred terminal effects.
+
+The forced setup prepare passing no `skillNameRoot` (row 6) is a gap in both paths, so the pure
+move preserves it. Slice 1 fixes it explicitly, after the move, in the shared module.
 
 ## Design
 
@@ -80,6 +87,46 @@ coordinator, worktree lifecycle, effective concurrency, abort registration, a sh
 the owner gh runner, and an optional pinned engine version. In slice 1 both adapters call it:
 `daemon-cli.ts` passes its real services, and the child passes the broker proxies.
 
+**Context members are adapter-owned, not supervisor globals.** The verbatim body reads
+supervisor-local state today: `activeConductors`, `allWaitSignals`, `shutdownRequested`, the
+`featureEventFlushers` map and the module's own engine version. The move replaces each with a
+context member, and each adapter supplies its own:
+
+| Member | In-process adapter (slice 1 only) | Child adapter |
+|---|---|---|
+| `registerConductor(conductor)` returns an unregister function | adds to `activeConductors` | records the conductor so `beginShutdown` calls `closeOpenExecutionsForShutdown` |
+| `registerAbortController(controller)` | adds to `allWaitSignals` | adds to the child's `waitControllers`, as today |
+| `isShutdownRequested()` | `shutdownRequested` | `signal.aborted` |
+| `flushFeatureEvents()` | the `featureEventFlushers` entry | `sessionTail.flush` |
+| `engineVersionId` for finish publication | `resolveEngineVersion(__dirname)` | the order's pinned id |
+
+The child's existing shutdown contract is preserved and tested: the abort aborts every registered
+wait, then closes open executions, and an aborted run returns `parked` with the abort reason.
+
+**One lease owner.** The child's `admitDispatch` already holds the stacked dispatch lease (#3480).
+`makeFeatureRunnerDeps` supplies `projectRoot` and `daemon: true`, so `makeRunFeature` would
+acquire it again and get `live-owner` (`feature-dispatch-lease.ts` refuses the holder's own
+process), parking every stacked child as `feature-lease-held`. `makeRunFeature` gains a required
+`dispatchAdmission` member, the closed union `acquire | admitted`. `makeFeatureRunnerDeps`
+supplies `acquire`. The child runner overrides it with `admitted`, which skips acquisition and the
+parked-after-lease check, because `admitDispatch` performed both. A successful stacked dispatch
+through the child is tested.
+
+**The WorkOrder carries the base branch.** The child cannot learn the supervisor's
+`opts.baseBranch` (row 17). The WorkOrder gains an optional `baseBranch`, which `createWorkOrder`
+always sets. The child uses it, and falls back to `originDefaultBranch` only when it is absent.
+This changes the serialized dispatcher-to-executor contract. The change is additive: the protocol
+message types and `WORK_ORDER_SCHEMA_VERSION` stay unchanged, because the child casts the order
+without rejecting unknown fields (verified, `executor-protocol.ts`), and an absent field keeps
+today's behavior. So a child pinned to an older engine ignores the field, and a newer child accepts
+an order from an older supervisor.
+
+**Process services are installed once per process.** `installDaemonProcessServices` replaces the
+process-global bot co-author resolver. `createExecutorChildRuntime` gains a required
+`processServices` member, the closed union `install | inherited`. The `executor-child` entry passes
+`install`. The test fork installs the services once for the test process and passes `inherited`, so
+concurrent in-memory children never replace each other's resolver.
+
 **The child builds its lifecycle from `makeFeatureRunnerDeps`.** `runExecutorChildFeature` stops
 assembling its own prepare, triage, conductor and teardown closures. It calls
 `makeFeatureRunnerDeps` with the moved `runSetupTriage` and the shared conductor runner, keeping
@@ -94,10 +141,16 @@ the dispatch kind with `classifyDispatchKind`, from root-readable state: whether
 `.worktrees/«slug»` exists, and whether its `.pipeline/REKICK` exists. It takes the tier from the
 WorkOrder. On a halted outcome it takes `haltClass` from `readHaltSidecarClassification` on the
 worktree and the halting step from the last `loop_halt` event forwarded on the proxy bus, as
-`makeRunFeature` does from its own bus. It maps `parked` to `terminated`. The IPC protocol does not
-change. The child's per-dispatch visualizer on the proxy bus uses the worktree's persisted
-`conduct-session-id`, the installed harness version, and the order's `sourceRef`. It is stopped
-and flushed at collection (rows 14, 15).
+`makeRunFeature` does from its own bus. It maps `parked` to `terminated`. The IPC protocol messages do not
+change.
+
+The child's per-dispatch visualizer stays supervisor-attached before the fork. Its context matches
+the in-process one. The run id is the worktree's persisted `conduct-session-id` when the worktree
+already exists, and a fresh id otherwise, as `beginFeatureRun` does. It also carries the installed
+harness version and the order's `sourceRef`. The broker's `attachFeatureOtelVisualizer` changes
+shape to take that context and return an async stop. `createChildProcessFeatureExecutor` awaits
+that stop at collection, before `feature_dispatch_ended`, instead of the synchronous unawaited
+disposer (rows 14, 15).
 
 **Test boundary.** The in-memory fork replaces only OS process creation, with three required
 deviations from the parity test's `FixtureChild`:
@@ -121,7 +174,7 @@ lifecycle.
 |---|---|
 | Stack compatibility | No new dependency. Every moved function already runs in the daemon process today (verified). |
 | Prerequisites | #3377 shipped in #3406 (verified). The dispatch lease (#3480) and the shared state seed (#3331) are on the base (verified). |
-| Integration surface | `daemon-cli.ts`, `index.ts`, the child runtime, `executor-child.ts`, `child-feature-executor.ts`, `daemon-deps.ts`, the new lifecycle module, `feature-executor.ts`, `daemon-log.ts`, config type and validation. The IPC protocol messages and version are unchanged. |
+| Integration surface | `daemon-cli.ts`, `index.ts`, the child runtime, `executor-child.ts`, `child-feature-executor.ts`, `daemon-deps.ts`, the new lifecycle module, `feature-executor.ts`, `daemon-log.ts`, config type and validation. `work-order.ts` and `executor-broker.ts`. The IPC message types and the WorkOrder schema version are unchanged; the WorkOrder gains one optional field (see Design). |
 | Data implications | None persisted. `executor_isolation` never shipped in a release and no registered config sets it (verified 2026-10-24). No migration. |
 | Performance | Each child already loads the engine. It now also prepares a managed-session context and the audit writer, which the in-process path did per feature. Neutral. |
 | Worktree isolation | No new port, process or shared resource. |
@@ -131,8 +184,13 @@ lifecycle.
 
 High: one module moves across a process boundary, and about fifteen test files change. It is
 bounded by doing the move as a pure relocation first (both adapters call it), and by giving each
-parity row its own test through the child path. The estimate is 29 tasks, below the 30-task ceiling.
-The operator chose two stacked slices in one spec rather than two specs.
+parity row its own test through the child path.
+
+The estimate is 34 tasks: 25 in slice 1 and 9 in slice 2. The second review added five slice-1
+tasks: the admission mode, the base-branch field, the visualizer API, the process-services mode and
+the forced-prepare `skillNameRoot` fix. That is above the 30-task ceiling. The operator chose two
+stacked slices in one spec. Delivering that needs either a `**Scope-exception:**` citing that
+decision, or two sequential specs (parity, then removal). **Open operator decision.**
 
 ## Alignment
 
@@ -190,7 +248,9 @@ No new config key, event type, CLI subcommand, hook or job. Removed in slice 2: 
 | A parity row is fixed in code but untested, so it drifts again | Technical | Medium | High | Each inventory row has a test that dispatches through the child path and asserts the behavior at its adapter |
 | The child now runs the REKICK rebase and the `Closes` edit, which are root-checkout git and GitHub mutations | Security | Low | High | Both run against the feature worktree and the feature's guarded mutation context, exactly as in-process. The live-boundary proxy keeps fingerprinting the root checkout |
 | A test stubs below the broker and proves nothing child-specific | Technical | Medium | Medium | The fork replaces only process creation; provider stubs sit at adapters, never at the lifecycle |
-| Two concurrent in-memory children cross-contaminate console capture | Technical | High | Medium | Per-child console sink in the fixture. The production per-process tee is covered by its own unit test |
+| Two concurrent in-memory children cross-contaminate console capture or the bot co-author resolver | Technical | High | Medium | Per-child console sink in the fixture, and process services installed once with `inherited` children. The production per-process tee and `install` mode keep their own unit tests |
+| A stacked child parks itself on its own lease | Technical | High (without the admission mode) | High | `dispatchAdmission: admitted` in the child, and a successful stacked dispatch test through the child |
+| An older pinned child ignores `baseBranch` | Integration | Low | Low | The absent-field path is today's behavior; only engines carrying this change read it |
 | Docs anchor links to `#executor_isolation` break | Integration | High | Low | Retarget every link; a repo-wide search outside `.docs/` must return nothing |
 
 ## Conditions
@@ -200,11 +260,18 @@ No new config key, event type, CLI subcommand, hook or job. Removed in slice 2: 
 2. Every parity inventory row 1–16 is asserted by a test that dispatches through the production
    child runtime.
 3. Test-only typing checks use `npm run typecheck:test`. `npm run typecheck` excludes `test/`.
+4. "Unchanged in-process tests" means unchanged behavioral assertions. Retargeting an import from
+   `daemon-cli.ts` to the new engine module is allowed. The retarget set is found by search, not
+   by a list: every test that imports a moved helper or mocks `makeRunFeature`, for example
+   `daemon-cli-skill-name-root.test.ts` and `stack-preflight-wiring.sweepG4.test.ts`.
+5. Engine-pin test fixtures use ids that match `VERSION_ID_PATTERN`.
+6. The plan's scope decision (Complexity) is recorded before the plan lands.
 
 ## ADRs Created
 
 None. The governing decision exists: adr-2026-10-15 D1 already says the child runs the whole
 per-feature path. Additive 2026-11-07 notes on 10-15 D1, D4 and A2 record that one engine module
 holds that path, how the supervisor fills its dispatch events, and that A2's inventory was
-incomplete. These sit beside the 2026-10-24 notes on 10-15 D1, A2, Consequences and Follow-up
+incomplete. The D4 note also records the additive `baseBranch` WorkOrder field and the visualizer
+stop change. These sit beside the 2026-10-24 notes on 10-15 D1, A2, Consequences and Follow-up
 Actions, and on 08-27 D1 and D8.
