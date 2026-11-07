@@ -13,6 +13,7 @@ import { parseCommitSha, type ChildRange, type CommitSha } from '../../../src/en
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
+type Git = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
 function sha(value: string): CommitSha {
   const parsed = parseCommitSha(value.trim());
@@ -20,17 +21,20 @@ function sha(value: string): CommitSha {
   return parsed;
 }
 
-async function repository(): Promise<{ repo: string; git: (args: string[]) => ReturnType<typeof execFile> }> {
+async function repository(): Promise<{ repo: string; git: Git }> {
   const repo = await mkdtemp(join(tmpdir(), 'restack-flattened-handoff-'));
   repositories.push(repo);
-  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  const git: Git = async (args) => {
+    const { stdout, stderr } = await execFile('git', args, { cwd: repo, encoding: 'utf8' });
+    return { stdout: String(stdout), stderr: String(stderr) };
+  };
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 'restack@example.test']);
   await git(['config', 'user.name', 'Restack fixture']);
   return { repo, git };
 }
 
-async function commit(git: (args: string[]) => ReturnType<typeof execFile>, subject: string): Promise<CommitSha> {
+async function commit(git: Git, subject: string): Promise<CommitSha> {
   await git(['add', '.']);
   await git(['commit', '-qm', subject]);
   return sha((await git(['rev-parse', 'HEAD'])).stdout);
