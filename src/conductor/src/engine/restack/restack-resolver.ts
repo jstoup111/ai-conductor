@@ -16,9 +16,9 @@ import { parseCommitSha } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
 import {
   carryNewestHaltRecord,
-  isHaltRecordOnlyCommit,
   mapOmittedHaltRecordCommits,
 } from './halt-record-bookkeeping.js';
+import { selectReplayCandidates } from './restack-replay-candidates.js';
 import { missingCandidateSubjects, rewritesByUniqueSubject, writeConflictRecord } from './restack-conflict-record.js';
 import type { StoredRestackJournal } from './restack-journal.js';
 import {
@@ -132,12 +132,6 @@ export interface RestackConflictResolution {
   readonly audit?: FlattenedHandoff['audit'];
 }
 
-function requiredSha(raw: string, context: string): CommitSha {
-  const sha = parseCommitSha(raw.trim());
-  if (!sha) throw new Error(`${context} did not return a full Git object name`);
-  return sha;
-}
-
 function committerEnvironment(stamp: CommitterStamp): NodeJS.ProcessEnv {
   return {
     GIT_COMMITTER_NAME: stamp.name,
@@ -148,39 +142,6 @@ function committerEnvironment(stamp: CommitterStamp): NodeJS.ProcessEnv {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-async function patchId(git: GitRunner, commit: CommitSha): Promise<string | undefined> {
-  const patch = await git(['show', '--format=', '--no-ext-diff', commit]);
-  if (patch.exitCode !== 0) throw new Error(`could not read patch for ${commit}: ${patch.stderr}`);
-  const result = await git(['patch-id', '--stable'], { input: patch.stdout });
-  if (result.exitCode !== 0) throw new Error(`could not compute patch-id for ${commit}: ${result.stderr}`);
-  return result.stdout.trim().split('\n').find(Boolean)?.split(/\s+/, 1)[0];
-}
-
-
-/** The non-merge candidate selection shared semantically with plumbing replay. */
-async function replayCandidates(
-  git: GitRunner,
-  range: ChildRange,
-  comparisonCommits: readonly CommitSha[],
-  haltRecordSlug: string | undefined,
-): Promise<CommitSha[]> {
-  const compared = new Set<string>();
-  for (const commit of comparisonCommits) {
-    const id = await patchId(git, commit);
-    if (id !== undefined) compared.add(id);
-  }
-  const listed = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
-  if (listed.exitCode !== 0) throw new Error(`could not list restack range: ${listed.stderr}`);
-  const candidates: CommitSha[] = [];
-  for (const raw of listed.stdout.split('\n').filter(Boolean)) {
-    const commit = requiredSha(raw, 'restack replay candidate');
-    if (haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, haltRecordSlug, git)) continue;
-    // Empty commits have no patch-id and deliberately remain candidates.
-    if (!compared.has(await patchId(git, commit) ?? '')) candidates.push(commit);
-  }
-  return candidates;
 }
 
 async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
@@ -248,7 +209,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         haltRecordSlug: options.haltRecordSlug,
       })
       : undefined;
-    const candidates = handoff?.candidates ?? await replayCandidates(runGit, options.range, options.comparisonCommits ?? [], options.haltRecordSlug);
+    const candidates = handoff?.candidates ?? await selectReplayCandidates(runGit, options.range, options.comparisonCommits, options.haltRecordSlug);
     // An empty engine-authored todo has no resolver work to settle. Its only
     // valid result is the supplied replay parent; never ask Git to run an
     // empty interactive rebase, which reports a synthetic failure.

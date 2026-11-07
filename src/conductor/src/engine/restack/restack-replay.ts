@@ -5,7 +5,8 @@ import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 import { unionRemBlocks } from '../routing/rem-block-merge.js';
-import { carryNewestHaltRecord, haltRecordPathFor, haltRecordTree, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
+import { carryNewestHaltRecord, haltRecordPathFor, haltRecordTree, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
+import { selectReplayCandidates } from './restack-replay-candidates.js';
 
 /** A deterministic append-only plan conflict that must halt without an LLM resolver. */
 export class RemBlockBodyMismatchError extends Error {
@@ -89,33 +90,9 @@ async function sideLineageCount(git: GitRunner, firstParent: CommitSha, secondPa
   return result.stdout.split('\n').filter(Boolean).length;
 }
 
-async function commitsInFirstParentRange(git: GitRunner, range: ChildRange): Promise<CommitSha[]> {
-  const result = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
-  if (result.exitCode !== 0) throw new Error(`could not list restack range: ${result.stderr}`);
-  return result.stdout.split('\n').filter(Boolean).map((value) => requiredSha(value, 'rev-list'));
-}
-
 async function commitsAreSigned(git: GitRunner): Promise<boolean> {
   const result = await git(['config', '--bool', 'commit.gpgSign']);
   return result.exitCode === 0 && result.stdout.trim() === 'true';
-}
-
-async function patchIdForCommit(git: GitRunner, commit: CommitSha): Promise<string | undefined> {
-  const patch = await git(['show', '--format=', '--no-ext-diff', commit]);
-  if (patch.exitCode !== 0) throw new Error(`could not read patch for ${commit}: ${patch.stderr}`);
-  const result = await git(['patch-id', '--stable'], { input: patch.stdout });
-  if (result.exitCode !== 0) throw new Error(`could not compute patch-id for ${commit}: ${result.stderr}`);
-  const line = result.stdout.trim().split('\n').find(Boolean);
-  return line?.split(/\s+/, 1)[0];
-}
-
-async function patchIdsForCommits(git: GitRunner, commits: readonly CommitSha[]): Promise<ReadonlySet<string>> {
-  const patchIds = new Set<string>();
-  for (const commit of commits) {
-    const patchId = await patchIdForCommit(git, commit);
-    if (patchId !== undefined) patchIds.add(patchId);
-  }
-  return patchIds;
 }
 
 function conflictPaths(stdout: string, stderr: string): string[] {
@@ -209,19 +186,13 @@ export async function replayChildRange(
   options: ReplayChildRangeOptions = {},
 ): Promise<ChildRangeReplay> {
   const sign = await commitsAreSigned(git);
-  const comparisonPatchIds = await patchIdsForCommits(git, options.comparisonCommits ?? []);
   const rewrites = new Map<CommitSha, CommitSha>();
   const flattenedMerges: CommitSha[] = [];
   const ancestryOnlyMerges: CommitSha[] = [];
   let sideLineageCountTotal = 0;
   let accumulator = newParent;
 
-  for (const commit of await commitsInFirstParentRange(git, range)) {
-    if (options.haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, options.haltRecordSlug, git)) continue;
-    // Only patches newly introduced by this operation are already carried.
-    // A matching patch in the stack itself (for example a child re-applying a
-    // reverted parent change) must remain part of that child's history.
-    if (comparisonPatchIds.has(await patchIdForCommit(git, commit) ?? '')) continue;
+  for (const commit of await selectReplayCandidates(git, range, options.comparisonCommits, options.haltRecordSlug)) {
     const parents = await mergeParents(git, commit);
     const isMerge = parents.length >= 2;
     const merge = isMerge

@@ -1,5 +1,6 @@
 import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
-import { isHaltRecordOnlyCommit } from './halt-record-bookkeeping.js';
+import type { GitRunner } from '../rebase.js';
+import { selectReplayCandidates } from './restack-replay-candidates.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
 
 export interface FlattenedHandoff {
@@ -20,8 +21,6 @@ export interface BuildFlattenedHandoffOptions {
   readonly classifyMerge: (git: GitRunner, commit: CommitSha, newParent: CommitSha, mode: 'stacked') => Promise<ReplayMerge>;
 }
 
-interface GitResult { readonly exitCode: number; readonly stdout: string; readonly stderr: string; }
-interface GitRunner { (args: string[], options?: { input?: string; env?: NodeJS.ProcessEnv }): Promise<GitResult>; }
 interface ReplayMerge {
   readonly kind: 'ancestry-only' | 'q-carried' | 'flattened';
   readonly firstParent: string;
@@ -34,14 +33,6 @@ function requiredSha(raw: string, context: string): CommitSha {
   const sha = parseCommitSha(raw.trim());
   if (!sha) throw new Error(`${context} did not return a full Git object name`);
   return sha;
-}
-
-async function patchId(git: GitRunner, commit: CommitSha): Promise<string | undefined> {
-  const patch = await git(['show', '--format=', '--no-ext-diff', commit]);
-  if (patch.exitCode !== 0) throw new Error(`could not read patch for ${commit}: ${patch.stderr}`);
-  const result = await git(['patch-id', '--stable'], { input: patch.stdout });
-  if (result.exitCode !== 0) throw new Error(`could not compute patch-id for ${commit}: ${result.stderr}`);
-  return result.stdout.trim().split('\n').find(Boolean)?.split(/\s+/, 1)[0];
 }
 
 async function commitTree(git: GitRunner, commit: CommitSha): Promise<CommitSha> {
@@ -99,11 +90,7 @@ async function flattenedMergeIsCarried(git: GitRunner, parent: CommitSha, newPar
 
 /** Builds the resolver's linear hand-off without depending on its orchestration module. */
 export async function buildFlattenedHandoff(range: ChildRange, newParent: CommitSha, git: GitRunner, options: BuildFlattenedHandoffOptions): Promise<FlattenedHandoff> {
-  const comparedPatchIds = new Set<string>();
-  for (const comparison of options.comparisonCommits ?? []) {
-    const id = await patchId(git, comparison);
-    if (id !== undefined) comparedPatchIds.add(id);
-  }
+  const ordinaryCandidates = new Set(await selectReplayCandidates(git, range, options.comparisonCommits, options.haltRecordSlug));
   const listed = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
   if (listed.exitCode !== 0) throw new Error(`could not list restack range: ${listed.stderr}`);
   const todo: CommitSha[] = [];
@@ -118,8 +105,7 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
     const parents = await commitParents(git, commit);
     if (parents.length < 2) {
       accumulator = await writeLinearCommit(git, await commitTree(git, commit), accumulator, commit);
-      const omitted = (options.haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, options.haltRecordSlug, git)) || comparedPatchIds.has(await patchId(git, commit) ?? '');
-      if (!omitted) { todo.push(commit); candidates.push(commit); }
+      if (ordinaryCandidates.has(commit)) { todo.push(commit); candidates.push(commit); }
       continue;
     }
     const merge = await options.classifyMerge(git, commit, newParent, 'stacked');
