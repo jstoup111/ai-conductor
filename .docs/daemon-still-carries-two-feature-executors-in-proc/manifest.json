@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "daemon-still-carries-two-feature-executors-in-proc",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-27-daemon-dispatcher-executor-seam.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-15-per-dispatch-engine-pinned-executor.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/daemon-still-carries-two-feature-executors-in-proc.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/daemon-still-carries-two-feature-executors-in-proc.md"
+    }
+  ]
+}
