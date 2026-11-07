@@ -82,7 +82,7 @@ construction, operator-park check, stack preflight, `resumeRebaseFirst`, `conduc
 switch) and its helpers: `runDaemonRekickStackPreflight`, `restackResolverForStepRunner`,
 `createForcedSetupPrepare`, `prepareDaemonFeatureManagedSessionContext` and
 `createWorkOrderGitRunner`. Supervisor-owned services reach it through one explicit context:
-config, base branch, self-host flag, rate-limit episode, provider availability, live-boundary
+the canonical repository root, config, base branch, self-host flag, rate-limit episode, provider availability, live-boundary
 coordinator, worktree lifecycle, effective concurrency, abort registration, a shutdown predicate,
 the owner gh runner, and an optional pinned engine version. In slice 1 both adapters call it:
 `daemon-cli.ts` passes its real services, and the child passes the broker proxies.
@@ -99,6 +99,11 @@ context member, and each adapter supplies its own:
 | `isShutdownRequested()` | `shutdownRequested` | `signal.aborted` |
 | `flushFeatureEvents()` | the `featureEventFlushers` entry | `sessionTail.flush` |
 | `engineVersionId` for finish publication | `resolveEngineVersion(__dirname)` | the order's pinned id |
+| `projectRoot` (canonical repository root) | the daemon's `projectRoot` | the child's `projectRoot` |
+
+`projectRoot` is the repository root, never the worktree path. The body uses it for the StepRunner,
+the operator-park marker reads, and the managed-session repository identity. It stays distinct from
+the Conductor's `projectRoot` option, which is deliberately the worktree path.
 
 The child's existing shutdown contract is preserved and tested: the abort aborts every registered
 wait, then closes open executions, and an aborted run returns `parked` with the abort reason.
@@ -130,8 +135,13 @@ concurrent in-memory children never replace each other's resolver.
 **The child builds its lifecycle from `makeFeatureRunnerDeps`.** `runExecutorChildFeature` stops
 assembling its own prepare, triage, conductor and teardown closures. It calls
 `makeFeatureRunnerDeps` with the moved `runSetupTriage` and the shared conductor runner, keeping
-only its child-owned overrides (pre-created worktree, child bus as the runner scope, deferred
-terminal effects). That closes rows 10–13 by construction. The child loads config with
+only its child-owned overrides: the pre-created worktree, the child bus as the runner scope,
+deferred terminal effects, `dispatchAdmission: admitted`, and the order bindings. The order
+bindings are the ones the in-process adapter applies today: `prepareWorktree` receives the order,
+and `runSetupTriage` receives `order.baseSha`. Without them, `makeRunFeature` calls prepare with no
+order and `makeFeatureRunnerDeps` resolves the current base instead of the dispatch's pinned base.
+A test advances the configured base after the order is created, then asserts that setup and forced
+triage use the order's `baseSha`. That closes rows 10–13 by construction. The child loads config with
 `loadMergedConfig` and the installed harness version (row 8). Its `ProviderExecutionContext` gains
 `onProviderSuppressed`, emitting on the child bus (forwarded with `root` scope, 10-15 D4), the
 managed-session context and observation preparer, and `diagnosticLog` (rows 7, 9, 16).
@@ -178,7 +188,10 @@ lifecycle.
 | Data implications | None persisted. `executor_isolation` never shipped in a release and no registered config sets it (verified 2026-10-24). No migration. |
 | Performance | Each child already loads the engine. It now also prepares a managed-session context and the audit writer, which the in-process path did per feature. Neutral. |
 | Worktree isolation | No new port, process or shared resource. |
-| Layering | Verified: `test/structural/layer-ratchet.ts` forbids engine → entry (`daemon-cli.ts`, `index.ts`) and allows engine → execution. Every moved helper lands in `engine/`. The ratchet's allowlist may only shrink, so no new entry is added. |
+| Layering | Verified: `test/structural/layer-ratchet.ts` forbids engine → entry (`daemon-cli.ts`, `index.ts`) and allows engine → execution. Every moved helper lands in `engine/`. The move corrects one import: the moved signatures use
+`ConductorEventEmitter` from `ui/events.ts`, and the new engine module imports it from
+`engine/conductor-event-emitter.ts`, because the ratchet checks type imports. This import change is
+allowed within the pure move. The ratchet's allowlist may only shrink, so no new entry is added. |
 
 ## Complexity
 
@@ -257,8 +270,9 @@ No new config key, event type, CLI subcommand, hook or job. Removed in slice 2: 
 
 1. Slice 1's relocation task lands as a pure move, with the existing in-process daemon tests
    unchanged and green.
-2. Every parity inventory row 1–16 is asserted by a test that dispatches through the production
-   child runtime.
+2. Every parity inventory row 1–17 is asserted by a test that dispatches through the production
+   child runtime. Row 17's test configures a non-default base branch and covers REKICK and finish
+   publication.
 3. Test-only typing checks use `npm run typecheck:test`. `npm run typecheck` excludes `test/`.
 4. "Unchanged in-process tests" means unchanged behavioral assertions. Retargeting an import from
    `daemon-cli.ts` to the new engine module is allowed. The retarget set is found by search, not
