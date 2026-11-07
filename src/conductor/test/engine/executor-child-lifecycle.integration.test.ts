@@ -10,6 +10,7 @@ const seams = vi.hoisted(() => ({
   prepareWorktree: vi.fn(),
   acquireFeatureDispatchLease: vi.fn(),
   resumeRebaseFirst: vi.fn(),
+  stackPreflightCompleted: false,
   finishPublicationBaseBranches: [] as string[],
 }));
 
@@ -65,6 +66,18 @@ vi.mock('../../src/engine/daemon-rekick.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/restack/stack-preflight.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/restack/stack-preflight.js')>();
+  return {
+    ...actual,
+    runStackPreflight: async (...args: Parameters<typeof actual.runStackPreflight>) => {
+      const result = await actual.runStackPreflight(...args);
+      seams.stackPreflightCompleted = true;
+      return result;
+    },
+  };
+});
+
 vi.mock('../../src/engine/finish-publication-production.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/finish-publication-production.js')>();
   return {
@@ -95,6 +108,7 @@ let engineStore: Awaited<ReturnType<typeof useTempEngineStore>> | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  seams.stackPreflightCompleted = false;
   seams.finishPublicationBaseBranches.length = 0;
 });
 
@@ -260,9 +274,13 @@ describe('executor child shared lifecycle', () => {
     const subject = await fixture('stacked-rekick-order');
     const worktree = await prepareStackedRekick(subject);
     const run = vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
+    seams.resumeRebaseFirst.mockImplementation(() => {
+      expect(seams.stackPreflightCompleted).toBe(true);
+    });
 
     await subject.execute();
 
+    expect(seams.resumeRebaseFirst).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: worktree }));
     await expect(readFile(join(worktree, '.pipeline', 'REKICK'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(run).toHaveBeenCalledTimes(1);
   });
@@ -279,6 +297,7 @@ describe('executor child shared lifecycle', () => {
     expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(detail) });
     await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(detail);
     await expect(readFile(join(worktree, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('');
+    expect(seams.resumeRebaseFirst).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
     expect(outcome.reason).not.toContain('loop ended without DONE or HALT marker');
   });
