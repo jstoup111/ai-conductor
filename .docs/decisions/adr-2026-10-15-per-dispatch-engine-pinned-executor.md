@@ -77,6 +77,15 @@ which the per-dispatch pin of D2 does not apply.
 > that still sets the key fails validation as an unknown top-level key. The per-dispatch pin of D2
 > applies to every dispatch.
 
+> **Amended 2026-11-07 by #3333:** The child did not run the whole per-feature path. It ran its own
+> copy, which skipped the stack preflight, the REKICK rebase-first resume, the audit trail, the
+> `Closes` link, merged user config, the managed-session context, setup and teardown bounds, and
+> other steps that only `runConductorInWorktree` and `makeFeatureRunnerDeps` performed. One engine
+> module, `engine/daemon-feature-lifecycle.ts`, now holds that path. Supervisor services reach it
+> through an explicit context. The child runtime builds its lifecycle from `makeFeatureRunnerDeps`
+> and that module, so the child runs the same lifecycle the in-process adapter ran. The adapter is
+> then removed.
+
 ### D2 — The engine version is pinned per dispatch in the WorkOrder
 At claim time the dispatcher resolves the floating `dist` symlink to a concrete immutable
 `dist-versions/«id»`. It records `engineVersionId` in the WorkOrder beside `baseSha`, along with a
@@ -142,6 +151,14 @@ occurrences they cause (for example `provider_suppressed`) are still emitted as 
 
 Plain feature log lines and tee'd `console.warn`/`console.error` are forwarded as log messages and
 rendered through the existing `featureLogFor(slug)` sink.
+
+> **Amended 2026-11-07 by #3333:** The supervisor's `feature_dispatch_started` carries the dispatch
+> `kind`, classified before the fork from root-readable state (whether the feature worktree and its
+> `.pipeline/REKICK` exist), and the WorkOrder's `tier`. A halted `feature_dispatch_ended` carries
+> `haltClass` from the worktree's halt sidecar and `step` from the last forwarded `loop_halt`.
+> `parked` maps to `terminated`. The per-dispatch visualizer uses the worktree's persisted session
+> id, the installed harness version and the order's `sourceRef`, and is stopped and flushed at
+> collection. The IPC protocol is unchanged.
 
 ### D5 — The child's lifecycle is bound to the supervisor
 On SIGTERM the supervisor sends a stop request to each child. The child takes today's shutdown
@@ -235,6 +252,11 @@ The operator declined the proposed three-spec split on 2026-10-15. The plan carr
 > **Amended 2026-10-24 by #3333:** A2's mitigation no longer includes the in-process rollback lever, which
 > is removed. Child-mode coverage now rests on the parity test and on daemon tests that run the
 > production child path through an injected in-memory fork.
+
+> **Amended 2026-11-07 by #3333:** A2 was false. The inventory covered shared services but not the
+> per-feature steps that only the in-process runner performed (#3333's parity inventory), and the
+> parity test exercised protocol transport, not the feature lifecycle. Coverage now rests on one
+> lifecycle module and on a child-path test for each behavior it performs.
 
 ## Consequences
 
