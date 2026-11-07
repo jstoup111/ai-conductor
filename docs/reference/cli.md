@@ -1737,8 +1737,18 @@ touches only paths child `<k>` owns. On success it writes
 child), appends a `restack_resolution` event with
 `action: recorded` and the operator identity, clears the HALT, and exits `0`. The next restack uses
 the recorded tip for that child instead of replaying the conflicted range, emits
-`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs. A
-refusal prints `stack restack-resolve: refused — <detail>` and exits `1`. A failure after the ref is
+`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs.
+Commits that change only `.docs/halted/<slug>.md` are bookkeeping: halt-record drift in the old
+range or the new parent's tree does not make the tip stale. A tip that cannot be consumed is retired:
+the restack deletes the resolution ref and emits `restack_resolution` with `action: retired`.
+
+- **Orphan (`record`):** no conflict record for that child exists. The replay continues normally.
+- **Stale (`range` or `parent-tree`):** the child's old range or the new parent's tree has changed.
+  The restack emits `restack_refused` with reason `restack-resolution-stale`. It then writes a new
+  `restack conflict child <k>` HALT whose detail lines are `restack-resolution-stale` and the field,
+  followed by a fresh `Restack-Conflict` recipe. Resolve that recipe again.
+
+A refusal prints `stack restack-resolve: refused — <detail>` and exits `1`. A failure after the ref is
 written prints `stack restack-resolve: recorded but could not …`, exits `1`, and leaves the HALT in
 place.
 

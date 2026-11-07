@@ -317,8 +317,9 @@ engine with `ai-conductor daemon status | grep "EXECUTOR ENGINE CURRENT"`.
   ```
 
   The real reason was overwritten. Read it from the first commit of the halt episode
-  (`git -C .worktrees/<slug> log -- .docs/halted/<slug>.md`, then `git show <commit>:...`) and
-  follow the matching section.
+  (`git -C .worktrees/<slug> log refs/conductor/<slug>/halt-record` on current engines, or
+  `git -C .worktrees/<slug> log -- .docs/halted/<slug>.md` for branch-committed records, then
+  `git show <commit>:.docs/halted/<slug>.md`) and follow the matching section.
 
 ## 6. Restack conflicts
 
@@ -337,9 +338,11 @@ current, clear the HALT and the next resume tries the resolver.
 `Missing decision:` line. Settle the conflict on the named child's branch as described in
 [A stacked restack halted](stalled-or-stuck-feature.md#a-stacked-restack-halted), then clear.
 
-**Halt-record-only commits.** The engine commits `.docs/halted/<slug>.md` on the checked-out child
-branch at every halt. Current engines treat that record as bookkeeping during a restack, on both the
-plumbing replay and the `git rebase` resolver fallback:
+**Halt-record-only commits.** Current engines store a stacked feature's halt record at
+`refs/conductor/<slug>/halt-record` and commit nothing to a child branch. Older engines committed
+`.docs/halted/<slug>.md` on the checked-out child branch at every halt, so existing stacks can still
+carry those commits. A restack treats them as bookkeeping, on both the plumbing replay and the
+`git rebase` resolver fallback, and a leaf move skips them as strays:
 
 - A non-merge commit whose only changed path is the feature's halt record is not replayed and
   never reaches the resolver. Its rewrite entry points at the nearest earlier rewritten commit (or
