@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
-import { conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, readConflictRecord, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import { conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, decisionRefFor, readConflictRecord, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
@@ -208,6 +208,51 @@ describe('runRestack merge-bearing conflicts (real local Git)', () => {
     await expect(subject.git(['rev-parse', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ stdout: `${second.recipe.tip}\n` });
     await expect(subject.git(['rev-parse', conflictParentRefFor('demo')])).resolves.toMatchObject({ stdout: `${second.record.newParent}\n` });
   });
+
+  // Covers: task:10
+  it('delivers a recorded decision to a flattened merge resolver and retires it after applying', async () => {
+    const subject = await fixture('not-carried');
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'operator required' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const conflict = await readConflictRecord(subject.repo, 'demo');
+    if (conflict.kind !== 'record') throw new Error('expected merge-bearing conflict record');
+    const answer = 'preserve the side change after resolving shared.txt';
+
+    await expect(dispatchStackRestackResolve({ slug: 'demo', child: '2', decision: answer }, resolveDeps(subject.repo)))
+      .resolves.toBe(0);
+    await expect(subject.git(['show-ref', '--verify', '--quiet', decisionRefFor('demo', 2 as never)])).resolves.toMatchObject({ stdout: expect.any(String) });
+    await expect(subject.git(['show-ref', '--verify', '--quiet', resolutionRefFor('demo', 2 as never)])).rejects.toMatchObject({ code: 1 });
+
+    const events = new ConductorEventEmitter();
+    const decisions: unknown[] = [];
+    events.on('restack_decision', (event) => { decisions.push(event); });
+    let delivered: unknown;
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault, events,
+      git: makeGitRunner(subject.repo), resolverCap: 1,
+      resolver: async (context) => {
+        delivered = context.operatorDecision;
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'decision-resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    expect(delivered).toEqual({ answer, commit: conflict.record.commit, paths: conflict.record.paths });
+    expect(decisions).toContainEqual(expect.objectContaining({ action: 'applied', child: 2, commit: conflict.record.commit }));
+    const tip = sha((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout);
+    expect((await subject.git(['log', '--format=%B', `${subject.newDefault}..${tip}`])).stdout).toContain(`Flattened-merge: ${subject.merge}`);
+    await expect(readFile(join(subject.repo, 'shared.txt'), 'utf8')).resolves.toBe('decision-resolved\n');
+    await expect(readFile(join(subject.repo, 'side.txt'), 'utf8')).resolves.toBe('side\n');
+    for (const ref of [decisionRefFor('demo', 2 as never), conflictFlattenedTipRefFor('demo'), conflictRecordRefFor('demo'), conflictParentRefFor('demo')]) {
+      await expect(subject.git(['show-ref', '--verify', '--quiet', ref])).rejects.toMatchObject({ code: 1 });
+    }
+  });
+
   it('applies a settled merge-bearing conflict as a linear history and emits the existing merge audit', async () => {
     const subject = await fixture('not-carried');
     const events = new ConductorEventEmitter();
