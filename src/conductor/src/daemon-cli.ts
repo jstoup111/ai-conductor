@@ -615,6 +615,14 @@ export function installDaemonOtelSighupHandler(options: {
 
 export interface DaemonModeOptions {
   projectRoot: string;
+  /**
+   * Engine paths used to create immutable dispatch pins. Production derives
+   * both from this module; tests can provide a complete temporary store.
+   */
+  engineRoot?: {
+    conductorRoot: string;
+    ownEngineDir: string;
+  };
   /** Parallel workers (>= 1). */
   concurrency: number;
   /** Stop after this many features (default: drain the backlog once). */
@@ -1268,6 +1276,10 @@ export function attachFeatureEventRenderer(
 
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
+  const engineRoot = opts.engineRoot ?? {
+    conductorRoot: conductorRootForModuleDir(__dirname),
+    ownEngineDir: __dirname,
+  };
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
   const configResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   if (!configResult.ok && configResult.error.type !== 'missing') {
@@ -1950,12 +1962,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
-    const conductorRoot = conductorRootForModuleDir(__dirname);
     const enginePin = await resolveEnginePin({
-      conductorRoot,
-      storeRoot: resolveEngineStoreRoot({ conductorRoot }),
+      conductorRoot: engineRoot.conductorRoot,
+      storeRoot: resolveEngineStoreRoot({ conductorRoot: engineRoot.conductorRoot }),
       // A versioned install has its forkable index.js directly in __dirname.
-      ownEngineDir: __dirname,
+      ownEngineDir: engineRoot.ownEngineDir,
     });
     return buildWorkOrder(
       {
@@ -2006,8 +2017,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       })(item);
     },
   });
-  const conductorRoot = conductorRootForModuleDir(__dirname);
-  const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot });
+  const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot: engineRoot.conductorRoot });
   let protocolMismatchPending = false;
   const executorBroker = createExecutorBroker({
     rateLimitEpisode,
@@ -2025,9 +2035,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // The order carries only a stable version id. Resolve it from the immutable
     // store at fork time, never through the floating dist link.
     engineDirForOrder: (order, useSupervisorBuild) => useSupervisorBuild
-      ? __dirname
+      ? engineRoot.ownEngineDir
       : realpathSync(join(engineStoreRoot, order.engineVersionId)),
-    supervisorEngineVersionId: resolveEngineVersion(__dirname),
+    supervisorEngineVersionId: resolveEngineVersion(engineRoot.ownEngineDir),
     rootEvents: events,
     attachBroker: executorBroker.attach,
     dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
