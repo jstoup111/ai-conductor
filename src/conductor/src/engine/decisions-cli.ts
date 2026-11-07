@@ -8,8 +8,8 @@ import {
 
 export interface DecisionsDispatch {
   readonly kind: 'decisions';
-  readonly kindFilter: DecisionRecordKind | undefined;
-  readonly status: DecisionDisposition | undefined;
+  readonly kindFilter: string | undefined;
+  readonly status: string | undefined;
   readonly json: boolean;
   readonly term: string | undefined;
 }
@@ -18,17 +18,17 @@ export interface DecisionsDispatch {
 export function detectDecisionsCommand(argv: string[]): DecisionsDispatch | null {
   if (argv[2] !== 'decisions') return null;
 
-  let kindFilter: DecisionRecordKind | undefined;
-  let status: DecisionDisposition | undefined;
+  let kindFilter: string | undefined;
+  let status: string | undefined;
   let json = false;
   let term: string | undefined;
   for (let index = 3; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--kind') {
-      kindFilter = argv[index + 1] as DecisionRecordKind | undefined;
+      kindFilter = argv[index + 1];
       index += 1;
     } else if (argument === '--status') {
-      status = argv[index + 1] as DecisionDisposition | undefined;
+      status = argv[index + 1];
       index += 1;
     } else if (argument === '--json') {
       json = true;
@@ -45,7 +45,35 @@ export interface DecisionsDispatchDeps {
   readonly stderr?: (line: string) => void;
 }
 
-function matches(row: DecisionCorpusRow, command: DecisionsDispatch): boolean {
+const DECISION_RECORD_KINDS: readonly DecisionRecordKind[] = [
+  'decision',
+  'review',
+  'assessment',
+  'reference',
+  'unclassified',
+];
+
+const DECISION_DISPOSITIONS: readonly DecisionDisposition[] = [
+  'approved',
+  'superseded',
+  'other',
+  'undeclared',
+];
+
+function isDecisionRecordKind(kind: string): kind is DecisionRecordKind {
+  return DECISION_RECORD_KINDS.includes(kind as DecisionRecordKind);
+}
+
+function isDecisionDisposition(status: string): status is DecisionDisposition {
+  return DECISION_DISPOSITIONS.includes(status as DecisionDisposition);
+}
+
+type ValidatedDecisionsDispatch = Omit<DecisionsDispatch, 'kindFilter' | 'status'> & {
+  readonly kindFilter: DecisionRecordKind | undefined;
+  readonly status: DecisionDisposition | undefined;
+};
+
+function matches(row: DecisionCorpusRow, command: ValidatedDecisionsDispatch): boolean {
   if (command.kindFilter !== undefined && row.kind !== command.kindFilter) return false;
   if (command.status !== undefined && row.disposition !== command.status) return false;
   if (command.term === undefined) return true;
@@ -63,10 +91,35 @@ export async function dispatchDecisions(
   projectRoot: string,
   deps: DecisionsDispatchDeps = {},
 ): Promise<number> {
+  let kindFilter: DecisionRecordKind | undefined;
+  if (command.kindFilter !== undefined) {
+    if (!isDecisionRecordKind(command.kindFilter)) {
+      (deps.stderr ?? console.error)(
+        `Invalid decision kind "${command.kindFilter}". Allowed kinds: ${DECISION_RECORD_KINDS.join(', ')}.`,
+      );
+      return 2;
+    }
+    kindFilter = command.kindFilter;
+  }
+  let status: DecisionDisposition | undefined;
+  if (command.status !== undefined) {
+    if (!isDecisionDisposition(command.status)) {
+      (deps.stderr ?? console.error)(
+        `Invalid decision status "${command.status}". Allowed dispositions: ${DECISION_DISPOSITIONS.join(', ')}.`,
+      );
+      return 2;
+    }
+    status = command.status;
+  }
+  const validatedCommand: ValidatedDecisionsDispatch = { ...command, kindFilter, status };
   const corpus = await (deps.readCorpus ?? readDecisionCorpus)(projectRoot);
-  const rows = corpus.rows.filter((row) => matches(row, command));
+  const rows = corpus.rows.filter((row) => matches(row, validatedCommand));
   const stdout = deps.stdout ?? console.log;
   if (command.json) stdout(JSON.stringify(rows));
   else rows.forEach((row) => stdout(renderText(row)));
-  return 0;
+  if (corpus.errors.length === 0) return 0;
+
+  const stderr = deps.stderr ?? console.error;
+  corpus.errors.forEach(({ path, error }) => stderr(`Unable to read decision record ${path}: ${error}`));
+  return 1;
 }

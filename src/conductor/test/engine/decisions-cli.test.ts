@@ -111,6 +111,68 @@ describe('dispatchDecisions', () => {
     }
   });
 
+  // Covers: task:6
+  it('rejects an invalid kind and names the accepted kinds', async () => {
+    const result = await dispatch(['decisions', '--kind', 'bogus']);
+
+    expect(result.code).toBe(2);
+    expect(result.stdout).toEqual([]);
+    expect(result.stderr.join('\n')).toMatch(/bogus/i);
+    expect(result.stderr.join('\n')).toMatch(/decision/i);
+    expect(result.stderr.join('\n')).toMatch(/review/i);
+    expect(result.stderr.join('\n')).toMatch(/assessment/i);
+    expect(result.stderr.join('\n')).toMatch(/reference/i);
+    expect(result.stderr.join('\n')).toMatch(/unclassified/i);
+  });
+
+  // Covers: task:6
+  it('rejects an invalid status and names the accepted statuses', async () => {
+    const result = await dispatch(['decisions', '--status', 'bogus']);
+
+    expect(result.code).toBe(2);
+    expect(result.stdout).toEqual([]);
+    expect(result.stderr.join('\n')).toMatch(/bogus/i);
+    expect(result.stderr.join('\n')).toMatch(/approved/i);
+    expect(result.stderr.join('\n')).toMatch(/superseded/i);
+    expect(result.stderr.join('\n')).toMatch(/other/i);
+    expect(result.stderr.join('\n')).toMatch(/undeclared/i);
+  });
+
+  // Covers: task:6
+  it('reports unreadable corpus records while retaining readable decision rows', async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+
+    const code = await dispatchDecisions(
+      { kind: 'decisions', kindFilter: undefined, status: undefined, json: false, term: undefined },
+      root,
+      {
+        readCorpus: async () => ({
+          rows: [{
+            path: '.docs/decisions/adr-2026-01-02-runtime.md',
+            kind: 'decision',
+            disposition: 'approved',
+            declared: 'APPROVED',
+            date: '2026-01-02',
+            title: 'Runtime Decision',
+            summary: 'Keep the runtime boring.',
+          }],
+          errors: [{
+            path: '.docs/decisions/adr-2026-01-03-unreadable.md',
+            error: 'EACCES: permission denied',
+          }],
+        }),
+        stdout: (line: string) => stdout.push(line),
+        stderr: (line: string) => stderr.push(line),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(stdout.join('\n')).toContain('Runtime Decision');
+    expect(stderr.join('\n')).toContain('.docs/decisions/adr-2026-01-03-unreadable.md');
+    expect(stderr.join('\n')).toContain('EACCES: permission denied');
+  });
+
   it('routes decisions through the injectable pre-pipeline dispatcher', async () => {
     const dispatchDecisions = vi.fn(async () => 0);
     await expect(dispatchNonDispatchingCliCommand(
