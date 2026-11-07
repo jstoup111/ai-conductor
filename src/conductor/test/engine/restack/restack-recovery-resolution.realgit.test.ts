@@ -1,4 +1,4 @@
-// Covers: task:5, task:11
+// Covers: task:5, task:7, task:12
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,7 +10,8 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { detectStackRestackResolveCommand } from '../../../src/cli.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
-import { readConflictRecord, resolutionRefFor, writeConflictRecord } from '../../../src/engine/restack/restack-conflict-record.js';
+import { haltRecordPathFor } from '../../../src/engine/restack/halt-record-bookkeeping.js';
+import { conflictRecordRefFor, readConflictRecord, recordAnswer, resolutionRefFor, writeConflictRecord } from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { journalRefFor, readRestackJournal, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
@@ -112,6 +113,39 @@ async function baseRefreshConflictFixture() {
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
   }, topologyFilesystem);
   return { repo, git, runner, firstTip, secondTip, leafTip, newDefault, resolutionTip, second };
+}
+
+async function planRecovery(
+  subject: Awaited<ReturnType<typeof baseRefreshConflictFixture>>,
+  newDefault: CommitSha,
+  opId: RestackOpId,
+) {
+  const first = parseChildId(1);
+  const leaf = parseChildId(3);
+  if (!first || !leaf) throw new Error('child ids should parse');
+  const base = sha((await subject.git(['rev-parse', `${subject.firstTip}^`])).stdout.trim());
+  const journal: RestackJournal = {
+    opId, cause: 'base-refresh', newDefault,
+    committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+    dirtyPaths: [],
+    refs: [
+      { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.firstTip },
+      { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.firstTip },
+      { ref: 'refs/heads/feat/c2/demo' as never, oldSha: subject.secondTip },
+      { ref: 'refs/conductor/demo/closed/c2' as never, oldSha: subject.secondTip },
+      { ref: 'refs/heads/feat/daemon-demo' as never, oldSha: subject.leafTip },
+    ],
+    ranges: [
+      { child: first, oldParent: base, oldTip: subject.firstTip, kind: 'closed' },
+      { child: subject.second, oldParent: subject.firstTip, oldTip: subject.secondTip, kind: 'closed' },
+      { child: leaf, oldParent: subject.secondTip, oldTip: subject.leafTip, kind: 'leaf-active' },
+    ],
+    children: [{ child: first, status: 'pending' }, { child: subject.second, status: 'pending' }, { child: leaf, status: 'pending' }],
+    state: 'planned', owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+  };
+  const blob = await writeRestackJournalBlob(subject.repo, journal);
+  await subject.runner(['update-ref', journalRefFor('demo'), blob]);
+  return journal;
 }
 
 describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
@@ -257,6 +291,74 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
       .resolves.toMatchObject({ stdout: `${childTip}\n` });
   });
 
+  it('consumes a recorded tip through planned-journal recovery despite parent halt-record drift', async () => {
+    const subject = await baseRefreshConflictFixture();
+    await subject.git(['checkout', '-qb', 'operator-halt-record', subject.resolutionTip]);
+    await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.repo, haltRecordPathFor('demo')), 'Status: halted\nHalted at: 2030-01-01T00:00:00Z\n');
+    await subject.git(['add', haltRecordPathFor('demo')]);
+    await subject.git(['commit', '-qm', 'halt record: demo']);
+    const tipWithHaltRecord = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    await expect(recordAnswer(subject.repo, 'demo', {
+      kind: 'tip', child: subject.second, tip: tipWithHaltRecord,
+    }, { git: subject.runner })).resolves.toEqual({ kind: 'updated' });
+    await subject.git(['checkout', '-q', 'main']);
+    await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.repo, haltRecordPathFor('demo')), 'Status: halted\nHalted at: 2031-01-01T00:00:00Z\n');
+    await subject.git(['add', haltRecordPathFor('demo')]);
+    await subject.git(['commit', '-qm', 'halt record: demo']);
+    await writeFile(join(subject.repo, haltRecordPathFor('demo')), 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n');
+    await subject.git(['add', haltRecordPathFor('demo')]);
+    await subject.git(['commit', '-qm', 'halt record: demo']);
+    const advanced = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const base = sha((await subject.git(['rev-parse', `${subject.firstTip}^`])).stdout.trim());
+    const leaf = parseChildId(3);
+    if (!leaf) throw new Error('expected leaf child');
+    const journal: RestackJournal = {
+      opId: 'recovery-halt-record-drift' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault: advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.firstTip },
+        { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.firstTip },
+        { ref: 'refs/heads/feat/c2/demo' as never, oldSha: subject.secondTip },
+        { ref: 'refs/conductor/demo/closed/c2' as never, oldSha: subject.secondTip },
+        { ref: 'refs/heads/feat/daemon-demo' as never, oldSha: subject.leafTip },
+      ],
+      ranges: [
+        { child: parseChildId(1)!, oldParent: base, oldTip: subject.firstTip, kind: 'closed' },
+        { child: subject.second, oldParent: subject.firstTip, oldTip: subject.secondTip, kind: 'closed' },
+        { child: leaf, oldParent: subject.secondTip, oldTip: subject.leafTip, kind: 'leaf-active' },
+      ],
+      children: [
+        { child: parseChildId(1)!, status: 'pending' },
+        { child: subject.second, status: 'pending' },
+        { child: leaf, status: 'pending' },
+      ],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    const prior = await readRestackJournal(subject.repo, 'demo', { git: subject.runner });
+    await subject.git(['update-ref', journalRefFor('demo'), blob, prior.kind === 'journal' ? prior.blob : '']);
+    const events: unknown[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('restack_resolution', (event) => { events.push(event); });
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', git: subject.runner, events: emitter,
+    })).resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    const rebuilt = sha((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim());
+    await expect(subject.git(['show', `${rebuilt}:${haltRecordPathFor('demo')}`]))
+      .resolves.toMatchObject({ stdout: 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n' });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed', child: subject.second }));
+  });
+
   it('refuses a dispatcher-recorded base-refresh resolution whose recorded parent tree is stale without moving refs', async () => {
     const subject = await baseRefreshConflictFixture();
     await subject.git(['checkout', '-q', 'main']);
@@ -282,9 +384,9 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
       subject.git(['rev-parse', 'refs/conductor/demo/closed/c2']),
     ]);
     expect(after.map((result) => result.stdout)).toEqual(before.map((result) => result.stdout));
-    await expect(subject.git(['rev-parse', resolutionRefFor('demo', subject.second)])).resolves.toMatchObject({ stdout: `${subject.resolutionTip}\n` });
+    await expect(subject.git(['rev-parse', '-q', '--verify', resolutionRefFor('demo', subject.second)])).rejects.toMatchObject({ code: 1 });
     await expect(subject.git(['rev-parse', 'refs/conductor/demo/restack/conflict/record'])).resolves.toMatchObject({ stdout: expect.any(String) });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('restack-resolution-stale) child 2\nparent-tree');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatchObject(expect.stringContaining('restack-resolution-stale\nparent-tree'));
   });
 
   it('rebuilds an omitted duplicate-subject leaf through the same owner resolution as the executor', async () => {
@@ -371,5 +473,49 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     expect((await git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(executorOwner[0]!.rewritten);
     expect((await git(['merge-base', '--is-ancestor', executorOwner[0]!.rewritten, 'feat/c2/demo'])).stdout).toBe('');
     expect(await readRestackJournal(repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
+  it('retires a malformed-record resolution and reaches the ordinary recovery replay', async () => {
+    const subject = await baseRefreshConflictFixture();
+    const malformed = await subject.runner(['hash-object', '-w', '--stdin'], { input: '{not json' });
+    await subject.runner(['update-ref', conflictRecordRefFor('demo'), malformed.stdout.trim()]);
+    await planRecovery(subject, subject.newDefault, 'malformed-record-recovery' as RestackOpId);
+    const events: unknown[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('restack_resolution', (event) => { events.push(event); });
+    const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'ordinary replay reached resolver' }));
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', git: subject.runner, events: emitter, resolver, resolverCap: 1,
+    })).resolves.toEqual({ kind: 'halted' });
+
+    await expect(subject.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', subject.second)])).resolves.toMatchObject({ exitCode: 1 });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'restack_resolution', child: subject.second, action: 'retired' }));
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it('retires successive orphaned resolutions and replays both children during recovery', async () => {
+    const subject = await baseRefreshConflictFixture();
+    const leaf = parseChildId(3);
+    if (!leaf) throw new Error('leaf child should parse');
+    await subject.runner(['update-ref', '-d', conflictRecordRefFor('demo')]);
+    await subject.runner(['update-ref', resolutionRefFor('demo', leaf), subject.leafTip]);
+    const base = sha((await subject.git(['rev-parse', `${subject.firstTip}^`])).stdout.trim());
+    await planRecovery(subject, base, 'successive-orphan-recovery' as RestackOpId);
+    const events: unknown[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('restack_resolution', (event) => { events.push(event); });
+
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: subject.runner, events: emitter }))
+      .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    await expect(subject.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', subject.second)])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(subject.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', leaf)])).resolves.toMatchObject({ exitCode: 1 });
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'restack_resolution', child: subject.second, action: 'retired' }),
+      expect.objectContaining({ type: 'restack_resolution', child: leaf, action: 'retired' }),
+    ]));
+    expect((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(subject.secondTip);
+    expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).not.toBe(subject.leafTip);
   });
 });

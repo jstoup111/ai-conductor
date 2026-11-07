@@ -215,10 +215,10 @@ describe('restack cascade cap sweep (real local Git)', () => {
     const ledger = await readKickbackLedger(subject.repo, child(3));
     expect(ledger.gates.restack?.capEvidence).toMatchObject({ allowance: 'restacks', consumed: 4, limit: 4 });
     expect(ledger.gates.restack?.capEvidence?.latestReason ?? ledger.gates.restack?.lastReason).toContain('originating child 1');
-    // Only the halt-record commit may advance the checked-out leaf; nothing else moved.
+    // The halt record is isolated on its own ref; no stack ref moved.
     const after = await refSnapshot(subject.repo);
-    const withoutLeaf = (snapshot: string) => snapshot.split('\n').filter((line) => !line.startsWith('refs/heads/feat/daemon-demo ')).join('\n');
-    expect(withoutLeaf(after)).toBe(withoutLeaf(before));
+    const withoutHaltRecord = (snapshot: string) => snapshot.split('\n').filter((line) => !line.startsWith('refs/conductor/demo/halt-record ')).join('\n');
+    expect(withoutHaltRecord(after)).toBe(withoutHaltRecord(before));
 
     // With two originating children, the second child's exhausted cap also refuses before any journal.
     const second = await stack();

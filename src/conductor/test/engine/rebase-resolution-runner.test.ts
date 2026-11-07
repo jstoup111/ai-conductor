@@ -114,7 +114,7 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
     const environment = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/helpers/hooks' };
     await runner.resolveRebaseConflict({ ...sampleCtx, environment });
-    expect(((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions).env).toEqual(environment);
+    expect(((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions).environmentOverlay).toEqual(environment);
   });
 
   it('keeps the plain-rebase prompt byte-identical when no operator decision is provided', async () => {
@@ -315,7 +315,7 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
     expect(result.resolved).toBe(false);
     expect(codex.invoke).toHaveBeenCalledOnce();
     const options = (codex.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(options.env).toEqual(environment);
+    expect(options.environmentOverlay).toEqual(environment);
     expect(options.prompt).toBe('$rebase');
     expect(options.systemPrompt).toContain('full replay');
     expect(options.systemPrompt).toContain('source intent');

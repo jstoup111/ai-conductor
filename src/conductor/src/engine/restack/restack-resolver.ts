@@ -18,6 +18,7 @@ import {
   isHaltRecordOnlyCommit,
   mapOmittedHaltRecordCommits,
 } from './halt-record-bookkeeping.js';
+import { missingCandidateSubjects, rewritesByUniqueSubject } from './restack-conflict-record.js';
 
 /** Resolver dispatch receives the same immutable identity as every Git child. */
 export interface RestackResolutionContext extends ResolutionContext {
@@ -44,6 +45,8 @@ export interface ResolveRestackConflictOptions {
   readonly cap: number;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
   readonly git?: GitRunner;
+  /** Test seam for the Git runner rooted at the detached resolver checkout. */
+  readonly temporaryGit?: (worktree: string) => GitRunner;
 }
 
 export interface RestackConflictResolution {
@@ -160,6 +163,19 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
 
   try {
     const candidates = await replayCandidates(runGit, options.range, options.comparisonCommits ?? [], options.haltRecordSlug);
+    // An empty engine-authored todo has no resolver work to settle. Its only
+    // valid result is the supplied replay parent; never ask Git to run an
+    // empty interactive rebase, which reports a synthetic failure.
+    if (candidates.length === 0) {
+      const rewrites = new Map<CommitSha, CommitSha>();
+      let tip = options.newParent;
+      if (options.haltRecordSlug !== undefined) {
+        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned, runGit);
+        tip = carried.tip;
+        await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
+      }
+      return { outcome: { kind: 'noop' }, tip, rewrites, candidates };
+    }
     const addedResult = await runGit(['worktree', 'add', '--detach', temporaryWorktree, options.range.oldTip], { env: identity });
     if (addedResult.exitCode !== 0) throw new Error(`could not add restack resolver worktree: ${addedResult.stderr}`);
     added = true;
@@ -191,37 +207,59 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         GIT_CONFIG_VALUE_2: 'true',
       }),
     };
-    const nativeTemporaryGit = makeGitRunner(temporaryWorktree);
+    const nativeTemporaryGit = options.temporaryGit?.(temporaryWorktree) ?? makeGitRunner(temporaryWorktree);
     // Every call rooted in the detached checkout, including rebase-state
     // inspection around a resolver's --continue, carries the journal stamp.
     const tempGit: GitRunner = (args, opts) => nativeTemporaryGit(args, {
       ...opts,
       env: { ...environment, ...opts?.env },
     });
-    const resolved = async (outcome: RebaseOutcome): Promise<RestackConflictResolution> => {
+    const resolved = async (
+      outcome: RebaseOutcome,
+      capturedTip: CommitSha | undefined = undefined,
+    ): Promise<RestackConflictResolution> => {
       const rewrites = await readRewrites(rewritePath);
-      // Git may reap a detached resolver checkout as the final rebase action.
-      // post-rewrite is therefore the durable authority for its resulting tip.
+      // The settled checkout is the same authority FR-8 and FR-9 inspected.
+      // The hook list survives a lost checkout, but never overrides its HEAD.
+      const head = capturedTip === undefined ? await tempGit(['rev-parse', 'HEAD']) : undefined;
+      const settledTip = capturedTip ?? (head?.exitCode === 0 ? parseCommitSha(head.stdout.trim()) : undefined);
       const rewrittenTip = [...rewrites.values()].at(-1);
-      if (rewrittenTip === undefined) {
-        // No rewrites means every candidate dropped out, leaving HEAD on the new
-        // parent. Anything else is a replay the engine cannot account for, and
-        // adopting the parent would silently discard this child's commits.
-        const head = await tempGit(['rev-parse', 'HEAD']);
-        if (head.exitCode !== 0 || head.stdout.trim() !== options.newParent) {
-          return {
-            outcome: {
-              kind: 'conflict_halt',
-              conflicts: [],
-              reason: `restack resolver finished child ${options.range.child} without a rewrite list; refusing to discard its commits`,
-            },
-            tip: undefined,
-            rewrites,
-            candidates,
-          };
-        }
+      if (settledTip === undefined && rewrittenTip === undefined && candidates.length > 0) {
+        return {
+          outcome: {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `restack resolver finished child ${options.range.child} without a readable settled tip`,
+          },
+          tip: undefined,
+          rewrites,
+          candidates,
+        };
       }
-      let tip = rewrittenTip ?? options.newParent;
+      let tip = settledTip ?? rewrittenTip ?? options.newParent;
+      const candidateSubjects = await replayCandidateSubjects(runGit, candidates);
+      const missingSubjects = await missingCandidateSubjects(runGit, options.newParent, tip, candidateSubjects);
+      if (missingSubjects.length > 0) {
+        return {
+          outcome: {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `restack resolver finished child ${options.range.child} without candidate subjects: ${missingSubjects.join(', ')}`,
+          },
+          tip: undefined,
+          rewrites,
+          candidates,
+        };
+      }
+      if (rewrites.size === 0 && candidates.length > 0) {
+        const rebuilt = await rewritesByUniqueSubject(
+          runGit,
+          `${options.range.oldParent}..${options.range.oldTip}`,
+          `${options.newParent}..${tip}`,
+          candidateSubjects,
+        );
+        for (const [original, replacement] of rebuilt) rewrites.set(original, replacement);
+      }
       if (options.haltRecordSlug !== undefined) {
         const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned, runGit);
         tip = carried.tip;
@@ -235,6 +273,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
     }
 
     const conflicts = await conflictedFiles(tempGit);
+    let resolverSettledTip: CommitSha | undefined;
     const outcome = await resolveRebaseConflicts(
       tempGit,
       temporaryWorktree,
@@ -244,14 +283,21 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         reason: started.stderr || 'restack resolver rebase failed',
         expectedSubjects: await replayCandidateSubjects(tempGit, candidates),
       },
-      async (context) => options.resolver({
-        ...context,
-        environment,
-        ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
-      }),
+      async (context) => {
+        const result = await options.resolver({
+          ...context,
+          environment,
+          ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
+        });
+        if (result.resolved) {
+          const head = await tempGit(['rev-parse', 'HEAD']);
+          resolverSettledTip = head.exitCode === 0 ? parseCommitSha(head.stdout.trim()) : undefined;
+        }
+        return result;
+      },
       options.cap,
     );
-    if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome);
+    if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome, resolverSettledTip);
     return { outcome, tip: undefined, rewrites: await readRewrites(rewritePath), candidates };
   } finally {
     try {

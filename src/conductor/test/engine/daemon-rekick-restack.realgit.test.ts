@@ -12,6 +12,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { clearMarker, REKICK_SENTINEL, resumeRebaseFirst } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { supersedeHaltRecord } from '../../src/engine/halt-record.js';
+import { readHaltRecordRef } from '../../src/engine/halt-record-ref.js';
 import type { performRebase } from '../../src/engine/rebase.js';
 import {
   journalRefFor,
@@ -190,11 +191,12 @@ describe('daemon re-kick whole-stack restack (real local Git)', () => {
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     expect(seen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'dirty-overlap', detail: 'src/a.ts' })]);
     expect(rebase).not.toHaveBeenCalled();
-    // Refused, not skipped: no stack ref was replayed (the leaf gained only its
-    // halt-record commit) and the operator's edit is intact.
-    expect(await subject.git('rev-parse', 'feat/daemon-demo^')).toBe(subject.oldLeaf);
-    expect(await subject.git('diff', '--name-only', subject.oldLeaf, 'feat/daemon-demo')).toBe('.docs/halted/demo.md');
-    expect(await subject.git('show', 'feat/daemon-demo:.docs/halted/demo.md')).toContain('restack refused (dirty-overlap)\nsrc/a.ts');
+    // Refused, not skipped: no stack ref moved, while the halt record lives
+    // on its isolated ref and the operator's edit remains intact.
+    expect(await subject.git('rev-parse', 'feat/daemon-demo')).toBe(subject.oldLeaf);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining('restack refused (dirty-overlap)\nsrc/a.ts'),
+    });
     expect(await subject.git('rev-parse', 'feat/c1/demo')).toBe(subject.c1);
     expect(await subject.git('rev-parse', 'feat/c2/demo')).toBe(subject.c2);
     await expect(readFile(join(subject.repo, 'src', 'a.ts'), 'utf8')).resolves.toBe('operator edit\n');
@@ -267,7 +269,9 @@ describe('daemon re-kick whole-stack restack (real local Git)', () => {
     expect(halted.resume).toBe('halted');
     const leftover = await readRestackJournal(subject.repo, 'demo');
     expect(leftover).toMatchObject({ kind: 'journal', journal: { state: 'aborted', cause: 'base-refresh' } });
-    expect(await subject.git('show', 'HEAD:.docs/halted/demo.md')).toMatch(/^Status:\s*halted\s*$/m);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringMatching(/^Status:\s*halted\s*$/m),
+    });
 
     // The operator resolves the overlap; the re-kick sweep clears the halt.
     await subject.git('checkout', '--', 'src/a.ts');

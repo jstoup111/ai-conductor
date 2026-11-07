@@ -97,6 +97,17 @@ git -C .worktrees/<slug> show HEAD:.docs/halted/<slug>.md
 
 Repair the push failure separately; do not treat a missing remote copy as a missing halt record.
 
+A stacked feature (one with child branches or stack refs) commits no record to a branch and pushes
+none. Read its record from the local ref; `git log` on the ref lists earlier records of the halt
+history:
+
+```bash
+git -C .worktrees/<slug> show refs/conductor/<slug>/halt-record:.docs/halted/<slug>.md
+git -C .worktrees/<slug> log --format='%h %ci %s' refs/conductor/<slug>/halt-record
+```
+
+If the ref is absent, the record predates ref storage; read `HEAD:.docs/halted/<slug>.md` as above.
+
 ### 1. Read the halt marker
 
 ```bash
@@ -1335,8 +1346,13 @@ ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer
 Use exactly one of `--tip` and `--decision`; a `--tip`/`--decision` flag conflict is refused.
 `--decision` also refuses a wrong child, no matching live
 HALT, an unstacked feature, a held feature-dispatch lease, and invocation from a daemon session.
-On success it clears the HALT and the next restack supplies the answer to the resolver. For
-validation rules and refusals, see
+On success it clears the HALT and the next restack supplies the answer to the resolver.
+
+A recorded `--tip` that the restack cannot use is retired, not left in place. When the HALT returns
+as `restack conflict child <k>` with `restack-resolution-stale` and `range` or `parent-tree` on its
+detail lines, the child's history moved after you resolved it. Run the HALT's new
+`Restack-Conflict` recipe from scratch; the old scratch branch is based on the outdated range. For
+validation rules, refusals, and stale handling, see
 [restack conflict resolution](../reference/cli.md#restack-conflict-resolution).
 
 **Recovery:**

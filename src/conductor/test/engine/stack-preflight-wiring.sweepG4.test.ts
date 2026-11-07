@@ -125,6 +125,7 @@ import { runDaemonMode } from '../../src/daemon-cli.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { clearMarker, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
+import { readHaltRecordRef } from '../../src/engine/halt-record-ref.js';
 import { __resetResolveCacheForTests, writeOperatorPark } from '../../src/engine/park-marker.js';
 import { journalRefFor, readRestackJournal, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -514,7 +515,9 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
 
     await daemon.dispatch(subject, new ConductorEventEmitter());
     expect(await readFile(join(subject.worktree, HALT_MARKER), 'utf8')).toContain('dirty-overlap');
-    expect(await subject.git('show', 'HEAD:.docs/halted/demo.md')).toMatch(/^Status:\s*halted\s*$/m);
+    await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringMatching(/^Status:\s*halted\s*$/m),
+    });
     expect(await readRestackJournal(subject.worktree, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
 
     // The operator resolves the overlap; the halt is cleared.
@@ -531,7 +534,9 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
     const repair = captured.trace.indexOf('restack:feature-repair');
     expect(supersede).toBeGreaterThanOrEqual(0);
     expect(repair).toBeGreaterThan(supersede);
-    expect(await subject.git('show', 'feat/daemon-demo:.docs/halted/demo.md')).toMatch(/^Status:\s*resolved\s*$/m);
+    await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringMatching(/^Status:\s*resolved\s*$/m),
+    });
     // No journal or staging ref survived to the repair's entry.
     expect(captured.restackEntryRefs[0]).toBe('');
     expect(seen.filter((event) => event.type === 'restack_refused')).toEqual([]);

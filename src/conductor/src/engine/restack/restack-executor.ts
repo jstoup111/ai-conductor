@@ -36,7 +36,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines } from './restack-conflict-record.js';
+import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, retireRecordedResolution } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
@@ -741,14 +741,34 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const recorded = await consumeRecordedResolution({
           slug: options.slug, range, parent, committer: journal.journal.committer, git,
           replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
-            replayRange, replayParent, replayCommitter, replayGit, { comparisonCommits: [] },
+            replayRange, replayParent, replayCommitter, replayGit, {
+              comparisonCommits: [],
+              haltRecordSlug: options.slug,
+            },
           ),
         });
         if (recorded.kind === 'stale') {
-          await abortJournal(options.worktree, journal, git, moves);
-          await haltRestack(options.worktree, 'restack-resolution-stale', options.events, { child: range.child, detail: recorded.field });
-          terminal = true;
-          return haltedResult(options.worktree);
+          // An answer can outlive either its conflict record (an orphan) or
+          // the exact history it described.  Orphans are harmless once their
+          // ref is retired and must continue through the ordinary replay;
+          // history drift becomes a new, operator-actionable conflict.
+          if (recorded.field !== 'record') await abortJournal(options.worktree, journal, git, moves);
+          const retired = await retireRecordedResolution(options.worktree, options.slug, range.child, { git });
+          if (retired.kind !== 'retired') throw new Error(`cannot retire stale restack resolution: ${retired.kind}`);
+          await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'retired', tip: retired.tip });
+          if (recorded.field !== 'record') {
+            if (!retired.record) throw new Error('stale restack resolution lost its matching conflict record');
+            await options.events?.emit(emitRestackRefused({ reason: 'restack-resolution-stale', child: range.child, detail: recorded.field }));
+            await haltRecordedRestackConflict({
+              worktree: options.worktree, slug: options.slug, journal, range, replayParent: parent,
+              candidateSubjects: await replayCandidateSubjects(git, await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)),
+              commit: retired.record.commit, paths: retired.record.paths,
+              detail: `restack-resolution-stale\n${recorded.field}`,
+              events: options.events, git, writeHalt: haltRestackConflict,
+            });
+            terminal = true;
+            return haltedResult(options.worktree);
+          }
         }
         if (recorded.kind === 'consumed') {
           const ownership = await checkPathOwnership(range, parent, recorded.tip, git);

@@ -1,7 +1,6 @@
 // Covers: task:28
-import { execFile as execFileCallback, spawn } from 'node:child_process';
+import { execFile as execFileCallback } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -9,7 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { writeHaltMarker } from '../../../src/engine/halt-marker.js';
-import { renderHaltRecord } from '../../../src/engine/halt-record.js';
+import { renderHaltRecord, supersedeHaltRecord } from '../../../src/engine/halt-record.js';
+import { haltRecordRefFor, readHaltRecordRef } from '../../../src/engine/halt-record-ref.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import {
   journalRefFor,
@@ -98,22 +98,6 @@ async function movedFixture() {
   return { repo, git, child, oldTip, replay, journal, blob };
 }
 
-function waitForPath(path: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(join(path, '..'), (_event, name) => {
-      if (name === path.slice(path.lastIndexOf('/') + 1)) {
-        clearTimeout(timeout);
-        watcher.close();
-        resolve();
-      }
-    });
-    const timeout = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`timed out waiting for ${path}`));
-    }, 2_000);
-  });
-}
-
 async function commitInitialHaltRecord(subject: Awaited<ReturnType<typeof movedFixture>>): Promise<CommitSha> {
   // Reset the fixture's branch to the pre-move tip for the independently
   // controlled supersede/restack interleavings below.
@@ -128,43 +112,6 @@ async function commitInitialHaltRecord(subject: Awaited<ReturnType<typeof movedF
   await subject.git(['add', '.docs/halted/demo.md']);
   await subject.git(['commit', '-qm', 'halt record: demo']);
   return sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
-}
-
-async function runSupersedeInChild(repo: string, started: string, release: string): Promise<{ readonly outcome: unknown; readonly complete: Promise<void> }> {
-  const hooks = join(repo, '..', 'race-hooks');
-  await mkdir(hooks, { recursive: true });
-  const prepare = join(hooks, 'prepare-commit-msg');
-  await writeFile(prepare, `#!/bin/sh\nprintf '' > '${started}'\nwhile [ ! -f '${release}' ]; do sleep 0.01; done\nexit 0\n`);
-  await chmod(prepare, 0o755);
-  for (const hook of ['commit-msg', 'post-commit']) {
-    const path = join(hooks, hook);
-    await writeFile(path, '#!/bin/sh\nexit 0\n');
-    await chmod(path, 0o755);
-  }
-  await execFile('git', ['config', 'core.hooksPath', hooks], { cwd: repo });
-
-  const module = new URL('../../../src/engine/halt-record.ts', import.meta.url).pathname;
-  const program = [
-    'const { supersedeHaltRecord } = await import(process.argv[1]);',
-    'const result = await supersedeHaltRecord(process.argv[2], "demo", "race");',
-    'process.stdout.write(JSON.stringify(result));',
-  ].join(' ');
-  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', program, module, repo], {
-    cwd: repo, stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (chunk: Buffer) => { stdout += chunk; });
-  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk; });
-  const complete = new Promise<void>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr}`)));
-  });
-  await waitForPath(started);
-  return {
-    get outcome() { return stdout === '' ? undefined : JSON.parse(stdout) as unknown; },
-    complete,
-  };
 }
 
 async function moveBranchDuringRace(
@@ -193,8 +140,9 @@ describe('restack halt seam (real local Git)', () => {
 
     const journal = await readRestackJournal(subject.repo, 'demo');
     expect(journal).toMatchObject({ kind: 'journal', journal: { state: 'synced' } });
-    const record = await readFile(join(subject.repo, '.docs', 'halted', 'demo.md'), 'utf8');
-    expect(record).toContain(`Head SHA: ${subject.replay.tip}`);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining(`Head SHA: ${subject.replay.tip}`),
+    });
     expect(failures).toEqual([]);
   });
 
@@ -226,34 +174,24 @@ describe('restack halt seam (real local Git)', () => {
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('operator decision required\n');
   });
 
-  it('refuses a separate node supersede after the restack moves the branch, preserving the restacked tree', async () => {
+  it('does not move the restacked tree when no legacy record survives its replay', async () => {
     const subject = await movedFixture();
     const recordHead = await commitInitialHaltRecord(subject);
-    const started = join(subject.repo, '..', 'supersede-started');
-    const release = join(subject.repo, '..', 'supersede-release');
-    const child = await runSupersedeInChild(subject.repo, started, release);
     await moveBranchDuringRace(subject, recordHead);
-    await writeFile(release, 'go\n');
-    await child.complete;
 
-    expect(child.outcome).toMatchObject({ kind: 'failed' });
+    await expect(supersedeHaltRecord(subject.repo, 'demo', 'race')).resolves.toEqual({ kind: 'noop' });
     expect((await subject.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(subject.replay.tip);
     await expect(subject.git(['show', 'HEAD:child.txt'])).resolves.toMatchObject({ stdout: 'child\n' });
   });
 
-  it('allows a separate node supersede that commits before the restack, then moves the same branch safely', async () => {
+  it('supersedes a legacy record before the restack, then moves the same branch safely', async () => {
     const subject = await movedFixture();
     const recordHead = await commitInitialHaltRecord(subject);
-    const started = join(subject.repo, '..', 'supersede-started');
-    const release = join(subject.repo, '..', 'supersede-release');
-    const child = await runSupersedeInChild(subject.repo, started, release);
-    await writeFile(release, 'go\n');
-    await child.complete;
-    expect(child.outcome).toEqual({ kind: 'written' });
-    const supersededHead = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
-    expect(supersededHead).not.toBe(recordHead);
+    await expect(supersedeHaltRecord(subject.repo, 'demo', 'race')).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
+    expect(sha((await subject.git(['rev-parse', 'HEAD'])).stdout)).toBe(recordHead);
 
-    await subject.git(['update-ref', 'refs/heads/feat/c1/demo', subject.replay.tip, supersededHead]);
+    await subject.git(['update-ref', 'refs/heads/feat/c1/demo', subject.replay.tip, recordHead]);
     expect((await subject.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(subject.replay.tip);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'record', source: 'ref', text: expect.stringContaining('Status: resolved\n') });
   });
 });

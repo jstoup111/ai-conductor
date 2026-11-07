@@ -284,6 +284,11 @@ export interface InvokeOptions {
    */
   env?: NodeJS.ProcessEnv;
   /**
+   * Engine-owned environment overlaid after self-host setup and before
+   * adapter-owned session markers and tmux masking.
+   */
+  environmentOverlay?: NodeJS.ProcessEnv;
+  /**
    * Working directory for the spawned `claude` process. CRITICAL for the daemon:
    * each feature runs in its own git worktree, so the agent's file writes and
    * commits must land in that worktree — not the daemon's main checkout. When

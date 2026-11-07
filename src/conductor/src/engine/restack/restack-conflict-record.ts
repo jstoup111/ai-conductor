@@ -1,11 +1,12 @@
 import { execa } from 'execa';
 import { parseChildId, type ChildId } from '../child-context.js';
+import { haltRecordPathFor, haltRecordTree, isHaltRecordOnlyCommit } from './halt-record-bookkeeping.js';
 import { parseCommitSha, type ChildRange, type CommitSha, type RefName, type RestackOpId } from './restack-types.js';
 
 const ZERO_SHA = '0'.repeat(40) as CommitSha;
 
 interface GitRunner {
-  (args: string[], opts?: { input?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  (args: string[], opts?: { input?: string; env?: NodeJS.ProcessEnv }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 interface CommitterStamp { readonly name: string; readonly email: string; readonly date: string; }
@@ -94,6 +95,18 @@ export type ConsumeRecordedResolutionResult =
     readonly tip: CommitSha;
     readonly rewrites: ReadonlyMap<CommitSha, CommitSha>;
     readonly resolution: ConsumedConflictRefs;
+  };
+
+/** Result of retiring a resolution which is no longer safe to consume. */
+export type RetireRecordedResolutionResult =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'unavailable' }
+  | {
+    readonly kind: 'retired';
+    readonly tip: CommitSha;
+    /** Present only when the durable record belongs to this resolution child. */
+    readonly record?: RestackConflictRecord;
   };
 
 export interface ConsumeRecordedResolutionInput {
@@ -364,6 +377,38 @@ export function conflictDeleteLines(slug: string, refs: ConsumedConflictRefs): r
   ];
 }
 
+/**
+ * Remove one obsolete operator tip with the exact value observed at retirement.
+ * A mismatched conflict record deliberately remains intact: it belongs to a
+ * different child and must not be destroyed while this child resumes ordinary
+ * replay.
+ */
+export async function retireRecordedResolution(
+  worktree: string,
+  slug: string,
+  child: ChildId,
+  dependencies: ConflictRecordDependencies = {},
+): Promise<RetireRecordedResolutionResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const ref = resolutionRefFor(slug, child);
+  const resolved = await runGit(git, ['rev-parse', '-q', '--verify', `${ref}^{commit}`]);
+  if (resolved?.exitCode === 1) return { kind: 'missing' };
+  const tip = resolved?.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
+  if (!tip) return { kind: 'unavailable' };
+  const stored = await readConflictRecord(worktree, slug, { git });
+  // An unreadable record cannot authorize a resolution.  Preserve its bytes
+  // for diagnosis, but retire the orphaned tip and let ordinary replay create
+  // any new conflict state it needs.
+  const deleted = await runGit(git, ['update-ref', '-d', ref, tip]);
+  if (deleted?.exitCode === 0) {
+    return {
+      kind: 'retired', tip,
+      ...(stored.kind === 'record' && stored.record.child === child ? { record: stored.record } : {}),
+    };
+  }
+  return deleted === undefined ? { kind: 'unavailable' } : { kind: 'stale' };
+}
+
 /** Subjects are an operator-resolution contract, not a patch-equivalence hint. */
 export async function missingCandidateSubjects(
   git: GitRunner, parent: CommitSha, tip: CommitSha, candidates: readonly string[],
@@ -400,6 +445,52 @@ function uniqueSubjectCommit(
   return commits?.length === 1 ? commits[0] : undefined;
 }
 
+/** Map only unambiguous replay candidates through a subject-preserving rebuild. */
+export async function rewritesByUniqueSubject(
+  git: GitRunner,
+  originalRange: string,
+  rebuiltRange: string,
+  candidateSubjects: readonly string[],
+): Promise<ReadonlyMap<CommitSha, CommitSha>> {
+  const [originals, rebuilt] = await Promise.all([
+    subjectsByCommit(git, originalRange),
+    subjectsByCommit(git, rebuiltRange),
+  ]);
+  const counts = new Map<string, number>();
+  for (const subject of candidateSubjects) counts.set(subject, (counts.get(subject) ?? 0) + 1);
+  const rewrites = new Map<CommitSha, CommitSha>();
+  for (const subject of counts.keys()) {
+    if (counts.get(subject) !== 1) continue;
+    const original = uniqueSubjectCommit(originals, subject);
+    const replacement = uniqueSubjectCommit(rebuilt, subject);
+    if (original !== undefined && replacement !== undefined) rewrites.set(original, replacement);
+  }
+  return rewrites;
+}
+
+/** A moved range boundary is safe only when every intervening commit is this feature's halt record. */
+async function descendsOnlyThroughHaltRecordCommits(
+  recorded: CommitSha,
+  live: CommitSha,
+  slug: string,
+  git: GitRunner,
+): Promise<boolean> {
+  if (recorded === live) return true;
+  const ancestor = await runGit(git, ['merge-base', '--is-ancestor', recorded, live]);
+  if (ancestor?.exitCode !== 0) return false;
+  const commits = await runGit(git, ['rev-list', '--reverse', `${recorded}..${live}`]);
+  if (commits?.exitCode !== 0) return false;
+  try {
+    for (const raw of commits.stdout.split('\n').filter(Boolean)) {
+      const commit = parseCommitSha(raw);
+      if (commit === undefined || !await isHaltRecordOnlyCommit(commit, slug, git)) return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Rebuild an operator-recorded resolution only when it still describes this
  * exact child range and the live replay parent has the recorded tree.
@@ -417,12 +508,32 @@ export async function consumeRecordedResolution(
   // consumption receives the caller's runner so the root is deliberately inert.
   const stored = await readConflictRecord('', input.slug, { git: input.git });
   if (stored.kind !== 'record' || stored.record.child !== input.range.child) return { kind: 'stale', field: 'record' };
-  if (stored.record.oldParent !== input.range.oldParent || stored.record.oldTip !== input.range.oldTip) {
+  const [parentMatches, tipMatches] = await Promise.all([
+    descendsOnlyThroughHaltRecordCommits(stored.record.oldParent, input.range.oldParent, input.slug, input.git),
+    descendsOnlyThroughHaltRecordCommits(stored.record.oldTip, input.range.oldTip, input.slug, input.git),
+  ]);
+  if (!parentMatches || !tipMatches) {
     return { kind: 'stale', field: 'range' };
   }
   const liveTree = await runGit(input.git, ['rev-parse', '--verify', `${input.parent}^{tree}`]);
-  if (liveTree?.exitCode !== 0 || parseCommitSha(liveTree.stdout.trim()) !== stored.record.newParentTree) {
+  const liveTreeSha = liveTree?.exitCode === 0 ? parseCommitSha(liveTree.stdout.trim()) : undefined;
+  if (!liveTreeSha) {
     return { kind: 'stale', field: 'parent-tree' };
+  }
+  // An identical raw tree needs no temporary-index masking.  When the trees
+  // differ, only this feature's halt record is bookkeeping, so compare the
+  // two trees after removing precisely that path from each one.
+  if (liveTreeSha !== stored.record.newParentTree) {
+    try {
+      const path = haltRecordPathFor(input.slug);
+      const [maskedLiveTree, maskedRecordedTree] = await Promise.all([
+        haltRecordTree(input.git, liveTreeSha, path, { kind: 'write', record: undefined }),
+        haltRecordTree(input.git, stored.record.newParentTree, path, { kind: 'write', record: undefined }),
+      ]);
+      if (maskedLiveTree !== maskedRecordedTree) return { kind: 'stale', field: 'parent-tree' };
+    } catch {
+      return { kind: 'stale', field: 'parent-tree' };
+    }
   }
 
   const replayRange: ChildRange = {
@@ -431,19 +542,16 @@ export async function consumeRecordedResolution(
     oldTip: tip,
   };
   const replay = await input.replay(replayRange, input.parent, input.committer, input.git);
-  const [originals, resolutions] = await Promise.all([
-    subjectsByCommit(input.git, `${input.range.oldParent}..${input.range.oldTip}`),
-    subjectsByCommit(input.git, `${stored.record.newParent}..${tip}`),
-  ]);
-  const recordedCounts = new Map<string, number>();
-  for (const subject of stored.record.candidateSubjects) recordedCounts.set(subject, (recordedCounts.get(subject) ?? 0) + 1);
+  const resolutionRewrites = await rewritesByUniqueSubject(
+    input.git,
+    `${input.range.oldParent}..${input.range.oldTip}`,
+    `${stored.record.newParent}..${tip}`,
+    stored.record.candidateSubjects,
+  );
   const rewrites = new Map<CommitSha, CommitSha>();
-  for (const subject of stored.record.candidateSubjects) {
-    if (recordedCounts.get(subject) !== 1) continue;
-    const original = uniqueSubjectCommit(originals, subject);
-    const resolution = uniqueSubjectCommit(resolutions, subject);
-    const rebuilt = resolution === undefined ? undefined : replay.rewrites.get(resolution);
-    if (original !== undefined && rebuilt !== undefined) rewrites.set(original, rebuilt);
+  for (const [original, resolution] of resolutionRewrites) {
+    const rebuilt = replay.rewrites.get(resolution);
+    if (rebuilt !== undefined) rewrites.set(original, rebuilt);
   }
   return {
     kind: 'consumed',
