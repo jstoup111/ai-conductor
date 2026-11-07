@@ -54,6 +54,9 @@ session. Codex's `SKILL.md` path listing and its `<skill-dir>` script convention
   the statement the change contradicts, so it receives an additive amendment note (the original text
   is kept). The engine had already overtaken the "no custom runtime" half, and the note records only
   the skill-directory change.
+
+> **Amended 2026-11-07 by #1480:** `001-harness-architecture` has been deleted. Its "no custom runtime" decision no longer described the repository, and the parts that still hold are documented in `ARCHITECTURE.md`. See `adr-2026-11-07-decision-corpus-query-and-known-record-shapes` decision 1; the original text is recoverable from git history.
+
 - adr-2026-07-25-first-class-codex-skill-and-guidance-adaptation (APPROVED), D1 "keep one canonical
   skill source", which rejected plugin packaging. It is honoured: the helper lives inside the one
   shipped catalog, no plugin package or per-host tree is created, and both hosts reach it through the
