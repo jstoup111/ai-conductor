@@ -8,9 +8,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
-import { readConflictRecord } from '../../../src/engine/restack/restack-conflict-record.js';
+import { conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, readConflictRecord, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -103,7 +104,110 @@ async function stackRefs(subject: Awaited<ReturnType<typeof fixture>>): Promise<
   ])).stdout;
 }
 
+function haltRecipe(halt: string): { readonly branch: string; readonly tip: string; readonly rebase: string[] } {
+  const switchLine = halt.split('\n').find((line) => line.startsWith('git switch -c '));
+  const rebaseLine = halt.split('\n').find((line) => line.startsWith('git rebase --onto '));
+  if (!switchLine || !rebaseLine) throw new Error('expected switch and rebase commands in HALT');
+  const [, , , branch, tip] = switchLine.split(' ');
+  if (!branch || !tip) throw new Error(`invalid switch recipe: ${switchLine}`);
+  return { branch, tip, rebase: rebaseLine.split(' ').slice(2) };
+}
+
+function resolveDeps(repo: string, print: (message: string) => void = () => undefined) {
+  return {
+    cwd: repo, print,
+    resolveMainRoot: async () => repo,
+    resolveWorktree: async () => repo,
+    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
+    resolveOperator: async () => 'operator@example.test',
+  };
+}
+
 describe('runRestack merge-bearing conflicts (real local Git)', () => {
+  // Covers: task:9
+  it('consumes a resolution made by following the printed flattened-tip recipe', async () => {
+    const subject = await fixture('not-carried');
+    const events = new ConductorEventEmitter();
+    const resolutions: unknown[] = [];
+    events.on('restack_resolution', (event) => { resolutions.push(event); });
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      events, git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'operator required' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    const recipe = haltRecipe(await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8'));
+    await subject.git(['switch', '-c', recipe.branch, recipe.tip]);
+    await subject.git(['rebase', ...recipe.rebase]).catch(() => undefined);
+    await writeFile(join(subject.repo, 'shared.txt'), 'hand edit\n');
+    await subject.git(['add', 'shared.txt']);
+    await subject.git(['-c', 'core.editor=true', 'rebase', '--continue']);
+    const tip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
+    await expect(dispatchStackRestackResolve({ slug: 'demo', child: '2', tip }, resolveDeps(subject.repo)))
+      .resolves.toBe(0);
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+
+    const resumed = await runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      events, git: makeGitRunner(subject.repo), resolver: async () => { throw new Error('recorded tip should be consumed'); },
+    });
+    if (resumed.kind === 'unavailable') throw new Error(resumed.detail);
+    expect(resumed).toMatchObject({ kind: 'applied' });
+    expect(resolutions).toContainEqual(expect.objectContaining({ action: 'consumed' }));
+    await expect(readFile(join(subject.repo, 'shared.txt'), 'utf8')).resolves.toBe('hand edit\n');
+    await expect(readFile(join(subject.repo, 'side.txt'), 'utf8')).resolves.toBe('side\n');
+    for (const ref of [conflictFlattenedTipRefFor('demo'), conflictRecordRefFor('demo'), conflictParentRefFor('demo')]) {
+      await expect(subject.git(['show-ref', '--verify', '--quiet', ref])).rejects.toMatchObject({ code: 1 });
+    }
+  });
+
+  // Covers: task:9
+  it('rejects an unflattened rebase tip that loses the merge subject', async () => {
+    const subject = await fixture('not-carried');
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'operator required' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const record = await readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) });
+    if (record.kind !== 'record') throw new Error('expected conflict record');
+    await subject.git(['switch', '-c', 'plain-unflattened-tip', subject.merge]);
+    await subject.git(['rebase', '--onto', record.record.newParent, record.record.oldParent]).catch(() => undefined);
+    await writeFile(join(subject.repo, 'shared.txt'), 'plain hand edit\n');
+    await subject.git(['add', 'shared.txt']);
+    await subject.git(['-c', 'core.editor=true', 'rebase', '--continue']);
+    const plainTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
+    const messages: string[] = [];
+    await expect(dispatchStackRestackResolve({ slug: 'demo', child: '2', tip: plainTip }, resolveDeps(subject.repo, (message) => messages.push(message))))
+      .resolves.toBe(1);
+    expect(messages.join('\n')).toContain('merge uncarried Q');
+    await expect(subject.git(['show-ref', '--verify', '--quiet', resolutionRefFor('demo', 2 as never)])).rejects.toMatchObject({ code: 1 });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Restack-Conflict: 2');
+  });
+
+  // Covers: task:9
+  it('replaces a previous flattened pin when a later merge-bearing halt has a new parent', async () => {
+    const subject = await fixture('not-carried');
+    const halt = async (newDefault: CommitSha) => {
+      await expect(runRestack({
+        worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault,
+        git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'operator required' }), resolverCap: 1,
+      })).resolves.toMatchObject({ kind: 'halted' });
+      const record = await readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) });
+      if (record.kind !== 'record' || record.record.flattenedTip === undefined) throw new Error('expected flattened conflict hand-off');
+      return { record: record.record, recipe: haltRecipe(await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')) };
+    };
+    const first = await halt(subject.newDefault);
+    await subject.git(['checkout', '-q', 'main']);
+    await writeFile(join(subject.repo, 'later-default.txt'), 'later\n');
+    await subject.git(['add', 'later-default.txt']);
+    await subject.git(['commit', '-qm', 'later default']);
+    const laterDefault = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const second = await halt(laterDefault);
+    expect(second.record.newParent).not.toBe(first.record.newParent);
+    expect(second.recipe.tip).toBe(second.record.flattenedTip);
+    await expect(subject.git(['rev-parse', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ stdout: `${second.recipe.tip}\n` });
+    await expect(subject.git(['rev-parse', conflictParentRefFor('demo')])).resolves.toMatchObject({ stdout: `${second.record.newParent}\n` });
+  });
   it('applies a settled merge-bearing conflict as a linear history and emits the existing merge audit', async () => {
     const subject = await fixture('not-carried');
     const events = new ConductorEventEmitter();
