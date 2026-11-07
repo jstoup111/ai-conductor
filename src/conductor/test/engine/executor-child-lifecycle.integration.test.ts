@@ -13,13 +13,14 @@ const seams = vi.hoisted(() => ({
   stackPreflightCompleted: false,
   finishPublicationBaseBranches: [] as string[],
   ghCalls: [] as string[][],
+  observeMemorySetup: vi.fn(),
 }));
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/config.js')>();
   return {
     ...actual,
-    loadConfig: async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] }),
+    loadMergedConfig: async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] }),
   };
 });
 
@@ -43,6 +44,11 @@ vi.mock('../../src/engine/provider-model-probe.js', async (importOriginal) => {
 vi.mock('../../src/engine/worktree-prepare.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/worktree-prepare.js')>();
   return { ...actual, prepareWorktree: seams.prepareWorktree };
+});
+
+vi.mock('../../src/engine/memory-cli.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/memory-cli.js')>();
+  return { ...actual, observeMemorySetup: seams.observeMemorySetup };
 });
 
 vi.mock('../../src/engine/feature-dispatch-lease.js', async (importOriginal) => {
@@ -142,6 +148,7 @@ beforeEach(() => {
   seams.stackPreflightCompleted = false;
   seams.finishPublicationBaseBranches.length = 0;
   seams.ghCalls.length = 0;
+  seams.observeMemorySetup.mockReset();
 });
 
 afterEach(async () => {
@@ -453,5 +460,22 @@ describe('executor child shared lifecycle', () => {
     ]));
     await expect(readFile(join(subject.root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('prepares memory on the child feature bus and persists its event in the worktree ledger', async () => {
+    const subject = await fixture('child-memory-setup');
+    seams.observeMemorySetup.mockImplementation(async (_path: string, events: ConductorEventEmitter) => {
+      await events.emit({ type: 'memory_setup', before: 'absent', canonical: true });
+    });
+    seams.prepareWorktree.mockImplementation((worktree: string) => completeConductorState(worktree));
+
+    await subject.execute();
+
+    expect(seams.observeMemorySetup).toHaveBeenCalledWith(
+      join(subject.root, '.worktrees', subject.order.slug),
+      expect.any(ConductorEventEmitter),
+    );
+    const ledger = await readFile(join(subject.root, '.worktrees', subject.order.slug, '.pipeline', 'events.jsonl'), 'utf8');
+    expect(ledger).toContain('"type":"memory_setup"');
   });
 });

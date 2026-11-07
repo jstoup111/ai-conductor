@@ -11,7 +11,7 @@ import {
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -1281,6 +1281,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     ownEngineDir: __dirname,
   };
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+  const daemonHarnessVersion = await resolveHarnessVersion(__dirname);
   const configResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   if (!configResult.ok && configResult.error.type !== 'missing') {
     throw new Error(`Config error: ${configResult.error.message}`);
@@ -1873,26 +1874,35 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // in-process bus. Attach the same visualizer there, but use the immutable
   // WorkOrder pin rather than this supervisor's loaded engine version.
   const attachChildFeatureOtelVisualizer = (
-    slug: string,
-    engineVersionId: string,
+    trace: { slug: string; engineVersionId: string; sourceRef?: string },
     featureEvents: ConductorEventEmitter,
-  ): (() => void) => {
+  ): (() => Promise<void>) => {
+    const pipelineDir = join(projectRoot, '.worktrees', trace.slug, '.pipeline');
+    const persistedRunId = (() => {
+      try { return readFileSync(join(pipelineDir, 'conduct-session-id'), 'utf8').trim(); }
+      catch { return ''; }
+    })();
+    const visualizerContext = {
+      pipelineDir,
+      runId: persistedRunId || createSessionEventIdentity(),
+      feature: trace.slug,
+      project: projectRoot,
+      branch: leafBranchFor(trace.slug),
+      engineVersion: trace.engineVersionId,
+      metrics: false,
+      harnessVersion: daemonHarnessVersion,
+      ...(trace.sourceRef ? { sourceRef: trace.sourceRef } : {}),
+    };
     const visualizer = daemonOtel?.spoolRuntime
       ? wireOtelVisualizer(config ?? {}, {
-          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
-          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
-          metrics: false, harnessVersion: 'unknown',
+          ...visualizerContext,
         }, featureEvents, daemonOtel.spoolRuntime)
-      : wireOtelVisualizer(config ?? {}, {
-          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
-          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
-          metrics: false, harnessVersion: 'unknown',
-        }, featureEvents);
+      : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    return () => {
+    return async () => {
       if (!visualizer) return;
       activeDispatchVisualizers.delete(visualizer);
-      void visualizer.stop();
+      await visualizer.stop();
     };
   };
   // Resolve the active memory provider once at run start so all steps see the

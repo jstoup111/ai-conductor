@@ -104,6 +104,8 @@ export function createForcedSetupPrepare(
     baseSha?: string;
     events?: ConductorEventEmitter;
     dispatchStartTimeoutSeconds?: number;
+    isSelfHost?: boolean;
+    harnessRoot?: string;
   },
 ): (worktreePath: string) => Promise<void> {
   return async (worktreePath) => {
@@ -115,6 +117,11 @@ export function createForcedSetupPrepare(
       events: base.events,
       dispatchStart: true,
       dispatchStartTimeoutSeconds: base.dispatchStartTimeoutSeconds,
+      skillNameRoot: skillNameRootFor({
+        isSelfHost: base.isSelfHost ?? false,
+        worktreePath,
+        harnessRoot: base.harnessRoot ?? await resolveHarnessRoot(),
+      }),
     });
   };
 }
@@ -206,7 +213,14 @@ export async function runDaemonFeatureConductor(
     worktreeBranch: wt.branch, log: featureLog, selfHost: isSelfHost,
     liveBoundaryCoordinator: context.liveBoundaryCoordinator,
     baseBranch, verifyArtifacts: true, resume: true, daemon: true, featureSlug: item.slug,
-    operatorParkBoundary: () => isOperatorParked(projectRoot, item.slug, (error) => featureLog(`operator park marker read failed: ${error.message}`)),
+    operatorParkBoundary: async () => {
+      try {
+        return await isOperatorParked(projectRoot, item.slug, (error) => featureLog(`operator park marker read failed: ${error.message}`));
+      } catch (error) {
+        featureLog(`operator park marker read failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    },
     preemptionRequested: context.preemptionRequested,
     rateLimitEpisode, readOnlyReviewCapabilities,
     registerAbortController: context.registerAbortController,
@@ -214,7 +228,20 @@ export async function runDaemonFeatureConductor(
   const unregisterConductor = context.registerConductor(conductor);
   try {
     const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
-    const parked = await isOperatorParked(projectRoot, item.slug);
+    // Keep a marker read fault diagnostic on the feature log at both park
+    // boundaries.  The marker primitive treats a recoverable read failure as
+    // not parked, so dispatch may continue, but the operator still needs the
+    // reason persisted with this feature rather than lost on the root console.
+    let parked = false;
+    try {
+      parked = await isOperatorParked(
+        projectRoot,
+        item.slug,
+        (error) => featureLog(`operator park marker read failed: ${error.message}`),
+      );
+    } catch (error) {
+      featureLog(`operator park marker read failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (parked) {
       featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
       return { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } };
@@ -277,6 +304,8 @@ export async function runDaemonSetupTriage(
   const runPrepare = createForcedSetupPrepare(prepareWorktree, featureLog, context.config?.daemon_verbose ?? false, {
     projectRoot: context.projectRoot, baseBranch: context.baseBranch, baseSha: workOrderBaseSha,
     events: featureEvents, dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(context.config),
+    isSelfHost: context.isSelfHost,
+    harnessRoot: await resolveHarnessRoot(),
   });
   const dispatchFixSession = async () => {
     const sessionId = uuidv4();

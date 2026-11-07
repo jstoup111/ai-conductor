@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import {
+  createForcedSetupPrepare,
   runDaemonFeatureConductor,
   type DaemonFeatureLifecycleContext,
 } from '../../src/engine/daemon-feature-lifecycle.js';
@@ -107,6 +108,27 @@ afterEach(async () => {
 });
 
 describe('daemon feature lifecycle adapter context', () => {
+  it('uses the self-host worktree as the forced-prepare skill root', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-feature-lifecycle-project-'));
+    const worktreePath = join(projectRoot, '.worktrees', 'feature-a');
+    roots.push(projectRoot);
+    await mkdir(worktreePath, { recursive: true });
+    const prepare = vi.fn(async () => {});
+
+    await createForcedSetupPrepare(prepare as never, undefined, false, {
+      projectRoot,
+      baseBranch: 'main',
+      baseSha: 'a'.repeat(40),
+      isSelfHost: true,
+      harnessRoot: '/installed/harness',
+    })(worktreePath);
+
+    expect(prepare).toHaveBeenCalledWith(worktreePath, undefined, expect.objectContaining({
+      force: true,
+      skillNameRoot: worktreePath,
+    }));
+  });
+
   it('uses context-owned lifecycle services and the canonical project root', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-feature-lifecycle-project-'));
     roots.push(projectRoot);

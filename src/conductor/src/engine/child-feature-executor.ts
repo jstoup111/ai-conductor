@@ -1,6 +1,7 @@
 import { fork as nodeFork } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ConductorEvent } from '../types/events.js';
 import { forwardedFeatureOf } from './event-persister.js';
@@ -27,7 +28,7 @@ export interface ChildFeatureExecutorDeps {
   engineDirForOrder: (order: WorkOrder, useSupervisorBuild: boolean) => string;
   supervisorEngineVersionId: string;
   rootEvents: ConductorEventEmitter;
-  attachBroker: (slug: string, port: ExecutorIpcPort, engineVersionId?: string) => ExecutorBrokerAttachment;
+  attachBroker: (slug: string, port: ExecutorIpcPort, order?: WorkOrder) => ExecutorBrokerAttachment;
   fork?: (modulePath: string, args: string[], options: { silent: true; execArgv?: string[] }) => ForkedExecutor;
   dispatchStartTimeoutMs?: number;
   teardownTimeoutMs?: number;
@@ -84,7 +85,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     };
     forwardOutput(child.stdout, 'stdout');
     forwardOutput(child.stderr, 'stderr');
-    const attachment = deps.attachBroker(order.slug, child, launchedOrder.engineVersionId);
+    const attachment = deps.attachBroker(order.slug, child, launchedOrder);
     const entry: RunningChild = { child, order: launchedOrder, attachment };
     running.add(entry);
     // Publish the pin immediately after fork, before waiting for the child's
@@ -121,7 +122,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       ended = true; outcome = result;
       if (timer) clearTimeout(timer);
       if (terminationTimer) clearTimeout(terminationTimer);
-      attachment.close(); running.delete(entry);
+      await attachment.close(); running.delete(entry);
       // A record write started at fork may complete after an early child exit.
       // Serialize removal after it so records only disappear following the
       // actual exit and cannot be resurrected by that racing write.
@@ -226,8 +227,11 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       // protocol fallback may launch twice, but the durable daemon ledger must
       // still contain exactly one start/end pair for that claim.
       const tier = order.tier === undefined ? {} : { tier: order.tier };
+      const kind = existsSync(join(deps.projectRoot, '.worktrees', order.slug, '.pipeline', 'REKICK'))
+        ? 'rekick' as const
+        : 'initial' as const;
       await deps.rootEvents.emit({
-        type: 'feature_dispatch_started', slug: order.slug, kind: 'initial',
+        type: 'feature_dispatch_started', slug: order.slug, kind,
         ...tier,
         engineVersionId: order.engineVersionId,
         ...(order.pinFallbackReason === undefined ? {} : { pinFallbackReason: order.pinFallbackReason }),
@@ -255,7 +259,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       }
       const outcome = result.status === 'done'
         ? 'complete'
-        : result.status === 'halted' || result.status === 'parked'
+        : result.status === 'halted'
           ? 'halted'
           : 'terminated';
       await deps.rootEvents.emit({

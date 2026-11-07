@@ -8,6 +8,13 @@ import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { LiveBoundaryCoordinator, LiveBoundaryWindow } from './self-host/live-boundary-coordinator.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { ExecutorIpcPort } from './executor-proxies.js';
+import type { WorkOrder } from './work-order.js';
+
+export interface ExecutorFeatureTraceContext {
+  readonly slug: string;
+  readonly engineVersionId: string;
+  readonly sourceRef?: string;
+}
 
 export interface ExecutorBrokerDeps {
   rateLimitEpisode: RateLimitEpisode;
@@ -19,14 +26,15 @@ export interface ExecutorBrokerDeps {
   /** Attaches supervisor-owned non-persistence feature subscribers. */
   attachFeatureEventRenderer?: (slug: string, events: ConductorEventEmitter) => () => void;
   /** Child proxy-bus visualizer; its engine identity is the WorkOrder pin. */
-  attachFeatureOtelVisualizer?: (slug: string, engineVersionId: string, events: ConductorEventEmitter) => () => void;
+  attachFeatureOtelVisualizer?: (context: ExecutorFeatureTraceContext, events: ConductorEventEmitter) => (() => void | Promise<void>) | undefined;
   log?: (line: string) => void;
   now?: () => number;
 }
 
 export interface ExecutorBrokerAttachment {
   events: ConductorEventEmitter;
-  close(): void;
+  /** Stops optional visualizers before the supervisor publishes dispatch end. */
+  close(): void | Promise<void>;
 }
 
 /**
@@ -34,7 +42,7 @@ export interface ExecutorBrokerAttachment {
  * spine events; feature ledger persistence remains in the executor process.
  */
 export function createExecutorBroker(deps: ExecutorBrokerDeps): {
-  attach(slug: string, port: ExecutorIpcPort, engineVersionId?: string): ExecutorBrokerAttachment;
+  attach(slug: string, port: ExecutorIpcPort, identity?: string | Pick<WorkOrder, 'engineVersionId' | 'sourceRef'>): ExecutorBrokerAttachment;
   abortAll(): void;
 } {
   const now = deps.now ?? (() => Date.now());
@@ -60,7 +68,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
   deps.providerAvailability.subscribe?.(() => broadcast('provider', providerSnapshot()));
 
   return {
-    attach(slug, port, engineVersionId) {
+    attach(slug, port, identity) {
+      const engineVersionId = typeof identity === 'string' ? identity : identity?.engineVersionId;
       ports.add(port);
       const windows = new Map<string, LiveBoundaryWindow>();
       const pendingRateLimitClears = new Map<string, AbortController>();
@@ -72,6 +81,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const heldWorktreeLocks = new Map<string, () => void>();
       const pendingWorktreeAcquires = new Map<string, { cancelled: boolean }>();
       let closed = false;
+      let closePromise: Promise<void> | undefined;
       const featureEvents = createForwardingFeatureEventEmitter(deps.rootEvents, slug);
       // The child owns the feature EventPersister. The supervisor attaches only
       // ephemeral subscribers (currently the slug-aware daemon renderer) to
@@ -79,7 +89,11 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const detachFeatureEventRenderer = deps.attachFeatureEventRenderer?.(slug, featureEvents);
       const detachFeatureOtelVisualizer = engineVersionId === undefined
         ? undefined
-        : deps.attachFeatureOtelVisualizer?.(slug, engineVersionId, featureEvents);
+        : deps.attachFeatureOtelVisualizer?.({
+          slug,
+          engineVersionId,
+          ...(typeof identity === 'string' || identity?.sourceRef === undefined ? {} : { sourceRef: identity.sourceRef }),
+        }, featureEvents);
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
         for (const window of windows.values()) window.close();
@@ -205,8 +219,9 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           void (message.scope === 'feature' ? featureEvents : deps.rootEvents).emit(message.payload as ConductorEvent);
         } else if (message.kind === 'log') deps.featureLogFor(slug)(`[executor:${message.level}] ${message.message}`);
       };
-      const close = (reason = 'executor broker aborted') => {
-        if (closed) return;
+      const close = (reason = 'executor broker aborted'): Promise<void> => {
+        if (closePromise) return closePromise;
+        closePromise = (async () => {
         closed = true;
         for (const [requestId, abort] of pendingRateLimitClears) {
           // A broker shutdown is observable by the child even when the IPC port
@@ -224,9 +239,11 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         pendingWorktreeAcquires.clear();
         release();
         detachFeatureEventRenderer?.();
-        detachFeatureOtelVisualizer?.();
+        await detachFeatureOtelVisualizer?.();
         ports.delete(port);
         attachments.delete(close);
+        })();
+        return closePromise;
       };
       port.on('message', onMessage);
       port.on('disconnect', () => close('executor supervisor channel disconnected'));

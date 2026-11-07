@@ -1,11 +1,12 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Conductor } from './conductor.js';
-import { loadConfig } from './config.js';
+import { loadMergedConfig } from './config.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
 import { makeFeatureRunnerDeps } from './daemon-deps.js';
 import {
   createWorkOrderGitRunner,
+  prepareDaemonFeatureManagedSessionContext,
   runDaemonFeatureConductor,
   runDaemonSetupTriage,
   type DaemonFeatureLifecycleContext,
@@ -23,6 +24,11 @@ import {
   type ProviderModelProbeRunner,
 } from './provider-model-probe.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
+import { createManagedSessionObservationPreparer } from '../execution/managed-session-preparation.js';
+import { createSessionEventIdentity } from '../execution/session-event-identity.js';
+import { resolveHarnessVersion } from './version-report.js';
+import { probeManagedObservationDestination } from './build-review-read-only-capability.js';
+import { resolveDispatchStartTimeoutSeconds, resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { isOperatorParked } from './park-marker.js';
 import { leafBranchFor } from './feature-branch-identity.js';
@@ -268,7 +274,9 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   const { order, events, signal, worktree, projectRoot } = input;
   if (signal.aborted) return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
 
-  const loaded = await loadConfig(projectRoot);
+  // A child is a real daemon feature dispatch, not a reduced config reader:
+  // user defaults are merged beneath project config exactly as in-process runs.
+  const loaded = await loadMergedConfig(projectRoot, await resolveHarnessVersion(import.meta.dirname));
   if (!loaded.ok && loaded.error.type !== 'missing') throw new Error(`Config error: ${loaded.error.message}`);
   const config = loaded.ok ? loaded.config : undefined;
   const registry = new PluginRegistry();
@@ -301,13 +309,27 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     config,
     providerAvailability: input.providerAvailability,
     withCandidateSafety: createCandidateSafetyBoundary(),
+    onProviderSuppressed: (provider, deadline) => events.emit({ type: 'provider_suppressed', provider, deadline }),
     ...providerExecutionEventCallbacks(events),
+    ...(input.log ? { diagnosticLog: input.log } : {}),
   };
   const runtime = providerExecution.runtimes.get(configuredProviders[0]);
   if (!runtime) throw new Error('executor child requires a configured provider runtime');
 
   const pipelineDir = join(worktree.path, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
+  const dispatchId = createSessionEventIdentity();
+  const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
+    projectRoot,
+    worktreeRoot: worktree.path,
+    featureSlug: order.slug,
+    dispatchId,
+    provider: configuredProviders[0]!,
+  });
+  providerExecution.managedSessionContext = managedSessionContext;
+  providerExecution.prepareManagedSessionObservation = createManagedSessionObservationPreparer(
+    (observation) => probeManagedObservationDestination(observation),
+  );
   const sessionTail = startSessionEventTail(worktree.path, events, order.slug);
   const baseBranch = await resolveExecutorChildBaseBranch(order, makeGitRunner(worktree.path));
   const waitControllers = new Set<AbortController>();
@@ -393,6 +415,9 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     workOrderGit: createWorkOrderGitRunner(projectRoot),
     worktreeLifecycle: input.worktreeLifecycle as never,
     effectiveConcurrency: input.effectiveConcurrency ?? order.effectiveConcurrency,
+    verbose: config?.daemon_verbose ?? false,
+    dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
+    teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
   });
   const runner = makeExecutorChildFeatureRunner(
     { order, worktree, events, providerExecution, log: input.log },
