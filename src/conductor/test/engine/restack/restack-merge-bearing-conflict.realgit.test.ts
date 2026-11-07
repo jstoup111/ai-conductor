@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:8
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -167,6 +167,16 @@ describe('runRestack merge-bearing conflicts (real local Git)', () => {
     expect(stagingRefs.stdout).toContain(`refs/conductor/demo/restack/staging/c2 ${subject.merge}`);
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toMatch(/^restack conflict child 2/m);
+    const record = await readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) });
+    if (record.kind !== 'record' || record.record.flattenedTip === undefined) throw new Error('expected flattened conflict hand-off');
+    const flattenedTip = record.record.flattenedTip;
+    expect(record.record.candidateSubjects).toEqual(['child conflict', q === 'carried' ? 'merge carried Q' : 'merge uncarried Q']);
+    expect((await subject.git(['rev-parse', `${flattenedTip}^{tree}`])).stdout).toBe(
+      (await subject.git(['rev-parse', `${subject.merge}^{tree}`])).stdout,
+    );
+    expect((await subject.git(['rev-list', '--min-parents=2', `${record.record.oldParent}..${flattenedTip}`])).stdout).toBe('');
+    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${flattenedTip}`);
+    expect(halt).not.toContain(`git switch -c restack-resolve/demo/c2 ${subject.merge}`);
   });
 
   // Covers: task:5

@@ -2,6 +2,7 @@ import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import type { GitRunner } from '../rebase.js';
 import { writeConflictRecord } from './restack-conflict-record.js';
 import { type StoredRestackJournal } from './restack-journal.js';
+import { buildFlattenedHandoff, replayCandidateSubjects } from './restack-resolver.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
 
 interface HaltRecordedRestackConflictOptions {
@@ -19,8 +20,14 @@ interface HaltRecordedRestackConflictOptions {
   readonly events?: ConductorEventEmitter;
   readonly git: GitRunner;
   readonly writeHalt: (worktree: string, child: ChildRange['child'], detail: string, events?: ConductorEventEmitter, recipe?: {
-    readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha;
+    readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha; readonly startingTip?: CommitSha;
   }) => Promise<unknown>;
+}
+
+async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean> {
+  const result = await git(['rev-list', '--min-parents=2', `${range.oldParent}..${range.oldTip}`]);
+  if (result.exitCode !== 0) throw new Error(`could not inspect restack range for merges: ${result.stderr}`);
+  return result.stdout.trim() !== '';
 }
 
 /**
@@ -31,7 +38,14 @@ interface HaltRecordedRestackConflictOptions {
 export async function haltRecordedRestackConflict(options: HaltRecordedRestackConflictOptions): Promise<void> {
   const { journal, range } = options;
   let recordFailure = '';
+  let flattenedTip: CommitSha | undefined;
   try {
+    let candidateSubjects = options.candidateSubjects;
+    if (await rangeHasMerge(options.git, range)) {
+      const handoff = await buildFlattenedHandoff(range, options.replayParent, options.git);
+      candidateSubjects = await replayCandidateSubjects(options.git, handoff.candidates);
+      flattenedTip = handoff.tip;
+    }
     const tree = await options.git(['rev-parse', '--verify', `${options.replayParent}^{tree}`]);
     const replayParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
     if (!replayParentTree) throw new Error('cannot read replay parent tree');
@@ -42,9 +56,10 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
       oldTip: range.oldTip,
       newParent: options.replayParent,
       newParentTree: replayParentTree,
-      candidateSubjects: options.candidateSubjects,
+      candidateSubjects,
       commit: options.commit,
       paths: options.paths,
+      ...(flattenedTip === undefined ? {} : { flattenedTip }),
     }, { git: options.git });
     if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
   } catch (error) {
@@ -57,5 +72,6 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
       oldTip: range.oldTip,
       newParent: options.replayParent,
       oldParent: range.oldParent,
+      ...(flattenedTip === undefined ? {} : { startingTip: flattenedTip }),
     });
 }

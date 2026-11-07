@@ -288,12 +288,12 @@ export async function haltRestackConflict(
   child: ChildId,
   detail: string,
   events?: ConductorEventEmitter,
-  recipe?: { readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha },
+  recipe?: { readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha; readonly startingTip?: CommitSha },
 ): Promise<HaltMarkerWriteResult> {
   const instructions = recipe === undefined ? '' : [
     // ai-conductor:session-command-context=operator-only
     `Restack-Conflict: ${child} ${recipe.opId}`,
-    `git switch -c restack-resolve/${recipe.slug}/c${child} ${recipe.oldTip}`,
+    `git switch -c restack-resolve/${recipe.slug}/c${child} ${recipe.startingTip ?? recipe.oldTip}`,
     `git rebase --onto ${recipe.newParent} ${recipe.oldParent}`,
     `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --tip <sha>`,
     `ai-conductor stack restack-resolve --slug ${recipe.slug} --child ${child} --decision "<answer>"`,
