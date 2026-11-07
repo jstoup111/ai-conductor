@@ -45,11 +45,11 @@ async function sourceFiles(directory: string): Promise<string[]> {
 const REASONS: readonly RestackRefusalReason[] = [
   'cascade-cap', 'dirty-overlap', 'sync-collision', 'checked-out-elsewhere', 'stack-ref-changed',
   'lock-unavailable', 'verification-failed', 'replay-mismatch', 'range-not-ancestor',
-  'closed-child-rewritten', 'flatten_refused', 'restack-outstanding', 'published-stack', 'deferred-base-refresh',
+  'closed-child-rewritten', 'restack-outstanding', 'published-stack', 'deferred-base-refresh',
 ];
 
 describe('restack_refused sole emitter (sweep G1)', () => {
-  // Covers: task:2
+  // Covers: task:2, task:11
   it('tags every named child on emitRestackRefused and rejects a restack_refused literal outside restack-events.ts', async () => {
     const child = parseChildId(3)!;
     for (const reason of REASONS) {

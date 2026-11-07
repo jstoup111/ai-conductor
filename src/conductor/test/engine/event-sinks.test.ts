@@ -165,7 +165,6 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'replay-mismatch'
   | 'range-not-ancestor'
   | 'closed-child-rewritten'
-  | 'flatten_refused'
   | 'restack-outstanding'
   | 'journal-live-owner'
   | 'published-stack'
