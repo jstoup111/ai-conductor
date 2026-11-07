@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { conflictParentRefFor, conflictRecordRefFor, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import { conflictParentRefFor, conflictRecordRefFor, readConflictRecord, resolutionRefFor, writeConflictRecord } from '../../../src/engine/restack/restack-conflict-record.js';
 import {
   createRestackJournal,
   journalRefFor,
@@ -135,12 +135,23 @@ async function journal(repo: string): Promise<StoredRestackJournal> {
 
 async function withConsumedResolution(fixture: Awaited<ReturnType<typeof createFixture>>) {
   const resolution = fixture.refs[2]!.oldSha;
-  const record = sha((await makeGitRunner(fixture.repo)(['hash-object', '-w', '--stdin'], { input: '{"resolution":true}' })).stdout.trim());
   const parent = fixture.refs[1]!.oldSha;
+  const parentTree = sha((await fixture.git(['rev-parse', `${parent}^{tree}`])).stdout.trim());
+  await expect(writeConflictRecord(fixture.repo, 'demo', {
+    opId: 'conflict-op' as RestackOpId,
+    child: child(2),
+    oldParent: fixture.refs[0]!.oldSha,
+    oldTip: fixture.refs[2]!.oldSha,
+    newParent: parent,
+    newParentTree: parentTree,
+    candidateSubjects: ['old c2'],
+    commit: fixture.refs[2]!.oldSha,
+    paths: ['c2.txt'],
+  })).resolves.toEqual({ kind: 'updated' });
+  const storedConflict = await readConflictRecord(fixture.repo, 'demo');
+  if (storedConflict.kind !== 'record') throw new Error('conflict record was not stored');
   await fixture.git(['update-ref', resolutionRefFor('demo', child(2)), resolution]);
-  await fixture.git(['update-ref', conflictRecordRefFor('demo'), record]);
-  await fixture.git(['update-ref', conflictParentRefFor('demo'), parent]);
-  const next = { ...fixture.stored.journal, consumedResolution: { child: child(2), tip: resolution, record, parent } };
+  const next = { ...fixture.stored.journal, consumedResolution: { child: child(2), tip: resolution, record: storedConflict.blob, parent } };
   const blob = await writeRestackJournalBlob(fixture.repo, next);
   await fixture.git(['update-ref', journalRefFor('demo'), blob, fixture.stored.blob]);
   const stored = await journal(fixture.repo);
@@ -149,13 +160,24 @@ async function withConsumedResolution(fixture: Awaited<ReturnType<typeof createF
 
 async function withDeliveredDecision(fixture: Awaited<ReturnType<typeof createFixture>>) {
   const blob = sha((await makeGitRunner(fixture.repo)(['hash-object', '-w', '--stdin'], { input: '{"answer":"keep upstream"}' })).stdout.trim());
-  const record = sha((await makeGitRunner(fixture.repo)(['hash-object', '-w', '--stdin'], { input: '{"conflict":true}' })).stdout.trim());
   const parent = fixture.refs[1]!.oldSha;
+  const parentTree = sha((await fixture.git(['rev-parse', `${parent}^{tree}`])).stdout.trim());
+  await expect(writeConflictRecord(fixture.repo, 'demo', {
+    opId: 'conflict-op' as RestackOpId,
+    child: child(2),
+    oldParent: fixture.refs[0]!.oldSha,
+    oldTip: fixture.refs[2]!.oldSha,
+    newParent: parent,
+    newParentTree: parentTree,
+    candidateSubjects: ['old c2'],
+    commit: fixture.refs[2]!.oldSha,
+    paths: ['c2.txt'],
+  })).resolves.toEqual({ kind: 'updated' });
+  const storedConflict = await readConflictRecord(fixture.repo, 'demo');
+  if (storedConflict.kind !== 'record') throw new Error('conflict record was not stored');
   const decisionRef = ref('refs/conductor/demo/restack/decision/c2');
   await fixture.git(['update-ref', decisionRef, blob]);
-  await fixture.git(['update-ref', conflictRecordRefFor('demo'), record]);
-  await fixture.git(['update-ref', conflictParentRefFor('demo'), parent]);
-  const next = { ...fixture.stored.journal, deliveredDecision: { child: child(2), blob, record, parent } };
+  const next = { ...fixture.stored.journal, deliveredDecision: { child: child(2), blob, record: storedConflict.blob, parent } };
   const journalBlob = await writeRestackJournalBlob(fixture.repo, next);
   await fixture.git(['update-ref', journalRefFor('demo'), journalBlob, fixture.stored.blob]);
   return { ...fixture, stored: await journal(fixture.repo), decision: next.deliveredDecision, decisionRef };
