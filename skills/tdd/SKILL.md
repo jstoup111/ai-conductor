@@ -117,8 +117,8 @@ coverage, and need no RED of their own.
 5. Paste the expected failure output
 
 Any unrelated scoped test failure blocks the current RED phase; fix that
-failure in its own commit with a `Scope: <path> — <reason>` trailer before
-proceeding to DOMAIN. If one of the repository's documented
+failure in a separate commit (`Scope:` trailer for any file outside the task's
+Files) before proceeding to DOMAIN. If one of the repository's documented
 intermediate fallback triggers makes the affected set genuinely unsafe, name
 the exact trigger and reason and defer aggregate proof to the engine's
 dedicated aggregate gate. Never run the full suite — or any aggregate
@@ -182,8 +182,8 @@ conforms to the applicable recorded basis.
 5. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `ai-conductor scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
 
 A known failure in that scoped set blocks the current GREEN phase; fix it here,
-in its own commit with a `Scope: <path> — <reason>` trailer, rather than
-deferring it to a later gate. If one of the repository's documented
+in a separate commit (`Scope:` trailer for any file outside the task's Files),
+rather than deferring it to a later gate. If one of the repository's documented
 intermediate fallback triggers makes the affected set genuinely unsafe, name
 the exact trigger and defer aggregate proof to the engine's dedicated
 aggregate gate. Never run the full suite — or any aggregate command —
