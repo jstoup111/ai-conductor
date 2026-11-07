@@ -111,10 +111,10 @@ each available story criterion in the advisory judgment.
   committed coherence waiver: do not grade it, associate it with a criterion, or make it a PLAN_GAP.
 - **OVER_SCOPE** — shipped behavior goes beyond the planned implementation. Judge it against intent:
   PRD Goals/Non-Goals and In/Out Scope when available, otherwise the stories plus the plan outcome.
-  Set the intent relation: `within` when the change serves a story, the plan outcome, an ADR, or a
-  spec rule (fail-closed hardening and repairs to failing tests count); `outside-harmless` when it
-  changes no operator-visible output, CLI result, or persisted state; otherwise `outside-visible`.
-  Code that contradicts plan or story text is FIXABLE under that task, not OVER_SCOPE. Include any `Scope:` trailer rationale and operator-reseal rationale in the
+  Set the intent relation: `within` when the change serves a story, the plan outcome, or an ADR
+  (fail-closed hardening and repairs to failing tests count); `outside-harmless` when it changes no
+  operator-visible output, CLI result, or persisted state; otherwise `outside-visible`. Code that
+  contradicts story text leaves that criterion unmet: grade it FIXABLE under its owner task. Include any `Scope:` trailer rationale and operator-reseal rationale in the
   evidence. A reseal rationale that does not justify the protected-artifact change is an OVER_SCOPE
   finding; a rationale that does justify it is evidence for no finding.
   **An unplanned change usually owns no story criterion.** Associate it with the criterion whose
