@@ -1,7 +1,8 @@
 // Covers: task:5
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { execa } from 'execa';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import { createChildProcessFeatureExecutor } from '../../src/engine/child-feature-executor.js';
@@ -10,40 +11,75 @@ import { installDaemonBotCoAuthor, type BotCoAuthorResolver } from '../../src/en
 import { createProviderAvailability } from '../../src/engine/provider-availability.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
-import type { ExecutorChildRunInput } from '../../src/engine/executor-child.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { commitAll, initTestRepo } from './git-repo.js';
 
 const seams = vi.hoisted(() => ({
-  runtime: undefined as undefined | {
-    admitDispatch(order: WorkOrder): Promise<{ kind: 'admitted' }>;
-    createWorktree(order: WorkOrder): Promise<{ path: string }>;
-    run(input: ExecutorChildRunInput): Promise<{ slug: string; status: 'done' }>;
-  },
-  runtimeFactory: vi.fn(),
+  prepareWorktree: vi.fn(),
 }));
 
-vi.mock('../../src/engine/executor-child-runtime.js', () => ({
-  createExecutorChildRuntime: seams.runtimeFactory,
-}));
+vi.mock('../../src/engine/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/config.js')>();
+  return { ...actual, loadConfig: async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] }) };
+});
+
+vi.mock('../../src/engine/provider-discovery.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/provider-discovery.js')>();
+  return { ...actual, discoverInstalledProviders: async () => ({ installed: ['codex'], missing: [] }) };
+});
+
+vi.mock('../../src/engine/provider-model-probe.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/provider-model-probe.js')>();
+  return { ...actual, validateConfiguredProviderModels: async () => {}, resolveProviderModelTiers: async () => {} };
+});
+
+vi.mock('../../src/engine/worktree-prepare.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/worktree-prepare.js')>();
+  return { ...actual, prepareWorktree: seams.prepareWorktree };
+});
 
 import { createInMemoryExecutorFork } from './in-memory-executor-fork.js';
 
 const VERSION = '20261107T000000Z-0123456789ab' as WorkOrder['engineVersionId'];
 const roots: string[] = [];
 
-function order(slug: string): WorkOrder {
+function order(slug: string, baseSha: string): WorkOrder {
   return {
     schemaVersion: 1,
     repository: 'owner/repository',
     slug,
-    baseSha: 'a'.repeat(40),
+    baseSha,
+    baseBranch: 'main',
     engineVersionId: VERSION,
     manifest: [],
   };
 }
 
-function executor(root: string, fork: ReturnType<typeof createInMemoryExecutorFork>, timeout = 50) {
-  const rootEvents = new ConductorEventEmitter();
+async function completeConductorState(worktree: string): Promise<void> {
+  await mkdir(join(worktree, '.pipeline'), { recursive: true });
+  await writeFile(
+    join(worktree, '.pipeline', 'conduct-state.json'),
+    JSON.stringify(Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']))),
+  );
+}
+
+async function fixtureOrder(slug: string): Promise<{ root: string; order: WorkOrder }> {
+  const root = await mkdtemp(join(tmpdir(), 'in-memory-executor-fork-'));
+  roots.push(root);
+  await initTestRepo(root);
+  await writeFile(join(root, 'README.md'), 'base\n');
+  await commitAll(root, 'initial');
+  const baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+  return { root, order: order(slug, baseSha) };
+}
+
+function executor(
+  root: string,
+  fork: ReturnType<typeof createInMemoryExecutorFork>,
+  timeout = 50,
+  rootEvents = new ConductorEventEmitter(),
+) {
   const broker = createExecutorBroker({
     rateLimitEpisode: createRateLimitEpisode(),
     providerAvailability: createProviderAvailability({ now: () => Date.now() }),
@@ -64,7 +100,7 @@ function executor(root: string, fork: ReturnType<typeof createInMemoryExecutorFo
 }
 
 beforeEach(() => {
-  seams.runtimeFactory.mockImplementation(() => seams.runtime);
+  vi.clearAllMocks();
 });
 
 afterEach(async () => {
@@ -74,54 +110,47 @@ afterEach(async () => {
 });
 
 describe('in-memory executor fork', () => {
-  it('delivers hello to the real broker, runs the child runtime, and returns its outcome', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'in-memory-executor-fork-'));
-    roots.push(root);
-    const received: ExecutorChildRunInput[] = [];
-    seams.runtime = {
-      admitDispatch: async () => ({ kind: 'admitted' }),
-      createWorktree: async (workOrder) => ({ path: join(root, '.worktrees', workOrder.slug) }),
-      run: async (input) => {
-        received.push(input);
-        return { slug: input.order.slug, status: 'done' };
-      },
-    };
+  it('delivers hello to the real broker, runs the production child runtime, and returns its outcome', async () => {
+    const fixture = await fixtureOrder('fixture-conductor');
+    seams.prepareWorktree.mockImplementation(async (worktree: string) => completeConductorState(worktree));
     const brokerHellos: string[] = [];
-    const fork = createInMemoryExecutorFork({ projectRoot: root, onHello: (hello) => brokerHellos.push(hello.engineVersionId) });
+    const completed: string[] = [];
+    const rootEvents = new ConductorEventEmitter();
+    rootEvents.on('feature_complete', (event) => completed.push(event.featureDesc));
+    const fork = createInMemoryExecutorFork({ projectRoot: fixture.root, onHello: (hello) => brokerHellos.push(hello.engineVersionId) });
 
-    await expect(executor(root, fork).execute(order('fixture-conductor'))).resolves.toEqual({
-      slug: 'fixture-conductor', status: 'done',
+    await expect(executor(fixture.root, fork, 50, rootEvents).execute(fixture.order)).resolves.toMatchObject({
+      slug: 'fixture-conductor',
+      status: 'halted',
+      reason: 'done without a finish-choice marker (expected finishChoice: "pr")',
     });
 
     expect(brokerHellos).toEqual([VERSION]);
-    expect(received).toHaveLength(1);
-    expect(received[0]?.order).toMatchObject({ slug: 'fixture-conductor' });
-    expect(seams.runtimeFactory).toHaveBeenCalledWith({ projectRoot: root, processServices: 'inherited' });
+    expect(completed).toEqual(['fixture-conductor']);
+    await expect(readFile(join(fixture.root, '.worktrees', fixture.order.slug, '.pipeline', 'work-order.json'), 'utf8'))
+      .resolves.toContain('fixture-conductor');
   });
 
   it('keeps concurrent child console lines separate and preserves the installed co-author resolver', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'in-memory-executor-fork-'));
-    roots.push(root);
+    const fixture = await fixtureOrder('first');
+    const secondOrder = order('second', fixture.order.baseSha);
     const release = new Map<string, () => void>();
     const entered = new Set<string>();
-    seams.runtime = {
-      admitDispatch: async () => ({ kind: 'admitted' }),
-      createWorktree: async (workOrder) => ({ path: join(root, '.worktrees', workOrder.slug) }),
-      run: async (input) => {
-        console.warn(`child ${input.order.slug}`);
-        entered.add(input.order.slug);
-        await new Promise<void>((resolve) => release.set(input.order.slug, resolve));
-        return { slug: input.order.slug, status: 'done' };
-      },
-    };
+    seams.prepareWorktree.mockImplementation(async (worktree: string) => {
+      const slug = basename(worktree);
+      console.warn(`child ${slug}`);
+      entered.add(slug);
+      await new Promise<void>((resolve) => release.set(slug, resolve));
+      await completeConductorState(worktree);
+    });
     const resolver: BotCoAuthorResolver = { prepare: async () => ({ kind: 'unconfigured' }), current: () => undefined };
     installDaemonBotCoAuthor(resolver);
     const sinks = new Map<string, string[]>();
-    const childExecutor = executor(root, createInMemoryExecutorFork({ projectRoot: root, consoleSinks: sinks }));
+    const childExecutor = executor(fixture.root, createInMemoryExecutorFork({ projectRoot: fixture.root, consoleSinks: sinks }));
 
-    const first = childExecutor.execute(order('first'));
+    const first = childExecutor.execute(fixture.order);
     await vi.waitFor(() => expect(entered.has('first')).toBe(true));
-    const second = childExecutor.execute(order('second'));
+    const second = childExecutor.execute(secondOrder);
     await vi.waitFor(() => expect(entered).toEqual(new Set(['first', 'second'])));
     release.get('second')?.();
     await second;
@@ -135,34 +164,22 @@ describe('in-memory executor fork', () => {
   });
 
   it('returns the startup-handshake error when a silent child sends no hello', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'in-memory-executor-fork-'));
-    roots.push(root);
-    seams.runtime = {
-      admitDispatch: async () => ({ kind: 'admitted' }),
-      createWorktree: async (workOrder) => ({ path: join(root, '.worktrees', workOrder.slug) }),
-      run: async (input) => ({ slug: input.order.slug, status: 'done' }),
-    };
+    const fixture = await fixtureOrder('silent');
     const onHello = vi.fn();
 
-    await expect(executor(root, createInMemoryExecutorFork({ projectRoot: root, handshake: 'silent', onHello }), 1).execute(order('silent')))
+    await expect(executor(fixture.root, createInMemoryExecutorFork({ projectRoot: fixture.root, handshake: 'silent', onHello }), 1).execute(fixture.order))
       .resolves.toEqual({ slug: 'silent', status: 'error', reason: 'executor missing startup handshake' });
     expect(onHello).not.toHaveBeenCalled();
   });
 
   it('reports the version encoded in the forked module path as the child engine identity', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'in-memory-executor-fork-'));
-    roots.push(root);
     const identities: string[] = [];
-    seams.runtime = {
-      admitDispatch: async () => ({ kind: 'admitted' }),
-      createWorktree: async (workOrder) => ({ path: join(root, '.worktrees', workOrder.slug) }),
-      run: async (input) => {
-        identities.push(input.engineVersionId);
-        return { slug: input.order.slug, status: 'done' };
-      },
-    };
+    const fixture = await fixtureOrder('engine-identity');
+    seams.prepareWorktree.mockImplementation(async (worktree: string) => completeConductorState(worktree));
+    const rootEvents = new ConductorEventEmitter();
+    rootEvents.on('executor_started', (event) => identities.push(event.engineVersionId));
 
-    await executor(root, createInMemoryExecutorFork({ projectRoot: root })).execute(order('engine-identity'));
+    await executor(fixture.root, createInMemoryExecutorFork({ projectRoot: fixture.root }), 50, rootEvents).execute(fixture.order);
 
     expect(identities).toEqual([VERSION]);
   });
