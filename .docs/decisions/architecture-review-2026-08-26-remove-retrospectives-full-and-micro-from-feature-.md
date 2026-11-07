@@ -42,6 +42,8 @@ ordering-sensitive co-changes. No spike needed — every touchpoint is enumerate
   architecture-review-2026-07-26-ship-tail-serial-publication-922, 001-harness-architecture
   (Decision 5 retired), adr-006-flywheel-lesson-selection-and-provenance,
   adr-2026-07-10-session-hook-task-stamping.
+
+> **Amended 2026-11-07 by #1480:** `001-harness-architecture` has been deleted. Its "no custom runtime" decision no longer described the repository, and the parts that still hold are documented in `ARCHITECTURE.md`. See `adr-2026-11-07-decision-corpus-query-and-known-record-shapes` decision 1; the original text is recoverable from git history.
 - **adr-2026-08-11-deprecated-no-op-step-retirement conflict:** explicitly waived by the
   operator on 2026-08-26 for this change only (breaking change accepted). Recorded in
   adr-2026-08-26-remove-retrospectives-one-shot; the two-phase contract stays in force for
