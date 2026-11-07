@@ -33,6 +33,7 @@ import type { RemediationGap } from './artifacts.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { parsePlanTaskBlocks } from './plan-task-parse.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-task-id.js';
 import type { GitRunner } from './rebase.js';
 import type { FrozenAllocation, FrozenHostAllocation } from './routing/route-types.js';
 
@@ -79,11 +80,7 @@ export function refusalTaskIds(gap: CriterionBoundRemediationGap): string[] | un
   );
 }
 
-/** True when an id carries the `rem-` signal accepted by either engine writer. */
-export function isEngineAppendedRemediationTaskId(id: string): boolean {
-  return id.startsWith('rem-')
-    && ID_SEGMENT_RE.test(id);
-}
+export { isEngineAppendedRemediationTaskId } from './remediation-task-id.js';
 
 export interface AppendRemediationResult {
   /** The plan text with any new task blocks appended (input text untouched otherwise). */

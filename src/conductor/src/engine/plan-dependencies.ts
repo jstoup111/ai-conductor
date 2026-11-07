@@ -2,7 +2,7 @@ import {
   parsePlanTaskBodies,
   resolvePlanTaskReference,
 } from './plan-task-parse.js';
-import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-task-id.js';
 
 const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;

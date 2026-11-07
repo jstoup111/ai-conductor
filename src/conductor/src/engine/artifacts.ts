@@ -110,10 +110,9 @@ import {
   artifactPresenceAtMergeBase,
   evaluateAdrAssumptionLedgers,
 } from './adr-assumption-ledger-scope.js';
-import { validatePlanDependencies } from './plan-dependencies.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
-import { loadSliceTopology } from './slice-topology.js';
+import { loadSliceTopology, validatePlanDependencies } from './slice-topology.js';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
