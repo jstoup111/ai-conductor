@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "slug": "code-formatting-is-entirely-unenforced-no-formatte",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/code-formatting-is-entirely-unenforced-no-formatte.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/code-formatting-is-entirely-unenforced-no-formatte.md"
+    }
+  ]
+}
