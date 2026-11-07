@@ -54,7 +54,7 @@ child 1's gates re-run, so that child 1's PR is green with its own fix.
 - Given round `r1` region entry, when it completes, then host 1 is `repairing` in the route record, and that transition happened only after the append commit exists.
 - Given round `r1` region entry, when it begins, then host 1's base is pinned in the route record as the `closed/c1` SHA before any branch switch or commit.
 - Given a round whose only host is the leaf, when region entry runs, then the leaf's frozen blocks are written on `feat/daemon-demo` and the pinned base is the leaf tip read before the append commit.
-- Given an audit round whose every routed task for host 1, frozen rem ids and restaged bound ids alike, is already evidence-complete on child 1's tree after region entry, and no other host in the round is `pending`, `restacked` or `rerouted`, when the no-op guard runs, then the feature halts with outcome `derived-already-complete` on its halt record and no build is dispatched.
+- Given an audit round where host 1 has at least one routed task and no taskless obligation, and every routed task for host 1, frozen rem ids and restaged bound ids alike, is already evidence-complete on child 1's tree after region entry, and no other host in the round is `pending`, `restacked` or `rerouted`, when the no-op guard runs, then the feature halts with outcome `derived-already-complete` on its halt record and no build is dispatched.
 - Given round `r1` admitted and region entry run, when the events are read, then exactly one `kickback` event and one leaf rewind exist for the round, and region entry emitted neither.
 
 #### Negative Paths

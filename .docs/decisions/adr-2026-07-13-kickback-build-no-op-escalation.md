@@ -44,6 +44,8 @@ decision; audit-logged via the existing `kickback` event plus a new distinguishi
 
 > **Amended 2026-10-15 by #3211:** For a routed round in a stacked feature, the guard runs at the host's region entry, which emits no `kickback` event. It halts only when every routed task for the host is already evidence-complete, and the `derived-already-complete` outcome is carried on the halt record (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
 
+> **Amended 2026-11-07 by #3605:** "Every routed task for the host is already evidence-complete" holds only when the host has at least one routed task. A host whose only work is a taskless obligation (a `manual_test` FAIL or a post-region custom-step kickback) never halts on this guard; it dispatches BUILD with its retry hint (`adr-2026-10-12-routed-whole-feature-repair` decision 7, `architecture-review-2026-11-07-manual-test-failure-routed-to-a-child-that-can-t-h`).
+
 > **Amended 2026-10-12 by #2944:** In a stacked feature, the route-into-no-op guard evaluates the
 > host child's checked-out tree at region entry, not the leaf's
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 11).
