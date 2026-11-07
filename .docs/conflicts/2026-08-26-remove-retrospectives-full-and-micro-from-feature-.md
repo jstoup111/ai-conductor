@@ -25,6 +25,8 @@ the architecture-review sweep). Supersession parsing: only unambiguous full supe
 excluded (6 files); partially superseded ADRs (including adr-002, superseded in part by this
 feature) retained and compared.
 
+> **Amended 2026-11-07 by #1480:** `001-harness-architecture` has been deleted. Its "no custom runtime" decision no longer described the repository, and the parts that still hold are documented in `ARCHITECTURE.md`. See `adr-2026-11-07-decision-corpus-query-and-known-record-shapes` decision 1; the original text is recoverable from git history.
+
 ## Pairwise Scan (all 6 types, both directions)
 
 - **Story 1 × Story 4** (both own the step graph): Story 4's fail-by-name on stale

@@ -72,6 +72,20 @@ The config key `executor_isolation: child | in-process` selects the adapter. It 
 `child`. `in-process` keeps today's behavior as an operator rollback lever and is the only mode in
 which the per-dispatch pin of D2 does not apply.
 
+> **Amended 2026-10-24 by #3333:** The rollback lever is retired. The child executor is the daemon's only
+> feature executor: the in-process adapter and the `executor_isolation` key are removed, and a config
+> that still sets the key fails validation as an unknown top-level key. The per-dispatch pin of D2
+> applies to every dispatch.
+
+> **Amended 2026-11-07 by #3333:** The child did not run the whole per-feature path. It ran its own
+> copy, which skipped the stack preflight, the REKICK rebase-first resume, the audit trail, the
+> `Closes` link, merged user config, the managed-session context, setup and teardown bounds, and
+> other steps that only `runConductorInWorktree` and `makeFeatureRunnerDeps` performed. One engine
+> module, `engine/daemon-feature-lifecycle.ts`, now holds that path. Supervisor services reach it
+> through an explicit context. The child runtime builds its lifecycle from `makeFeatureRunnerDeps`
+> and that module, so the child runs the same lifecycle the in-process adapter ran. The adapter is
+> then removed.
+
 ### D2 — The engine version is pinned per dispatch in the WorkOrder
 At claim time the dispatcher resolves the floating `dist` symlink to a concrete immutable
 `dist-versions/«id»`. It records `engineVersionId` in the WorkOrder beside `baseSha`, along with a
@@ -137,6 +151,17 @@ occurrences they cause (for example `provider_suppressed`) are still emitted as 
 
 Plain feature log lines and tee'd `console.warn`/`console.error` are forwarded as log messages and
 rendered through the existing `featureLogFor(slug)` sink.
+
+> **Amended 2026-11-07 by #3333:** The supervisor's `feature_dispatch_started` carries the dispatch
+> `kind`, classified before the fork from root-readable state (whether the feature worktree and its
+> `.pipeline/REKICK` exist), and the WorkOrder's `tier`. A halted `feature_dispatch_ended` carries
+> `haltClass` from the worktree's halt sidecar and `step` from the last forwarded `loop_halt`.
+> `parked` maps to `terminated`. The per-dispatch visualizer uses the worktree's persisted session
+> id, the installed harness version and the order's `sourceRef`, and is stopped and flushed at
+> collection: the broker's attach hook returns an async stop, which the child executor awaits. The
+> IPC message types and the WorkOrder schema version are unchanged. The WorkOrder gains one optional
+> field, `baseBranch`, carrying the supervisor's configured base branch. An absent field keeps the
+> child's `originDefaultBranch` fallback.
 
 ### D5 — The child's lifecycle is bound to the supervisor
 On SIGTERM the supervisor sends a stop request to each child. The child takes today's shutdown
@@ -227,6 +252,15 @@ The operator declined the proposed three-spec split on 2026-10-15. The plan carr
 | A4 | Only the self-host daemon should run the cadence rebuild job; consumer daemons adopt shared-install rebuilds through per-dispatch resolution | inferred | 90% | yes | Consumers would need their own rebuild cadence to satisfy outcome 3 | APPROVED by operator 2026-10-15 |
 | A5 | Most engine fixes land in executor-side code (conductor, steps, gates), so supervisor staleness bounded by D7 is acceptable | inferred | 75% | no | Supervisor-side fixes lag up to the age cap | n/a |
 
+> **Amended 2026-10-24 by #3333:** A2's mitigation no longer includes the in-process rollback lever, which
+> is removed. Child-mode coverage now rests on the parity test and on daemon tests that run the
+> production child path through an injected in-memory fork.
+
+> **Amended 2026-11-07 by #3333:** A2 was false. The inventory covered shared services but not the
+> per-feature steps that only the in-process runner performed (#3333's parity inventory), and the
+> parity test exercised protocol transport, not the feature lifecycle. Coverage now rests on one
+> lifecycle module and on a child-path test for each behavior it performs.
+
 ## Consequences
 
 ### Positive
@@ -243,9 +277,15 @@ The operator declined the proposed three-spec split on 2026-10-15. The plan carr
 - Supervisor-side fixes can lag up to `supervisor_max_stale_hours`.
 - Each feature pays a child-process start (module load) per dispatch.
 - Two executor adapters (child and in-process) exist until the rollback lever is retired.
+
+  > **Amended 2026-10-24 by #3333:** The rollback lever is retired; only the child adapter remains.
+
 - More engine versions are retained while long-running executors pin older builds.
 - Total memory ceiling grows to (concurrency + 1) times the per-process heap cap.
 
 ### Follow-up Actions
-- [ ] Retire `executor_isolation: in-process` once child mode has run a full release cycle without
+- [x] Retire `executor_isolation: in-process` once child mode has run a full release cycle without
   a rollback (separate intake).
+
+> **Amended 2026-10-24 by #3333:** Done, ahead of the release-cycle precondition, by operator decision after
+> the two paths drifted and halted every child dispatch (fixed by #3331).

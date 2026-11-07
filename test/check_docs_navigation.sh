@@ -61,6 +61,7 @@ declare -A TITLE_BY_PATH
 declare -A PARENT_BY_PATH
 declare -A TITLE_PATHS
 declare -A SIBLING_PATHS
+declare -A ORDERS_BY_PARENT
 declare -A LANDING_ROOT_PATHS=(
   ['docs/index.md']=1
   ['docs/quickstart.md']=1
@@ -138,6 +139,7 @@ while IFS= read -r -d '' markdown_path; do
   PARENT_BY_PATH["$relative_path"]=$parent
   SIBLING_PATHS["$sibling_key"]+="$relative_path"$'\n'
   TITLE_PATHS["$title"]+="$relative_path"$'\n'
+  ORDERS_BY_PARENT["parent:$parent"]+="$nav_order"$'\t'"$relative_path"$'\n'
 done < <(find "$ROOT/docs" -type f -name '*.md' -print0 | sort -z)
 
 for sibling_key in "${!SIBLING_PATHS[@]}"; do
@@ -185,4 +187,25 @@ for relative_path in "${!TITLE_BY_PATH[@]}"; do
 
     current_path="$(printf '%s' "${TITLE_PATHS[$parent]}" | sed '/^$/d')"
   done
+done
+
+# Siblings under one parent (top-level topics share the empty parent) must
+# carry nav_order values that are unique and contiguous from 1.
+for parent_key in "${!ORDERS_BY_PARENT[@]}"; do
+  parent=${parent_key#parent:}
+  label=${parent:-(top level)}
+  expected=1
+  previous_order=''
+  previous_path=''
+  while IFS=$'\t' read -r order relative_path; do
+    if [ "$order" = "$previous_order" ]; then
+      fail_navigation "$previous_path, $relative_path" "duplicate nav_order $order under parent '$label'"
+    fi
+    if [ "$order" != "$expected" ]; then
+      fail_navigation "$relative_path" "nav_order gap under parent '$label': expected $expected, found $order"
+    fi
+    previous_order=$order
+    previous_path=$relative_path
+    expected=$((expected + 1))
+  done < <(printf '%s' "${ORDERS_BY_PARENT[$parent_key]}" | sort -t $'\t' -k1,1n -k2,2)
 done

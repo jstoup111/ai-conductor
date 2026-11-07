@@ -23,8 +23,8 @@ so that misconfigurations are caught early with clear error messages.
 - Given the config specifies `harness_version: ">=2.0.0"` but the installed harness is 1.x,
   when the version check runs, then it fails with: "Config requires harness >=2.0.0 but
   installed version is 1.x.x"
-- Given the config contains unknown top-level keys, when validated, then it warns about
-  unrecognized keys but does not fail (forward compatibility)
+- Given the config contains an unknown top-level key, when validated, then loading fails with
+  `Unknown top-level key: "<key>"` naming that key
 - Given the config contains a recognized key with an invalid value type (e.g., `steps.disable`
   is a string instead of a list), when validated, then it fails with a type error
 
@@ -34,5 +34,5 @@ so that misconfigurations are caught early with clear error messages.
 - [ ] Missing config fails with migration instructions
 - [ ] YAML parse errors reported with line numbers
 - [ ] Version mismatch reported with installed vs required versions
-- [ ] Unknown keys produce warnings (not failures)
+- [ ] Unknown top-level keys fail loading with an error naming the key
 - [ ] Type validation catches incorrect value types

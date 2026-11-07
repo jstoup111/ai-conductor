@@ -43,22 +43,10 @@ publication *mechanics* are the coordinator's.
 The FINISH provider session never runs tests or launches full-suite or aggregate verification.
 It consumes the coordinator's evidence; missing or stale suite proof belongs to `test_suite`.
 
-Before any provider receives FINISH work, the coordinator uses the engine's
-configured aggregate verifier for current completion evidence. It reuses a
-current passing result; when evidence is missing or stale, the verifier obtains
-the required current result. A previous session's report, marker, or provider
-response does not substitute for current repository and external evidence.
-
-Both passing verdicts are equally acceptable proof: `REUSED` for a current
-passing result the verifier reused, and `EXECUTED` for one it obtained during
-this pass. The coordinator never requires `EXECUTED` when `REUSED` is available
-— re-running a suite that is already current buys no evidence and costs the
-whole suite's runtime.
-
-When that verifier exits non-zero, the coordinator **STOP**s before any choice
-or options and leaves `.pipeline/finish-choice` unwritten. It preserves the
-evidence and routes an implementation failure to `/tdd` or `/pipeline`; it does
-not dispatch FINISH or hand off to `/pr`.
+Before FINISH is dispatched, the coordinator obtains current proof from the
+configured aggregate verifier: a `REUSED` or `EXECUTED` pass are equally valid. When it exits non-zero, the coordinator
+**STOP**s before any choice or options, leaves `.pipeline/finish-choice` unwritten, and routes the
+failure to `/tdd` or `/pipeline`.
 
 ## Operator Intent
 
@@ -129,22 +117,12 @@ unstructured substitute. The provider-facing verdict vocabulary is:
 Every `revision_required` verdict is a deficient-prose objection: it routes the
 retained PR to a separate authoring pass, then a fresh bounded judgment pass.
 It should include a concrete `detail` naming what is deficient so that authoring
-can address the objection. `detail` remains optional for compatibility on
-`revision_required` and `refused`; when supplied, it must be a non-blank string
-describing the concrete observation or blocker. The coordinator trims it and
-bounds it to 1,000 characters; overlong detail is truncated with a visible
-marker. The coordinator, not the provider, owns all routing and publication
+can address the objection. `detail` is optional on `revision_required` and `refused`; when
+supplied, it must be a non-blank string. The coordinator owns all routing and publication
 transitions.
 
 Accepted prose authorizes the coordinator to continue with its deterministic
 transitions. It does not itself authorize any publication effect.
-
-## Completion
-
-FINISH completes only when the coordinator reports coherent, verified outcome
-evidence. Publication-only failures stay at FINISH; implementation-invalid
-evidence is routed by the conductor with its cited proof. Ambiguous or
-operator-owned outcomes halt for human review.
 
 ## Worktree Retention Boundary
 
@@ -156,12 +134,5 @@ is proven on origin/default branch. FINISH does not delete a worktree.
 
 - [ ] Attended default and interactive foreground intent is explicit before
       publication activity.
-- [ ] An unauthored PR body was authored from the feature's own diff before any
-      prose judgment was requested.
-- [ ] The provider judged only the retained PR title/body, at most once per
-      observed prose revision; only the authoring pass changed prose through
-      the handoff.
 - [ ] No provider action created, pushed, merged, readied, or recorded
       publication state.
-- [ ] The coordinator, rather than prompt compliance, determined the terminal
-      completion or halt disposition.

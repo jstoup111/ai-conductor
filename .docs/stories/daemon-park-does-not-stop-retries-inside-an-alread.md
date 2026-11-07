@@ -16,7 +16,7 @@ As a daemon operator, I want a park to stop the next provider attempt of a step 
 #### Happy Path
 
 - Given a daemon-run build step whose first provider attempt fails and whose retry budget allows another attempt, When the feature is parked before that attempt ends, Then no second provider attempt is dispatched and the conductor returns an operator-parked termination.
-- Given a daemon-run build step on the ordinary (non-self-host) dispatch path with no park active, When its first attempt fails, Then the next attempt is dispatched exactly as today.
+- Given a daemon-run build step on the ordinary (non-self-host) dispatch path with no park active and no preemption requested, When its first attempt fails, Then the next attempt is dispatched exactly as today.
 
 #### Negative Paths
 
@@ -271,7 +271,7 @@ As a daemon operator, I want the daemon log to show that an attempt was declined
 #### Negative Paths
 
 - Given a park observed at a scheduling-unit boundary with no attempt declined, When the boundary event is emitted, Then it keeps the existing unit-level shape and rendering unchanged.
-- Given a declined attempt, When the event is persisted, Then exactly one operator-park boundary event is recorded for that stop, not one per retry path.
+- Given a park-declined attempt, When the event is persisted, Then exactly one operator-park boundary event is recorded for that stop, not one per retry path.
 
 ### Done When
 
