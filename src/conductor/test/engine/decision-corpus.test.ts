@@ -36,7 +36,9 @@ describe('decision corpus known shapes', () => {
       matchesKnownShape('technical-assessment-2026-01-01.md'),
       matchesKnownShape('api-response-contract.md'),
       matchesKnownShape('styleguide.md'),
-    ]).toEqual([true, true, true, true, true, true]);
+      matchesKnownShape('notes.md'),
+      matchesKnownShape('Styleguide.md'),
+    ]).toEqual([true, true, true, true, true, true, false, false]);
   });
 
   it('classifies filename shapes before falling back to status-bearing content', () => {
@@ -71,6 +73,13 @@ describe('decision corpus known shapes', () => {
       matchesKnownShape('legacy-review.md', '**Verdict:** APPROVED'),
       matchesKnownShape('notes.md', '# Notes'),
     ]).toEqual([true, true, false]);
+  });
+
+  it('classifies and retains an inline-bold declared verdict on a legacy record', () => {
+    const content = '**Verdict: APPROVED**';
+
+    expect(classifyKind('legacy-review.md', content)).toBe('review');
+    expect(deriveDisposition(content)).toEqual({ disposition: 'other', declared: 'APPROVED' });
   });
 
   // Covers: task:2

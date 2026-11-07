@@ -36,12 +36,14 @@ export function matchesKnownShape(filename: string, content = ''): boolean {
   return classifyKind(filename, content) !== 'unclassified';
 }
 
-const FENCED_CODE_BLOCK_RE =
-  /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm;
-const VERDICT_LINE_RE =
-  /^\s*(?:[-+*]\s+)?(?:(?:\*\*verdict\s*:\s*\*\*|\*\*verdict\*\*\s*:|verdict\s*:))\s*\S.*$/im;
-const VERDICT_VALUE_RE =
-  /^\s*(?:[-+*]\s+)?(?:(?:\*\*verdict\s*:\s*\*\*|\*\*verdict\*\*\s*:|verdict\s*:)\s*(.*?)|\*\*verdict\s*:\s*(.*?)\*\*)\s*$/im;
+const VERDICT_DECLARATION_RE =
+  /^\s*(?:[-+*]\s+)?(?:\*\*verdict\s*:\s*\*\*\s*(\S.*?)|\*\*verdict\s*:\s*(\S.*?)\*\*|verdict\s*:\s*(\S.*))\s*$/im;
+
+function declaredVerdict(content: string): string | null {
+  const verdict = stripFencedCodeBlocks(content).match(VERDICT_DECLARATION_RE);
+  if (verdict === null) return null;
+  return (verdict[1] ?? verdict[2] ?? verdict[3]).trim();
+}
 
 export type DecisionDisposition = 'approved' | 'superseded' | 'other' | 'undeclared';
 
@@ -78,10 +80,8 @@ export function deriveDisposition(content: string): {
     };
   }
 
-  const verdict = stripFencedCodeBlocks(content).match(VERDICT_VALUE_RE);
-  if (verdict === null) return { disposition: 'undeclared', declared: null };
-
-  const declared = (verdict[1] ?? verdict[2]).trim();
+  const declared = declaredVerdict(content);
+  if (declared === null) return { disposition: 'undeclared', declared: null };
   return { disposition: 'other', declared };
 }
 
@@ -89,7 +89,7 @@ export function classifyKind(filename: string, content: string): DecisionRecordK
   const knownKind = shapeKind(filename);
   if (knownKind !== null) return knownKind;
   if (adrApprovalStatus(content).found !== null) return 'decision';
-  if (VERDICT_LINE_RE.test(content.replace(FENCED_CODE_BLOCK_RE, ''))) return 'review';
+  if (declaredVerdict(content) !== null) return 'review';
   return 'unclassified';
 }
 

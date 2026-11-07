@@ -14,6 +14,8 @@ describe('repository decision corpus', () => {
   it('contains no retired founding record or unclassified canonical records', async () => {
     const corpus = await readDecisionCorpus(repositoryRoot);
 
+    expect(corpus.rows).not.toEqual([]);
+    expect(corpus.rows.some((row) => basename(row.path).startsWith('adr-') && row.kind === 'decision')).toBe(true);
     expect(corpus.rows.some((row) => basename(row.path) === '001-harness-architecture.md')).toBe(false);
     expect(corpus.rows.filter((row) => CANONICAL_RECORD_PREFIX.test(basename(row.path)) && row.kind === 'unclassified')).toEqual([]);
     expect(corpus.errors).toEqual([]);

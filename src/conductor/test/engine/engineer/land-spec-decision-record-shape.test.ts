@@ -149,6 +149,19 @@ describe('landSpec decision record shape gate', () => {
     await expect(land(worktreePath)).resolves.toMatchObject({ slug: 'shape-landing' });
   });
 
+  it('lands a modified legacy verdict record whose filename is off-shape', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', '000-legacy-verdict.md'), '**Verdict: APPROVED**\n');
+    await git(['add', '.docs/decisions']);
+    await git(['commit', '-m', 'add legacy verdict record']);
+    const worktreePath = await seedWorktree();
+    await writeFile(join(worktreePath, '.docs', 'decisions', '000-legacy-verdict.md'), '**Verdict: APPROVED**\n\nUpdated.\n');
+    await git(['add', '.docs/decisions'], worktreePath);
+    await git(['commit', '-m', 'modify legacy verdict record'], worktreePath);
+
+    await expect(land(worktreePath)).resolves.toMatchObject({ slug: 'shape-landing' });
+  });
+
   it('refuses an added off-shape corpus file without committing', async () => {
     const worktreePath = await seedWorktree();
     await addDecision(worktreePath, 'notes.md');
