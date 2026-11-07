@@ -55,7 +55,7 @@ interface HaltRecordedRestackConflictOptions {
   }) => Promise<unknown>;
 }
 
-async function rangeHasMergeForHalt(git: GitRunner, range: ChildRange): Promise<boolean> {
+async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean> {
   const result = await git(['rev-list', '--min-parents=2', `${range.oldParent}..${range.oldTip}`]);
   if (result.exitCode !== 0) throw new Error(`could not inspect restack range for merges: ${result.stderr}`);
   return result.stdout.trim() !== '';
@@ -68,7 +68,7 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
   let flattenedTip: CommitSha | undefined;
   try {
     let candidateSubjects = options.candidateSubjects;
-    if (await rangeHasMergeForHalt(options.git, range)) {
+    if (await rangeHasMerge(options.git, range)) {
       const handoff = await buildFlattenedHandoff(range, options.replayParent, options.git);
       candidateSubjects = await replayCandidateSubjects(options.git, handoff.candidates);
       flattenedTip = handoff.tip;
@@ -160,12 +160,6 @@ async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
     if (oldSha && newSha) rewrites.set(oldSha, newSha);
   }
   return rewrites;
-}
-
-async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean> {
-  const result = await git(['rev-list', '--min-parents=2', `${range.oldParent}..${range.oldTip}`]);
-  if (result.exitCode !== 0) throw new Error(`could not inspect restack range for merges: ${result.stderr}`);
-  return result.stdout.trim() !== '';
 }
 
 function translateFlattenedRewrites(
