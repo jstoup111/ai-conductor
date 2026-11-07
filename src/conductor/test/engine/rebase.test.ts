@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:5
+// Covers: task:1, task:3, task:5, task:rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -9,6 +9,7 @@ import { execa } from 'execa';
 import {
   resolveBase,
   resolveBaseCore,
+  originDefaultBranch,
   resolveFreshBase,
   isBranchCurrent,
   rebaseStateActive,
@@ -445,6 +446,40 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
 });
 
 describe('engine/rebase — resolveBaseCore (shared seam, Task 1)', () => {
+  it('keeps originDefaultBranch origin/HEAD-only while resolveBaseCore owns the remote-show fallback', async () => {
+    const sharedCalls: string[][] = [];
+    const sharedRunner: GitRunner = async (args) => {
+      sharedCalls.push(args);
+      return { exitCode: 1, stdout: '', stderr: 'origin/HEAD is unset' };
+    };
+
+    await expect(originDefaultBranch(sharedRunner)).resolves.toBeNull();
+    expect(sharedCalls).toEqual([['symbolic-ref', 'refs/remotes/origin/HEAD']]);
+
+    const fallbackCalls: string[][] = [];
+    const fallbackRunner: GitRunner = async (args) => {
+      fallbackCalls.push(args);
+      if (args[0] === 'remote' && args.length === 1) {
+        return { exitCode: 0, stdout: 'origin\n', stderr: '' };
+      }
+      if (args[0] === 'symbolic-ref') {
+        return { exitCode: 1, stdout: '', stderr: 'origin/HEAD is unset' };
+      }
+      if (args.join(' ') === 'remote show origin') {
+        return { exitCode: 0, stdout: '  HEAD branch: trunk\n', stderr: '' };
+      }
+      if (args.join(' ') === 'fetch origin trunk') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    };
+
+    await expect(resolveBaseCore(fallbackRunner, 'main')).resolves.toEqual({
+      ref: 'origin/trunk', kind: 'remote', branch: 'trunk',
+    });
+    expect(fallbackCalls).toContainEqual(['remote', 'show', 'origin']);
+  });
+
   it('is the extracted core that resolveBase delegates to — identical result on success', async () => {
     const { git } = fakeGit([
       { match: ['remote'], result: { stdout: 'origin\n' } },
