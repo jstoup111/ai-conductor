@@ -888,35 +888,19 @@ async function dispatchCliCommand(): Promise<void> {
   if (process.argv[2] === 'executor-child') {
     const [
       { runExecutorChild, withExecutorBrokerProxies },
-      { makeExecutorChildDispatchAdmission, makeExecutorChildRun },
-      { createWorkOrderGitRunner },
-      { makeFeatureRunnerDeps },
+      { createExecutorChildRuntime },
       { defaultSelfHostDetector },
     ] = await Promise.all([
       import('./engine/executor-child.js'),
       import('./engine/executor-child-runtime.js'),
-      import('./engine/daemon-feature-lifecycle.js'),
-      import('./engine/daemon-deps.js'),
       import('./engine/self-host/detector.js'),
     ]);
     const projectRoot = process.cwd();
+    const runtime = createExecutorChildRuntime({ projectRoot, processServices: 'install' });
     await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
-      admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
-      // Reuse the daemon seam, which verifies the WorkOrder before its first
-      // worktree side effect and performs the pinned-base create under the
-      // brokered lifecycle lock.
-      createWorktree: async (order, worktreeLifecycle) => {
-        const runnerDeps = makeFeatureRunnerDeps({
-          projectRoot,
-          worktreeBase: join(projectRoot, '.worktrees'),
-          baseBranch: 'main',
-          runConductorInWorktree: async () => {},
-          workOrderGit: createWorkOrderGitRunner(projectRoot),
-          worktreeLifecycle: worktreeLifecycle as never,
-        });
-        return runnerDeps.createWorktree(order.slug, order);
-      },
-      run: makeExecutorChildRun({ projectRoot }),
+      admitDispatch: runtime.admitDispatch,
+      createWorktree: runtime.createWorktree,
+      run: runtime.run,
       // The WorkOrder is the supervisor's authority for self-host mode.  The
       // detector is only a compatibility fallback for pre-field orders.
       liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),

@@ -14,7 +14,8 @@ import { makeProductionGit } from './pr-labels.js';
 import { isOperatorParked } from './park-marker.js';
 import { DefaultStepRunner } from './step-runners.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
-import { readWorktreeOutcome } from './daemon-deps.js';
+import { makeFeatureRunnerDeps, readWorktreeOutcome } from './daemon-deps.js';
+import { createWorkOrderGitRunner } from './daemon-feature-lifecycle.js';
 import { installDaemonProcessServices, type DaemonProcessServicesOptions } from './daemon-process-bootstrap.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { runSetupFailureTriage } from './setup-triage.js';
@@ -58,6 +59,8 @@ export interface ExecutorChildFeatureRunnerInput {
 
 export interface MakeExecutorChildRunOptions {
   readonly projectRoot: string;
+  /** Defaults to install for direct callers retained during the migration. */
+  readonly processServices?: 'install' | 'inherited';
   readonly runFeature?: typeof runExecutorChildFeature;
   readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
 }
@@ -76,6 +79,12 @@ export function buildExecutorChildConductorBoundaryOptions({
     operatorParkBoundary: () => isOperatorParked(projectRoot, slug),
     preemptionRequested,
   };
+}
+
+export interface CreateExecutorChildRuntimeOptions {
+  readonly projectRoot: string;
+  /** The entrypoint owns process-global services; in-memory children inherit them. */
+  readonly processServices: 'install' | 'inherited';
 }
 
 /**
@@ -114,16 +123,48 @@ export async function makeExecutorChildDispatchAdmission(
 }
 
 /**
+ * Compose every child-executor dependency at its process boundary. Keeping
+ * process-service ownership explicit lets an in-memory test fork share the
+ * one resolver installed for its host process.
+ */
+export function createExecutorChildRuntime({
+  projectRoot,
+  processServices,
+}: CreateExecutorChildRuntimeOptions) {
+  return {
+    admitDispatch: (order: WorkOrder) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
+    // Reuse the daemon seam, which verifies the WorkOrder before its first
+    // worktree side effect and performs the pinned-base create under the
+    // brokered lifecycle lock.
+    createWorktree: async (order: WorkOrder, worktreeLifecycle: ExecutorChildRunInput['worktreeLifecycle']) => {
+      const runnerDeps = makeFeatureRunnerDeps({
+        projectRoot,
+        worktreeBase: join(projectRoot, '.worktrees'),
+        baseBranch: 'main',
+        runConductorInWorktree: async () => {},
+        workOrderGit: createWorkOrderGitRunner(projectRoot),
+        worktreeLifecycle: worktreeLifecycle as never,
+      });
+      return runnerDeps.createWorktree(order.slug, order);
+    },
+    run: makeExecutorChildRun({ projectRoot, processServices }),
+  };
+}
+
+/**
  * Compose the child-only daemon services before running its sole feature.
  * Each child handles one order, so the order's feature bus is the process bus.
  */
 export function makeExecutorChildRun({
   projectRoot,
+  processServices = 'install',
   runFeature = runExecutorChildFeature,
   githubBoundary,
 }: MakeExecutorChildRunOptions): (input: ExecutorChildRunInput) => Promise<FeatureExecutionOutcome> {
   return async (input) => {
-    installDaemonProcessServices({ projectRoot, events: input.events, ...githubBoundary });
+    if (processServices === 'install') {
+      installDaemonProcessServices({ projectRoot, events: input.events, ...githubBoundary });
+    }
     return runFeature({
       ...input,
       worktree: {
