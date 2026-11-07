@@ -30,7 +30,8 @@ git diff <batch-start-commit>..HEAD --name-only
 
 Keep non-test analysis limited to these files. For each changed or added test, additionally
 inspect existing tests at the same production seam; do not scan unrelated code or tests.
-The batch-start commit is the last batch boundary recorded in `.pipeline/progress.log`.
+Derive the batch-start commit from the last batch entry in `.pipeline/progress.log` (the commit
+before that batch's first task commit).
 
 ### 2. Duplication Check
 
@@ -159,9 +160,10 @@ references to each new symbol.
 ### 9. Output
 
 Write findings to `.pipeline/audit-trail/batch-N-simplification.md`: the batch commit range, one
-table of findings (`# | Category | Description | File:Line | Severity`, where Category is one of
-duplication, complexity, extract-worthy, over-engineering, domain-modelling, dead-code, or
-test-value, and Severity is `must-fix` or `advisory (reason)`), then
+table of findings (`# | Category | Kind | Description | File:Line | Fix | Severity`, where Category is
+one of duplication, complexity, extract-worthy, over-engineering, domain-modelling, dead-code, or
+test-value; Kind is the domain-modelling kind or complexity metric; Fix is the recommendation or
+extraction target; and Severity is `must-fix` or `advisory (reason)`), then
 `## Verdict: CLEAN | SIMPLIFY_REQUIRED` with must-fix and advisory counts.
 
 ### 10. Verdict and Gating

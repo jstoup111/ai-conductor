@@ -32,8 +32,8 @@ Before starting manual testing, check the stories in `.docs/stories/` for this f
   ```
   ai-conductor manual-test-record --skip --reason "<reason>" --pipeline-dir /abs/path/to/.pipeline
   ```
-  Use the absolute worktree `.pipeline` path supplied in the step's system prompt (see the
-  "Daemon mode" note under Step 5 for why it must be absolute, not relative).
+  Use the absolute worktree `.pipeline` path supplied in the step's system prompt (never a
+  relative path).
 
 ### 1. Detect Project Type
 

@@ -418,6 +418,8 @@ construction) in the project's test-support location if they don't already exist
 
 ### 5b. Generate End-to-End / UI Specs (Full-Stack Projects)
 
+Declare coverage with the same `Covers:` markers as §5a, including `Covers: FR-N` on the product track.
+
 **File mapping:** `.docs/stories/auth.md` → the project's E2E spec for that area
 (e.g. `spec/system/auth_spec.rb`, `tests/e2e/test_auth.py`, `test/e2e/auth.spec.ts`).
 
