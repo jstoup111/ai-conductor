@@ -385,8 +385,46 @@ describe('runRestack merge-bearing conflicts (real local Git)', () => {
       (await subject.git(['rev-parse', `${subject.merge}^{tree}`])).stdout,
     );
     expect((await subject.git(['rev-list', '--min-parents=2', `${record.record.oldParent}..${flattenedTip}`])).stdout).toBe('');
-    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${flattenedTip}`);
+    expect(halt.split('\n').slice(halt.split('\n').indexOf(`Restack-Conflict: 2 ${record.record.opId}`))).toEqual([
+      `Restack-Conflict: 2 ${record.record.opId}`,
+      `git switch -c restack-resolve/demo/c2 ${flattenedTip}`,
+      `git rebase --onto ${record.record.newParent} ${record.record.oldParent}`,
+      'ai-conductor stack restack-resolve --slug demo --child 2 --tip <sha>',
+      'ai-conductor stack restack-resolve --slug demo --child 2 --decision "<answer>"',
+      '',
+    ]);
+    expect((await subject.git(['rev-parse', conflictFlattenedTipRefFor('demo')])).stdout).toBe(`${flattenedTip}\n`);
+    expect((await subject.git(['rev-parse', conflictParentRefFor('demo')])).stdout).toBe(`${record.record.newParent}\n`);
+    for (const forbidden of ['resolve the conflict on child branch', 'feat/c2/demo', 'feat/daemon-demo', 'refs/conductor/demo/closed/']) {
+      expect(halt).not.toContain(forbidden);
+    }
     expect(halt).not.toContain(`git switch -c restack-resolve/demo/c2 ${subject.merge}`);
+  });
+
+  // Covers: task:8
+  it('writes the needs-human halt without moving stack refs when the flattened-tip pin races', async () => {
+    const subject = await fixture('not-carried');
+    const before = await stackRefs(subject);
+    const native = makeGitRunner(subject.repo);
+    let raced = false;
+    const racingGit = async (args: string[], options?: { input?: string }) => {
+      if (!raced && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(conflictFlattenedTipRefFor('demo'))) {
+        raced = true;
+        await native(['update-ref', conflictFlattenedTipRefFor('demo'), subject.newDefault, '']);
+      }
+      return native(args, options);
+    };
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: racingGit, resolver: async () => ({ resolved: false, reason: 'operator required' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    expect(raced).toBe(true);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatchObject(
+      expect.stringContaining('conflict record write failed'),
+    );
+    expect(await stackRefs(subject)).toBe(before);
   });
 
   // Covers: task:5
