@@ -201,7 +201,7 @@ build-time tasks, and do not close any portion with `Evidence: satisfied-by`; ru
 unmodified TDD cycle — RED → DOMAIN → GREEN → DOMAIN → COMMIT — for that task. Ambiguity always
 resolves toward the full cycle.
 
-**Pre-completion scan (at pipeline start):** Before dispatching any tasks, check each task's
+**Pre-completion scan (first BUILD entry only, never on a retry):** Before dispatching any tasks, check each task's
 acceptance criteria against existing code and test coverage (git log, test files). Mark tasks
 as `pre-completed` if criteria are already satisfied. Batch-verify in one pass — do not
 dispatch individual subagents to discover "already done." If Task N's implementation was a
@@ -363,6 +363,11 @@ cross-cutting regression and route it back.
 selectors to repair subagents. Fix the failure, verify the scoped affected-test union
 through `ai-conductor scoped-run <selectors...>`, then commit and leave the aggregate rerun to
 `test_suite`. A scoped PASS does not establish an aggregate PASS.
+
+**Build-review work order:** A retry carrying a `Build-review remediation work order` is the job
+even when every task already reads completed. Each listed repair ends in a commit under its admitted
+task id, or, if you judge it done or wrong, in `Need user decision: case <caseId> — <evidence>`
+written to `.pipeline/halt-user-input-required`.
 
 **Batch affected-test union:** At each batch boundary, compute one named
 `BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set and retain
