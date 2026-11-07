@@ -2,6 +2,9 @@ import { fork as nodeFork } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
+import type { ConductorEvent } from '../types/events.js';
+import { forwardedFeatureOf } from './event-persister.js';
+import { readHaltSidecarClassification } from './halt-marker.js';
 import type { FeatureExecutionOutcome, FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage } from './executor-protocol.js';
@@ -222,11 +225,22 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       // Dispatch lifecycle belongs to the claim, not a particular fork. A
       // protocol fallback may launch twice, but the durable daemon ledger must
       // still contain exactly one start/end pair for that claim.
+      const tier = order.tier === undefined ? {} : { tier: order.tier };
       await deps.rootEvents.emit({
         type: 'feature_dispatch_started', slug: order.slug, kind: 'initial',
+        ...tier,
         engineVersionId: order.engineVersionId,
         ...(order.pinFallbackReason === undefined ? {} : { pinFallbackReason: order.pinFallbackReason }),
       });
+      // The child's own dispatch end (which carries the halt classification)
+      // is dropped at the broker because this lifecycle is supervisor-owned,
+      // so the supervisor must recover the halting step itself. The broker
+      // forwards the child's feature-scope events here tagged with the slug.
+      let haltingStep: string | undefined;
+      const onLoopHalt = (event: ConductorEvent) => {
+        if (event.type === 'loop_halt' && forwardedFeatureOf(event) === order.slug) haltingStep = event.step;
+      };
+      deps.rootEvents.on('loop_halt', onLoopHalt);
       // Fork and broker construction are process boundaries too.  Preserve the
       // dispatch pair even when either fails synchronously before a child can
       // report an outcome; otherwise a durable start record would have no
@@ -236,10 +250,18 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         result = await launch(order, false);
       } catch (error) {
         result = errorOutcome(order, error instanceof Error ? error.message : String(error));
+      } finally {
+        deps.rootEvents.off('loop_halt', onLoopHalt);
       }
+      const outcome = result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated';
       await deps.rootEvents.emit({
-        type: 'feature_dispatch_ended', slug: order.slug,
-        outcome: result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated',
+        type: 'feature_dispatch_ended', slug: order.slug, outcome, ...tier,
+        ...(outcome === 'halted'
+          ? {
+            haltClass: await readHaltSidecarClassification(join(deps.projectRoot, '.worktrees', order.slug)),
+            step: haltingStep ?? 'unknown',
+          }
+          : {}),
       });
       return result;
     },
