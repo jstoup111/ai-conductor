@@ -44,23 +44,6 @@ the project's conventions. Illustrative mappings (adapt to whatever the project 
 | JS/TS + Jest/Vitest | `test/integration/` (supertest) | `test/e2e/` (Playwright/Cypress) |
 | Go | `*_integration_test.go` (`net/http/httptest`) | `e2e/` (chromedp/rod) |
 
-## When to Use
-
-Run this **after `/plan` and before `/pipeline`** (or `/tdd`). The flow is:
-
-```
-/stories → /conflict-check → /plan → /writing-system-tests → /pipeline
-```
-
-**Trigger when:**
-- About to implement a feature and stories exist without corresponding acceptance specs
-- New story files added to `.docs/stories/`
-- User asks for acceptance tests, integration tests, BDD tests, E2E tests, or system tests
-
-**Skip when:**
-- Acceptance specs already exist for the stories
-- Writing unit/model specs (that's the TDD skill's job)
-
 ## Process
 
 ### Stacked-Child Scope
@@ -263,8 +246,7 @@ When a task **replaces or supersedes existing behavior** (the plan says "replace
 "supersede Y", "swap the old path for the new"), the new code is only correct if the
 PRODUCTION entry point actually calls it. A unit test that invokes the new function
 *directly* passes even while the live path still calls the old one — the new primitive
-ships orphaned (zero production callers). This class escaped into ~5 consecutive Phase-9
-features; it is caught late by build_review's `implementationQuality` rubric or `/code-review`, not the suite.
+ships orphaned (zero production callers).
 
 **Rule:** for any replacement task, assign **≥1 behavioral test at the lowest sufficient layer**
 that drives the real production entry point (the command / handler / route / loop a user or caller
@@ -285,8 +267,7 @@ must fail if the entry point is still wired to the OLD behavior.
 Any spec covering a **path, prefix, or canonical-root guard** (an allow/deny check on a
 filesystem path or string prefix) MUST include explicit boundary-value cases. Off-by-one
 normalization bugs in these guards fail *closed* (reject everything) or *open* (accept a
-sibling) and are invisible to happy-path tests — this exact gap shipped a fail-closed
-trailing-slash bug caught only by build_review or `/code-review`.
+sibling) and are invisible to happy-path tests.
 
 Generate a negative/boundary case for EACH row:
 
@@ -307,11 +288,7 @@ auth/permission predicate, an identity or path check, a state guard ("is the tre
 the right session", "has this been processed") — a unit test that exercises the derivation on
 **clean or hand-injected** input passes while the REAL production call site feeds it adversarial
 real-world input that is never tested. The bug lives in the *wiring between the call site and the
-derivation*, which the derivation's own unit test cannot reach. This class shipped CRITICAL/HIGH
-bugs in three consecutive phases — a token-in-URL redaction invoked at a sibling call site with a
-real token; a rebase predicate evaluated against a real in-progress tree instead of the clean
-injected one; an injected project name that masked the real derivation — each caught only by the
-fresh-context build_review or `/code-review`, never by the suite.
+derivation*, which the derivation's own unit test cannot reach.
 
 **Rule:** for each such derivation, enumerate **EVERY production call site** that invokes it, and
 assign a failing behavioral test **per call site** at the lowest sufficient layer that:
@@ -333,10 +310,6 @@ missed.
 and an **approved PRD** exists for the feature. If either condition is false (technical track,
 or no approved PRD), skip this section entirely.
 
-- **If technical track:** perform no FR-coverage work, emit no table, complete exactly as today
-  (§1–§7 unchanged). No error; the gate is skipped for non-product features.
-- **If no PRD in `.docs/specs/`:** perform no FR-coverage work, emit no table, complete as-is.
-  No error; the gate does not apply.
 - **If a PRD exists but `Status: Approved` is not in the file:** do NOT build a table from an
   unapproved FR list — report the task as **FAILED** with the reason "PRD found but not
   approved; cannot gate on incomplete FR list." This surfaces the missing approval as a
@@ -474,10 +447,6 @@ SUITE "Authentication" (driven through a real UI driver):
   at every third-party adapter boundary
 - Sign-in uses the actual login UI, not a session backdoor
 - Assert on user-visible content and navigated location, not internal DOM/implementation details
-- On product track: every generated spec identifies the FR(s) it covers — either in the
-  top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
-  (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
-  acceptance directory finds every FR's specs.
 
 ### 6. Run and Verify RED (Generated or Copied Acceptance/System Specs)
 
@@ -624,12 +593,7 @@ run command, target specs, exception, or other generated-spec fields:
 
 **Write `.pipeline/acceptance-specs-run.json` before reporting complete for a feature with no
 active child; write `.pipeline/children/<k>/acceptance-specs-run.json` for the supplied active
-child.** The RED evidence in the matching `acceptance-specs-red.json` captures the RESULT of one
-run this skill happened to perform. If that run never happened, or the daemon needs to
-re-establish RED later (e.g. after a self-heal), the engine has no deterministic way to know
-*how* to re-run this feature's or child's specs on its own. The run contract fixes that: it is
-the exact, machine-replayable command the engine's self-heal runner uses to redrive RED without
-guessing a path or invoking an LLM.
+child.** It is the exact, machine-replayable command the engine uses to redrive RED later.
 
 Shape — exactly three fields, matching the command actually run in this step:
 
@@ -655,15 +619,8 @@ replay it without guessing framework-specific text:
 ACCEPTANCE_RED_EVIDENCE: {"executed":5,"passed":0,"failed":5,"skipped":0,"errors":0,"failingTests":[{"name":"returns the archived filing","reason":"the archive endpoint is not implemented"}],"intentRationale":"The failing endpoint proves the requested archive behavior is not implemented."}
 ```
 
-This line is part of the command's own output contract. It carries the fresh observed counters and
-provenance; the engine adds the recorded command, target specs, and fresh run timestamp before it
-replaces an older marker. A command that does not emit valid evidence is refused without overwriting
-the prior marker.
-
-Write this file **after** the RED run succeeds and **before** this skill reports the step
-complete — it is not optional evidence, it is the deterministic backstop the engine consumes
-when the red-evidence marker is missing or misplaced. This is gitignored run evidence, not a
-committed design artifact, same as `acceptance-specs-red.json`.
+A command that does not emit valid evidence is refused. Write this file **after** the RED run
+succeeds and **before** reporting the step complete.
 
 ### Stubbing Rules for Pre-Implementation Specs
 
@@ -684,38 +641,6 @@ git commit -m "test: add failing acceptance specs for [feature area]"
 For `specs-generated`, failing tests get committed. They represent the acceptance criteria and
 implementation (via `/pipeline` or `/tdd`) makes them pass. For `disposition-only`, do not commit
 an acceptance spec; the cited lower-layer task owns its genuine RED test and commit.
-
-**Verification checklist before completing this skill:**
-- `.pipeline/acceptance-specs-red.json` records exactly one outcome:
-  `specs-generated` with RED evidence, or `disposition-only` with exhaustive cited happy and
-  negative criterion records
-- For `specs-generated`, RED evidence and the run contract are written before reporting complete
-- For `disposition-only`, no acceptance spec, RED-run evidence fields, run contract, or
-  failing-spec commit is written
-- Evidence file written to `.pipeline/fr-coverage.md` (only for product-track runs with an
-  approved PRD) with verdict "Coverage: COMPLETE" — otherwise the step is a hard stop per §6's
-  FR-coverage gate
-- For `specs-generated`, failing tests committed
-
-## How This Relates to Other Test Types
-
-```
-Acceptance specs (this skill)      — Distinct multi-step externally observable flows that
-  ↕ generated from .docs/stories/     cannot be proven sufficiently below
-  ↕                                    "Create link → visit → verify click recorded"
-
-Request/endpoint tests (TDD)       — Single endpoint/operation contract
-  ↕ generated during RED phase        "POST /links with blank URL returns 422"
-  ↕ owns: status codes, error formats, params validation, headers
-
-Unit tests (TDD per-model/module)  — Domain/model logic in isolation
-  ↕ generated during RED phase        "generate_short_code returns 6 chars"
-  ↕ owns: validations, callbacks, business methods
-```
-
-**Each layer tests something the others don't.** If a test could live in a lower layer, it should.
-Acceptance specs are expensive — only use them for multi-step flows that can't be verified at a
-lower level. This skill handles the top layer. TDD handles the bottom two.
 
 ## Verify
 

@@ -19,11 +19,6 @@ pass is `verified` — you actually observed the response/behavior — never ass
 inferred from a green unit test. If a story was not actually exercised, do not claim it passed;
 report it as untested rather than presenting an assumption as a result.
 
-**Runs at SHIP as a member of the concurrent validation group — fanned out alongside
-`/prd-audit` and `/architecture-review --as-built` in daemon/auto runs. In interactive
-runs it stays in the configured SHIP sequence, with its post-step
-checkpoint unchanged.**
-
 ## Practices
 
 ### 0. Feature Type Check
@@ -146,16 +141,8 @@ or, if the results were written to a file first:
 ai-conductor manual-test-record --results /path/to/results.md --pipeline-dir /abs/path/to/.pipeline
 ```
 
-`manual-test-record` handles the append semantics (new `## Attempt N — <ISO timestamp>`
-section, LATEST-attempt gate evaluation, whitewash-guard bookkeeping) — you supply only the
-current attempt's table and bug list; do not construct attempt headers or timestamps
-yourself.
-
-**Append, never overwrite.** Each invocation of `manual-test-record --results` adds a new
-`## Attempt N — <ISO timestamp>` section to the file (the CLI creates the file with
-`## Attempt 1 — …` on the first run). The conductor's gate evaluates only the LATEST attempt
-section, so a fixed old FAIL doesn't block you — but the history of what earlier attempts
-found is preserved for audit, because the CLI is the only writer and it never truncates.
+Supply only the current attempt's table and bug list; the CLI adds the `## Attempt N` header and
+timestamp, appends, and never truncates earlier attempts.
 
 Use this format for the content you pass to `--results` (both in chat and to the CLI):
 
@@ -175,39 +162,14 @@ Use this format for the content you pass to `--results` (both in chat and to the
 2. **BUG-002:** ...
 ```
 
-`.pipeline/manual-test-results.md` is gitignored, so it is never committed —
-which is what the conductor's freshness check needs (the file's mtime must be
-newer than the current session's start; a committed copy from a prior run
-would defeat that).
+Always pass the **absolute worktree `.pipeline` path** from the step's system prompt — never a
+relative `.pipeline/...` path, which can land in the wrong checkout. If you cannot run the CLI (no
+pipeline directory supplied, or the command fails), do NOT consider manual_test complete and never
+hand-write the results file — HALT and report the blocker.
 
-**Daemon mode — record to the retained worktree.** Daemon/auto Push & PR outcomes retain the
-feature worktree through manual testing; only the engine mergeable sweep cleans it after the
-shipped record is proven on `origin/<default>`. The feature's `.pipeline` lives in that worktree. Run
-`manual-test-record` against the **absolute worktree `.pipeline` path** (the conductor
-supplies it in the step's system prompt) — never a relative `.pipeline/...` path. A relative write
-can land in the wrong checkout and the gate (which reads the retained worktree) never sees it.
-
-**Refusal contract:** `manual-test-record` is the sole intended writer of
-`.pipeline/manual-test-results.md` — never hand-write, append to, or fabricate that file. If
-you cannot actually run the CLI (e.g. no pipeline directory was supplied, or the command
-fails), do NOT consider manual_test complete and do NOT invent a marker to paper over it —
-HALT and report the blocker. An absent or stale marker is the correct refusal signal the
-conductor watches for; a hand-written one defeats the gate's whole purpose (objective,
-CLI-verified on-disk evidence rather than a self-reported claim).
-
-**Whitewash guard (#367):** when the gate observes FAIL rows it records the
-current commit sha; a later attempt with no FAIL rows is accepted only if
-new commits exist since that sha. Recording PASS without actually committing a
-fix will be refused by the gate — the fix in Step C below MUST land as commits
-before the re-verify attempt. In daemon runs, a manual_test that keeps failing
-is kicked back to the build step with the FAIL rows as evidence (bounded), then
-HALTs for a human if the bug survives the kickback budget.
-
-`WARN` rows are recorded visibly and marked by the CLI as warning-bearing attempts, but they do not
-block the gate. They also cannot whitewash a prior `FAIL`: after a recorded failure, a later
-FAIL-free attempt containing PASS and/or WARN rows still requires HEAD to move. Only unavailable or
-unlaunchable browser automation dependencies qualify for this warning path; observed application
-behavior that violates a story remains `FAIL`.
+**Whitewash guard (#367):** after a recorded `FAIL`, a later attempt with no `FAIL` rows (PASS
+and/or WARN) is accepted only if new commits exist since the failure, so the Step C fix MUST land as
+commits before the re-verify attempt. `WARN` rows do not block the gate.
 
 ### 6. Bug Loop
 
@@ -234,12 +196,6 @@ genuinely self-evident from the failure.
 4. Re-run the manual test for that story to verify
 
 **Do NOT proceed to `/finish` with known bugs.** The manual test gate must be clean.
-
-```
-/manual-test → bugs found? → /debugging (discover cause, if not obvious) → /tdd (fix each bug) → /manual-test (re-verify) → /finish
-```
-
-The loop continues until all stories pass manual testing.
 
 ### 7. Shut Down
 

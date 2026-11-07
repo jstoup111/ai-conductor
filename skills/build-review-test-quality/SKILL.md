@@ -33,27 +33,15 @@ Use only the supplied projection version `v3`. Its closed input contains:
   `endLine`, and `contentHash`. They are not embedded source content or a replacement for the
   engine's authority.
 
-The session runs inside the feature worktree. The diff content is not embedded: read referenced
-files and obtain any per-path diff with `git diff <mergeBase>..HEAD -- <path>` (or the merge-base
-form with `git show <mergeBase>:<path>`). Those reads are part of this closed input. Do not infer
-facts from a maker transcript, task-status narrative, prior review, or state outside this projection
-and its referenced content.
+Do not infer facts from a maker transcript, task-status narrative, prior review, or state outside
+this projection and its referenced content.
 
 Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review
 identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.
 
-For every `testScope.evidence` region you inspect, re-read the file at the pinned ref for its
-`source` side (`mergeBase` for base regions, `headSha` for head regions). The region is the raw bytes
-from `byteRegion.start` (inclusive) to `byteRegion.end` (exclusive) of that output. `byteRegion` is in
-UTF-8 bytes; `region`, `startLine`, and `endLine` are character positions for identity and
-orientation only, and diverge from byte offsets once the file holds a non-ASCII character. The engine
-computed `contentHash` from that same immutable commit. Do not recompute it (a read-only review
-session has no hashing tool); copy it verbatim where the schema asks for it. A candidate's evidence
-record is the one whose `id` equals its `candidateId`. An unreadable region, one whose pinned read
-fails, is not judged: return its fallback candidate as `indeterminate` with a non-empty
-`missingEvidenceReason`.
-Your own read never becomes authoritative. The engine rejects a finding anchored to a `contentHash`
-that is absent from the projected evidence and candidates.
+For `testScope.evidence` regions, follow the pinned-ref read rules in the engine prompt. An
+unreadable region is not judged: return its fallback candidate as `indeterminate` with a non-empty
+`missingEvidenceReason`. Your own read never becomes authoritative.
 
 ## Judgement
 
