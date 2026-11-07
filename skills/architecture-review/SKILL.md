@@ -452,7 +452,9 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
 
 **Scope (only this):**
 - For `adrCompliance`, load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`).
-  DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
+  Block only on ADRs in this feature's change set or cited by its plan; DECIDE checked the plan
+  against exactly those. Code that follows the plan but conflicts with any other APPROVED ADR is a
+  drift note naming that ADR decision to amend. DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
   `diagramDrift`, compare the shipped code with the approved architecture diagrams
   (`.docs/architecture/`).
 - For each enabled check, compare the shipped source with its governing evidence: new structural
@@ -593,6 +595,7 @@ work; `DESIGN` means a human architectural decision is required.
 | Unreachable rung; no plan task or approved entry point covers it | `DESIGN` | the APPROVED ADR decision it conflicts with |
 | Code diverges from an APPROVED ADR decision the plan already requires | `REMEDIABLE` | `<adr-stem> D<n>` |
 | Complying needs a changed or new architectural decision | `DESIGN` | `<adr-stem> D<n>` |
+| Code follows the plan; conflicts only with an APPROVED ADR the plan neither changes nor cites | none | drift note naming `<adr-stem> D<n>` |
 | Story criterion or desired outcome unmet | none | out of scope; `/prd-audit` owns it |
 
 Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Task <id>`.
@@ -626,5 +629,5 @@ Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Tas
       remain rejected
 - [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
       with its greppable observation signature
-- [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
+- [ ] **As-built mode:** BLOCKED on any enabled violation of a change-set or plan-cited APPROVED ADR; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
