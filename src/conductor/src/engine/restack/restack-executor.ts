@@ -502,15 +502,6 @@ async function replayConflict(git: GitRunner, slug: string, error: unknown): Pro
   return { commit, paths };
 }
 
-export async function mergeInRange(git: GitRunner, range: ChildRange): Promise<CommitSha | undefined> {
-  for (const commit of await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)) {
-    const parents = await runGit(git, ['rev-list', '--parents', '-n', '1', commit]);
-    if (parents.exitCode !== 0) throw new Error(`cannot read parents for ${commit}`);
-    if (parents.stdout.trim().split(/\s+/).length > 2) return commit;
-  }
-  return undefined;
-}
-
 async function haltUnresolvedConflict(
   worktree: string,
   slug: string,

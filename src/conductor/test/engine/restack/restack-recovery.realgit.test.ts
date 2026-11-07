@@ -1,4 +1,4 @@
-// Covers: task:24, task:rem-prd-audit-R15, task:rem-as-built-rem-as-built-R27, task:rem-as-built-rem-as-built-R16
+// Covers: task:4, task:24, task:rem-prd-audit-R15, task:rem-as-built-rem-as-built-R27, task:rem-as-built-rem-as-built-R16
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -342,7 +342,7 @@ describe('recoverRestackJournal (real local Git)', () => {
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
-  it('refuses a merge-bearing planned-recovery conflict before resolver dispatch or ref moves', async () => {
+  it('dispatches a merge-bearing planned-recovery conflict to the resolver without a flatten refusal', async () => {
     const subject = await fixture();
     const child = parseChildId(1);
     if (!child) throw new Error('child id should parse');
@@ -391,15 +391,12 @@ describe('recoverRestackJournal (real local Git)', () => {
     });
 
     expect(result).toMatchObject({ kind: 'halted' });
-    expect(resolverCalls).toBe(0);
+    expect(resolverCalls).toBe(1);
     expect((await subject.git([
       'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
     ])).stdout).toBe(refsBefore);
-    expect(refusals).toContainEqual(expect.objectContaining({
-      reason: 'flatten_refused', child: 1, detail: expect.stringContaining(merge),
-    }));
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/resolve.*feat\/c1\/demo.*resume/is);
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toMatch(/git\s+rebase/i);
+    expect(refusals).toEqual([]);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^restack conflict child 1/m);
   });
 
   // Covers: task:rem-as-built-R22
