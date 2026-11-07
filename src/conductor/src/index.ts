@@ -180,6 +180,7 @@ import {
 } from './engine/daemon-exit-witness.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import { detectRateCardCommand, dispatchRateCard } from './engine/rate-card-cli.js';
+import { detectDecisionsCommand, dispatchDecisions } from './engine/decisions-cli.js';
 import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
@@ -813,6 +814,7 @@ export async function dispatchNonDispatchingCliCommand(
   deps: {
     readonly discoverProviders?: () => Promise<unknown>;
     readonly dispatchRateCard?: typeof dispatchRateCard;
+    readonly dispatchDecisions?: typeof dispatchDecisions;
     readonly dispatchOverlapScan?: typeof overlapScanCommand;
     readonly dispatchRender?: typeof dispatchRender;
   } = {},
@@ -827,6 +829,9 @@ export async function dispatchNonDispatchingCliCommand(
 
   const rateCardCmd = detectRateCardCommand([...argv]);
   if (rateCardCmd) return (deps.dispatchRateCard ?? dispatchRateCard)(rateCardCmd, projectRoot);
+
+  const decisionsCmd = detectDecisionsCommand([...argv]);
+  if (decisionsCmd) return (deps.dispatchDecisions ?? dispatchDecisions)(decisionsCmd, projectRoot);
 
   const overlapScanCmd = detectOverlapScanCommand([...argv]);
   if (overlapScanCmd) {

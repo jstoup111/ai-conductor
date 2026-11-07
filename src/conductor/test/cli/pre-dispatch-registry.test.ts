@@ -10,6 +10,18 @@ import { createProgram } from '../../src/cli.js';
 import { detectRewindCommand } from '../../src/engine/rewind.js';
 
 describe('pre-dispatch command registry', () => {
+  // Covers: S3.1
+  it('registers decisions as a router-owned pre-dispatch command and documents its filters', () => {
+    expect(PRE_DISPATCH_COMMANDS).toContainEqual({
+      detector: 'detectDecisionsCommand', commandPath: ['decisions'], helpOwner: 'router',
+    });
+
+    const decisions = createProgram().commands.find((command) => command.name() === 'decisions');
+    expect(decisions?.helpInformation()).toContain('--kind');
+    expect(decisions?.helpInformation()).toContain('--status');
+    expect(decisions?.helpInformation()).toContain('--json');
+  });
+
   // Covers: task:28
   it('parses a closed-child rewind reason and refuses malformed supplied reasons', () => {
     expect(detectRewindCommand([
