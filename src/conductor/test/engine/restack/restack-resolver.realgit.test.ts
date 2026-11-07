@@ -1,4 +1,4 @@
-// Covers: task:14
+// Covers: task:2, task:14
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -102,11 +102,116 @@ async function refSnapshot(repo: string): Promise<string> {
   return (await execFile('git', ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/'], { cwd: repo })).stdout;
 }
 
+async function mergeFixture(kind: 'q-carried' | 'ancestry-only'): Promise<{
+  repo: string;
+  range: ChildRange;
+  newParent: CommitSha;
+  merge: CommitSha;
+  sideSubject: string;
+}> {
+  const repo = await mkdtemp(join(tmpdir(), 'restack-resolver-merge-'));
+  repositories.push(repo);
+  const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, { cwd: repo, env });
+  const commit = async (subject: string) => {
+    await git(['add', '.']);
+    await git(['commit', '-qm', subject]);
+    return sha((await git(['rev-parse', 'HEAD'])).stdout);
+  };
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.name', 'Merge fixture']);
+  await git(['config', 'user.email', 'merge-fixture@example.test']);
+  await writeFile(join(repo, 'shared.txt'), 'base\n');
+  const base = await commit('base');
+  await git(['checkout', '-qb', 'child']);
+  await writeFile(join(repo, 'child.txt'), 'C\n');
+  await commit('C');
+  await git(['checkout', '-qb', 'side', base]);
+  await writeFile(join(repo, 'shared.txt'), 'side\n');
+  const sideSubject = 'S';
+  await commit(sideSubject);
+  await git(['checkout', '-q', 'main']);
+  await git(['merge', '--no-ff', '-m', 'carry side', 'side']);
+  await writeFile(join(repo, 'shared.txt'), 'parent later edit\n');
+  const newParent = await commit('parent later edit');
+  await git(['checkout', '-q', 'child']);
+  if (kind === 'q-carried') {
+    await git(['merge', '--no-ff', '--no-commit', 'side']);
+    await writeFile(join(repo, 'shared.txt'), 'hand edit\n');
+    await git(['add', 'shared.txt']);
+    await git(['commit', '-qm', 'M']);
+  } else {
+    await git(['merge', '--no-ff', '-m', 'M', 'side']);
+  }
+  const merge = sha((await git(['rev-parse', 'HEAD'])).stdout);
+  await writeFile(join(repo, 'shared.txt'), 'later child edit\n');
+  const tip = await commit('T');
+  const child = parseChildId(2);
+  if (!child) throw new Error('child must parse');
+  return { repo, range: { child, oldParent: base, oldTip: tip, kind: 'active' }, newParent, merge, sideSubject };
+}
+
 afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
 });
 
 describe('resolveRestackConflict (real local Git)', () => {
+  it('replays a q-carried merge from the flattened todo, maps its rewrite to the original merge, and omits side lineage', async () => {
+    const subject = await mergeFixture('q-carried');
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'hand edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+
+    expect(result.outcome.kind).toBe('changed');
+    expect(result.tip).toBeDefined();
+    expect((await execFile('git', ['show', `${result.tip}:shared.txt`], { cwd: subject.repo })).stdout).toBe('later child edit\n');
+    expect((await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout).toContain('M');
+    expect((await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout).not.toContain(subject.sideSubject);
+    expect(result.rewrites.get(subject.merge)).toBeDefined();
+    expect(result.audit).toMatchObject({ flattenedMerges: [] });
+  });
+
+  it('preserves the no-merge resolver path and reports no merge audit', async () => {
+    const subject = await fixture();
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp,
+      comparisonCommits: [subject.carried], cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    expect(result.candidates).toEqual([subject.empty, subject.conflicting]);
+    expect(result.audit).toBeUndefined();
+  });
+
+  it('accepts an ancestry-only merge without requiring its merge subject in the settled history', async () => {
+    const subject = await mergeFixture('ancestry-only');
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'hand edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    const subjects = (await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout;
+    expect(result.outcome.kind).toBe('changed');
+    expect(subjects).not.toContain('M');
+    expect(result.audit).toMatchObject({ ancestryOnlyMerges: [subject.merge] });
+  });
+
   it('resolves only the replay candidates in a detached temporary worktree, stamps every rewritten commit, and moves no real ref', async () => {
     const subject = await fixture();
     const beforeRefs = await refSnapshot(subject.repo);

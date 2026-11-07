@@ -28,6 +28,8 @@ export interface FlattenedHandoff {
   readonly tip: CommitSha;
   /** Todo commits whose subjects must survive a settled resolver replay. */
   readonly candidates: readonly CommitSha[];
+  /** Resolver-todo commit to original merge identity correspondence. */
+  readonly flattenedMergesByCommit: ReadonlyMap<CommitSha, CommitSha>;
   readonly audit: {
     readonly flattenedMerges: readonly CommitSha[];
     readonly ancestryOnlyMerges: readonly CommitSha[];
@@ -77,6 +79,8 @@ export interface RestackConflictResolution {
   readonly rewrites: ReadonlyMap<CommitSha, CommitSha>;
   /** The engine-written todo's pick candidates, in replay order. */
   readonly candidates: readonly CommitSha[];
+  /** Merge decisions made while constructing a flattened resolver hand-off. */
+  readonly audit?: FlattenedHandoff['audit'];
 }
 
 function requiredSha(raw: string, context: string): CommitSha {
@@ -188,6 +192,7 @@ export async function buildFlattenedHandoff(
   if (listed.exitCode !== 0) throw new Error(`could not list restack range: ${listed.stderr}`);
   const todo: CommitSha[] = [];
   const candidates: CommitSha[] = [];
+  const flattenedMergesByCommit = new Map<CommitSha, CommitSha>();
   const flattenedMerges: CommitSha[] = [];
   const ancestryOnlyMerges: CommitSha[] = [];
   let sideLineageCountTotal = 0;
@@ -233,6 +238,7 @@ export async function buildFlattenedHandoff(
       `${await commitMessage(git, commit)}\nFlattened-merge: ${commit}\n`,
     );
     accumulator = flattened;
+    flattenedMergesByCommit.set(flattened, commit);
     if (!(await flattenedMergeIsCarried(git, flattenedParent, newParent, flattened))) {
       todo.push(flattened);
       candidates.push(flattened);
@@ -242,6 +248,7 @@ export async function buildFlattenedHandoff(
     todo,
     tip: accumulator,
     candidates,
+    flattenedMergesByCommit,
     audit: { flattenedMerges, ancestryOnlyMerges, sideLineageCount: sideLineageCountTotal },
   };
 }
@@ -288,6 +295,23 @@ async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
   return rewrites;
 }
 
+async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean> {
+  const result = await git(['rev-list', '--min-parents=2', `${range.oldParent}..${range.oldTip}`]);
+  if (result.exitCode !== 0) throw new Error(`could not inspect restack range for merges: ${result.stderr}`);
+  return result.stdout.trim() !== '';
+}
+
+function translateFlattenedRewrites(
+  rewrites: ReadonlyMap<CommitSha, CommitSha>,
+  flattenedMergesByCommit: ReadonlyMap<CommitSha, CommitSha>,
+): Map<CommitSha, CommitSha> {
+  const translated = new Map<CommitSha, CommitSha>();
+  for (const [original, replacement] of rewrites) {
+    translated.set(flattenedMergesByCommit.get(original) ?? original, replacement);
+  }
+  return translated;
+}
+
 export async function replayCandidateSubjects(git: GitRunner, candidates: readonly CommitSha[]): Promise<string[]> {
   const subjects: string[] = [];
   for (const candidate of candidates) {
@@ -323,7 +347,13 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
   let added = false;
 
   try {
-    const candidates = await replayCandidates(runGit, options.range, options.comparisonCommits ?? [], options.haltRecordSlug);
+    const handoff = await rangeHasMerge(runGit, options.range)
+      ? await buildFlattenedHandoff(options.range, options.newParent, runGit, {
+        comparisonCommits: options.comparisonCommits,
+        haltRecordSlug: options.haltRecordSlug,
+      })
+      : undefined;
+    const candidates = handoff?.candidates ?? await replayCandidates(runGit, options.range, options.comparisonCommits ?? [], options.haltRecordSlug);
     // An empty engine-authored todo has no resolver work to settle. Its only
     // valid result is the supplied replay parent; never ask Git to run an
     // empty interactive rebase, which reports a synthetic failure.
@@ -335,13 +365,13 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         tip = carried.tip;
         await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
       }
-      return { outcome: { kind: 'noop' }, tip, rewrites, candidates };
+      return { outcome: { kind: 'noop' }, tip, rewrites, candidates, ...(handoff === undefined ? {} : { audit: handoff.audit }) };
     }
-    const addedResult = await runGit(['worktree', 'add', '--detach', temporaryWorktree, options.range.oldTip], { env: identity });
+    const addedResult = await runGit(['worktree', 'add', '--detach', temporaryWorktree, handoff?.tip ?? options.range.oldTip], { env: identity });
     if (addedResult.exitCode !== 0) throw new Error(`could not add restack resolver worktree: ${addedResult.stderr}`);
     added = true;
 
-    const todo = candidates.map((commit) => `pick ${commit}\n`).join('');
+    const todo = (handoff?.todo ?? candidates).map((commit) => `pick ${commit}\n`).join('');
     await writeFile(todoPath, todo);
     await writeFile(sequenceEditorPath, `#!/bin/sh\ncp ${shellQuote(todoPath)} "$1"\n`);
     await chmod(sequenceEditorPath, 0o700);
@@ -379,7 +409,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       outcome: RebaseOutcome,
       capturedTip: CommitSha | undefined = undefined,
     ): Promise<RestackConflictResolution> => {
-      const rewrites = await readRewrites(rewritePath);
+      let rewrites = await readRewrites(rewritePath);
       // The settled checkout is the same authority FR-8 and FR-9 inspected.
       // The hook list survives a lost checkout, but never overrides its HEAD.
       const head = capturedTip === undefined ? await tempGit(['rev-parse', 'HEAD']) : undefined;
@@ -393,8 +423,9 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
             reason: `restack resolver finished child ${options.range.child} without a readable settled tip`,
           },
           tip: undefined,
-          rewrites,
+          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map()),
           candidates,
+          ...(handoff === undefined ? {} : { audit: handoff.audit }),
         };
       }
       let tip = settledTip ?? rewrittenTip ?? options.newParent;
@@ -408,14 +439,15 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
             reason: `restack resolver finished child ${options.range.child} without candidate subjects: ${missingSubjects.join(', ')}`,
           },
           tip: undefined,
-          rewrites,
+          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map()),
           candidates,
+          ...(handoff === undefined ? {} : { audit: handoff.audit }),
         };
       }
       if (rewrites.size === 0 && candidates.length > 0) {
         const rebuilt = await rewritesByUniqueSubject(
           runGit,
-          `${options.range.oldParent}..${options.range.oldTip}`,
+          `${options.range.oldParent}..${handoff?.tip ?? options.range.oldTip}`,
           `${options.newParent}..${tip}`,
           candidateSubjects,
         );
@@ -426,7 +458,8 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         tip = carried.tip;
         await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
       }
-      return { outcome, tip, rewrites, candidates };
+      rewrites = translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map());
+      return { outcome, tip, rewrites, candidates, ...(handoff === undefined ? {} : { audit: handoff.audit }) };
     };
     const started = await tempGit(['rebase', '-i', '--onto', options.newParent, options.range.oldParent], { env: environment });
     if (started.exitCode === 0) {
@@ -459,7 +492,13 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       options.cap,
     );
     if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome, resolverSettledTip);
-    return { outcome, tip: undefined, rewrites: await readRewrites(rewritePath), candidates };
+    return {
+      outcome,
+      tip: undefined,
+      rewrites: translateFlattenedRewrites(await readRewrites(rewritePath), handoff?.flattenedMergesByCommit ?? new Map()),
+      candidates,
+      ...(handoff === undefined ? {} : { audit: handoff.audit }),
+    };
   } finally {
     try {
       if (added) {
