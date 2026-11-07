@@ -1,8 +1,31 @@
 // Covers: task:1
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { adrApprovalStatus } from '../../src/engine/artifacts.js';
-import { classifyKind, deriveDisposition, matchesKnownShape } from '../../src/engine/decision-corpus.js';
+import * as featureManifest from '../../src/engine/feature-manifest.js';
+import { classifyKind, deriveDisposition, matchesKnownShape, readDecisionCorpus } from '../../src/engine/decision-corpus.js';
+
+const fixtureRoots: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(fixtureRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function createCorpusRoot(directory = featureManifest.MANIFEST_KIND_LOCATIONS.decision.directory): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'decision-corpus-'));
+  fixtureRoots.push(root);
+  await mkdir(join(root, directory), { recursive: true });
+  return root;
+}
+
+async function writeCorpusRecord(root: string, filename: string, content: string, directory = featureManifest.MANIFEST_KIND_LOCATIONS.decision.directory): Promise<void> {
+  await writeFile(join(root, directory, filename), content, 'utf8');
+}
 
 describe('decision corpus known shapes', () => {
   it('recognizes every known filename shape', () => {
@@ -104,5 +127,145 @@ describe('decision corpus known shapes', () => {
       disposition: 'undeclared',
       declared: null,
     });
+  });
+
+  // Covers: task:4
+  it('enumerates regular Markdown records into complete index rows', async () => {
+    const root = await createCorpusRoot();
+    const directory = featureManifest.MANIFEST_KIND_LOCATIONS.decision.directory;
+    await Promise.all([
+      writeCorpusRecord(root, 'adr-2026-01-02-hello.md', '# Approve hello\n\n**Date:** 2026-01-02\n**Status:** APPROVED\n\n## Decision\n\nAdopt the hello approach.\n'),
+      writeCorpusRecord(root, 'architecture-review-2026-01-03-layout.md', '# Layout review\n\n**Verdict:** APPROVED WITH CONDITIONS\n\n## Decision\n\nReview the layout.\n'),
+      writeCorpusRecord(root, 'technical-assessment-2026-01-04.md', '# Technical assessment\n\n## Decision\n\nAssess the implementation.\n'),
+      writeCorpusRecord(root, 'styleguide.md', '# Style guide\n\nA reference paragraph.\n'),
+      writeCorpusRecord(root, 'notes.md', '# Notes\n\nA plain paragraph.\n'),
+      writeFile(join(root, directory, 'image.png'), 'not markdown', 'utf8'),
+      mkdir(join(root, directory, 'nested')),
+    ]);
+
+    await expect(readDecisionCorpus(root)).resolves.toEqual({
+      rows: [
+        {
+          path: '.docs/decisions/adr-2026-01-02-hello.md',
+          kind: 'decision',
+          disposition: 'approved',
+          declared: 'APPROVED',
+          date: '2026-01-02',
+          title: 'Approve hello',
+          summary: 'Adopt the hello approach.',
+        },
+        {
+          path: '.docs/decisions/architecture-review-2026-01-03-layout.md',
+          kind: 'review',
+          disposition: 'other',
+          declared: 'APPROVED WITH CONDITIONS',
+          date: '2026-01-03',
+          title: 'Layout review',
+          summary: 'Review the layout.',
+        },
+        {
+          path: '.docs/decisions/notes.md',
+          kind: 'unclassified',
+          disposition: 'undeclared',
+          declared: null,
+          date: '',
+          title: 'Notes',
+          summary: 'A plain paragraph.',
+        },
+        {
+          path: '.docs/decisions/styleguide.md',
+          kind: 'reference',
+          disposition: 'undeclared',
+          declared: null,
+          date: '',
+          title: 'Style guide',
+          summary: 'A reference paragraph.',
+        },
+        {
+          path: '.docs/decisions/technical-assessment-2026-01-04.md',
+          kind: 'assessment',
+          disposition: 'undeclared',
+          declared: null,
+          date: '2026-01-04',
+          title: 'Technical assessment',
+          summary: 'Assess the implementation.',
+        },
+      ],
+      errors: [],
+    });
+  });
+
+  // Covers: task:4
+  it('falls back to a filename title and empty date', async () => {
+    const root = await createCorpusRoot();
+    await writeCorpusRecord(root, 'adr-without-metadata.md', 'A plain paragraph.\n');
+
+    await expect(readDecisionCorpus(root)).resolves.toMatchObject({
+      rows: [expect.objectContaining({ title: 'adr-without-metadata', date: '' })],
+      errors: [],
+    });
+  });
+
+  // Covers: task:4
+  it('truncates the decision summary to 160 characters', async () => {
+    const root = await createCorpusRoot();
+    const summary = 'a'.repeat(161);
+    await writeCorpusRecord(root, 'adr-2026-01-08-long.md', `# Long\n\n## Decision\n\n${summary}\n`);
+
+    await expect(readDecisionCorpus(root)).resolves.toMatchObject({
+      rows: [expect.objectContaining({ summary: 'a'.repeat(160) })],
+      errors: [],
+    });
+  });
+
+  // Covers: task:4
+  it('uses the first Decision-section line when the record has no trailing newline', async () => {
+    const root = await createCorpusRoot();
+    await writeCorpusRecord(root, 'adr-2026-01-09-final-line.md', '# Title\n\nIntroductory paragraph.\n\n## Decision\n\nChosen outcome.');
+
+    await expect(readDecisionCorpus(root)).resolves.toMatchObject({
+      rows: [expect.objectContaining({ summary: 'Chosen outcome.' })],
+      errors: [],
+    });
+  });
+
+  // Covers: task:4
+  it('returns no rows when the corpus directory is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'decision-corpus-missing-'));
+    fixtureRoots.push(root);
+
+    await expect(readDecisionCorpus(root)).resolves.toEqual({ rows: [], errors: [] });
+  });
+
+  // Covers: task:4
+  it('resolves the corpus directory through the decision kind location', async () => {
+    const alternateDirectory = '.docs/adr-alt/';
+    const root = await createCorpusRoot(alternateDirectory);
+    await writeCorpusRecord(root, 'adr-2026-01-05-alt.md', '# Alternate\n\n## Decision\n\nUse the relocated corpus.\n', alternateDirectory);
+    vi.spyOn(featureManifest, 'MANIFEST_KIND_LOCATIONS', 'get').mockReturnValue({
+      ...featureManifest.MANIFEST_KIND_LOCATIONS,
+      decision: { ...featureManifest.MANIFEST_KIND_LOCATIONS.decision, directory: alternateDirectory },
+    });
+
+    await expect(readDecisionCorpus(root)).resolves.toMatchObject({
+      rows: [expect.objectContaining({ path: '.docs/adr-alt/adr-2026-01-05-alt.md', title: 'Alternate' })],
+      errors: [],
+    });
+  });
+
+  // Covers: task:4
+  it.skipIf(process.getuid?.() === 0)('reports unreadable records while retaining readable rows', async () => {
+    const root = await createCorpusRoot();
+    const directory = featureManifest.MANIFEST_KIND_LOCATIONS.decision.directory;
+    const unreadable = join(root, directory, 'adr-2026-01-06-private.md');
+    await Promise.all([
+      writeCorpusRecord(root, 'adr-2026-01-07-readable.md', '# Readable\n\n## Decision\n\nKeep this row.\n'),
+      writeFile(unreadable, '# Private\n', 'utf8'),
+    ]);
+    await (await import('node:fs/promises')).chmod(unreadable, 0o000);
+
+    const corpus = await readDecisionCorpus(root);
+    expect(corpus.rows).toEqual([expect.objectContaining({ path: '.docs/decisions/adr-2026-01-07-readable.md' })]);
+    expect(corpus.errors).toEqual([expect.objectContaining({ path: '.docs/decisions/adr-2026-01-06-private.md' })]);
   });
 });
