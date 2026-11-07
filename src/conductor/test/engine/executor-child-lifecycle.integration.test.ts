@@ -1,5 +1,5 @@
-// Covers: task:8
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: task:8, task:9
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -54,8 +54,10 @@ vi.mock('../../src/engine/feature-dispatch-lease.js', async (importOriginal) => 
 
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { createChildProcessFeatureExecutor } from '../../src/engine/child-feature-executor.js';
+import { Conductor } from '../../src/engine/conductor.js';
 import { createExecutorBroker } from '../../src/engine/executor-broker.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
+import { removeOperatorPark, writeOperatorPark } from '../../src/engine/park-marker.js';
 import { createProviderAvailability } from '../../src/engine/provider-availability.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
@@ -84,7 +86,7 @@ async function completeConductorState(worktree: string): Promise<void> {
   );
 }
 
-async function fixture(slug: string): Promise<{
+async function fixture(slug: string, { durableChildState = true }: { durableChildState?: boolean } = {}): Promise<{
   root: string;
   order: WorkOrder;
   rootEvents: ConductorEventEmitter;
@@ -96,7 +98,7 @@ async function fixture(slug: string): Promise<{
   await writeFile(join(root, 'README.md'), 'base\n');
   await commitAll(root, 'initial');
   const baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
-  await mkdir(join(root, '.pipeline', 'children', 'first'), { recursive: true });
+  if (durableChildState) await mkdir(join(root, '.pipeline', 'children', 'first'), { recursive: true });
   engineStore = await useTempEngineStore();
   const rootEvents = new ConductorEventEmitter();
   const broker = createExecutorBroker({
@@ -162,5 +164,39 @@ describe('executor child shared lifecycle', () => {
 
     expect(outcome.status).not.toBe('parked');
     expect(observedBaseShas).toEqual([subject.order.baseSha, subject.order.baseSha]);
+  });
+
+  it('preserves REKICK and skips the conductor only while the claimed feature is operator-parked', async () => {
+    const subject = await fixture('parked-rekick', { durableChildState: false });
+    const worktree = join(subject.root, '.worktrees', subject.order.slug);
+    await mkdir(join(subject.root, '.worktrees'), { recursive: true });
+    await execa('git', ['worktree', 'add', '-b', `feat/daemon-${subject.order.slug}`, worktree, subject.order.baseSha], {
+      cwd: subject.root,
+    });
+    const pipelineDir = join(worktree, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(
+      join(pipelineDir, 'conduct-state.json'),
+      JSON.stringify({ build: 'pending' }),
+    );
+    const rekickPath = join(pipelineDir, 'REKICK');
+    await writeFile(rekickPath, '');
+    seams.prepareWorktree.mockResolvedValue(undefined);
+    await writeOperatorPark(subject.root, subject.order.slug);
+    const run = vi.spyOn(Conductor.prototype, 'run');
+    run.mockResolvedValue(undefined);
+    run.mockClear();
+
+    const parked = await subject.execute();
+
+    expect(parked).toMatchObject({ status: 'parked' });
+    expect(run).not.toHaveBeenCalled();
+    await expect(readFile(rekickPath, 'utf8')).resolves.toBe('');
+
+    await removeOperatorPark(subject.root, subject.order.slug);
+    const unparked = await subject.execute();
+
+    expect(unparked.status).not.toBe('parked');
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });
