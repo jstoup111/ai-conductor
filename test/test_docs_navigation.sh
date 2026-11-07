@@ -5,9 +5,11 @@ set -uo pipefail
 # .docs/stories/browsable-documentation-site.md (Stories 1-5, 8, and 9).
 # Covers: FR-1, FR-2, FR-3, FR-4, FR-5, FR-8, FR-9
 #
-# The production entry point is the planned offline navigation checker. These
-# specs drive it against both the real repository tree and complete/invalid
-# documentation trees; they do not invoke Jekyll, GitHub, or the network.
+# The production entry point is the offline navigation checker. These specs
+# drive it against complete/invalid fixture trees, then once against the real
+# repository tree. Real-tree navigation is enforced only through the checker's
+# structural invariants; never copy page titles or nav_order values into this
+# file. They do not invoke Jekyll, GitHub, or the network.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -177,7 +179,6 @@ expect_checker_failure "a wrong theme pin names its configuration and key" "$WRO
 printf '\n=== Stories 1-3, 5-7: maintained site source ===\n'
 
 SOURCE_CONFIG="$REPO_ROOT/docs/_config.yml"
-SOURCE_LANDING="$REPO_ROOT/docs/index.md"
 
 record "source configuration pins the approved Pages theme and URL" \
   "$( [ -f "$SOURCE_CONFIG" ] && \
@@ -190,136 +191,6 @@ record "source configuration identifies AI Conductor and enables navigation" \
     grep -Fxq 'nav_enabled: true' "$SOURCE_CONFIG" && \
     grep -Fxq 'aux_links:' "$SOURCE_CONFIG" && \
     grep -Fxq '  Repository: https://github.com/jstoup111/ai-conductor' "$SOURCE_CONFIG" && echo 0 || echo 1 )"
-record "source landing links every top-level documentation taxonomy" \
-  "$( [ -f "$SOURCE_LANDING" ] && \
-    grep -Fxq -- '- [Quickstart](quickstart.md)' "$SOURCE_LANDING" && \
-    grep -Fxq -- '- [Guides](guides/)' "$SOURCE_LANDING" && \
-    grep -Fxq -- '- [Reference](reference/)' "$SOURCE_LANDING" && \
-    grep -Fxq -- '- [Explanation](explanation/)' "$SOURCE_LANDING" && \
-    grep -Fxq -- '- [Runbooks](runbooks/)' "$SOURCE_LANDING" && \
-    grep -Fxq -- '- [Contributing](contributing/)' "$SOURCE_LANDING" && echo 0 || echo 1 )"
-
-source_has_top_level_destination() {
-  local path=$1
-  local title=$2
-  local order=$3
-  local has_children=${4:-false}
-
-  [ -f "$REPO_ROOT/docs/$path" ] && \
-    grep -Fxq "title: $title" "$REPO_ROOT/docs/$path" && \
-    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/$path" && \
-    ! grep -q '^parent:' "$REPO_ROOT/docs/$path" && \
-    { [ "$has_children" = false ] || grep -Fxq 'has_children: true' "$REPO_ROOT/docs/$path"; }
-}
-
-record "source top-level destinations have unique titles and stable order" \
-  "$( source_has_top_level_destination 'quickstart.md' 'Quickstart' 2 && \
-    source_has_top_level_destination 'guides/index.md' 'Guides' 3 true && \
-    source_has_top_level_destination 'reference/index.md' 'Reference' 4 true && \
-    source_has_top_level_destination 'explanation/index.md' 'Explanation' 5 true && \
-    source_has_top_level_destination 'runbooks/index.md' 'Runbooks' 6 true && \
-    source_has_top_level_destination 'contributing/index.md' 'Contributing' 7 true && echo 0 || echo 1 )"
-
-source_has_guide_destination() {
-  local path=$1
-  local title=$2
-  local order=$3
-
-  [ -f "$REPO_ROOT/docs/guides/$path" ] && \
-    grep -Fxq "title: $title" "$REPO_ROOT/docs/guides/$path" && \
-    grep -Fxq 'parent: Guides' "$REPO_ROOT/docs/guides/$path" && \
-    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/guides/$path"
-}
-
-record "source guides have unique titles, the Guides parent, and stable order" \
-  "$( source_has_guide_destination 'working-effectively.md' 'Working effectively with the harness' 1 && \
-    source_has_guide_destination 'faq.md' 'FAQ' 2 && \
-    source_has_guide_destination 'first-feature.md' 'Ship your first feature' 3 && \
-    source_has_guide_destination 'engineer-loop.md' 'The composer loop' 4 && \
-    source_has_guide_destination 'intake.md' 'Filing intake issues' 5 && \
-    source_has_guide_destination 'multiprovider.md' 'Choose and configure the LLM host' 6 && \
-    source_has_guide_destination 'running-the-daemon.md' 'Running the daemon' 7 && \
-    source_has_guide_destination 'self-hosting.md' 'Self-hosting the harness' 8 && echo 0 || echo 1 )"
-
-source_has_reference_destination() {
-  local path=$1
-  local title=$2
-  local order=$3
-
-  [ -f "$REPO_ROOT/docs/reference/$path" ] && \
-    grep -Fxq "title: $title" "$REPO_ROOT/docs/reference/$path" && \
-    grep -Fxq 'parent: Reference' "$REPO_ROOT/docs/reference/$path" && \
-    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/reference/$path"
-}
-
-record "core reference topics have unique titles, the Reference parent, and stable order" \
-  "$( source_has_reference_destination 'artifacts.md' 'Artifacts and state files' 1 && \
-    source_has_reference_destination 'cli.md' '`ai-conductor` CLI reference' 2 && \
-    source_has_reference_destination 'configuration.md' 'Configuration reference' 3 && \
-    source_has_reference_destination 'environment.md' 'Environment variables' 4 && echo 0 || echo 1 )"
-
-record "remaining reference topics have unique titles, the Reference parent, and stable order" \
-  "$( source_has_reference_destination 'models.md' 'Model and effort resolution' 5 && \
-    source_has_reference_destination 'settings-and-hooks.md' 'Settings and hooks' 6 && \
-    source_has_reference_destination 'skills.md' 'Skills' 7 && \
-    source_has_reference_destination 'steps.md' 'Steps' 8 && echo 0 || echo 1 )"
-
-source_has_explanation_destination() {
-  local path=$1
-  local title=$2
-  local order=$3
-
-  [ -f "$REPO_ROOT/docs/explanation/$path" ] && \
-    grep -Fxq "title: $title" "$REPO_ROOT/docs/explanation/$path" && \
-    grep -Fxq 'parent: Explanation' "$REPO_ROOT/docs/explanation/$path" && \
-    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/explanation/$path"
-}
-
-record "explanation topics have unique titles, the Explanation parent, and stable order" \
-  "$( source_has_explanation_destination 'architecture.md' 'Architecture' 1 && \
-    source_has_explanation_destination 'evidence-model.md' 'Evidence model' 2 && \
-    source_has_explanation_destination 'gates.md' 'Gates' 3 && \
-    source_has_explanation_destination 'sdlc-phases.md' 'SDLC phases' 4 && echo 0 || echo 1 )"
-
-source_has_runbook_destination() {
-  local path=$1
-  local title=$2
-  local order=$3
-
-  [ -f "$REPO_ROOT/docs/runbooks/$path" ] && \
-    grep -Fxq "title: $title" "$REPO_ROOT/docs/runbooks/$path" && \
-    grep -Fxq 'parent: Runbooks' "$REPO_ROOT/docs/runbooks/$path" && \
-    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/runbooks/$path"
-}
-
-record "runbooks have unique titles, the Runbooks parent, and stable order" \
-  "$( source_has_runbook_destination 'daemon-recovery.md' 'Daemon recovery' 1 && \
-    source_has_runbook_destination 'emergency-stop-a-running-feature.md' 'Emergency stop a running feature' 2 && \
-    source_has_runbook_destination 'shipped-record-reconciliation.md' 'Shipped record reconciliation' 3 && \
-    source_has_runbook_destination 'stalled-or-stuck-feature.md' 'Stalled or stuck feature' 4 && \
-    source_has_runbook_destination 'worktree-and-evidence-recovery.md' 'Worktree and evidence recovery' 5 && echo 0 || echo 1 )"
-
-source_has_contributing_destination() {
-  local path=$1
-  local title=$2
-  local order=$3
-
-  [ -f "$REPO_ROOT/docs/contributing/$path" ] && \
-    grep -Fxq "title: $title" "$REPO_ROOT/docs/contributing/$path" && \
-    grep -Fxq 'parent: Contributing' "$REPO_ROOT/docs/contributing/$path" && \
-    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/contributing/$path"
-}
-
-record "core contributing topics have unique titles, the Contributing parent, and stable order" \
-  "$( source_has_contributing_destination 'code-organization.md' 'Code organization' 1 && \
-    source_has_contributing_destination 'extending.md' 'Extending the harness' 2 && \
-    source_has_contributing_destination 'releases.md' 'Releases' 3 && echo 0 || echo 1 )"
-
-record "remaining contributing topics and Quickstart have unique stable navigation" \
-  "$( source_has_contributing_destination 'testing.md' 'Testing' 4 && \
-    source_has_contributing_destination 'validation.md' 'Validation' 5 && \
-    source_has_top_level_destination 'quickstart.md' 'Quickstart' 2 && echo 0 || echo 1 )"
-
 integrity_runs_full_navigation_contract() {
   local integrity_path="$REPO_ROOT/test/test_harness_integrity.sh"
 
@@ -459,6 +330,34 @@ nav_order: 1
 MARKDOWN
 expect_checker_failure "a disconnected navigation subtree names its root" "$DISCONNECTED" \
   "docs/rogue/index.md" "not a landing navigation destination"
+
+DUPLICATE_ORDER="$FIXTURE_ROOT/duplicate-order"
+cp -R "$VALID_ROOT" "$DUPLICATE_ORDER"
+cat > "$DUPLICATE_ORDER/docs/guides/second-feature.md" <<'MARKDOWN'
+---
+title: Second Feature
+parent: Guides
+nav_order: 1
+---
+
+# Second Feature
+MARKDOWN
+expect_checker_failure "a duplicate sibling nav_order names both topics" "$DUPLICATE_ORDER" \
+  "docs/guides/first-feature.md" "docs/guides/second-feature.md" "duplicate nav_order 1 under parent 'Guides'"
+
+ORDER_GAP="$FIXTURE_ROOT/order-gap"
+cp -R "$VALID_ROOT" "$ORDER_GAP"
+cat > "$ORDER_GAP/docs/guides/third-feature.md" <<'MARKDOWN'
+---
+title: Third Feature
+parent: Guides
+nav_order: 3
+---
+
+# Third Feature
+MARKDOWN
+expect_checker_failure "a gap in sibling nav_order names the topic and the expected order" "$ORDER_GAP" \
+  "docs/guides/third-feature.md" "nav_order gap under parent 'Guides': expected 2, found 3"
 
 if [ "${1:-}" = '--navigation-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
