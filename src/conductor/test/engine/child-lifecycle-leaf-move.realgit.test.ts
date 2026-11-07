@@ -1,4 +1,4 @@
-// Covers: task:16, task:17
+// Covers: task:16, task:17, task:rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
