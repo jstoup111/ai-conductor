@@ -1,4 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { adrApprovalStatus, stripFencedCodeBlocks } from './artifacts.js';
@@ -143,7 +144,7 @@ function corpusRow(repoRoot: string, directory: string, filename: string, conten
 export async function readDecisionCorpus(repoRoot: string): Promise<DecisionCorpus> {
   const directory = MANIFEST_KIND_LOCATIONS.decision.directory;
   const corpusDirectory = join(repoRoot, directory);
-  let entries: Awaited<ReturnType<typeof readdir>>;
+  let entries: Dirent<string>[];
   try {
     entries = await readdir(corpusDirectory, { withFileTypes: true });
   } catch (error) {
