@@ -40,7 +40,8 @@ instance and leave the remainder for a later lap.
 - `primitive-obsession` — changed primitive values encode a domain concept that needs invariants.
   **Non-finding:** a primitive whose valid range and meaning are already locally enforced.
 - `representable-invalid-state` — changed state shape permits an invalid domain combination.
-  **Non-finding:** states constrained at construction so invalid combinations cannot arise.
+  **Non-finding:** states constrained at construction so invalid combinations cannot arise, or a
+  persisted or wire shape whose every writer and reader passes through one validating parser.
 - `non-exhaustive-domain-match` — a changed domain branch silently drops a meaningful case.
   **Non-finding:** an explicit exhaustive default that preserves all remaining cases.
 - `non-semantic-name` — a changed public or domain name obscures its semantic role. **Non-finding:**

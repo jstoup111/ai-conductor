@@ -43,8 +43,8 @@ Look for duplicated **business logic** across batch-changed files. Distinguish b
 | Duplicated shape | Two serializers with similar structure | Leave alone |
 | Copy-paste with tweaks | Same method with 1-2 param differences | Extract with parameters — except a declared replication's exact mapped source/target pair alone is not an extract-with-parameters finding. Still flag undeclared duplication or similarity outside the declared target set; with no declaration, apply this row unchanged. A declared pair may retain an extraction finding when rationale beyond the declared replication merits it. |
 
-Flag when 3+ similar blocks exist across different files. Two similar blocks in the same
-file are a judgment call — flag only if the logic is non-trivial.
+Flag the second copy of non-trivial behavior, and any changed block that reimplements an existing
+repository helper; implementationQuality flags both.
 
 Before recommending extraction, inlining, or a competing abstraction, consult the applicable
 focused pattern basis (for example, the approved plan, architecture decision, or declared
@@ -130,7 +130,7 @@ cover two kinds. Check batch-changed code for the other five:
 
 | Kind | Must-fix when the batch... | Not a finding |
 |------|----------------------------|---------------|
-| `representable-invalid-state` | adds a state shape that can hold a contradictory or meaningless combination (two fields that can disagree, independently optional fields that must appear together) | invalid combinations are impossible at construction |
+| `representable-invalid-state` | adds a state shape that can hold a contradictory or meaningless combination (two fields that can disagree, independently optional fields that must appear together) | invalid combinations are impossible at construction, or every writer and reader passes through one validating parser |
 | `non-exhaustive-domain-match` | adds a branch over a closed domain (union, enum, event kind) that silently drops a meaningful case | an exhaustive match, or an explicit default that preserves the remaining cases |
 | `primitive-obsession` | encodes a domain concept with invariants (an identity, a path component, a slug, a count with a unit) as a bare primitive that callers can confuse or misuse | the primitive's range and meaning are enforced where it is used |
 | `obscured-intent` | hides the domain operation it performs (a hidden second return value, a computed value that is discarded and recomputed) | a local detail with a clear name and boundary |
