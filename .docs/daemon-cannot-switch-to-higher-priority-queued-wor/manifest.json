@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "daemon-cannot-switch-to-higher-priority-queued-wor",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-05-every-dispatch-outcome-leaves-an-operator-lever.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-daemon-step-boundary-preemption.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/daemon-cannot-switch-to-higher-priority-queued-wor.md"
+    }
+  ]
+}
