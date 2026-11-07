@@ -842,3 +842,14 @@ Slice 2
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic, and no slice-1 task depends on a slice-2 task
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+- [test] The same feature, unparked, dispatches through the child and runs the conductor, so the park marker alone caused the skip.
+- [test] A dispatch of the same worktree without `.pipeline/REKICK` never calls `resumeRebaseFirst`.
+- [test] The audit records are written under the feature worktree's `.pipeline`, not under the supervisor's root checkout.
+- [test] The `memory_setup` event is forwarded to the supervisor on the feature scope, so it lands in the feature's `.pipeline/events.jsonl`.
+- [test] The managed-session context's worktree root is the feature worktree path.
+- [test] With the same key set in both user and project config, the child uses the project value.
+- [test] The forwarded `provider_suppressed` event carries the suppressed provider's id and is not duplicated on the feature scope.
+- [test] With `daemon_verbose` unset, the child's prepare, forced prepare and teardown receive the verbose flag as false.
+- [test] With the variable unset, the same failing setup dispatches one setup-triage session.
+- [test] A stop received before the conductor starts returns `parked` with the stop reason and never runs the conductor.
+- [test] With the key removed, the same fixture dispatches through the injected executor fork, so the load failure is caused by the key alone.
