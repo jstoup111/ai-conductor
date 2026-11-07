@@ -958,7 +958,7 @@ the real `gh` resolved from the inherited `PATH`. If no executable `gh` resolves
 cannot be written, the candidate fails provider setup with capability `managed-gh-observation` and
 the recovery action names both fixes. Operator shells and other engine subprocesses are unaffected.
 
-`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch: the shas of
+`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch or stacked child range: the shas of
 flattened merges, the shas of dropped ancestry-only merges, and the count of side-lineage commits not
 replayed individually. When a flattened merge blocks the replay, `rebase_conflict_halt` carries an
 optional `mergeAudit` field naming that merge, its parents, its flattened sha, and the conflicting
