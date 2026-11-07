@@ -402,9 +402,9 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
-  // Covers: task:7 — merged plans retain the historical presence-only
-  // dependency-tree eligibility check; strict dependency validation is not a
-  // daemon backlog concern.
+  // Covers: task:7
+  // Merged plans retain the historical presence-only dependency-tree eligibility
+  // check; strict dependency validation is not a daemon backlog concern.
   it('keeps legacy dependency forms and a dependency cycle eligible', async () => {
     await writeFile(
       join(dir, '.docs/plans/legacy-dependencies.md'),
