@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd-2
+// Covers: task:rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd, task:rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd-2
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
