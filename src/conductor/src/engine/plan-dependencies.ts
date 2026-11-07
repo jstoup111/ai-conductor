@@ -2,12 +2,13 @@ import {
   parsePlanTaskBodies,
   resolvePlanTaskReference,
 } from './plan-task-parse.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 
 export interface PlanDependencyViolation {
-  code: 'dependencies-line' | 'malformed-dependencies' | 'unknown-dependency';
+  code: 'dependencies-line' | 'malformed-dependencies' | 'unknown-dependency' | 'dependency-cycle';
   message: string;
   taskId: string;
 }
@@ -145,6 +146,24 @@ export function findDependencyCycles(
     if (!indexes.has(taskId)) visit(taskId);
   }
   return cycles;
+}
+
+/** Validates authored plan dependency declarations and rejects dependency cycles. */
+export function validatePlanDependencies(planText: string): PlanDependencyViolation[] {
+  const dependencyGraph = parsePlanDependencyGraph(planText);
+  const violations = dependencyGraph.violations.filter(
+    (violation) => !isEngineAppendedRemediationTaskId(violation.taskId),
+  );
+
+  for (const cycle of findDependencyCycles(dependencyGraph.dependenciesByTaskId)) {
+    violations.push({
+      code: 'dependency-cycle',
+      taskId: cycle[0],
+      message: `Tasks ${cycle.join(', ')} form a dependency cycle and cannot be ordered`,
+    });
+  }
+
+  return violations;
 }
 
 /** Returns every direct or indirect prerequisite for one task. */

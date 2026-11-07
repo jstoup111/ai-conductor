@@ -4,6 +4,7 @@ import {
   findDependencyCycles,
   parsePlanDependencyGraph,
   transitiveDependencies,
+  validatePlanDependencies,
 } from '../../src/engine/plan-dependencies.js';
 
 function task(id: number, dependencies?: string): string {
@@ -93,5 +94,84 @@ describe('findDependencyCycles', () => {
       ['3', ['1']],
       ['4', ['2', '3']],
     ]))).toEqual([]);
+  });
+});
+
+describe('validatePlanDependencies', () => {
+  it('accepts an acyclic plan and ignores engine-appended remediation tasks without Dependencies', () => {
+    const planText = [
+      task(1, 'none'),
+      task(2, 'Task 1'),
+      task(3, 'Task 2'),
+      '### Task rem-1: Engine remediation',
+      'Remediation tasks do not require authored dependency metadata.',
+    ].join('\n\n');
+
+    expect(validatePlanDependencies(planText)).toEqual([]);
+  });
+
+  it.each([
+    ['a two-task cycle', [task(1, 'Task 2'), task(2, 'Task 1')].join('\n\n'), ['1', '2']],
+    ['a three-task cycle beside an independent task', [
+      task(1, 'none'),
+      task(3, 'Task 5'),
+      task(5, 'Task 7'),
+      task(7, 'Task 3'),
+    ].join('\n\n'), ['3', '5', '7']],
+    ['a self-dependency', [task(1, 'none'), task(2, 'Task 2')].join('\n\n'), ['2']],
+  ])('reports %s as a dependency cycle', (_name, planText, cycleTaskIds) => {
+    const violations = validatePlanDependencies(planText);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      code: 'dependency-cycle',
+      taskId: cycleTaskIds[0],
+    });
+    for (const taskId of cycleTaskIds) {
+      expect(violations[0].message).toContain(taskId);
+    }
+    if (cycleTaskIds[0] === '3') expect(violations[0].message).not.toContain('1');
+    expect(violations[0].message).toBe(
+      `Tasks ${cycleTaskIds.join(', ')} form a dependency cycle and cannot be ordered`,
+    );
+  });
+
+  it('reports unknown dependency task ids with their citing task', () => {
+    const violations = validatePlanDependencies([task(1, 'none'), task(2, 'Task 99')].join('\n\n'));
+
+    expect(violations).toEqual([expect.objectContaining({
+      code: 'unknown-dependency',
+      taskId: '2',
+      message: expect.stringContaining('Task 99'),
+    })]);
+    expect(violations[0].message).toContain('Task 2');
+  });
+
+  it('reports missing Dependencies lines for every authored task', () => {
+    const planText = [
+      task(1),
+      task(2),
+      '### Task rem-1: Engine remediation',
+      '## Task Dependency Graph',
+      '```text',
+      'Task 1 --> Task 2',
+      '```',
+    ].join('\n\n');
+
+    expect(validatePlanDependencies(planText)).toEqual([
+      expect.objectContaining({ code: 'dependencies-line', taskId: '1', message: expect.stringContaining('Task 1') }),
+      expect.objectContaining({ code: 'dependencies-line', taskId: '2', message: expect.stringContaining('Task 2') }),
+    ]);
+  });
+
+  it.each(['Tasks 1–9', 'all prior'])('reports malformed Dependencies %j', (dependencies) => {
+    const violations = validatePlanDependencies([task(1, 'none'), task(2, dependencies)].join('\n\n'));
+
+    expect(violations).toEqual([expect.objectContaining({
+      code: 'malformed-dependencies',
+      taskId: '2',
+      message: expect.stringContaining('expected "none" or comma-separated task references'),
+    })]);
+    expect(violations[0].message).toContain('Task 2');
   });
 });
