@@ -97,6 +97,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - prd-audit defines the within, outside-harmless and outside-visible intent relations, so fail-closed hardening and test repairs no longer halt SHIP as user-visible over-scope. ([implementation PR #3607](https://github.com/jstoup111/ai-conductor/pull/3607)).
 - BUILD's TDD and pipeline skills now require proving every Done-when bullet, asserting full outcomes, passing a stub check, and per-test Covers markers, and pass the implementer the criterion and ADR text SHIP grades. ([implementation PR #3611](https://github.com/jstoup111/ai-conductor/pull/3611)).
 - BUILD records a file missing from a task's Files list with a `Scope:` trailer instead of halting for a plan gap, and plans list the call sites, unions and registries a task forces. ([implementation PR #3606](https://github.com/jstoup111/ai-conductor/pull/3606)).
+- The rebase, finish, simplify, manual-test and writing-system-tests skills are 16% shorter, with duplicated checklists and engine-internal narration removed and no instruction an agent acts on dropped. ([implementation PR #3612](https://github.com/jstoup111/ai-conductor/pull/3612)).
+- implementationQuality no longer flags persisted shapes guarded by a single validating parser, and simplify flags duplication at the same threshold implementationQuality reviews it. ([implementation PR #3613](https://github.com/jstoup111/ai-conductor/pull/3613)).
+- BUILD treats a build-review remediation work order as the retry's job and records disagreement as a stall question, so a kickback can no longer end in a silent no-change halt. ([implementation PR #3609](https://github.com/jstoup111/ai-conductor/pull/3609)).
 
 ### Removed
 
